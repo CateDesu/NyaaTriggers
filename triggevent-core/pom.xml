@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>gg.xp.nyaa</groupId>
+    <artifactId>triggevent-core</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <!--
+      Headless Triggevent Engine sidecar for NyaaTriggers. Links Triggevent's
+      engine (xpdota/event-trigger, GPL-3.0); this artifact is therefore GPL-3.0.
+      Depends on the engine modules being installed in the local Maven repo first
+      (see build.sh). The triggers/easytriggers/timelines deps are required at
+      runtime purely so AutoScan can discover the built-in triggers on the classpath.
+    -->
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- event-trigger's project version (root pom: gg.xp:triggevent:1.0-SNAPSHOT) -->
+        <tv.version>1.0-SNAPSHOT</tv.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>gg.xp</groupId>
+            <artifactId>xivsupport</artifactId>
+            <version>${tv.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>gg.xp</groupId>
+            <artifactId>trigger-support</artifactId>
+            <version>${tv.version}</version>
+        </dependency>
+        <!-- `triggers` is a packaging=pom aggregator; the built-in trigger classes
+             (what AutoScan must find on the classpath) live in these code sub-modules.
+             Add any future triggers-* expansion module here too. -->
+        <dependency>
+            <groupId>gg.xp</groupId>
+            <artifactId>triggers-general</artifactId>
+            <version>${tv.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>gg.xp</groupId>
+            <artifactId>triggers-ew</artifactId>
+            <version>${tv.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>gg.xp</groupId>
+            <artifactId>triggers-sb</artifactId>
+            <version>${tv.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>gg.xp</groupId>
+            <artifactId>triggers-dt</artifactId>
+            <version>${tv.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>gg.xp</groupId>
+            <artifactId>titan-jails</artifactId>
+            <version>${tv.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>gg.xp</groupId>
+            <artifactId>easytriggers</artifactId>
+            <version>${tv.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>gg.xp</groupId>
+            <artifactId>timelines</artifactId>
+            <version>${tv.version}</version>
+        </dependency>
+        <!-- Telesto client integration: lets the sidecar drive the user's Telesto
+             Dalamud plugin to place automarks. TelestoMain / TelestoAutoMarkHandler /
+             TelestoPartyListHandler are AutoScanned once on the classpath (they carry
+             @HandleEvents). telesto-core's ONLY dependency is xivsupport (already above),
+             so this adds no new transitive jars and pulls in no Swing/GUI - the
+             telesto-gui / telesto-easy-triggers / telesto-right-clicks modules are
+             deliberately NOT included. build.sh installs telesto-core to ~/.m2 first. -->
+        <dependency>
+            <groupId>gg.xp</groupId>
+            <artifactId>telesto-core</artifactId>
+            <version>${tv.version}</version>
+        </dependency>
+        <!-- TriggeventCore parses NyaaTriggers control commands on stdin with Jackson
+             (tools.jackson, JsonNode/ObjectMapper). We deliberately do NOT declare a
+             jackson-databind dependency here: it comes transitively from xivsupport, so
+             the sidecar always compiles + shades against the EXACT Jackson the engine
+             uses. The previous explicit pin (com.fasterxml jackson-databind 2.13.x, from
+             when Triggevent was on Jackson 2) survived upstream's migration to Jackson 3
+             and dragged Jackson-2 jackson-annotations onto the classpath, which Maven
+             mediation forced over the 3.x annotations the engine's tools.jackson databind
+             was compiled against -> NoSuchFieldError (POJO / READ_UNKNOWN_ENUM_VALUES_...)
+             at boot, failing ~13 components. Inheriting transitively avoids any version
+             skew now and the next time upstream (floating master) bumps Jackson. The old
+             CVE-2022-42003/42004 databind advisories are Jackson 2.x only; the engine's
+             Jackson 3 line post-dates them. -->
+
+    </dependencies>
+
+    <build>
+        <finalName>triggevent-core</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.1</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>gg.xp.nyaa.TriggeventCore</mainClass>
+                                </transformer>
+                                <!-- Groovy / Pico / Reflections rely on service files; merge them. -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>module-info.class</exclude>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

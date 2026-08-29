@@ -1,0 +1,41 @@
+name: Prune old releases
+
+# Manual one-off cleanup, run from the Actions tab: deletes every release (and
+# its tag) EXCEPT the current rolling Stable (whatever /releases/latest points at).
+# Run it only while no Release build is in flight. A mid-build rolling release
+# already counts as "latest" before its platform zips upload, so a cleanup at
+# that moment would keep the assetless one and delete the last complete build.
+# The dry_run input lists what would be deleted without deleting anything.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be deleted without deleting"
+        type: boolean
+        default: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete all but the current Stable release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          KEEP_STABLE=$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)
+          [ -n "$KEEP_STABLE" ] || { echo "::error::could not resolve the current stable release"; exit 1; }
+          echo "Keeping stable: $KEEP_STABLE"
+          gh release list --limit 200 --json tagName --jq '.[].tagName' | while read -r t; do
+            [ -z "$t" ] && continue
+            [ "$t" = "$KEEP_STABLE" ] && continue
+            if [ "$DRY" = "true" ]; then
+              echo "Would delete $t"
+            else
+              echo "Deleting $t"
+              gh release delete "$t" --cleanup-tag --yes || true
+            fi
+          done

@@ -1,0 +1,608 @@
+name: Release
+
+# Two ways this runs:
+#   * push a v* TAG -> a full Stable release. The version comes from the tag,
+#     so _VERSION in app_common.py must already match it.
+#   * push to MAIN -> a ROLLING Stable release, built automatically on every
+#     commit with NO manual tagging. The version is <source _VERSION>.<run_number>
+#     (e.g. 1.2.1.47): that sorts ABOVE the matching base version and increases
+#     on every push, so users self-update continuously. The build stamps that
+#     version into _VERSION so the installed app reports exactly what the
+#     release advertises (else the updater would re-offer the same build
+#     forever). Older rolling releases are pruned within the channel. Hand-cut
+#     3-segment tags (vX.Y.Z) are never touched, so tagged milestones stay
+#     downloadable.
+#
+# History: this workflow also used to build a Master pre-release channel from
+# the master branch. That channel was retired when the app went Python-only.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+# Least-privilege default. Jobs that publish (release, build-*, publish,
+# prune-rolling) re-declare contents: write. meta and build-sidecar only need
+# read access, so they inherit this instead of the repo default.
+permissions:
+  contents: read
+
+# One in-flight build per ref. Each tag and each branch is its own ref, so
+# rolling and hand-cut releases never cancel each other. Rapid pushes to main
+# share a group, so a newer commit supersedes an older still-building rolling
+# run (saves minutes and avoids two prune steps racing). A canceled run that
+# already published self-heals: the next run's prune sweeps its leftover
+# rolling release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Resolve tag / version / prerelease / rolling ONCE so a branch push (no tag ref)
+  # and a tag push flow through the exact same build+publish pipeline below.
+  meta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      rolling: ${{ steps.v.outputs.rolling }}
+      suffix: ${{ steps.v.outputs.suffix }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: v
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+            VER="${TAG#v}"
+            # Tag builds skip the rolling version stamp, so the source version
+            # must already equal the tag. Fail here: a mismatch ships a build
+            # that reports the old version and offers this update forever.
+            BASE=$(grep -oP '^_VERSION\s*=\s*"\K[^"]+' app_common.py)
+            if [ "$BASE" != "$VER" ]; then
+              echo "::error::_VERSION $BASE does not match tag $TAG"; exit 1
+            fi
+            # Single Stable channel: every tag is a full release. A hyphenated
+            # tag no longer maps to a Master pre-release (that channel is retired).
+            PRE=false
+            SUFFIX=""
+            ROLL=false
+          else
+            BASE=$(grep -oP '^_VERSION\s*=\s*"\K[^"]+' app_common.py)
+            if [ -z "$BASE" ]; then echo "::error::could not read _VERSION from app_common.py"; exit 1; fi
+            VER="${BASE}.${{ github.run_number }}"
+            # Only main has a release channel. An unexpected ref (e.g. a manual
+            # workflow_dispatch from another branch) must never publish over
+            # Stable, so fail rather than guess.
+            if [ "${{ github.ref_name }}" != "main" ]; then
+              echo "::error::branch ${{ github.ref_name }} has no release channel"; exit 1
+            fi
+            PRE=false
+            SUFFIX=""
+            TAG="v${VER}"
+            ROLL=true
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=$VER"
+            echo "prerelease=$PRE"
+            echo "rolling=$ROLL"
+            echo "suffix=$SUFFIX"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building tag=$TAG version=$VER prerelease=$PRE rolling=$ROLL"
+
+  # Run the test suite on every push and tag. Every build/publish job below
+  # depends on this, so a commit that breaks the rollback contract or DPS
+  # totals never ships to auto-updating users. Tests are standalone scripts
+  # (python3 test_*.py), so run each one and fail the job if any exits non-zero.
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install system deps for PyQt6 runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon0 libxcb-cursor0 libgl1 libnss3 libasound2
+      - name: Install Python dependencies
+        run: |
+          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 websockets==16.1.1 regex==2026.7.19
+      - name: Run test suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          status=0
+          for f in test_*.py; do
+            echo "::group::$f"
+            python "$f" || { echo "::error::$f failed"; status=1; }
+            echo "::endgroup::"
+          done
+          exit $status
+      # The Japanese catalog drifts silently as strings are added. Fail the
+      # build when lang/ja.json is out of sync; tools/extract_strings.py
+      # (optionally --prune) brings it back.
+      - name: Check translation catalog is in sync
+        run: python tools/extract_strings.py --check
+
+  release:
+    needs: [meta, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Fetch voice model
+        run: |
+          curl -fL --retry 3 --retry-all-errors -o voices/en_US-arctic-medium.onnx \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/arctic/medium/en_US-arctic-medium.onnx"
+
+      # Pinned upstream hash of the 76,766,385-byte piper-voices v1.0.0 model: a saved
+      # HTTP error body fails here, before it can be packaged into the release.
+      - name: Verify voice model checksum
+        run: echo "483303e294947a3ec2f910ea96093d876e1640f5772e9d89e511d6c82c667286  voices/en_US-arctic-medium.onnx" | sha256sum -c
+
+      - name: Create/refresh the GitHub release with voice assets
+        uses: softprops/action-gh-release@v3
+        with:
+          # For a branch (rolling) build there is no tag ref, so pass the computed tag
+          # explicitly. The action creates it at this commit. Tags are always full
+          # Stable releases (prerelease is always false now that the Master
+          # channel is retired).
+          #
+          # Draft until both platform zips are uploaded: the release job runs at
+          # ~15s but the Windows/Linux zips land ~3min in, so a published release
+          # would be visible to the auto-updater with a higher version and no
+          # platform asset, surfacing "No Windows build found in the latest
+          # release". Drafts are excluded by /releases/latest, so the updater
+          # never sees it until the publish job below un-drafts it.
+          tag_name: ${{ needs.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          prerelease: ${{ needs.meta.outputs.prerelease }}
+          draft: true
+          generate_release_notes: true
+          files: |
+            voices/en_US-arctic-medium.onnx
+            voices/en_US-arctic-medium.onnx.json
+
+  # Build the Triggevent Engine sidecar (platform-independent fat jar) once and
+  # share it to both packaging jobs. build.sh clones xpdota/event-trigger, installs
+  # the engine modules, and shades target/triggevent-core.jar. Needs JDK 17 + Maven
+  # (Maven is preinstalled on the ubuntu runners).
+  build-sidecar:
+    needs: [meta, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Build triggevent-core.jar
+        run: bash triggevent-core/build.sh
+
+      - name: Upload sidecar jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: triggevent-core-jar
+          path: triggevent-core/target/triggevent-core.jar
+          if-no-files-found: error
+          retention-days: 1
+
+      # Boot the freshly-built engine headless once and capture the trigger inventory
+      # it prints on stdout at startup. The packaging jobs bundle this as a first-run
+      # seed so the engine rows list on a FRESH install before the sidecar has ever run
+      # on the user's machine. Best-effort: a failed harvest just means no seed this
+      # release (rows then appear after the first engine boot, exactly as before).
+      - name: Harvest Triggevent inventory seed
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y xvfb
+          # Keep stdin open (the sidecar reads commands from it) for longer than we poll,
+          # so it doesn't shut down on EOF before emitting its inventory.
+          sleep 180 | xvfb-run -a -s "-screen 0 1024x768x24" \
+            java -jar triggevent-core/target/triggevent-core.jar > engine.out 2> engine.err &
+          JPID=$!
+          for _ in $(seq 1 60); do
+            grep -aq '"inventory"' engine.out && break
+            sleep 2
+          done
+          kill "$JPID" 2>/dev/null || true
+          python3 - <<'PY'
+          import json, sys
+          try:
+              lines = open('engine.out', encoding='utf-8', errors='replace').read().splitlines()
+          except OSError:
+              lines = []
+          seed = None
+          for line in lines:
+              line = line.strip()
+              if '"inventory"' not in line:
+                  continue
+              try:
+                  msg = json.loads(line)
+              except ValueError:
+                  continue
+              if msg.get('t') == 'inventory' and isinstance(msg.get('triggers'), list):
+                  seed = [
+                      {'source': 'triggevent', 'id': t.get('id', ''),
+                       'fight': t.get('fight', ''), 'group': t.get('group', ''),
+                       'name': t.get('name') or t.get('id', ''), 'text': t.get('text', '')}
+                      for t in msg['triggers'] if isinstance(t, dict) and t.get('id')
+                  ]
+                  break
+          if not seed:
+              sys.stderr.write('No inventory line captured; skipping seed.\n')
+              sys.exit(1)
+          with open('triggevent_inventory.seed.json', 'w', encoding='utf-8') as f:
+              json.dump(seed, f)
+          print(f'Harvested {len(seed)} Triggevent triggers into the seed.')
+          PY
+
+      - name: Upload Triggevent inventory seed
+        uses: actions/upload-artifact@v4
+        with:
+          name: triggevent-seed
+          path: triggevent_inventory.seed.json
+          if-no-files-found: warn
+          retention-days: 1
+
+  build-windows:
+    needs: [meta, release, build-sidecar, test]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      # Pinned versions (no bare `pip install`): a compromised or buggy upstream
+      # release can no longer ride into the next rolling Stable. Keep these in
+      # sync with requirements.txt. pyinstaller/piper-tts/pillow are build-only.
+      - name: Install dependencies
+        run: |
+          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 piper-tts==1.6.0 pyinstaller==6.21.0 pillow==12.3.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1
+
+      # Rolling builds are versioned <source _VERSION>.<run_number>. Stamp that into
+      # _VERSION so the frozen app reports the same version the release advertises.
+      # Otherwise it would see itself as older and re-offer the same update on every
+      # launch. No-op for tag builds (their _VERSION already matches the tag).
+      - name: Stamp rolling version into _VERSION
+        if: needs.meta.outputs.rolling == 'true'
+        shell: bash
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+        run: |
+          python - <<'PY'
+          import os, re, pathlib
+          ver = os.environ["VER"]
+          p = pathlib.Path("app_common.py")
+          s = p.read_text(encoding="utf-8")
+          s, n = re.subn(r'(?m)^(_VERSION\s*=\s*")[^"]+(")', r'\g<1>' + ver + r'\g<2>', s, count=1)
+          assert n == 1, "did not patch _VERSION"
+          p.write_text(s, encoding="utf-8")
+          print("stamped _VERSION =", ver)
+          PY
+
+      - name: Generate exe icon
+        run: python -c "from PIL import Image; Image.open('icon_nyaa.png').save('icon_nyaa.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
+
+      - name: Fetch voice model
+        run: curl.exe -fL --retry 3 --retry-all-errors -o voices/en_US-arctic-medium.onnx "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/arctic/medium/en_US-arctic-medium.onnx"
+
+      # Pinned upstream hash of the 76,766,385-byte piper-voices v1.0.0 model: a saved
+      # HTTP error body fails here, before it can be packaged into the release.
+      - name: Verify voice model checksum
+        shell: bash
+        run: echo "483303e294947a3ec2f910ea96093d876e1640f5772e9d89e511d6c82c667286  voices/en_US-arctic-medium.onnx" | sha256sum -c
+
+      - name: Download Triggevent sidecar jar
+        uses: actions/download-artifact@v4
+        with:
+          name: triggevent-core-jar
+          path: triggevent-core/target
+
+      - name: Download Triggevent inventory seed (best-effort)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: triggevent-seed
+          path: .
+
+      - name: Bundle Temurin JRE 17
+        shell: bash
+        run: |
+          curl.exe -fL --retry 3 --retry-all-errors -o jre.zip "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jre/hotspot/normal/eclipse"
+          # Verify the JRE against the checksum Adoptium's API reports for this
+          # exact binary. The JRE is native code executing with full user
+          # privileges, so a MITM'd or CDN-poisoned archive must fail here rather
+          # than ship inside the release.
+          python - <<'PY'
+          import json, urllib.request, hashlib, sys
+          url = ("https://api.adoptium.net/v3/assets/feature_releases/17/ga"
+                 "?architecture=x64&image_type=jre&jvm_impl=hotspot&os=windows"
+                 "&page=0&page_size=1&vendor=eclipse")
+          # Adoptium's edge 403s urllib's default User-Agent (bot filtering).
+          req = urllib.request.Request(url, headers={"User-Agent": "NyaaTriggers-CI/1.0"})
+          meta = json.load(urllib.request.urlopen(req, timeout=30))
+          expected = meta[0]["binaries"][0]["package"]["checksum"].lower()
+          h = hashlib.sha256()
+          with open("jre.zip", "rb") as f:
+              for chunk in iter(lambda: f.read(1 << 20), b""):
+                  h.update(chunk)
+          actual = h.hexdigest().lower()
+          if actual != expected:
+              sys.exit(f"JRE checksum mismatch: expected {expected}, got {actual}")
+          print(f"JRE checksum OK ({actual})")
+          PY
+
+      - name: Extract Temurin JRE
+        run: |
+          Expand-Archive -Path jre.zip -DestinationPath jre-tmp
+          $inner = (Get-ChildItem jre-tmp -Directory)[0].FullName
+          Move-Item $inner jre
+
+      - name: Build with PyInstaller
+        run: pyinstaller NyaaTriggers.spec
+
+      # The engine ships with every build. The spec refuses to package without
+      # it, so this only catches the packaging itself dropping it.
+      - name: Verify the Triggevent Engine shipped
+        run: |
+          $jar = 'dist\NyaaTriggers\_internal\triggevent-core\target\triggevent-core.jar'
+          $java = 'dist\NyaaTriggers\_internal\jre\bin\java.exe'
+          if (-not (Test-Path $jar))  { throw "engine jar missing from the build: $jar" }
+          if (-not (Test-Path $java)) { throw "bundled JRE missing from the build: $java" }
+          if ((Get-Item $jar).Length -lt 1MB) { throw "engine jar is too small to be the fat jar" }
+
+      # TIMELINES_DIR reads timelines/ next to the exe, but onedir packing puts
+      # every datas entry under _internal. Copy the bundled local timeline out
+      # so a fresh install finds it. Only UMAD.txt ships.
+      - name: Place the bundled timeline next to the exe
+        run: |
+          $src = 'dist\NyaaTriggers\_internal\timelines\UMAD.txt'
+          if (-not (Test-Path $src)) { throw "bundled timeline missing from the build: $src" }
+          New-Item -ItemType Directory -Force 'dist\NyaaTriggers\timelines' | Out-Null
+          Copy-Item $src 'dist\NyaaTriggers\timelines\UMAD.txt'
+
+      - name: Zip release folder
+        run: Compress-Archive -Path dist\NyaaTriggers -DestinationPath NyaaTriggers-windows.zip
+
+      # The in-app updater downloads this sidecar (if present) and refuses to
+      # install an archive whose SHA-256 doesn't match.
+      - name: Write SHA-256 sidecar
+        shell: bash
+        run: sha256sum NyaaTriggers-windows.zip > NyaaTriggers-windows.zip.sha256
+
+      - name: Upload Windows build to release
+        run: gh release upload ${{ needs.meta.outputs.tag }} NyaaTriggers-windows.zip NyaaTriggers-windows.zip.sha256 --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-linux:
+    needs: [meta, release, build-sidecar, test]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install system deps for PyQt6 runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libxkbcommon0 libxcb-cursor0 libgl1 libnss3 libasound2
+
+      # Pinned versions (no bare `pip install`); keep in sync with requirements.txt.
+      - name: Install Python dependencies
+        run: |
+          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 piper-tts==1.6.0 pyinstaller==6.21.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1
+
+      # See build-windows: stamp the rolling version so the frozen app's reported
+      # version matches the release. No-op for tag builds.
+      - name: Stamp rolling version into _VERSION
+        if: needs.meta.outputs.rolling == 'true'
+        shell: bash
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+        run: |
+          python - <<'PY'
+          import os, re, pathlib
+          ver = os.environ["VER"]
+          p = pathlib.Path("app_common.py")
+          s = p.read_text(encoding="utf-8")
+          s, n = re.subn(r'(?m)^(_VERSION\s*=\s*")[^"]+(")', r'\g<1>' + ver + r'\g<2>', s, count=1)
+          assert n == 1, "did not patch _VERSION"
+          p.write_text(s, encoding="utf-8")
+          print("stamped _VERSION =", ver)
+          PY
+
+      - name: Fetch voice model
+        run: |
+          curl -fL --retry 3 --retry-all-errors -o voices/en_US-arctic-medium.onnx \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/arctic/medium/en_US-arctic-medium.onnx"
+
+      # Pinned upstream hash of the 76,766,385-byte piper-voices v1.0.0 model: a saved
+      # HTTP error body fails here, before it can be packaged into the release.
+      - name: Verify voice model checksum
+        run: echo "483303e294947a3ec2f910ea96093d876e1640f5772e9d89e511d6c82c667286  voices/en_US-arctic-medium.onnx" | sha256sum -c
+
+      - name: Download Triggevent sidecar jar
+        uses: actions/download-artifact@v4
+        with:
+          name: triggevent-core-jar
+          path: triggevent-core/target
+
+      - name: Download Triggevent inventory seed (best-effort)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: triggevent-seed
+          path: .
+
+      - name: Bundle Temurin JRE 17
+        run: |
+          curl -fL --retry 3 --retry-all-errors -o jre.tar.gz \
+            "https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jre/hotspot/normal/eclipse"
+          # Verify the JRE against the checksum Adoptium's API reports for this
+          # exact binary. Native code with full user privileges: a tampered
+          # archive must fail here, not ship inside the release.
+          python3 - <<'PY'
+          import json, urllib.request, hashlib, sys
+          url = ("https://api.adoptium.net/v3/assets/feature_releases/17/ga"
+                 "?architecture=x64&image_type=jre&jvm_impl=hotspot&os=linux"
+                 "&page=0&page_size=1&vendor=eclipse")
+          # Adoptium's edge 403s urllib's default User-Agent (bot filtering).
+          req = urllib.request.Request(url, headers={"User-Agent": "NyaaTriggers-CI/1.0"})
+          meta = json.load(urllib.request.urlopen(req, timeout=30))
+          expected = meta[0]["binaries"][0]["package"]["checksum"].lower()
+          h = hashlib.sha256()
+          with open("jre.tar.gz", "rb") as f:
+              for chunk in iter(lambda: f.read(1 << 20), b""):
+                  h.update(chunk)
+          actual = h.hexdigest().lower()
+          if actual != expected:
+              sys.exit(f"JRE checksum mismatch: expected {expected}, got {actual}")
+          print(f"JRE checksum OK ({actual})")
+          PY
+          mkdir -p jre-tmp
+          tar -xzf jre.tar.gz -C jre-tmp
+          mv "$(find jre-tmp -mindepth 1 -maxdepth 1 -type d | head -1)" jre
+
+      - name: Build with PyInstaller
+        run: pyinstaller NyaaTriggers.spec
+
+      # The engine ships with every build. The spec refuses to package without
+      # it, so this only catches the packaging itself dropping it.
+      - name: Verify the Triggevent Engine shipped
+        run: |
+          jar=dist/NyaaTriggers/_internal/triggevent-core/target/triggevent-core.jar
+          java=dist/NyaaTriggers/_internal/jre/bin/java
+          test -f "$jar" || { echo "engine jar missing from the build: $jar"; exit 1; }
+          test -x "$java" || { echo "bundled JRE missing from the build: $java"; exit 1; }
+          test "$(stat -c%s "$jar")" -ge 1000000 || { echo "engine jar too small"; exit 1; }
+
+      # The launcher runs the pre boot _internal recovery the frozen exe cannot
+      # run itself, then execs the real binary. Ship it next to the exe.
+      - name: Add launcher script
+        run: |
+          cp NyaaTriggers.sh dist/NyaaTriggers/NyaaTriggers.sh
+          chmod +x dist/NyaaTriggers/NyaaTriggers.sh
+
+      # Same onedir split as the Windows build: the spec bundles the local
+      # timeline under _internal, TIMELINES_DIR reads it next to the exe.
+      - name: Place the bundled timeline next to the exe
+        run: |
+          mkdir -p dist/NyaaTriggers/timelines
+          cp dist/NyaaTriggers/_internal/timelines/UMAD.txt dist/NyaaTriggers/timelines/UMAD.txt
+
+      - name: Tar release folder
+        run: |
+          cd dist
+          tar -czf ../NyaaTriggers-linux.tar.gz NyaaTriggers
+
+      # The in-app updater downloads this sidecar (if present) and refuses to
+      # install an archive whose SHA-256 doesn't match.
+      - name: Write SHA-256 sidecar
+        run: sha256sum NyaaTriggers-linux.tar.gz > NyaaTriggers-linux.tar.gz.sha256
+
+      - name: Upload Linux build to release
+        run: |
+          gh release upload ${{ needs.meta.outputs.tag }} NyaaTriggers-linux.tar.gz NyaaTriggers-linux.tar.gz.sha256 --clobber
+          # Publish the engine jar on its own so the in-app "Update Triggevent
+          # engine" button can pull it without a full app download. Its .sha256
+          # sidecar rides along: _download_engine verifies against it (fail
+          # closed) before swapping the jar in, same as the app archives.
+          (cd triggevent-core/target && sha256sum triggevent-core.jar) > triggevent-core.jar.sha256
+          gh release upload ${{ needs.meta.outputs.tag }} triggevent-core/target/triggevent-core.jar triggevent-core.jar.sha256 --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Flip the release from draft to published once both platform zips are
+  # uploaded. The release job creates it as a draft so the auto-updater never
+  # sees a half-empty release; this runs last (alongside prune) to publish it.
+  # If a build job failed, needs is unmet and the release stays a draft, which
+  # is the desired failure mode. Users keep the previous build, and the next push
+  # supersedes the orphan draft.
+  publish:
+    needs: [meta, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Publish release (un-draft)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          # This job has no checkout, and gh resolves the target repo from the
+          # local git remotes when GH_REPO is unset, so it dies with "not a git
+          # repository" and the release stays a draft forever.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release edit "$TAG" --draft=false
+          echo "Published $TAG"
+
+  # Keep the Stable channel a single continuously-updated rolling release: after a
+  # rolling build publishes with both assets, delete the PREVIOUS rolling releases
+  # (and their tags). Only auto-rolling tags (vN.N.N.N, a 4th numeric segment)
+  # are touched. Hand-cut vX.Y.Z Stables are left alone, so tagged milestones
+  # stay downloadable as rollback targets. Runs only after publish completes, so
+  # the previous rolling release is not deleted before the new one is visible.
+  prune-rolling:
+    needs: [meta, publish]
+    if: needs.meta.outputs.rolling == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      # Fail-closed double gate: the prerelease flag and the tag shape must both
+      # say the release is an auto-rolling Stable, so a wrong filter here deletes
+      # nothing rather than touching hand-cut milestone releases.
+      - name: Delete superseded rolling releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP: ${{ needs.meta.outputs.tag }}
+          PRE: ${{ needs.meta.outputs.prerelease }}
+          SUFFIX: ${{ needs.meta.outputs.suffix }}
+        run: |
+          if [ "$PRE" = "true" ]; then
+            SELECT='select(.isPrerelease)'
+          else
+            SELECT='select(.isPrerelease | not)'
+          fi
+          echo "Pruning channel prerelease=$PRE tags matching v<x.y.z.n>${SUFFIX}"
+          gh release list --limit 100 --json tagName,isPrerelease \
+            --jq ".[] | $SELECT | .tagName" | while read -r t; do
+            [ -z "$t" ] && continue
+            [ "$t" = "$KEEP" ] && continue
+            echo "$t" | grep -qE "^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+${SUFFIX}$" || continue
+            echo "Pruning superseded rolling release $t"
+            gh release delete "$t" --cleanup-tag --yes || true
+          done

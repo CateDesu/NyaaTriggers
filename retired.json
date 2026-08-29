@@ -1,0 +1,60 @@
+{
+  "note": "Trigger ids withdrawn from triggers.json. Removing a row from triggers.json is not enough on its own: the merge re-appends any local copy whose id is no longer official, so a client that ever toggled the trigger keeps it forever. Ids listed here are skipped on load and dropped from triggers.local.json on the next save. Never reuse a retired id.",
+  "retired": [
+    {
+      "id": "0a663d51-aef7-41ba-9561-c1195b2b07d1",
+      "name": "UMAD Mystery Magic (Stack/Spread)",
+      "reason": "'Stack or spread' named both outcomes, so it told you nothing. Left triggers.json in e29de7a; listed here to purge the local copies that outlived it."
+    },
+    {
+      "id": "31183138-ba78-4f50-a6ec-d6b919267345",
+      "name": "UMAD Thrumming Thunder III",
+      "reason": "'Dodge line' does not describe what the cast actually does."
+    },
+    {
+      "id": "6bc93def-c0da-44c8-8e0b-16378d3cf3aa",
+      "name": "UMAD Blizzard Blowout",
+      "reason": "'Cone, move' does not describe what the cast actually does."
+    },
+    {
+      "id": "d489010f-0f65-4a14-85aa-4140397bed8c",
+      "name": "M4S – Betwitching Flight",
+      "reason": "Second claim on M4S casts 9671 and 8DEF. cactbot r4s.ts calls both ids 'Avoid Front + Side Cleaves', which is the row that stays."
+    },
+    {
+      "id": "1e74b7e8-6043-40cd-8c96-f4b673d724a7",
+      "name": "Bewitching Flight - Go Behind",
+      "reason": "Third claim on M4S cast 9671. cactbot r4s.ts calls the cast 'Avoid Front + Side Cleaves', which is the row that stays."
+    },
+    {
+      "id": "7b49b5cc-0ed4-45e4-8ba9-81ae6f47fbe7",
+      "name": "M12S – Splattershed",
+      "reason": "Second claim on M12S cast B9C4 with identical 'Raidwide' text. The first row stays."
+    },
+    {
+      "id": "2d7850b3-3739-425b-a062-071792e91e83",
+      "name": "Holiest of Holy",
+      "reason": "Second claim on DSR cast 62D4 with identical 'Raidwide' text. The first row stays."
+    },
+    {
+      "id": "a474c5df-2885-4526-a27c-ce39e80d06b6",
+      "name": "Arcane Revelation Light",
+      "reason": "Second claim on P11S cast 820D with identical 'Dark Safe' text. The first row stays."
+    },
+    {
+      "id": "f1c682ea-a915-4d01-bb27-15003437f2f6",
+      "name": "Arcane Revelation Light",
+      "reason": "Second claim on P11S cast 820F with identical 'Dark Safe' text. The first row stays."
+    },
+    {
+      "id": "7fb197ee-cefe-431b-9a5b-7e4c3aee8f58",
+      "name": "Arcane Revelation Dark",
+      "reason": "Second claim on P11S cast 820E with identical 'Light Safe' text. The first row stays."
+    },
+    {
+      "id": "254469d5-dd56-4746-ac0e-b5fe5ab1e12a",
+      "name": "Arcane Revelation Dark",
+      "reason": "Second claim on P11S cast 8210 with identical 'Light Safe' text. The first row stays."
+    }
+  ]
+}

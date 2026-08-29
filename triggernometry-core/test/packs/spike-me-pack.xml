@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<TriggernometryExport PluginVersion="2.0.0.6">
+<ExportedFolder Id="55555555-5555-5555-5555-555555555555" Enabled="true" Name="SpikeMe">
+<Triggers>
+<Trigger Enabled="true" Id="66666666-6666-6666-6666-666666666666" Name="spike-me" RegularExpression="SPIKEME">
+<Actions>
+<Action OrderNumber="1" ActionType="UseTTS" UseTTSTextExpression="my x is ${_me.x} hp ${_me.currenthp}" />
+</Actions>
+</Trigger>
+</Triggers>
+</ExportedFolder>
+</TriggernometryExport>

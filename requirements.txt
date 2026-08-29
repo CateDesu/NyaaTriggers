@@ -1,0 +1,36 @@
+# System packages also required (install via pacman / apt / etc.):
+#   alsa-utils      Linux audio playback (aplay)
+#   python-pyqt6    (or: pip install PyQt6)
+# Optional: espeak-ng, the Linux System voice backend. Every use is guarded
+# by shutil.which, so the app runs fine without it.
+#
+# Versions are pinned (==) for reproducible source runs. Bump deliberately.
+PyQt6==6.11.0
+
+# Client for the companion Dalamud plugin's loopback WebSocket (the in-game
+# overlay). The IINACT feed uses Qt's own QWebSocket instead; the plugin link
+# runs on its own worker thread, so it needs a synchronous client.
+websockets==16.1.1
+
+# Optional: enables the "Cactbot Timeline and Triggers" tab, which runs the real
+# cactbot headlessly and reads its callouts. The app runs fine without it; the
+# toggle stays disabled with an install hint until it is present.
+PyQt6-WebEngine==6.11.0
+
+# Optional: the in-app neural Japanese voice (the "(JPN)" entries in the Model
+# dropdown) and the offline neural English voice. Deliberately NOT installable
+# lines here: the git updater installs this whole file into the app interpreter
+# on every update, and that interpreter never imports either package. Source
+# runs load them from the ~/.venv/ffxiv site-packages after installing them on
+# demand when you pick a neural voice, and frozen builds bundle their own copy,
+# pinned in the release workflow. The source-run pins live at the installers:
+# kokoro-onnx==0.4.7 in tts.py install_kokoro_deps, piper-tts==1.4.2 in
+# install.py and the first run setup. Kokoro reads the kana readings via
+# espeak-ng, so no misaki[ja]/pyopenjtalk build is required.
+
+# Backing regex engine for compile_user_regex, which compiles third-party trigger
+# patterns and matches them against every incoming log line. The `regex` module
+# supports a per-call timeout, the only runtime backstop against a catastrophic
+# backtracking pattern slipping past the static heuristic. Without it user
+# patterns are refused; stdlib `re` cannot bound a match.
+regex==2026.7.19

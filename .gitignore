@@ -1,0 +1,40 @@
+__pycache__/
+*.pyc
+triggers.local.json
+triggers.experimental.json
+nyaatriggers.log
+nyaatriggers_settings.json
+dps_logs/
+pull_logs/
+triggevent_inventory.json
+callouts_ja.cache.json
+triggers.repo.json
+retired.repo.json
+triggers.repo.version
+fight_catalog.json
+voices/*.onnx
+voices/*.pth
+voices/*.index
+voices/*.bin
+icon_nyaa.ico
+CODE_REVIEW.md
+triggers.custom.backup.json
+triggers.local.json.bak
+triggers.json.bak
+
+# Build artifacts (fetched/generated at release time, bundled, never committed)
+jre/
+triggevent_inventory.seed.json
+
+# Self-update runtime leftovers (created in the install dir, not the source tree)
+.nyaa-boot-ok
+*.nyaa-old
+.nyaa-version-x
+.nyaa-update-*
+
+# Local scratch (agent handoff/audit notes, plans) - never committed
+local/
+latest_release.json
+
+# Local agent instructions
+AGENTS.md

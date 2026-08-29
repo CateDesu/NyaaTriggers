@@ -1,0 +1,7 @@
+# bin/ is intentionally COMMITTED (vendored): it is cross-platform .NET Framework 4.6.2
+# MSIL that runs on Windows + Linux, and CI cannot rebuild it reliably (GitHub runners ship
+# Mono 6.8, whose mcs can't compile the engine's modern C#). Regenerate with build-all.sh on
+# Mono 6.12+ when the engine/host changes, then commit the result.
+/.engine/
+/.nuget/
+/shims/*.dll

@@ -1,0 +1,7 @@
+# Build output
+target/
+# Cloned GPL engine source (re-fetched by build.sh; not vendored)
+event-trigger/
+# Runtime properties the engine writes into cwd during boot/replay
+*.properties
+*.properties.backup

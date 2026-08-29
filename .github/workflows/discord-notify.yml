@@ -1,0 +1,47 @@
+# Posts a message to Discord whenever code lands on main.
+#
+# Why an Action and not a direct webhook: GitHub's event JSON isn't shaped like a
+# Discord message ({"content":"…"}), so pointing a GitHub webhook straight at a
+# Discord webhook URL 400s. This Action is the format-converting bridge.
+#
+# Setup (one-time): repo → Settings → Secrets and variables → Actions →
+# "New repository secret" → Name = DISCORD_WEBHOOK, Value = your Discord
+# webhook URL (https://discord.com/api/webhooks/…). No other config needed.
+name: Discord notify
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post push to Discord
+        env:
+          # Passed via env (not interpolated into the script) to avoid shell injection
+          # from a crafted commit message.
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          COMMIT_URL: ${{ github.event.head_commit.url }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK secret not set — skipping."
+            exit 0
+          fi
+          # --fail-with-body: a dead or revoked webhook returns 4xx/5xx; without
+          # --fail curl exits 0, the run reports success, and nothing is posted.
+          # -w logs the HTTP status on success and failure alike.
+          # Discord rejects content over 2000 characters so a long commit message
+          # would 400 the webhook call truncate before posting
+          jq -nc --arg c "📦 Push to **${REPO}** (${REF}) by ${ACTOR}
+
+          ${COMMIT_MSG}
+          ${COMMIT_URL}" \
+            '{content:(if ($c|length) > 2000 then ($c[:1999] + "…") else $c end), username:"NyaaTriggers"}' \
+            | curl -sS --fail-with-body -w '\nDiscord HTTP %{http_code}\n' \
+                -X POST -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK"

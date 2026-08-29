@@ -1,0 +1,52 @@
+<configuration debug="false">
+
+    <!-- Sidecar logging config. Shades over xivsupport's logback.xml: stdout
+         carries the JSON protocol only, so the engine's own console logging
+         must go to stderr instead. A debug line spliced into the 600 KB
+         inventory line, which flushes in many separately synchronized chunks,
+         would corrupt it. The Python bridge reads stderr as the diagnostic
+         channel, so nothing is lost. No %highlight, ANSI colors would just
+         pollute the bridge log. -->
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>
+                %d{HH:mm:ss.SSS} [%t] %-5level %logger{36}:%line - %msg%n
+            </pattern>
+        </encoder>
+    </appender>
+    <define name="TRIGG_DIR" class="gg.xp.xivsupport.persistence.UserDirFinder" />
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${TRIGG_DIR}/triggevent.log</file>
+
+        <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
+            <fileNamePattern>${TRIGG_DIR}/triggevent.log.%i.zip</fileNamePattern>
+            <minIndex>1</minIndex>
+            <maxIndex>3</maxIndex>
+        </rollingPolicy>
+
+        <triggeringPolicy class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
+            <maxFileSize>100MB</maxFileSize>
+        </triggeringPolicy>
+        <encoder>
+            <pattern>
+                %d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36}:%line - %msg%n
+            </pattern>
+        </encoder>
+    </appender>
+    <appender name="COLLECTOR" class="gg.xp.xivsupport.slf4j.LogCollector">
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>
+                %msg
+            </pattern>
+        </encoder>
+    </appender>
+
+    <root level="debug">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="COLLECTOR"/>
+        <appender-ref ref="FILE"/>
+    </root>
+
+</configuration>

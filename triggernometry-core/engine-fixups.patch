@@ -1,0 +1,127 @@
+diff --git a/Source/Triggernometry/TriggernometryPlugin.csproj b/Source/Triggernometry/TriggernometryPlugin.csproj
+index 8641cca..5761b3f 100644
+--- a/Source/Triggernometry/TriggernometryPlugin.csproj
++++ b/Source/Triggernometry/TriggernometryPlugin.csproj
+@@ -110,7 +110,13 @@
+     <Reference Include="System.Runtime.CompilerServices.Unsafe, Version=6.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
+       <HintPath>..\packages\System.Runtime.CompilerServices.Unsafe.6.0.0\lib\net461\System.Runtime.CompilerServices.Unsafe.dll</HintPath>
+     </Reference>
+-    <Reference Include="System.Speech" />
++    <Reference Include="System.Net.Http" />
++    <Reference Include="netstandard">
++      <HintPath>/usr/lib/mono/4.5/Facades/netstandard.dll</HintPath>
++    </Reference>
++    <Reference Include="System.Speech">
++      <HintPath>..\shims\System.Speech.dll</HintPath>
++    </Reference>
+     <Reference Include="System.Text.Encoding.CodePages, Version=4.1.1.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
+       <HintPath>..\packages\System.Text.Encoding.CodePages.4.5.1\lib\net461\System.Text.Encoding.CodePages.dll</HintPath>
+     </Reference>
+@@ -669,15 +675,9 @@
+     </EmbeddedResource>
+   </ItemGroup>
+   <ItemGroup>
+-    <COMReference Include="WMPLib">
+-      <Guid>{6BF52A50-394A-11D3-B153-00C04F79FAA6}</Guid>
+-      <VersionMajor>1</VersionMajor>
+-      <VersionMinor>0</VersionMinor>
+-      <Lcid>0</Lcid>
+-      <WrapperTool>tlbimp</WrapperTool>
+-      <Isolated>False</Isolated>
+-      <EmbedInteropTypes>True</EmbedInteropTypes>
+-    </COMReference>
++    <Reference Include="Interop.WMPLib">
++      <HintPath>..\shims\Interop.WMPLib.dll</HintPath>
++    </Reference>
+   </ItemGroup>
+   <ItemGroup>
+     <Folder Include="Resources\" />
+@@ -701,10 +701,8 @@
+     </PropertyGroup>
+     <Error Condition="!Exists('..\packages\Microsoft.CodeAnalysis.Analyzers.3.3.3\build\Microsoft.CodeAnalysis.Analyzers.props')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\Microsoft.CodeAnalysis.Analyzers.3.3.3\build\Microsoft.CodeAnalysis.Analyzers.props'))" />
+     <Error Condition="!Exists('..\packages\Microsoft.CodeAnalysis.Analyzers.3.3.3\build\Microsoft.CodeAnalysis.Analyzers.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\Microsoft.CodeAnalysis.Analyzers.3.3.3\build\Microsoft.CodeAnalysis.Analyzers.targets'))" />
+-    <Error Condition="!Exists('..\packages\System.Text.Json.6.0.3\build\System.Text.Json.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\System.Text.Json.6.0.3\build\System.Text.Json.targets'))" />
+   </Target>
+   <Import Project="..\packages\Microsoft.CodeAnalysis.Analyzers.3.3.3\build\Microsoft.CodeAnalysis.Analyzers.targets" Condition="Exists('..\packages\Microsoft.CodeAnalysis.Analyzers.3.3.3\build\Microsoft.CodeAnalysis.Analyzers.targets')" />
+-  <Import Project="..\packages\System.Text.Json.6.0.3\build\System.Text.Json.targets" Condition="Exists('..\packages\System.Text.Json.6.0.3\build\System.Text.Json.targets')" />
+   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+        Other similar extension points exist, see Microsoft.Common.targets.
+   <Target Name="BeforeBuild">
+diff --git a/Source/Triggernometry/ActionProps.cs b/Source/Triggernometry/ActionProps.cs
+index 2a6243c..d85109d 100644
+--- a/Source/Triggernometry/ActionProps.cs
++++ b/Source/Triggernometry/ActionProps.cs
+@@ -2636,7 +2636,7 @@ namespace Triggernometry
+             set
+             {
+                 TextAuraEffectEnum tea = (TextAuraEffectEnum)0;
+-                string[] ex = value.Split(' ');
++                string[] ex = value.Split(new[] { ' ' });
+                 foreach (string exx in ex)
+                 {
+                     tea |= (TextAuraEffectEnum)Enum.Parse(typeof(TextAuraEffectEnum), exx.Replace(",", ""));
+diff --git a/Source/Triggernometry/Actions/ActionOverlayText.cs b/Source/Triggernometry/Actions/ActionOverlayText.cs
+index ed6cd5a..7077e29 100644
+--- a/Source/Triggernometry/Actions/ActionOverlayText.cs
++++ b/Source/Triggernometry/Actions/ActionOverlayText.cs
+@@ -144,7 +144,7 @@ namespace Triggernometry.Actions
+             set
+             {
+                 EffectEnum tea = (EffectEnum)0;
+-                string[] ex = value.Split(' ');
++                string[] ex = value.Split(new[] { ' ' });
+                 foreach (string exx in ex)
+                 {
+                     tea |= (EffectEnum)Enum.Parse(typeof(EffectEnum), exx.Replace(",", ""));
+diff --git a/Source/Triggernometry/Context.cs b/Source/Triggernometry/Context.cs
+index e8cfdb9..8b3e8fc 100644
+--- a/Source/Triggernometry/Context.cs
++++ b/Source/Triggernometry/Context.cs
+@@ -309,7 +309,7 @@ namespace Triggernometry
+             string[] slices = SplitArguments(slicesStr, allowEmptyList: false);
+             foreach (string slice in slices)
+             {   // parse slice string to int start/end/step
+-                string[] sliceArgs = slice.Split(':').Select(s => Trim(s)).ToArray();
++                string[] sliceArgs = slice.Split(new[] { ':' }).Select(s => Trim(s)).ToArray();
+                 if (sliceArgs.Length > 3) { throw ArgCountError(I18n.TranslateWord("slice"), "0-3", sliceArgs.Length, rawExpr); }
+ 
+                 string startStr = GetArgument(sliceArgs, 0, "", true);
+diff --git a/Source/Triggernometry/Interpreter.cs b/Source/Triggernometry/Interpreter.cs
+index 1b4c946..86a12a8 100644
+--- a/Source/Triggernometry/Interpreter.cs
++++ b/Source/Triggernometry/Interpreter.cs
+@@ -384,7 +384,7 @@ namespace Triggernometry
+             ScriptOptions _myso = _so.WithAllowUnsafe(GetUnsafeUsage(ctx));
+             if (assy != null)
+             {
+-                var assys = assy.Split(',').Select(x => x.Trim());
++                var assys = assy.Split(new[] { ',' }).Select(x => x.Trim());
+                 var currentAssemblies = AppDomain.CurrentDomain.GetAssemblies();
+                 foreach (var asmName in assys)
+                 {
+diff --git a/Source/Triggernometry/MathParser.cs b/Source/Triggernometry/MathParser.cs
+index 3833348..3b5fd24 100644
+--- a/Source/Triggernometry/MathParser.cs
++++ b/Source/Triggernometry/MathParser.cs
+@@ -536,7 +536,7 @@ namespace Triggernometry
+             double totalMin = 0;
+             try
+             {
+-                if (etString.Contains(':'))
++                if (etString.Contains(":"))
+                 {
+                     double etHour = int.Parse(etString.Substring(0, etString.IndexOf(':')), CultureInfo);
+                     double etMin = double.Parse(etString.Substring(etString.IndexOf(':') + 1), CultureInfo);
+diff --git a/Source/Triggernometry/Variables/VariableTable.cs b/Source/Triggernometry/Variables/VariableTable.cs
+index 4332e43..ead3011 100644
+--- a/Source/Triggernometry/Variables/VariableTable.cs
++++ b/Source/Triggernometry/Variables/VariableTable.cs
+@@ -350,7 +350,7 @@ namespace Triggernometry.Variables
+                 for (int x = 1; x <= Width; x++)
+                 {
+                     string tempStr = Peek(x, y).ToString();
+-                    if (tempStr.Contains(',') || tempStr.Contains('"') || tempStr.Contains('\n') || tempStr.Contains('\r'))
++                    if (tempStr.Contains(",") || tempStr.Contains("\"") || tempStr.Contains("\n") || tempStr.Contains("\r"))
+                     {
+                         tempStr = "\"" + tempStr.Replace("\"", "\"\"") + "\"";
+                     }

@@ -1,0 +1,180 @@
+# Guard WIP DMU (Dancing Mad Ultimate) sequential-trigger crashes that abort the
+# sequence and silence every callout after them: confettis.get(0) on an empty list
+# (ArrayIndexOutOfBounds, three sites), anyEntropy with no null-check, and the
+# tether/glowing-hand/gaze Position reads that NPE when a combatant's position is
+# unknown (NullPointerException). A null position now defaults the comparison to
+# false instead of killing the invocation.
+#
+# Also stop filtering the boss fake/real element headmarkers by
+# getTarget().npcIdMatches(19504): on some pulls the Kefka combatant never gets an
+# npc id populated, the wait then runs into the 120s multiInvocation timeout and
+# every Graven Image / look-away element callout is silently dropped. Filter by
+# the marker ids (673-678) instead, which only ever appear on the boss for these
+# mechanics. Against the event-trigger pin in build.sh. Upstream candidate.
+diff --git a/triggers/triggers-dt/src/main/java/gg/xp/xivsupport/triggers/ultimate/DMU.java b/triggers/triggers-dt/src/main/java/gg/xp/xivsupport/triggers/ultimate/DMU.java
+index 3b20d7783965..4fbf6d0de07d 100644
+--- a/triggers/triggers-dt/src/main/java/gg/xp/xivsupport/triggers/ultimate/DMU.java
++++ b/triggers/triggers-dt/src/main/java/gg/xp/xivsupport/triggers/ultimate/DMU.java
+@@ -224,7 +224,7 @@ public class DMU extends AutoChildEventHandler implements FilteredEventHandler {
+ 				// stack is HM 128, spread is 127
+ 
+ 				{
+-					List<HeadMarkerEvent> kefkaHM = s.waitEvents(2, HeadMarkerEvent.class, hme -> hme.getTarget().npcIdMatches(19504));
++					List<HeadMarkerEvent> kefkaHM = s.waitEvents(2, HeadMarkerEvent.class, hme -> hme.markerIdMatches(FAKE_FIRE, REAL_FIRE, FAKE_ICE, REAL_ICE));
+ 					var playerHm = s.waitEvent(HeadMarkerEvent.class, hme -> hme.markerIdMatches(127, 128));
+ 					boolean fakeFire = kefkaHM.stream().anyMatch(hme -> hme.markerIdMatches(673));
+ 					boolean fakeIce = kefkaHM.stream().anyMatch(hme -> hme.markerIdMatches(675));
+@@ -258,12 +258,14 @@ public class DMU extends AutoChildEventHandler implements FilteredEventHandler {
+ 				// TODO: sort this with self first
+ 				var confettiPlayers = confettis.stream().map(BuffApplied::getTarget).toList();
+ 				s.setParam("confettiPlayers", confettiPlayers);
+-				confettis.stream().filter(cf -> cf.getTarget().isThePlayer()).findAny().ifPresentOrElse(
+-						myCf -> s.updateCall(gravenConfetti, myCf),
+-						() -> s.updateCall(gravenNoConfetti, confettis.get(0)));
++				if (!confettis.isEmpty()) {
++					confettis.stream().filter(cf -> cf.getTarget().isThePlayer()).findAny().ifPresentOrElse(
++							myCf -> s.updateCall(gravenConfetti, myCf),
++							() -> s.updateCall(gravenNoConfetti, confettis.get(0)));
++				}
+ 
+ 				{
+-					List<HeadMarkerEvent> kefkaHM = s.waitEvents(2, HeadMarkerEvent.class, hme -> hme.getTarget().npcIdMatches(19504));
++					List<HeadMarkerEvent> kefkaHM = s.waitEvents(2, HeadMarkerEvent.class, hme -> hme.markerIdMatches(FAKE_ICE, REAL_ICE, FAKE_THUNDER, REAL_THUNDER));
+ 					boolean fakeThunder = kefkaHM.stream().anyMatch(hme -> hme.markerIdMatches(677));
+ 					boolean fakeIce = kefkaHM.stream().anyMatch(hme -> hme.markerIdMatches(675));
+ 					s.setParam("fakeThunder", fakeThunder);
+@@ -293,12 +295,12 @@ public class DMU extends AutoChildEventHandler implements FilteredEventHandler {
+ 					s.waitThenRefreshCombatants(100);
+ 					var myTether = rawTethers.stream().filter(te -> te.eitherTargetMatches(XivCombatant::isThePlayer)).findAny().orElseThrow();
+ 					var myTetherFrom = state.getLatestCombatantData(myTether.getTargetMatching(cbt -> !cbt.isPc()));
+-					playerStone = myTetherFrom.getPos().x() > 120;
++					playerStone = myTetherFrom.getPos() != null && myTetherFrom.getPos().x() > 120;
+ 					s.setParam("playerStone", playerStone);
+ 				}
+ 
+ 				// Same fake/real ice
+-				var bossHm = s.waitEvent(HeadMarkerEvent.class, hme -> hme.getTarget().npcIdMatches(19504));
++				var bossHm = s.waitEvent(HeadMarkerEvent.class, hme -> hme.markerIdMatches(FAKE_ICE, REAL_ICE));
+ 				if (bossHm.markerIdMatches(FAKE_ICE)) {
+ 					s.updateCall(playerStone ? graven2fakeIceStone : graven2fakeIceDark);
+ 				}
+@@ -326,7 +328,8 @@ public class DMU extends AutoChildEventHandler implements FilteredEventHandler {
+ 				// Buster already handled by another trigger. Ignore it.
+ 				var glowingHand1 = s.waitEvent(ActorControlExtraEvent.class, acee -> acee.allFieldsMatch(0x19D, 0x40, 0x80, 0, 0));
+ 				s.waitThenRefreshCombatants(100);
+-				boolean westSafe1 = state.getLatestCombatantData(glowingHand1.getTarget()).getPos().x() > 100;
++				var glowingHand1Pos = state.getLatestCombatantData(glowingHand1.getTarget()).getPos();
++				boolean westSafe1 = glowingHand1Pos != null && glowingHand1Pos.x() > 100;
+ 
+ 				s.updateCall(westSafe1 ? graven2westSafe1 : graven2eastSafe1);
+ 				{
+@@ -335,7 +338,7 @@ public class DMU extends AutoChildEventHandler implements FilteredEventHandler {
+ 					s.waitThenRefreshCombatants(100);
+ 					var myTether = rawTethers.stream().filter(te -> te.eitherTargetMatches(XivCombatant::isThePlayer)).findAny().orElseThrow();
+ 					var myTetherFrom = state.getLatestCombatantData(myTether.getTargetMatching(cbt -> !cbt.isPc()));
+-					playerStone = myTetherFrom.getPos().x() > 120;
++					playerStone = myTetherFrom.getPos() != null && myTetherFrom.getPos().x() > 120;
+ 					s.setParam("playerStone", playerStone);
+ 				}
+ 				// No ice with this set
+@@ -346,14 +349,16 @@ public class DMU extends AutoChildEventHandler implements FilteredEventHandler {
+ 
+ 				var glowingHand2 = s.waitEvent(ActorControlExtraEvent.class, acee -> acee.allFieldsMatch(0x19D, 0x40, 0x80, 0, 0));
+ 				s.waitThenRefreshCombatants(200);
+-				boolean westSafe2 = state.getLatestCombatantData(glowingHand2.getTarget()).getPos().x() > 100;
++				var glowingHand2Pos = state.getLatestCombatantData(glowingHand2.getTarget()).getPos();
++				boolean westSafe2 = glowingHand2Pos != null && glowingHand2Pos.x() > 100;
+ 
+ 				s.setParam("safeSpot2", westSafe2 ? WEST : EAST);
+ 
+-				confettis.stream().filter(ba -> ba.getTarget().isThePlayer()).findAny()
+-						.ifPresentOrElse(ba -> s.updateCall(gravenConfetti2, ba), () -> {
+-							s.updateCall(gravenNoConfetti2, confettis.get(0));
+-						});
++				if (!confettis.isEmpty()) {
++					confettis.stream().filter(ba -> ba.getTarget().isThePlayer()).findAny()
++							.ifPresentOrElse(ba -> s.updateCall(gravenConfetti2, ba),
++									() -> s.updateCall(gravenNoConfetti2, confettis.get(0)));
++				}
+ 				s.waitMs(9_000);
+ 				s.updateCall(gravenFinalSoaks);
+ 			});
+@@ -478,9 +483,11 @@ public class DMU extends AutoChildEventHandler implements FilteredEventHandler {
+ 				s.setParam("confettis", confettis);
+ 				var confettiPlayers = confettis.stream().map(BuffApplied::getTarget).toList();
+ 				s.setParam("confettiPlayers", confettiPlayers);
+-				confettis.stream().filter(cf -> cf.getTarget().isThePlayer()).findAny()
+-						.ifPresentOrElse(cf -> s.updateCall(ttConfettiOnYou, cf),
+-								() -> s.updateCall(ttConfettiNotOnYou, confettis.get(0)));
++				if (!confettis.isEmpty()) {
++					confettis.stream().filter(cf -> cf.getTarget().isThePlayer()).findAny()
++							.ifPresentOrElse(cf -> s.updateCall(ttConfettiOnYou, cf),
++									() -> s.updateCall(ttConfettiNotOnYou, confettis.get(0)));
++				}
+ 
+ 				boolean playerStone;
+ 				{
+@@ -488,25 +495,25 @@ public class DMU extends AutoChildEventHandler implements FilteredEventHandler {
+ 					s.waitThenRefreshCombatants(100);
+ 					var myTether = rawTethers.stream().filter(te -> te.eitherTargetMatches(XivCombatant::isThePlayer)).findAny().orElseThrow();
+ 					var myTetherFrom = state.getLatestCombatantData(myTether.getTargetMatching(cbt -> !cbt.isPc()));
+-					playerStone = myTetherFrom.getPos().x() > 100;
++					playerStone = myTetherFrom.getPos() != null && myTetherFrom.getPos().x() > 100;
+ 					s.setParam("playerStone", playerStone);
+ 				}
+ 				// This call will not overwrite the confetti call
+ 				var tetherCall = s.call(playerStone ? ttSleepTetherInitial : ttConfusionTetherInitial);
+-				s.waitBuffRemoved(buffs, confettis.get(0));
++				if (!confettis.isEmpty()) { s.waitBuffRemoved(buffs, confettis.get(0)); }
+ 				tetherCall.forceExpire();
+ 				s.updateCall(playerStone ? ttSleepTether : ttConfuseTether);
+ 
+ 				var lookMechanic = s.waitEvent(ActorControlExtraEvent.class, acee -> acee.allFieldsMatch(0x19D, 0x40, 0x80, 0, 0));
+ 				s.waitThenRefreshCombatants(100);
+ 				var lookFrom = state.getLatestCombatantData(lookMechanic.getTarget());
+-				boolean fakeGaze = lookFrom.getPos().x() < 100;
++				boolean fakeGaze = lookFrom.getPos() != null && lookFrom.getPos().x() < 100;
+ 				s.setParam("fakeGaze", fakeGaze);
+ 				// This call is also in parallel
+ 				var gazeCall = s.call(fakeGaze ? ttEarlyFakeGaze : ttEarlyRealGaze, lookMechanic);
+ 
+ 				{
+-					List<HeadMarkerEvent> kefkaHM = s.waitEvents(2, HeadMarkerEvent.class, hme -> hme.getTarget().npcIdMatches(19504));
++					List<HeadMarkerEvent> kefkaHM = s.waitEvents(2, HeadMarkerEvent.class, hme -> hme.markerIdMatches(FAKE_FIRE, REAL_FIRE, FAKE_THUNDER, REAL_THUNDER));
+ 					var playerHm = s.waitEvent(HeadMarkerEvent.class, hme -> hme.markerIdMatches(FIRE_SPREAD, FIRE_STACK));
+ 					boolean fakeFire = kefkaHM.stream().anyMatch(hme -> hme.markerIdMatches(FAKE_FIRE));
+ 					boolean fakeThunder = kefkaHM.stream().anyMatch(hme -> hme.markerIdMatches(FAKE_THUNDER));
+@@ -895,20 +902,22 @@ public class DMU extends AutoChildEventHandler implements FilteredEventHandler {
+ 				}
+ 				BuffApplied anyEntropy = buffs.findBuffById(ENTROPY);
+ 				// Wait until 5s left on buff
+-				s.waitDuration(anyEntropy.remainingDurationPlus(Duration.ofSeconds(-5)));
+-				if (myEntropy != null) {
+-					s.updateCall(bowelsMyEntropySoon, myEntropy);
+-					s.waitBuffRemoved(buffs, myEntropy);
+-					if (myHeadwind != null) {
+-						s.updateCall(bowelsHeadwindAfter, myHeadwind);
++				if (anyEntropy != null) {
++					s.waitDuration(anyEntropy.remainingDurationPlus(Duration.ofSeconds(-5)));
++					if (myEntropy != null) {
++						s.updateCall(bowelsMyEntropySoon, myEntropy);
++						s.waitBuffRemoved(buffs, myEntropy);
++						if (myHeadwind != null) {
++							s.updateCall(bowelsHeadwindAfter, myHeadwind);
++						}
++						else if (myTailwind != null) {
++							s.updateCall(bowelsTailwindAfter, myTailwind);
++						}
+ 					}
+-					else if (myTailwind != null) {
+-						s.updateCall(bowelsTailwindAfter, myTailwind);
++					else {
++						s.call(bowelsOtherEntropySoon, anyEntropy);
+ 					}
+ 				}
+-				else {
+-					s.call(bowelsOtherEntropySoon, anyEntropy);
+-				}
+ 
+ 				BuffApplied anyDynamic = buffs.findBuffById(DYNAMIC);
+ 				// Wait until 5s left on buff

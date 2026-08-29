@@ -1,0 +1,25 @@
+### SAMPLE FIGHT (striking dummy test)
+# Zone-locked to Middle La Noscea (Summerford Farms dummies).
+# Syncs on combat start; bars cycle for two minutes and then LOOP until you
+# leave combat; every entry also speaks, so the plugin alert path and TTS get
+# exercised along with the bars. Leaving combat resets the run.
+# reset-on-combat-end
+
+hideall "--Reset--"
+hideall "--sync--"
+hideall "--loop--"
+
+0.0 "--Reset--" ActorControl { command: "4000000F" } window 0,100000 jump 0
+0.0 "--sync--" InCombat { inGameCombat: "1" } window 0,1
+
+5.0 "Tankbuster"
+15.0 "Raidwide"
+25.0 "Stack on you"
+35.0 "Spread"
+45.0 "Tankbuster"
+55.0 "Raidwide"
+70.0 "Stack on you"
+85.0 "Spread"
+100.0 "Tankbuster"
+115.0 "Raidwide"
+120.0 "--loop--" forcejump 0

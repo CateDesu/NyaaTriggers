@@ -1,0 +1,8 @@
+{
+  "note": "Shipped rewrites for sidecar-engine callout text, keyed by source then by engine trigger id. These seed the same path as a user's own callout edit, so the sidecar speaks our wording without a jar rebuild. A user edit for the same id wins, and Reset restores the wording here rather than the engine's.",
+  "triggevent": {
+    "gg.xp.xivsupport.events.triggers.duties.UCoB.InSpreadNeuroLinkSpread": "In, Spread, Spread",
+    "gg.xp.xivsupport.events.triggers.duties.UCoB.SpreadInNeuroLinkSpread": "Spread, In, Spread"
+  },
+  "triggernometry": {}
+}
