@@ -375,14 +375,18 @@ jobs:
           if ((Get-Item $jar).Length -lt 1MB) { throw "engine jar is too small to be the fat jar" }
 
       # TIMELINES_DIR reads timelines/ next to the exe, but onedir packing puts
-      # every datas entry under _internal. Copy the bundled local timeline out
-      # so a fresh install finds it. Only UMAD.txt ships.
-      - name: Place the bundled timeline next to the exe
+      # every datas entry under _internal. Copy the bundled timelines out so a
+      # fresh install finds them: UMAD.txt plus the cactbot dungeon timelines.
+      - name: Place the bundled timelines next to the exe
         run: |
-          $src = 'dist\NyaaTriggers\_internal\timelines\UMAD.txt'
-          if (-not (Test-Path $src)) { throw "bundled timeline missing from the build: $src" }
+          $src = 'dist\NyaaTriggers\_internal\timelines'
+          if (-not (Test-Path "$src\UMAD.txt")) { throw "bundled timeline missing from the build: $src\UMAD.txt" }
           New-Item -ItemType Directory -Force 'dist\NyaaTriggers\timelines' | Out-Null
-          Copy-Item $src 'dist\NyaaTriggers\timelines\UMAD.txt'
+          Copy-Item "$src\UMAD.txt" 'dist\NyaaTriggers\timelines\UMAD.txt'
+          Copy-Item "$src\*.cactbot.txt" 'dist\NyaaTriggers\timelines\'
+          if ((Get-ChildItem 'dist\NyaaTriggers\timelines\*.cactbot.txt').Count -eq 0) {
+            throw "cactbot dungeon timelines missing from the build: $src"
+          }
 
       - name: Zip release folder
         run: Compress-Archive -Path dist\NyaaTriggers -DestinationPath NyaaTriggers-windows.zip
@@ -514,11 +518,13 @@ jobs:
           chmod +x dist/NyaaTriggers/NyaaTriggers.sh
 
       # Same onedir split as the Windows build: the spec bundles the local
-      # timeline under _internal, TIMELINES_DIR reads it next to the exe.
-      - name: Place the bundled timeline next to the exe
+      # timeline and the cactbot dungeon timelines under _internal,
+      # TIMELINES_DIR reads them next to the exe.
+      - name: Place the bundled timelines next to the exe
         run: |
           mkdir -p dist/NyaaTriggers/timelines
           cp dist/NyaaTriggers/_internal/timelines/UMAD.txt dist/NyaaTriggers/timelines/UMAD.txt
+          cp dist/NyaaTriggers/_internal/timelines/*.cactbot.txt dist/NyaaTriggers/timelines/
 
       - name: Tar release folder
         run: |

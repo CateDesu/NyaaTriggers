@@ -1,0 +1,117 @@
+### BAELSAR'S WALL
+
+hideall "--Reset--"
+hideall "--sync--"
+
+#~~~~~~~~~~~~~~~~~~#
+# MAGITEK PREDATOR #
+#~~~~~~~~~~~~~~~~~~#
+
+# -ic Sky Armor Reinforcement
+
+# Timings on this encounter drift up to 2-3 seconds.
+# We're not sure precisely what causes this,
+# but it could be related to how quickly the adds die.
+# When solo, the second Missile is skipped and the timeline just keeps on.
+# We sync on Magitek Ray and hope for the best. It's all bad.
+
+# Via Praetoria will be sealed off
+0 "Start" SystemLogMessage { id: "7DC", param1: "746" } window 0,1
+10.5 "Magitek Claw" Ability { id: "1CB2", source: "Magitek Predator" }
+26.8 "Magitek Ray" Ability { id: "1CB3", source: "Magitek Predator" }
+34.1 "Magitek Missile" Ability { id: "1CB4", source: "Magitek Predator" }
+
+44.4 "Magitek Ray" Ability { id: "1CB3", source: "Magitek Predator" }
+54.5 "Magitek Claw" Ability { id: "1CB2", source: "Magitek Predator" } window 5,5
+68.7 "Magitek Missile" Ability { id: "1CB4", source: "Magitek Predator" }
+70.8 "Magitek Missile" Ability { id: "1CB4", source: "Magitek Predator" }
+
+73.2 "--sync--" StartsUsing { id: "1CB3", source: "Magitek Predator" } window 10,10
+75.9 "Magitek Ray" Ability { id: "1CB3", source: "Magitek Predator" } jump 44.4
+89.0 "Magitek Claw"
+98.4 "Magitek Missile"
+100.6 "Magitek Missile"
+
+#~~~~~~~~~~~~~~~~#
+# ARMORED WEAPON #
+#~~~~~~~~~~~~~~~~#
+
+# -ii 1CB7 1CBA
+
+# The Magitek Installation will be sealed off
+1000.0 "Start" SystemLogMessage { id: "7DC", param1: "747" } window 1000,5
+1007.1 "Magitek Cannon" Ability { id: "1CB8", source: "Armored Weapon" } window 7.1,5
+1013.2 "Launcher" Ability { id: "1CBC", source: "Armored Weapon" }
+1019.4 "Dynamic Sensory Jammer" Ability { id: "1CB9", source: "Armored Weapon" } duration 6
+1033.7 "Diffractive Laser" Ability { id: "1CBB", source: "Armored Weapon" }
+
+1039.9 "Distress Beacon?" Ability { id: "1CBE", source: "Armored Weapon" } window 39.9,5 jump 1100
+1039.9 "Magitek Bit?" Ability { id: "1CBD", source: "Armored Weapon" } window 39.9,5 jump 1155.6
+1049.1 "Launcher?"
+1051.8 "Assault Cannon?"
+1053.2 "Magitek Cannon?"
+1054.1 "Diffractive Laser?"
+
+
+1100.0 "Distress Beacon" Ability { id: "1CBE", source: "Armored Weapon" }
+1109.2 "Launcher" Ability { id: "1CBC", source: "Armored Weapon" }
+1113.3 "Magitek Cannon" Ability { id: "1CB8", source: "Armored Weapon" }
+1120.4 "Launcher" Ability { id: "1CBC", source: "Armored Weapon" }
+1125.5 "Dynamic Sensory Jammer" Ability { id: "1CB9", source: "Armored Weapon" } duration 6
+1133.3 "Diffractive Laser" Ability { id: "1CBB", source: "Armored Weapon" } window 10,10
+1137.4 "Magitek Cannon" Ability { id: "1CB8", source: "Armored Weapon" }
+1144.4 "Launcher" Ability { id: "1CBC", source: "Armored Weapon" }
+
+1155.6 "Magitek Bit" Ability { id: "1CBD", source: "Armored Weapon" } window 30,30
+1161.5 "--sync--" Ability { id: "1CBF", source: "Magitek Bit" }
+1167.5 "Assault Cannon" Ability { id: "1CC0", source: "Magitek Bit" }
+1169.8 "Diffractive Laser" Ability { id: "1CBB", source: "Armored Weapon" } window 10,10
+1175.9 "Launcher" Ability { id: "1CBC", source: "Armored Weapon" }
+1181.0 "Dynamic Sensory Jammer" Ability { id: "1CB9", source: "Armored Weapon" } duration 6
+1188.9 "Diffractive Laser" Ability { id: "1CBB", source: "Armored Weapon" }
+1193.0 "Magitek Cannon" Ability { id: "1CB8", source: "Armored Weapon" }
+1200.0 "Launcher" Ability { id: "1CBC", source: "Armored Weapon" }
+
+1211.2 "Distress Beacon" Ability { id: "1CBE", source: "Armored Weapon" } window 30,30 jump 1100
+1220.4 "Launcher"
+1224.5 "Magitek Cannon"
+1231.6 "Launcher"
+1236.7 "Dynamic Sensory Jammer"
+1244.5 "Diffractive Laser"
+
+#~~~~~~~~~~~~~#
+# THE GRIFFIN #
+#~~~~~~~~~~~~~#
+
+# The Airship Landing will be sealed off
+2000.0 "Start" SystemLogMessage { id: "7DC", param1: "748" } window 2000,5
+2006.1 "Dull Blade" Ability { id: "1CC1", source: "The Griffin" } window 6.1,5
+2012.2 "Beak Of The Griffin" Ability { id: "1CC3", source: "The Griffin" }
+2019.3 "Flash Powder" Ability { id: "1CC4", source: "The Griffin" }
+2021.4 "--teleport--" Ability { id: "1CC6", source: "The Griffin" }
+2026.9 "Sanguine Blade" Ability { id: "1CC5", source: "The Griffin" }
+
+2036.0 "Claw Of The Griffin" Ability { id: "1CC2", source: "The Griffin" } window 36,6
+2046.2 "Gull Dive x7" duration 5.6 # Ability { id: "1CCB", source: "Blade Of The Griffin" }
+2053.1 "Lionshead" Ability { id: "1CCA", source: "The Griffin" }
+2060.3 "Dull Blade" Ability { id: "1CC1", source: "The Griffin" }
+2066.4 "Flash Powder" Ability { id: "1CC4", source: "The Griffin" } window 30,30
+2071.6 "Big Boot" Ability { id: "1CC7", source: "The Griffin" }
+2077.7 "Corrosion" Ability { id: "1CCC", source: "Blade Of The Griffin" } window 30,30
+2077.8 "--teleport--" Ability { id: "1CC6", source: "The Griffin" }
+2083.3 "Sanguine Blade" Ability { id: "1CC5", source: "The Griffin" }
+2088.5 "Dull Blade" Ability { id: "1CC1", source: "The Griffin" }
+2095.6 "Restraint Collar" Ability { id: "1CC8", source: "The Griffin" } window 30,30
+2104.7 "Beak Of The Griffin" Ability { id: "1CC3", source: "The Griffin" }
+2108.8 "Dull Blade" Ability { id: "1CC1", source: "The Griffin" }
+2111.9 "--teleport 1--" # Ability { id: "1CC6", source: "The Griffin" }
+2112.7 "--teleport 2--" # Ability { id: "1CC6", source: "The Griffin" }
+2118.2 "Sanguine Blade" Ability { id: "1CC5", source: "The Griffin" }
+2125.3 "Beak Of The Griffin" Ability { id: "1CC3", source: "The Griffin" }
+
+2133.4 "Claw Of The Griffin" Ability { id: "1CC2", source: "The Griffin" } window 30,30 jump 2036
+2139.6 "Gull Dive"
+2146.5 "Lionshead"
+2153.7 "Dull Blade"
+2159.8 "Flash Powder"
+2164.9 "Big Boot"

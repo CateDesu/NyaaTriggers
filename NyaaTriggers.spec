@@ -86,11 +86,18 @@ datas += [
     # Hand-written local timeline for the UMAD fight tag. Onedir packing drops
     # every datas entry under _internal, but TIMELINES_DIR reads timelines/
     # next to the exe, so the release workflow copies it out beside the exe.
-    # Only this file ships: the *.cactbot.txt caches are fetched at runtime and
     # Sample Fight.txt stays a source checkout example.
     ('timelines/UMAD.txt', 'timelines'),
     ('icon_nyaa.png', '.'),
 ]
+
+# Committed cactbot timeline caches, named <tag>.cactbot.txt, exactly where
+# the runtime loader looks first. The bulk are the dungeon timelines pulled
+# from the cactbot repo, shipped so dungeons get timeline bars on a fresh
+# install with no download. The TTL re fetch still refreshes them from
+# upstream, and a fight with no committed file downloads on demand as before.
+for f in sorted(glob.glob('timelines/*.cactbot.txt')):
+    datas.append((f, 'timelines'))
 
 # Bundled UI font (Kosugi Maru, Apache-2.0, license ships alongside): the
 # sidebar brand block and nav pills. Best-effort glob like lang/.

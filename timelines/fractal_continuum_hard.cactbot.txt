@@ -1,0 +1,183 @@
+### FRACTAL CONTINUUM (HARD)
+
+hideall "--Reset--"
+hideall "--sync--"
+
+#~~~~~~~~~~~#
+# MOTHERBIT #
+#~~~~~~~~~~~#
+
+# -ii 27A3 27A7 27A9
+
+# Reality Augmentation Bay will be sealed off
+0 "Start" SystemLogMessage { id: "7DC", param1: "612" }
+
+10.1 "Electrochemical Transfer" Ability { id: "27A4", source: "Motherbit" } window 11,5
+15.7 "--sync--" Ability { id: "27AB", source: "Prototype Bit" }
+18.8 "Aetherochemical Laser" # Ability { id: "27AA", source: "Prototype Bit" }
+20.1 "Diffractive Laser" Ability { id: "27A8", source: "Prototype Bit" }
+20.7 "--sync--" Ability { id: "27AB", source: "Prototype Bit" }
+22.8 "Aetherochemical Laser" # Ability { id: "27AA", source: "Prototype Bit" }
+29.8 "Allagan Gravity" Ability { id: "27A6", source: "Motherbit" }
+
+37.9 "Electrochemical Transfer" Ability { id: "27A4", source: "Motherbit" }
+43.5 "--sync--" Ability { id: "27AB", source: "Prototype Bit" }
+54.2 "Citadel Buster" Ability { id: "27A5", source: "Motherbit" } window 30,30
+
+77.9 "Electrochemical Transfer" Ability { id: "27A4", source: "Motherbit" } jump 10.1
+86.6 "Aetherochemical Laser"
+87.9 "Diffractive Laser"
+90.6 "Aetherochemical Laser"
+97.6 "Allagan Gravity"
+105.7 "Electrochemical Transfer"
+
+#~~~~~~~~~~~~~~~~~~~~#
+# THE ULTIMA WARRIOR #
+#~~~~~~~~~~~~~~~~~~~~#
+
+# -ii 2798
+
+# Unfortunately, we have no choice but to use BattleTalk2 lines here.
+# The statues the boss tethers to are useless for timeline syncs,
+# and the boss gains no buffs for each form.
+
+# Each form is guaranteed to cycle once in three rounds,
+# but it is possible to have the same form back-to-back,
+# if the end of a round lines up with the beginning of the next.
+# That is, Sephirot->Sophia->Zurvan can immediately be followed by Zurvan->Sophia->Sephirot.
+
+# Each form has a set amount of dead time before announcing the next one.
+# That is, for Form X into whatever, the dead time is determined solely by X,
+# regardless of whether X is followed by Y or by Z.
+
+# Because the BattleTalk2 syncs are repeated below, the links and 'en' text are listed once:
+# https://xivapi.com/InstanceContentTextData/18509 (0x484D)
+# en: This humanoid prototype can perfectly replicate eikon abilities. In fact, it's already loading our data on Sephirot.
+# https://xivapi.com/InstanceContentTextData/18510 (0x484E)
+# en: Utilizing our data on Sophia, we can at last tip the scales in our favor.
+# https://xivapi.com/InstanceContentTextData/18511 (0x484F)
+# en: Successfully mimicking the Demon Zurvan earned our researchers a patent under article 42? <buzzzzzz>
+
+# Exhibit Level VIII will be sealed off
+1000.0 "Start" SystemLogMessage { id: "7DC", param1: "95D" } window 1000,5
+1008.5 "Aetheroplasm" Ability { id: "2793", source: "The Ultima Warrior" } window 8.5,5
+1018.9 "Citadel Buster" Ability { id: "2792", source: "The Ultima Warrior" }
+1029.8 "Ceruleum Vent" Ability { id: "2794", source: "The Ultima Warrior" }
+1042.0 "Aetheroplasm" Ability { id: "2793", source: "The Ultima Warrior" } # skipped if boss is at or below 95% HP
+
+1053.4 "--sync--" BattleTalk2 { instanceContentTextId: "484D" } window 53.4,10 jump 1100
+1053.4 "--sync--" BattleTalk2 { instanceContentTextId: "484E" } window 53.4,10 jump 1200
+1053.4 "--sync--" BattleTalk2 { instanceContentTextId: "484F" } window 53.4,10 jump 1300
+1060.9 "Primordial Aether"
+1062.0 "Ceruleum Vent?"
+1063.5 "Infinite Fire/Infinite Ice?"
+1071.5 "Ceruleum Vent?"
+1072.5 "Citadel Buster?"
+1073.5 "Ratzon?"
+1078.6 "Citadel Buster?"
+
+
+# Sephirot's block
+
+1100.0 "--sync--" BattleTalk2 { instanceContentTextId: "484D" }
+1107.5 "Primordial Aether" Ability { id: "2796", source: "The Ultima Warrior" } window 10,10
+1119.1 "Citadel Buster" Ability { id: "2792", source: "The Ultima Warrior" }
+1120.1 "Ratzon" Ability { id: "2797", source: "The Ultima Warrior" }
+1125.2 "Citadel Buster" Ability { id: "2792", source: "The Ultima Warrior" }
+1139.2 "Mass Aetheroplasm" Ability { id: "2795", source: "The Ultima Warrior" }
+1149.7 "Aetheroplasm" Ability { id: "2793", source: "The Ultima Warrior" }
+
+1154.8 "--sync--" BattleTalk2 { instanceContentTextId: "484D" } window 50,10 jump 1100
+1154.8 "--sync--" BattleTalk2 { instanceContentTextId: "484E" } window 50,10 jump 1200
+1154.8 "--sync--" BattleTalk2 { instanceContentTextId: "484F" } window 50,10 jump 1300
+1162.3 "Primordial Aether"
+1163.4 "Ceruleum Vent?"
+1164.9 "Infinite Fire/Infinite Ice?"
+1172.9 "Ceruleum Vent?"
+1173.9 "Citadel Buster?"
+1174.9 "Ratzon?"
+1180.0 "Citadel Buster?"
+
+
+# Sophia's Block
+
+1200.0 "--sync--" BattleTalk2 { instanceContentTextId: "484E" }
+1207.5 "Primordial Aether" Ability { id: "2796", source: "The Ultima Warrior" } window 10,10
+1218.1 "Ceruleum Vent" Ability { id: "2794", source: "The Ultima Warrior" }
+1225.3 "Citadel Buster" Ability { id: "2792", source: "The Ultima Warrior" }
+1226.3 "Dischordant Cleansing" Ability { id: "279C", source: "The Ultima Warrior" }
+1231.4 "Citadel Buster" Ability { id: "2792", source: "The Ultima Warrior" }
+1232.3 "Dischordant Cleansing" Ability { id: "279A", source: "The Ultima Warrior" }
+1242.3 "Aetheroplasm" Ability { id: "2793", source: "The Ultima Warrior" }
+
+1248.5 "--sync--" BattleTalk2 { instanceContentTextId: "484D" } window 50,10 jump 1100
+1248.5 "--sync--" BattleTalk2 { instanceContentTextId: "484E" } window 50,10 jump 1200
+1248.5 "--sync--" BattleTalk2 { instanceContentTextId: "484F" } window 50,10 jump 1300
+1256.0 "Primordial Aether"
+1257.1 "Ceruleum Vent?"
+1258.6 "Infinite Fire/Infinite Ice?"
+1266.6 "Ceruleum Vent?"
+1267.6 "Citadel Buster?"
+1268.6 "Ratzon?"
+1273.7 "Citadel Buster?"
+
+
+# Zurvan's Block
+
+1300.0 "--sync--" BattleTalk2 { instanceContentTextId: "484F" }
+1308.5 "Primordial Aether" Ability { id: "2796", source: "The Ultima Warrior" } window 10,10
+1311.1 "Infinite Fire/Infinite Ice" Ability { id: "279[DE]", source: "The Ultima Warrior" }
+1319.1 "Ceruleum Vent" Ability { id: "2794", source: "The Ultima Warrior" }
+1330.3 "Northern Star/Southern Star" Ability { id: "27A[01]", source: "The Ultima Warrior" }
+1336.4 "Mass Aetheroplasm" Ability { id: "2795", source: "The Ultima Warrior" }
+1343.0 "Citadel Buster" Ability { id: "2792", source: "The Ultima Warrior" }
+1354.0 "Aetheroplasm" Ability { id: "2793", source: "The Ultima Warrior" }
+
+1365.5 "--sync--" BattleTalk2 { instanceContentTextId: "484D" } window 50,10 jump 1100
+1365.5 "--sync--" BattleTalk2 { instanceContentTextId: "484E" } window 50,10 jump 1200
+1365.5 "--sync--" BattleTalk2 { instanceContentTextId: "484F" } window 50,10 jump 1300
+1373.0 "Primordial Aether"
+1374.1 "Ceruleum Vent?"
+1375.6 "Infinite Fire/Infinite Ice?"
+1383.6 "Ceruleum Vent?"
+1384.6 "Citadel Buster?"
+1385.6 "Ratzon?"
+1390.7 "Citadel Buster?"
+
+
+#~~~~~~~~~~~~~~~~~~#
+# THE ULTIMA BEAST #
+#~~~~~~~~~~~~~~~~~~#
+
+# -ii 27B9 27BC 27BA 27BB
+
+# Genesis Engine will be sealed off
+2000.0 "Start" SystemLogMessage { id: "7DC", param1: "95E" } window 2000,5
+2012.0 "Death Spin" Ability { id: "27AD", source: "The Ultima Beast" } window 12,5
+2025.6 "Aether Bend" Ability { id: "27AF", source: "The Ultima Beast" }
+2035.2 "--sync--" Ability { id: "27B6", source: "The Ultima Beast" }
+2044.1 "Flare Star" Ability { id: "27BD", source: "The Ultima Beast" }
+2044.3 "Allagan Gravity" Ability { id: "27B5", source: "The Ultima Beast" } window 30,30
+2057.9 "Light Pillar" Ability { id: "27B7", source: "The Ultima Beast" }
+2076.5 "Forborn Beast" Ability { id: "27B1", source: "The Ultima Beast" } window 76.5,5
+2085.0 "Demi Ultima" Ability { id: "27B2", source: "The Ultima Beast" }
+2102.9 "Aether Bend/Death Spin" Ability { id: "27(AD|B0)", source: "The Ultima Beast" }
+2113.4 "--sync--" Ability { id: "27B4", source: "The Ultima Beast" }
+2115.4 "Allagan Flare" Ability { id: "27B8", source: "The Ultima Beast" }
+
+2128.0 "--sync--" Ability { id: "27B6", source: "The Ultima Beast" } window 30,30
+2136.9 "Flare Star" Ability { id: "27BD", source: "The Ultima Beast" }
+2141.5 "--sync--" Ability { id: "27B4", source: "The Ultima Beast" }
+2143.5 "Allagan Flare" Ability { id: "27B8", source: "The Ultima Beast" }
+2158.1 "Aether Bend/Death Spin" Ability { id: "27(AD|B0)", source: "The Ultima Beast" }
+2168.7 "Light Pillar" Ability { id: "27B7", source: "The Ultima Beast" }
+2176.7 "Allagan Gravity" Ability { id: "27B5", source: "The Ultima Beast" }
+
+2196.2 "--sync--" Ability { id: "27B6", source: "The Ultima Beast" } window 30,30 jump 2128
+2205.1 "Flare Star"
+2211.7 "Allagan Flare"
+2226.3 "Aether Bend/Death Spin"
+
+
+3000.0 "--sync--" StartsUsing { id: "27B3", source: "The Ultima Beast" } window 1000,5
+3039.7 "Demi Ultima (Enrage)" Ability { id: "27B3", source: "The Ultima Beast" }

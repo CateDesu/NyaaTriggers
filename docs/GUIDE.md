@@ -54,7 +54,7 @@ Pick the backend in **Settings - Voice - Engine**:
 
 The trigger editor and your trigger set, bundled plus custom. The live combat log is a separate **Current Instance** tab.
 
-**Master switch.** **Triggers: ON/OFF** runs your editable triggers: **Local**, the **Triggevent** Engine, and the **Triggernometry** engine once you've imported a pack. **Cactbot** is separate and **mutually exclusive** - enabling it (in **Settings - Cactbot**) turns this switch off and vice versa, since cactbot isn't editable and would just double up. That one Cactbot switch is also all there is to timelines: on, and the current fight's timeline bars come from cactbot's own `.txt` files (downloaded and cached on demand) alongside its callouts; off, and your Local triggers and timelines stand alone.
+**Master switch.** **Triggers: ON/OFF** runs your editable triggers: **Local**, the **Triggevent** Engine, and the **Triggernometry** engine once you've imported a pack. **Cactbot** is separate and **mutually exclusive** - enabling it (in **Settings - Cactbot**) turns this switch off and vice versa, since cactbot isn't editable and would just double up. That one Cactbot switch is also all there is to timelines: on, and the current fight's timeline bars come from cactbot's own `.txt` files (dungeon timelines ship with the program, the rest are downloaded and cached on demand) alongside its callouts; off, and your Local triggers and timelines stand alone.
 
 **Everything ships off.** Bundled Local triggers and engine callouts all start disabled, including each new patch's additions, so a fresh install stays silent until you opt in. Local triggers are zone-locked. A trigger tagged M4S only fires inside that zone.
 

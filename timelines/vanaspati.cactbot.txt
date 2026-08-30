@@ -1,0 +1,154 @@
+# Vanaspati
+
+hideall "--Reset--"
+hideall "--sync--"
+
+# .*is no longer sealed
+0.0 "--Reset--" SystemLogMessage { id: "7DE" } window 0,100000 jump 0
+
+#~~~~~~~~~~~~~~~~~~~#
+# Terminus Snatcher #
+#~~~~~~~~~~~~~~~~~~~#
+
+# -p 6238:12.1
+# -ii 366 6291 6292
+
+# Trnakiya will be sealed off
+0.0 "--sync--" SystemLogMessage { id: "7DC", param1: "FAC" } window 0,1
+7.1 "--sync--" StartsUsing { id: "6238", source: "Terminus Snatcher" } window 10,10
+12.1 "Note of Despair" Ability { id: "6238", source: "Terminus Snatcher" }
+19.6 "Mouth Off" Ability { id: "6231", source: "Terminus Snatcher" }
+31.4 "Vitriol" Ability { id: "6232", source: "Terminus Snatcher" }
+41.0 "Last Gasp" Ability { id: "6235", source: "Terminus Snatcher" }
+48.7 "Mouth Off" Ability { id: "6231", source: "Terminus Snatcher" }
+59.8 "What Is Left/What Is Right" Ability { id: "623[34]", source: "Terminus Snatcher" }
+60.5 "Vitriol" Ability { id: "6232", source: "Terminus Snatcher" }
+
+72.1 "Note of Despair" Ability { id: "6238", source: "Terminus Snatcher" }
+80.4 "Lost Hope" Ability { id: "6237", source: "Terminus Snatcher" }
+85.5 "Mouth Off" Ability { id: "6231", source: "Terminus Snatcher" }
+97.3 "Vitriol" Ability { id: "6232", source: "Terminus Snatcher" }
+107.0 "Last Gasp" Ability { id: "6235", source: "Terminus Snatcher" }
+114.8 "Mouth Off" Ability { id: "6231", source: "Terminus Snatcher" }
+125.9 "What Is Left/What Is Right" Ability { id: "623[34]", source: "Terminus Snatcher" }
+126.6 "Vitriol" Ability { id: "6232", source: "Terminus Snatcher" }
+137.1 "What Is Left/What Is Right" Ability { id: "623[34]", source: "Terminus Snatcher" }
+138.2 "Wallow" Ability { id: "6236", source: "Terminus Snatcher" }
+
+149.3 "Note of Despair" Ability { id: "6238", source: "Terminus Snatcher" } window 40,40 jump 72.1
+157.6 "Lost Hope" #Ability { id: "6237", source: "Terminus Snatcher" }
+162.7 "Mouth Off" #Ability { id: "6231", source: "Terminus Snatcher" }
+174.5 "Vitriol" #Ability { id: "6232", source: "Terminus Snatcher" }
+184.2 "Last Gasp" #Ability { id: "6235", source: "Terminus Snatcher" }
+
+
+#~~~~~~~~~~~~~~~~~~#
+# Terminus Wrecker #
+#~~~~~~~~~~~~~~~~~~#
+
+# -p 6241:1011.2
+# -ii 6CC7
+
+# Note: 623F is also called "Poison Heart" but that's when the stack marker appears.
+
+# Insight will be sealed off
+1000.0 "--sync--" SystemLogMessage { id: "7DC", param1: "FAD" } window 1000,0
+1006.2 "--sync--" StartsUsing { id: "6241", source: "Terminus Wrecker" } window 1010,10
+1011.2 "Meaningless Destruction" Ability { id: "6241", source: "Terminus Wrecker" }
+1021.4 "Unholy Water" Ability { id: "6CCC", source: "Terminus Wrecker" }
+1026.8 "Aether Siphon" Ability { id: "623A", source: "Terminus Wrecker" }
+1036.2 "Aether Spray (Knockback)" Ability { id: "623C", source: "Terminus Wrecker" }
+1048.5 "Total Wreck" Ability { id: "6242", source: "Terminus Wrecker" }
+1053.8 "Unholy Water" Ability { id: "6CCC", source: "Terminus Wrecker" }
+1059.2 "Aether Siphon" Ability { id: "6239", source: "Terminus Wrecker" }
+1068.5 "Aether Spray (Bubble)" Ability { id: "623B", source: "Terminus Wrecker" }
+
+1080.7 "Meaningless Destruction" Ability { id: "6241", source: "Terminus Wrecker" }
+1091.0 "Unholy Water" Ability { id: "6CCC", source: "Terminus Wrecker" }
+1096.4 "Aether Siphon" Ability { id: "623A", source: "Terminus Wrecker" }
+1105.8 "Aether Spray (Knockback)" Ability { id: "623C", source: "Terminus Wrecker" }
+1112.9 "--sync--" Ability { id: "623F", source: "Terminus Wrecker" }
+1118.0 "Poison Heart" Ability { id: "6CCB", source: "Terminus Wrecker" }
+1125.2 "Total Wreck" Ability { id: "6242", source: "Terminus Wrecker" }
+1135.5 "Unholy Water" Ability { id: "6CCC", source: "Terminus Wrecker" }
+1140.9 "Aether Siphon" Ability { id: "6239", source: "Terminus Wrecker" }
+1150.2 "Aether Spray (Bubble)" Ability { id: "623B", source: "Terminus Wrecker" }
+
+1162.4 "Meaningless Destruction" Ability { id: "6241", source: "Terminus Wrecker" } window 40,40 jump 1080.7
+1172.7 "Unholy Water" #Ability { id: "6CCC", source: "Terminus Wrecker" }
+1178.1 "Aether Siphon" #Ability { id: "623A", source: "Terminus Wrecker" }
+1187.5 "Aether Spray (Knockback)" #Ability { id: "623C", source: "Terminus Wrecker" }
+1194.6 "--sync--" #Ability { id: "623F", source: "Terminus Wrecker" }
+1199.7 "Poison Heart" #Ability { id: "6CCB", source: "Terminus Wrecker" }
+1206.9 "Total Wreck" #Ability { id: "6242", source: "Terminus Wrecker" }
+1217.2 "Unholy Water" #Ability { id: "6CCC", source: "Terminus Wrecker" }
+1222.6 "Aether Siphon" #Ability { id: "6239", source: "Terminus Wrecker" }
+1231.9 "Aether Spray (Bubble)" #Ability { id: "623B", source: "Terminus Wrecker" }
+
+
+#~~~~~~~~~~~#
+# Svarbhanu #
+#~~~~~~~~~~~#
+
+# -p 6252:2010.1
+# -it "Svarbhanu"
+
+# TODO: is 624C "--middle--"?
+
+# I think this is when the floor panels disappear?
+hideall "Crumbling Sky"
+
+# Devatagara will be sealed off
+2000.0 "--sync--" SystemLogMessage { id: "7DC", param1: "FAE" } window 2000,0
+2005.1 "--sync--" StartsUsing { id: "6252", source: "Svarbhanu" } window 2020,10
+2010.1 "Flames of Decay" Ability { id: "6252", source: "Svarbhanu" }
+2018.0 "Chaotic Pulse" Ability { id: "6B61", source: "Svarbhanu" }
+2020.1 "--sync--" Ability { id: "624C", source: "Svarbhanu" }
+2027.0 "Aetherial Disruption" Ability { id: "6248", source: "Svarbhanu" }
+2027.9 "Chaotic Undercurrent" Ability { id: "624A", source: "Svarbhanu" }
+2034.6 "Chaotic Pulse" Ability { id: "6B61", source: "Svarbhanu" }
+2039.7 "Crumbling Sky" Ability { id: "624E", source: "Svarbhanu" }
+2041.9 "--sync--" Ability { id: "624D", source: "Svarbhanu" }
+2048.8 "Aetherial Disruption" Ability { id: "6248", source: "Svarbhanu" }
+2049.3 "Cosmic Kiss (Spread)" Ability { id: "6250", source: "Svarbhanu" }
+2049.7 "Chaotic Undercurrent" Ability { id: "624B", source: "Svarbhanu" }
+2061.1 "Gnashing of Teeth" Ability { id: "6253", source: "Svarbhanu" }
+2068.2 "Chaotic Pulse" Ability { id: "6B61", source: "Svarbhanu" }
+2073.3 "Crumbling Sky" Ability { id: "624E", source: "Svarbhanu" }
+2075.5 "--sync--" Ability { id: "624C", source: "Svarbhanu" }
+2080.4 "Cosmic Kiss (Knockback)" Ability { id: "6251", source: "Svarbhanu" }
+2082.4 "Aetherial Disruption" Ability { id: "6248", source: "Svarbhanu" }
+2083.3 "Chaotic Undercurrent" Ability { id: "624A", source: "Svarbhanu" }
+2094.4 "Crumbling Sky" Ability { id: "624E", source: "Svarbhanu" }
+
+2096.4 "--untargetable--"
+2105.2 "--sync--" Ability { id: "6249", source: "Svarbhanu" }
+2110.3 "--sync--" Ability { id: "6249", source: "Svarbhanu" }
+2110.7 "--meteor 1--" Ability { id: "631E", source: "Svarbhanu" }
+2114.5 "Cosmic Kiss" Ability { id: "624F", source: "Svarbhanu" }
+2115.4 "--sync--" Ability { id: "6249", source: "Svarbhanu" }
+2115.8 "--meteor 2--" Ability { id: "631E", source: "Svarbhanu" }
+2119.5 "Cosmic Kiss" Ability { id: "624F", source: "Svarbhanu" }
+2120.9 "--meteor 3--" Ability { id: "631E", source: "Svarbhanu" }
+2123.5 "Cosmic Kiss" Ability { id: "624F", source: "Svarbhanu" }
+2125.1 "--targetable--"
+
+2136.2 "Flames of Decay" Ability { id: "6252", source: "Svarbhanu" } window 100,10
+2143.4 "Chaotic Pulse" Ability { id: "6B61", source: "Svarbhanu" }
+2148.5 "Crumbling Sky" Ability { id: "624E", source: "Svarbhanu" }
+2150.7 "--sync--" Ability { id: "624C", source: "Svarbhanu" }
+2155.6 "Cosmic Kiss (Knockback)" Ability { id: "6251", source: "Svarbhanu" }
+2157.6 "Aetherial Disruption" Ability { id: "6248", source: "Svarbhanu" }
+2158.5 "Chaotic Undercurrent" Ability { id: "624A", source: "Svarbhanu" }
+2159.6 "Cosmic Kiss (Spread)" Ability { id: "6250", source: "Svarbhanu" }
+2169.8 "Gnashing of Teeth" Ability { id: "6253", source: "Svarbhanu" }
+
+2187.7 "Flames of Decay" Ability { id: "6252", source: "Svarbhanu" } window 30,30 jump 2136.2
+2194.9 "Chaotic Pulse" #Ability { id: "6B61", source: "Svarbhanu" }
+2200.0 "Crumbling Sky" #Ability { id: "624E", source: "Svarbhanu" }
+2202.2 "--sync--" #Ability { id: "624C", source: "Svarbhanu" }
+2207.1 "Cosmic Kiss (Knockback)" #Ability { id: "6251", source: "Svarbhanu" }
+2209.1 "Aetherial Disruption" #Ability { id: "6248", source: "Svarbhanu" }
+2210.0 "Chaotic Undercurrent" #Ability { id: "624A", source: "Svarbhanu" }
+2211.1 "Cosmic Kiss (Spread)" #Ability { id: "6250", source: "Svarbhanu" }
+2221.3 "Gnashing of Teeth" #Ability { id: "6253", source: "Svarbhanu" }

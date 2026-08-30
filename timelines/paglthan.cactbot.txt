@@ -1,0 +1,88 @@
+### PAGLTH'AN
+
+hideall "--Reset--"
+hideall "--sync--"
+
+#~~~~~~~~~#
+# AMHULUK #
+#~~~~~~~~~#
+
+# -ii 5C52 5C53
+
+# Gathering Ring will be sealed off
+0 "Start" SystemLogMessage { id: "7DC", param1: "B7B" } window 0,1
+12.6 "Critical Rip" Ability { id: "5C4E", source: "Amhuluk" } window 12.6,10
+18.8 "--sync--" Ability { id: "5C51", source: "Amhuluk" }
+30.2 "Lightning Bolt" Ability { id: "5C4B", source: "Amhuluk" }
+31.0 "--sync--" Ability { id: "5C4C", source: "Amhuluk" }
+36.8 "Electric Burst" Ability { id: "5C4D", source: "Amhuluk" }
+48.0 "Thundercall" Ability { id: "5C50", source: "Amhuluk" } window 48,10
+48.5 "--Levin orbs--"
+61.3 "Wide Blaster" Ability { id: "60C5", source: "Amhuluk" } window 61.3,10
+63.9 "Spike Flail" Ability { id: "5C4F", source: "Amhuluk" }
+66.1 "--sync--" Ability { id: "5C51", source: "Amhuluk" }
+77.6 "Lightning Bolt" Ability { id: "5C4B", source: "Amhuluk" }
+78.4 "--sync--" Ability { id: "5C4C", source: "Amhuluk" }
+84.2 "Electric Burst" Ability { id: "5C4D", source: "Amhuluk" }
+
+95.4 "Critical Rip" Ability { id: "5C4E", source: "Amhuluk" } window 45,30
+107.5 "Thundercall" Ability { id: "5C50", source: "Amhuluk" }
+108.0 "--Levin orbs--"
+109.6 "--sync--" Ability { id: "5C51", source: "Amhuluk" }
+121.0 "Lightning Bolt" Ability { id: "5C4B", source: "Amhuluk" }
+121.8 "--sync--" Ability { id: "5C4C", source: "Amhuluk" }
+127.6 "Electric Burst" Ability { id: "5C4D", source: "Amhuluk" }
+137.7 "Wide Blaster" Ability { id: "60C5", source: "Amhuluk" } window 30,30
+140.3 "Spike Flail" Ability { id: "5C4F", source: "Amhuluk" }
+
+160.4 "Critical Rip" Ability { id: "5C4E", source: "Amhuluk" } jump 95.4
+172.5 "Thundercall"
+173.0 "--Levin orbs--"
+186.0 "Lightning Bolt"
+192.6 "Electric Burst"
+
+# There's not a whole lot of stuff we can do with a timeline for boss 2,
+# and the timing on Stable Cannon seems to vary by up to a second or more.
+
+#~~~~~~~~~~~~~~~#
+# LUNAR BAHAMUT #
+#~~~~~~~~~~~~~~~#
+
+# -ii 5B56 5B50
+
+# Sunseat will be sealed off
+2000.0 "Start" SystemLogMessage { id: "7DC", param1: "B7D" } window 2000,5
+2010.0 "Twisted Scream" Ability { id: "5B47", source: "Lunar Bahamut" } window 2010,10
+2015.0 "Upburst x4" # Ability { id: "605B", source: "Lunar Nail" }
+2021.6 "Big Burst x4" # Ability { id: "5B48", source: "Lunar Nail" }
+2029.2 "Perigean Breath" Ability { id: "5B59", source: "Lunar Bahamut" } window 30,10
+2042.4 "Akh Morn x4" Ability { id: "5B55", source: "Lunar Bahamut" } duration 5
+2062.8 "Megaflare x3" Ability { id: "5B4C", source: "Lunar Bahamut" }
+2064.8 "--sync--" Ability { id: "5B4D", source: "Lunar Bahamut" }
+2068.9 "--sync--" Ability { id: "5B4E", source: "Lunar Bahamut" }
+2071.0 "Twisted Scream" Ability { id: "5B47", source: "Lunar Bahamut" }
+2076.0 "Upburst x4" # Ability { id: "605B", source: "Lunar Nail" }
+2082.6 "Big Burst x4" # Ability { id: "5B48", source: "Lunar Nail" }
+2083.9 "Megaflare Dive" Ability { id: "5B52", source: "Lunar Bahamut" } window 30,30
+2095.7 "Kan Rhai" Ability { id: "5B4F", source: "Lunar Bahamut" }
+2097.3 "--sync--" Ability { id: "5B51", source: "Lunar Bahamut" }
+2107.4 "Lunar Flare (circles)" Ability { id: "5B49", source: "Lunar Bahamut" }
+2119.5 "Lunar Flare (explosions)" Ability { id: "5B4A", source: "Lunar Bahamut" }
+
+2131.6 "Gigaflare" Ability { id: "5B57", source: "Lunar Bahamut" } window 131.6,10
+2150.7 "Akh Morn x4" Ability { id: "5B55", source: "Lunar Bahamut" } duration 5
+2168.1 "Twisted Scream" Ability { id: "5B47", source: "Lunar Bahamut" }
+2173.1 "Upburst x4" # Ability { id: "605B", source: "Lunar Nail" }
+2179.7 "Big Burst x4" # Ability { id: "5B48", source: "Lunar Nail" }
+2191.3 "Lunar Flare (circles)" Ability { id: "5B49", source: "Lunar Bahamut" } window 30,30
+2203.4 "Lunar Flare (explosions)" Ability { id: ["5B4A", "5B4B"], source: "Lunar Bahamut" }
+2215.5 "Kan Rhai" Ability { id: "5B4F", source: "Lunar Bahamut" }
+2217.1 "--sync--" Ability { id: "5B51", source: "Lunar Bahamut" }
+2223.5 "Flatten" Ability { id: "5B58", source: "Lunar Bahamut" }
+
+2241.6 "Gigaflare" Ability { id: "5B57", source: "Lunar Bahamut" } jump 2131.6
+2260.7 "Akh Morn x4"
+2278.1 "Twisted Scream"
+2283.1 "Upburst x4"
+2289.7 "Big Burst x4"
+2301.3 "Lunar Flare (circles)"

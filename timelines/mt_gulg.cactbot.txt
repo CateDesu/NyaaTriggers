@@ -1,0 +1,120 @@
+### Mt. Gulg (lvl 79 dungeon)
+
+hideall "--Reset--"
+hideall "--sync--"
+hideall "Reformation"
+hideall "Perfect Contrition"
+hideall "Rite Of The Sacrament"
+
+### Forgiven Cruelty
+# -p 3CFB:113 -ii 3CFE 3CFD 4301 3CFF
+# The Perished Path will be sealed off
+100.0 "--sync--" SystemLogMessage { id: "7DC", param1: "BB6" } window 100,0
+113.0 "Rake" Ability { id: "3CFB", source: "Forgiven Cruelty" } window 115,5
+121.2 "Lumen Infinitum" Ability { id: "41B2", source: "Forgiven Cruelty" }
+138.3 "Typhoon Wing" Ability { id: "3D00", source: "Forgiven Cruelty" }
+147.2 "Cyclone Wing" Ability { id: "3CFC", source: "Forgiven Cruelty" }
+160.8 "Typhoon Wing" Ability { id: "3D00", source: "Forgiven Cruelty" }
+171.6 "Lumen Infinitum" Ability { id: "41B2", source: "Forgiven Cruelty" }
+188.2 "Typhoon Wing" Ability { id: "3D01", source: "Forgiven Cruelty" }
+188.2 "Hurricane Wing" Ability { id: "3D03", source: "Forgiven Cruelty" }
+197.0 "Cyclone Wing" Ability { id: "3CFC", source: "Forgiven Cruelty" }
+
+205.3 "Rake" Ability { id: "3CFB", source: "Forgiven Cruelty" }
+214.4 "Lumen Infinitum" Ability { id: "41B2", source: "Forgiven Cruelty" }
+231.0 "Typhoon Wing" Ability { id: "3D0[12]", source: "Forgiven Cruelty" }
+231.0 "Hurricane Wing" Ability { id: "3D03", source: "Forgiven Cruelty" }
+239.8 "Cyclone Wing" Ability { id: "3CFC", source: "Forgiven Cruelty" }
+248.2 "Rake" Ability { id: "3CFB", source: "Forgiven Cruelty" }
+257.5 "Lumen Infinitum" Ability { id: "41B2", source: "Forgiven Cruelty" }
+274.2 "Typhoon Wing" Ability { id: "3D0[12]", source: "Forgiven Cruelty" }
+274.2 "Hurricane Wing" Ability { id: "3D03", source: "Forgiven Cruelty" }
+283.0 "Cyclone Wing" Ability { id: "3CFC", source: "Forgiven Cruelty" }
+
+291.3 "Rake" Ability { id: "3CFB", source: "Forgiven Cruelty" } window 20,20 jump 205.3
+300.4 "Lumen Infinitum"
+317.0 "Typhoon Wing"
+317.0 "Hurricane Wing"
+325.8 "Cyclone Wing"
+334.2 "Rake"
+343.5 "Lumen Infinitum"
+360.2 "Typhoon Wing"
+360.2 "Hurricane Wing"
+369.0 "Cyclone Wing"
+
+
+### Forgiven Whimsy
+# -p 3D0B:514.5 -ii 3D0C 3D07 3D0A
+# The White Gate will be sealed off
+500.0 "--sync--" SystemLogMessage { id: "7DC", param1: "BB7" } window 500,0
+514.5 "Sacrament Of Penance" Ability { id: "3D0B", source: "Forgiven Whimsy" } window 515,5
+518.3 "Reformation" Ability { id: "3D04", source: "Forgiven Whimsy" }
+530.4 "Exegesis" Ability { id: "425C", source: "Forgiven Whimsy" }
+534.1 "Reformation" Ability { id: "3D04", source: "Forgiven Whimsy" }
+546.2 "Exegesis" Ability { id: "425D", source: "Forgiven Whimsy" }
+557.0 "Catechism" Ability { id: "3D09", source: "Forgiven Whimsy" }
+563.7 "Judgment Day" Ability { id: "3D0F", source: "Forgiven Whimsy" }
+575.3 "Judged" Ability { id: "3D11", source: "Forgiven Whimsy" }
+580.3 "Catechism" Ability { id: "3D09", source: "Forgiven Whimsy" }
+580.3 "Judged" Ability { id: "3D11", source: "Forgiven Whimsy" }
+584.0 "Reformation" Ability { id: "3D04", source: "Forgiven Whimsy" }
+
+591.3 "Rite Of The Sacrament" Ability { id: "3D0D", source: "Forgiven Whimsy" }
+603.6 "Exegesis" Ability { id: "425B", source: "Forgiven Whimsy" }
+604.1 "Perfect Contrition" Ability { id: "3D0E", source: "Brightsphere" }
+607.2 "Reformation" Ability { id: "3D04", source: "Forgiven Whimsy" }
+614.4 "Rite Of The Sacrament" Ability { id: "3D0D", source: "Forgiven Whimsy" }
+626.8 "Exegesis" Ability { id: "3D06", source: "Forgiven Whimsy" }
+627.2 "Perfect Contrition" Ability { id: "3D0E", source: "Brightsphere" }
+636.9 "Sacrament Of Penance" Ability { id: "3D0B", source: "Forgiven Whimsy" }
+640.6 "Reformation" Ability { id: "3D04", source: "Forgiven Whimsy" }
+
+647.7 "Rite Of The Sacrament" Ability { id: "3D0D", source: "Forgiven Whimsy" } window 20,20 jump 591.3
+660.0 "Exegesis"
+660.5 "Perfect Contrition"
+663.6 "Reformation"
+670.8 "Rite Of The Sacrament"
+683.2 "Exegesis"
+683.6 "Perfect Contrition"
+693.3 "Sacrament Of Penance"
+697.0 "Reformation"
+
+
+### Forgiven Obscenity
+# -ii 3D15 4669 3D19 3D19 3D21 3D13 41CE 3D1B 3D20 -p 3D14:1014
+# The Winding Flare will be sealed off
+1000.0 "--sync--" SystemLogMessage { id: "7DC", param1: "BB8" } window 1000,0
+1014.0 "Orison Fortissimo" Ability { id: "3D14", source: "Forgiven Obscenity" } window 1014,5
+1023.2 "Divine Diminuendo" Ability { id: "3D16", source: "Forgiven Obscenity" }
+1032.4 "--sync--" Ability { id: "3D17", source: "Forgiven Obscenity" }
+1040.6 "Divine Diminuendo" Ability { id: "3D18", source: "Forgiven Obscenity" }
+1051.0 "Conviction Marcato" Ability { id: "3D1A", source: "Forgiven Obscenity" }
+1062.2 "Penance Pianissimo" Ability { id: "3D1C", source: "Forgiven Obscenity" }
+1070.4 "Feather Marionette" Ability { id: "3D1D", source: "Forgiven Obscenity" }
+1083.3 "Divine Diminuendo" Ability { id: "3D18", source: "Forgiven Obscenity" }
+1093.5 "Conviction Marcato" Ability { id: "3D1A", source: "Forgiven Obscenity" }
+1107.7 "Orison Fortissimo" Ability { id: "3D14", source: "Forgiven Obscenity" }
+
+1124.5 "Solitaire Ring" Ability { id: "42AA", source: "Forgiven Obscenity" }
+1129.5 "Ringsmith" Ability { id: "3D24", source: "Forgiven Obscenity" }
+1135.5 "Gold Chaser" Ability { id: "3D25", source: "Forgiven Obscenity" }
+1147.5 "Sacrament Sforzando" Ability { id: "3D12", source: "Forgiven Obscenity" }
+1158.6 "Orison Fortissimo" Ability { id: "3D14", source: "Forgiven Obscenity" }
+1169.8 "Divine Diminuendo" Ability { id: "3D18", source: "Forgiven Obscenity" }
+1189.2 "Penance Pianissimo" Ability { id: "3D1C", source: "Forgiven Obscenity" }
+1197.4 "Feather Marionette" Ability { id: "3D1D", source: "Forgiven Obscenity" }
+1210.5 "Divine Diminuendo" Ability { id: "3D18", source: "Forgiven Obscenity" }
+1220.6 "Conviction Marcato" Ability { id: "3D1A", source: "Forgiven Obscenity" }
+1234.9 "Sacrament Sforzando" Ability { id: "3D12", source: "Forgiven Obscenity" }
+
+1251.6 "Solitaire Ring" Ability { id: "42AA", source: "Forgiven Obscenity" } window 100,100 jump 1124.5
+1256.6 "Ringsmith"
+1262.6 "Gold Chaser"
+1274.6 "Sacrament Sforzando"
+1285.7 "Orison Fortissimo"
+1296.9 "Divine Diminuendo"
+1316.3 "Penance Pianissimo"
+1324.5 "Feather Marionette"
+1337.6 "Divine Diminuendo"
+1347.7 "Conviction Marcato"
+1362.0 "Sacrament Sforzando"
