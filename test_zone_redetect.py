@@ -47,6 +47,7 @@ app_common._REPO_RETIRED_FILE = TMP / "retired.repo.json"
 app_common._REPO_TRIGGERS_VERSION = TMP / "triggers.repo.version"
 app_common.RETIRED_FILE = TMP / "retired.json"
 app_common.TIMELINES_DIR = TMP / "timelines"
+app_common._BUNDLE_TIMELINES_DIR = TMP / "bundle_timelines"
 app_common.CACTBOT_TIMELINES_FILE = TMP / "cactbot_timelines.json"
 
 
@@ -221,6 +222,8 @@ app_common.CACTBOT_TIMELINES_FILE.write_text(json.dumps({
     "4242": {"tag": "cb_index_fight", "txt_path": "06-ew/raid/p9s.txt"},
     "4243": {"tag": "cb_nocache", "txt_path": "06-ew/raid/p10s.txt"},
     "4244": {"tag": "cb_localfirst", "txt_path": "06-ew/raid/p11s.txt"},
+    "4245": {"tag": "cb_bundle_fight", "txt_path": "07-dt/dungeon/x.txt"},
+    "4246": {"tag": "cb_cachewins", "txt_path": "07-dt/dungeon/y.txt"},
 }), encoding="utf-8")
 app_common._cactbot_tl_cache = None
 
@@ -244,7 +247,7 @@ class _IndexWin(_FightWin):
 # A cached index hit needs no local trigger file at all (the P1S case).
 iw = _IndexWin()
 iw._current_zone_id = 4242
-(app_common.TIMELINES_DIR / "cb_index_fight.cactbot.txt").write_text(
+(app_common.TIMELINES_DIR / "cb_index_fight.cactbot.cache.txt").write_text(
     '12.0 "Index Beeg"\n', encoding="utf-8")
 iw._load_timeline_for_zone("Zone With No Local Triggers")
 check("index hit loads the cached cactbot timeline", bool(iw._timeline.entries))
@@ -297,6 +300,38 @@ iw5._current_zone_id = 4242
 iw5._load_timeline_for_zone("Zone With No Local Triggers")
 check("cactbot off ignores the index",
       iw5._timeline_fight == "" and iw5.fetches == [])
+
+# ── (a5) the bundled copy is the read-only fallback, the cache wins ────────
+BUNDLE = app_common._BUNDLE_TIMELINES_DIR
+BUNDLE.mkdir(parents=True, exist_ok=True)
+
+# No cache but a bundled copy: the shipped file serves, no fetch while fresh.
+iw6 = _IndexWin()
+iw6._current_zone_id = 4245
+(BUNDLE / "cb_bundle_fight.cactbot.txt").write_text('9.0 "Bundle Beeg"\n', encoding="utf-8")
+iw6._load_timeline_for_zone("Zone With No Local Triggers")
+check("bundled timeline serves with no cache", bool(iw6._timeline.entries))
+check("bundled timeline records the index tag", iw6._timeline_fight == "cb_bundle_fight")
+check("fresh bundled copy kicks no fetch", iw6.fetches == [])
+
+# A download must never be shadowed by the bundled copy it refreshed.
+iw7 = _IndexWin()
+iw7._current_zone_id = 4246
+(BUNDLE / "cb_cachewins.cactbot.txt").write_bytes(b"\xff\xfe binary junk")
+(app_common.TIMELINES_DIR / "cb_cachewins.cactbot.cache.txt").write_text(
+    '8.0 "Cache Beeg"\n', encoding="utf-8")
+iw7._load_timeline_for_zone("Zone With No Local Triggers")
+check("cache wins over the bundled copy", bool(iw7._timeline.entries))
+check("cache win records the index tag", iw7._timeline_fight == "cb_cachewins")
+
+# A local fight whose file only exists in the bundle: the shipped copy
+# serves, the UMAD.txt on a frozen build case.
+fw4 = _FightWin()
+fw4._triggers = [Trigger(fight="ZZBundleLocal", zone_regex="ZZ Bundle Local Zone")]
+(BUNDLE / "ZZBundleLocal.txt").write_text('6.0 "Bundle Local Beeg"\n', encoding="utf-8")
+fw4._load_timeline_for_zone("ZZ Bundle Local Zone")
+check("bundled local timeline serves", bool(fw4._timeline.entries))
+check("bundled local records the fight", fw4._timeline_fight == "ZZBundleLocal")
 
 # ── (a4) a separator-bearing fight tag loads empty once, then stays steady ─
 # Imported triggers carry whatever the file said. The loader blanks such a

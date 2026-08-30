@@ -73,6 +73,12 @@ def _watched_trigger_files() -> tuple:
 # same path as a user's own callout edit, so wording fixes ship without a jar rebuild.
 CALLOUT_DEFAULTS_FILE = _BUNDLE_DIR / "callout_defaults.json"
 TIMELINES_DIR       = _DATA_DIR   / "timelines"
+# Read-only bundled set: the shipped UMAD.txt and the committed cactbot
+# dungeon timelines. Frozen builds find them under _internal, a source
+# checkout in the repo. The runtime never writes here. Downloads and TTL
+# refreshes land in TIMELINES_DIR under a distinct cache name, so the
+# committed files are never rewritten in place, the _CALLOUTS_JA_CACHE split.
+_BUNDLE_TIMELINES_DIR = _BUNDLE_DIR / "timelines"
 _SETTINGS_FILE              = _DATA_DIR   / "nyaatriggers_settings.json"
 # Last Triggevent inventory harvest. Lets rows list before the engine starts.
 _TRIGGEVENT_INVENTORY_CACHE = _DATA_DIR   / "triggevent_inventory.json"
@@ -102,8 +108,9 @@ _CALLOUTS_JA_MAX_BYTES = 4_000_000
 _REPO_JSON_MAX_BYTES = 8_000_000     # triggers.json runs about 300 KB today
 _TIMELINE_MAX_BYTES = 2_000_000      # cactbot .txt timelines run tens of KB
 # Downloaded cactbot timelines carry no upstream validator, so the file mtime,
-# stamped by the atomic replace on fetch, is the age stamp. Past the TTL the
-# cached copy still serves while a re fetch runs in the background.
+# stamped by the atomic replace on fetch, is the age stamp. A bundled copy's
+# pack or checkout time works the same way. Past the TTL the cached copy still
+# serves while a re fetch runs in the background.
 _CACTBOT_TIMELINE_TTL_S = 7 * 24 * 3600
 # Cross source callout de duplication. An own trigger callout claims its text
 # for this long. A guest cactbot callout arriving inside the window is silenced

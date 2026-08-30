@@ -20,6 +20,17 @@ from app_common import (
 )
 
 
+def _local_timeline_path(fight: str):
+    """The writable <Fight>.txt first, then the read-only bundled copy, so a
+    shipped file like UMAD.txt serves straight from _internal on a frozen
+    build. None when neither exists."""
+    p = ac.TIMELINES_DIR / f"{fight}.txt"
+    if p.exists():
+        return p
+    p = ac._BUNDLE_TIMELINES_DIR / f"{fight}.txt"
+    return p if p.exists() else None
+
+
 class TimelineTabMixin:
     def _on_timeline_tts(self, text: str) -> None:
         # A cactbot sourced schedule only drives the bars. The reader already
@@ -112,13 +123,18 @@ class TimelineTabMixin:
             path = None
             if cb:
                 ctag, rel = cb
-                # Prefer a cactbot .txt cached under a distinct name, never
-                # clobbers a user's own <FightTag>.txt. Fetch on demand.
-                cb_path = ac.TIMELINES_DIR / f"{ctag}.cactbot.txt"
+                # The writable download cache wins over the read-only bundled
+                # copy, and neither clobbers a user's own <FightTag>.txt. The
+                # distinct cache name keeps a source checkout's downloads away
+                # from the committed files, the _CALLOUTS_JA_CACHE pattern.
+                cb_path = ac.TIMELINES_DIR / f"{ctag}.cactbot.cache.txt"
+                if not cb_path.exists():
+                    cb_path = ac._BUNDLE_TIMELINES_DIR / f"{ctag}.cactbot.txt"
                 if cb_path.exists():
-                    # Past the TTL the cached copy still serves, but kick a
-                    # background re-fetch so an upstream correction reaches
-                    # users who fetched once long ago.
+                    # Past the TTL the cached or bundled copy still serves, but
+                    # kick a background re-fetch so an upstream correction
+                    # reaches users who fetched once long ago. The refresh
+                    # always lands in the cache, never back over a shipped file.
                     try:
                         if time.time() - cb_path.stat().st_mtime > _CACTBOT_TIMELINE_TTL_S:
                             self._fetch_cactbot_timeline(ctag, rel)
@@ -129,9 +145,9 @@ class TimelineTabMixin:
                 else:
                     self._fetch_cactbot_timeline(ctag, rel)   # async. Reloads on done
                     if local_fight:
-                        path = ac.TIMELINES_DIR / f"{local_fight}.txt"  # fall back meanwhile
+                        path = _local_timeline_path(local_fight)  # fall back meanwhile
             elif local_fight:
-                path = ac.TIMELINES_DIR / f"{local_fight}.txt"
+                path = _local_timeline_path(local_fight)
             if path and path.exists():
                 # utf-8-sig, not plain utf-8. A BOM survives strip and eats the
                 # first line, the anchored entry regex and hideall both miss it.
@@ -169,8 +185,9 @@ class TimelineTabMixin:
 
     def _fetch_cactbot_timeline(self, tag: str, rel: str) -> None:
         """Download cactbot's .txt timeline `rel`, a path under
-        ui/raidboss/data/, into the cache as <tag>.cactbot.txt, on a
-        daemon thread. Re-loads the timeline via a signal when done.
+        ui/raidboss/data/, into the writable cache as
+        <tag>.cactbot.cache.txt, on a daemon thread. Never touches the
+        bundled copy. Re-loads the timeline via a signal when done.
         No-ops on any error or if a fetch for this tag is already in
         flight."""
         if not rel:
@@ -192,7 +209,7 @@ class TimelineTabMixin:
                 if len(data) > _TIMELINE_MAX_BYTES:
                     raise ValueError("timeline response too large")
                 ac.TIMELINES_DIR.mkdir(parents=True, exist_ok=True)
-                dest = ac.TIMELINES_DIR / f"{tag}.cactbot.txt"
+                dest = ac.TIMELINES_DIR / f"{tag}.cactbot.cache.txt"
                 tmp = dest.with_suffix(dest.suffix + ".tmp")
                 tmp.write_bytes(data)
                 _fsync_file(tmp)

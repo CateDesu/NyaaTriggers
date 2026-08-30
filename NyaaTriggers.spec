@@ -83,19 +83,19 @@ datas += [
     # timeline bars for fights with no local trigger file.
     ('cactbot_timelines.json', '.'),
     ('callout_defaults.json', '.'),
-    # Hand-written local timeline for the UMAD fight tag. Onedir packing drops
-    # every datas entry under _internal, but TIMELINES_DIR reads timelines/
-    # next to the exe, so the release workflow copies it out beside the exe.
-    # Sample Fight.txt stays a source checkout example.
+    # Hand-written local timeline for the UMAD fight tag. Serves straight from
+    # the bundle: the loader falls back to _internal/timelines when no writable
+    # copy sits next to the exe. Sample Fight.txt stays a source checkout example.
     ('timelines/UMAD.txt', 'timelines'),
     ('icon_nyaa.png', '.'),
 ]
 
-# Committed cactbot timeline caches, named <tag>.cactbot.txt, exactly where
-# the runtime loader looks first. The bulk are the dungeon timelines pulled
-# from the cactbot repo, shipped so dungeons get timeline bars on a fresh
-# install with no download. The TTL re fetch still refreshes them from
-# upstream, and a fight with no committed file downloads on demand as before.
+# Committed cactbot timeline caches, named <tag>.cactbot.txt. The bulk are the
+# dungeon timelines pulled from the cactbot repo, shipped so dungeons get
+# timeline bars on a fresh install with no download. The loader falls back to
+# this bundled set behind the writable download cache (<tag>.cactbot.cache.txt
+# next to the exe), so TTL refreshes and on-demand downloads never rewrite a
+# shipped file. A fight with no committed file downloads on demand as before.
 for f in sorted(glob.glob('timelines/*.cactbot.txt')):
     datas.append((f, 'timelines'))
 
