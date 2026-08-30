@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v1.4.0 - 2026-08-30
+
 ### Added
 - **A pull never runs with an empty timeline anymore.** After a mid-instance app restart the zone's timeline could stay unloaded - the zone replay resolves and loads it, but if that load missed, nothing retried (the 30 s re-detect only reacts to a fight *change*), so timeline callouts and overlay bars silently went missing for the rest of the session. The app now re-arms the timeline from the current zone the moment a pull starts with an empty schedule.
 - **Automark signs clear themselves when the debuff falls off.** With the new **Remove the mark when the debuff falls off (auto-cleanse)** checkbox in the Automarkers tab (on by default), a sign placed by an automark rule is removed the moment the status that placed it is cleansed or expires - the UMAD Accretion pair's marks drop the instant they are healed to full, no manual clear. A loss only ever clears the sign its own rule placed, and signs owned by the black-hole chains or the gaze pairing are untouched.
