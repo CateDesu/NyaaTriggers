@@ -8,6 +8,12 @@ After any pull that moves HEAD, apply_git runs
 `pip install -r requirements.txt` with the running interpreter. A pip failure
 never fails the update itself - the message asks for a manual install.
 
+A pull blocked by untracked cactbot timeline downloads left over from before
+the repo tracked those files self heals instead: the stale files are deleted
+and the pull retried once, only when every conflicting path is one of those
+timeline names. The pull runs under LC_ALL=C so the conflict parse works
+whatever locale git speaks.
+
 Run directly:  python3 test_updater_git.py   (exit 0 = all pass)
 """
 import os
@@ -114,7 +120,7 @@ seen = []
 tmp = tempfile.TemporaryDirectory()
 
 def record_run(argv, **kw):
-    seen.append(list(argv))
+    seen.append((list(argv), kw))
     return _R(0, "same\n")
 
 orig = updater.subprocess.run
@@ -123,9 +129,105 @@ try:
     updater.apply_git(Path(tmp.name))
 finally:
     updater.subprocess.run = orig
-pulls = [c for c in seen if "pull" in c]
+pulls = [argv for argv, _ in seen if "pull" in argv]
+pull_kw = [kw for argv, kw in seen if "pull" in argv]
 check("pull passes --tags", len(pulls) == 1 and "--tags" in pulls[0])
+check("pull pins English output so the conflict parse survives any locale",
+      pull_kw[0].get("env", {}).get("LC_ALL") == "C")
 tmp.cleanup()
+
+# A pull blocked by untracked cactbot timeline downloads from before the repo
+# tracked those files deletes them and retries once. The merge brings fresh
+# copies of the same timelines, so nothing is lost.
+CONFLICT_ERR = """\
+error: The following untracked working tree files would be overwritten by merge:
+	timelines/castrum_abania.cactbot.txt
+	timelines/sirensong_sea.cactbot.txt
+Please move or remove them before you merge.
+Aborting
+"""
+
+tmp = tempfile.TemporaryDirectory()
+repo = Path(tmp.name)
+(repo / "requirements.txt").write_text("websockets==16.1.1\n", encoding="utf-8")
+(repo / "timelines").mkdir()
+for name in ("castrum_abania", "sirensong_sea"):
+    (repo / "timelines" / f"{name}.cactbot.txt").write_text("old download\n",
+                                                            encoding="utf-8")
+calls = []
+rev_count = [0]
+
+def conflict_then_ok(argv, **kw):
+    calls.append(list(argv))
+    if "rev-parse" in argv:
+        rev_count[0] += 1
+        return _R(0, ("old" if rev_count[0] == 1 else "new") + "\n")
+    if "pull" in argv:
+        if len([c for c in calls if "pull" in c]) == 1:
+            return _R(1, "", CONFLICT_ERR)
+        return _R(0, "Updating old..new\nFast-forward\n")
+    if argv[0] == sys.executable and "pip" in argv:
+        return _R(0)
+    raise AssertionError(f"unexpected argv: {argv}")
+
+orig = updater.subprocess.run
+updater.subprocess.run = conflict_then_ok
+try:
+    ok, msg = updater.apply_git(repo)
+finally:
+    updater.subprocess.run = orig
+check("stale cactbot conflicts self heal and the pull retries",
+      ok and len([c for c in calls if "pull" in c]) == 2)
+check("the stale downloads are gone from the checkout",
+      not any((repo / "timelines").glob("*.cactbot.txt")))
+check("the message mentions the cleanup", "stale cactbot timeline" in msg)
+check("healed pull still refreshes pip requirements",
+      "dependencies are up to date" in msg)
+tmp.cleanup()
+
+# A conflict on any other path keeps the hands off failure: nothing deleted,
+# no retry, the generic message.
+MIXED_ERR = CONFLICT_ERR.replace("timelines/sirensong_sea.cactbot.txt",
+                                 "triggers.local.json")
+tmp = tempfile.TemporaryDirectory()
+repo = Path(tmp.name)
+(repo / "timelines").mkdir()
+(repo / "timelines" / "castrum_abania.cactbot.txt").write_text("old download\n",
+                                                               encoding="utf-8")
+calls = []
+
+def conflict_only(argv, **kw):
+    calls.append(list(argv))
+    if "rev-parse" in argv:
+        return _R(0, "same\n")
+    if "pull" in argv:
+        return _R(1, "", MIXED_ERR)
+    raise AssertionError(f"unexpected argv: {argv}")
+
+orig = updater.subprocess.run
+updater.subprocess.run = conflict_only
+try:
+    ok, msg = updater.apply_git(repo)
+finally:
+    updater.subprocess.run = orig
+check("mixed conflicts keep the plain failure", not ok and "git pull failed" in msg)
+check("mixed conflicts delete nothing",
+      (repo / "timelines" / "castrum_abania.cactbot.txt").exists())
+check("mixed conflicts never retry the pull",
+      len([c for c in calls if "pull" in c]) == 1)
+tmp.cleanup()
+
+# Newer git prefixes the advice lines with hint:. The parse stops there just
+# the same.
+HINT_ERR = CONFLICT_ERR.replace(
+    "Please move or remove them before you merge.",
+    "hint: Please move or remove them before you merge.")
+paths = updater._stale_cactbot_conflicts(HINT_ERR)
+check("hint style advice still parses both paths",
+      paths == ["timelines/castrum_abania.cactbot.txt",
+                "timelines/sirensong_sea.cactbot.txt"])
+check("plain failure output parses to no conflicts",
+      updater._stale_cactbot_conflicts("rejected: non-fast-forward") == [])
 
 
 print()

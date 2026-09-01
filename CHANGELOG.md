@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Fixed
+- **Git self-updates heal themselves when old cactbot timeline downloads block the pull.** Checkouts from before the dungeon timelines shipped in the repo can hold runtime downloads sitting untracked under the same `timelines/*.cactbot.txt` names, and git refuses a pull that would overwrite untracked files, so Install Updates failed until those files were deleted by hand. The updater now spots that exact conflict, deletes the stale downloads, and retries the pull once - the merge restores them as tracked copies. Any other conflicting file still gets the plain failure message.
 - **The alert docstring in the plugin link matches real behavior.** An omitted `ttl` on an alert frame uses the overlay plugin's per severity alert times, not one configured alert time. Comment only, no behavior change.
 
 ## v1.4.0 - 2026-08-30

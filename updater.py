@@ -604,28 +604,90 @@ def _install_requirements(repo_dir: Path) -> tuple[bool, str] | None:
     return False, (r.stderr.strip() or r.stdout.strip() or "unknown error")
 
 
+def _git_pull(repo_dir: Path) -> subprocess.CompletedProcess:
+    """One `git pull --ff-only --tags` against the checkout. LC_ALL pins the
+    output to English so the conflict parse in apply_git works under any
+    locale."""
+    return subprocess.run(
+        ["git", "-C", str(repo_dir), "pull", "--ff-only", "--tags"],
+        capture_output=True, text=True, timeout=180,
+        encoding="utf-8", errors="replace",
+        env={**os.environ, "LC_ALL": "C"},
+    )
+
+
+def _stale_cactbot_conflicts(detail: str) -> list[str]:
+    """Untracked paths git refused to overwrite, when every one of them is a
+    cactbot timeline download from before the repo tracked those files. Older
+    checkouts cached downloads in timelines/ under the very names the merge
+    now brings, so the pull deadlocks itself. Any other conflicting path
+    bails to [] and the caller reports the plain failure instead."""
+    lines = detail.splitlines()
+    start = next((i for i, ln in enumerate(lines)
+                  if "untracked working tree files would be overwritten by merge"
+                  in ln), None)
+    if start is None:
+        return []
+    paths = []
+    for ln in lines[start + 1:]:
+        stripped = ln.strip()
+        if re.fullmatch(r"timelines/[a-z0-9][a-z0-9_-]*\.cactbot\.txt", stripped):
+            paths.append(stripped)
+        elif not stripped or stripped.startswith(("Please ", "hint:", "Aborting")):
+            break
+        else:
+            return []
+    return paths
+
+
+def _remove_untracked(repo_dir: Path, rel_paths: list[str]) -> int:
+    """Best effort delete of repo relative untracked files. Count removed."""
+    removed = 0
+    for rel in rel_paths:
+        try:
+            (repo_dir / rel).unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def apply_git(repo_dir: Path | None = None) -> tuple[bool, str]:
     """`git pull --ff-only --tags` in the source checkout, then refresh the
     pip requirements when the pull moved HEAD. Tags ride along so the git
     describe version label catches up to the rolling tags each push to main
     is cut from: plain tag following only fetches tags for commits the pull
-    downloads, and a maintainer downloads none of their own. A pip failure
-    never fails the update itself. The message asks for a manual install
-    instead. Returns ok and a message."""
+    downloads, and a maintainer downloads none of their own. A pull blocked
+    by untracked stale cactbot timeline downloads self heals: the repo ships
+    those files now, so they are deleted and the pull retried once. A pip
+    failure never fails the update itself. The message asks for a manual
+    install instead. Returns ok and a message."""
     repo_dir = repo_dir or source_dir()
     head_before = _git_head(repo_dir)
     try:
-        r = subprocess.run(
-            ["git", "-C", str(repo_dir), "pull", "--ff-only", "--tags"],
-            capture_output=True, text=True, timeout=180,
-            encoding="utf-8", errors="replace",
-        )
+        r = _git_pull(repo_dir)
     except FileNotFoundError:
         return False, "git is not installed or not on PATH."
     except Exception as exc:  # noqa: BLE001
         return False, f"git pull failed: {exc}"
+    cleared = 0
+    if r.returncode != 0:
+        stale = _stale_cactbot_conflicts(r.stderr.strip() or r.stdout.strip())
+        if stale:
+            cleared = _remove_untracked(repo_dir, stale)
+            if cleared == len(stale):
+                try:
+                    r = _git_pull(repo_dir)
+                except Exception as exc:  # noqa: BLE001
+                    return False, f"git pull failed: {exc}"
+            else:
+                cleared = 0
     if r.returncode == 0:
         msg = r.stdout.strip() or "Updated."
+        if cleared:
+            plural = "s" if cleared != 1 else ""
+            msg = (f"Removed {cleared} stale cactbot timeline download{plural} "
+                   "that blocked the pull.\n\n" + msg)
         if _git_head(repo_dir) != head_before:
             deps = _install_requirements(repo_dir)
             if deps is not None:
