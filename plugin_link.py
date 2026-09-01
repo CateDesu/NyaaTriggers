@@ -156,7 +156,8 @@ def timeline_frame(entries) -> dict:
 def alert_frame(text, severity="info") -> dict:
     """One callout. Unknown severities become info rather than being sent
     outside the documented vocabulary. The plugin would read them as info
-    anyway. ttl is omitted so the plugin's configured alert time applies."""
+    anyway. ttl is omitted so the plugin's configured per severity times
+    apply."""
     sev = str(severity)
     return {"c": "alert", "text": str(text),
             "sev": sev if sev in _SEVERITIES else "info"}

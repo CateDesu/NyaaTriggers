@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- **The alert docstring in the plugin link matches real behavior.** An omitted `ttl` on an alert frame uses the overlay plugin's per severity alert times, not one configured alert time. Comment only, no behavior change.
+
 ## v1.4.0 - 2026-08-30
 
 ### Added
