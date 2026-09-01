@@ -3,12 +3,16 @@
 tools/gen_cactbot_timelines.py rebuilds cactbot_timelines.json from upstream.
 When cactbot adds a dungeon the shipped timelines/ set has to follow, or a
 fresh install silently misses the new fight's bars. Two fights sharing a
-filename stem would shadow each other in the one flat cache. This pins both.
+filename stem would shadow each other in the one flat cache. And the runtime
+download cache must never write under a shipped name: on a source checkout
+TIMELINES_DIR is the git tree, where that stray file blocks the next pull.
+This pins all of it.
 
 Run directly:  python test_bundled_timelines.py   (exit 0 = all pass)
 """
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -54,6 +58,23 @@ empty = [p.name for p in (ROOT / "timelines").glob("*.cactbot.txt") if p.stat().
 check("no shipped timeline is empty", not empty)
 for name in empty:
     print(f"  empty: {name}")
+
+# The runtime cache writes <tag>.cactbot.cache.txt, never a shipped name. A
+# bare .cactbot.txt write into TIMELINES_DIR lands in the git tree on source
+# checkouts, untracked, and the next pull that tracks that name deadlocks.
+# Pre-bundle checkouts stranded exactly this way once already. The word
+# boundary keeps _BUNDLE_TIMELINES_DIR reads out of the match.
+tl_src = (ROOT / "ui" / "timeline_tab.py").read_text(encoding="utf-8")
+bare_writes = [
+    ln.strip() for ln in tl_src.splitlines()
+    if not ln.strip().startswith("#")
+    and re.search(r"\bTIMELINES_DIR\b", ln)
+    and ".cactbot.txt" in ln
+]
+check("runtime never writes a cactbot timeline under a shipped name",
+      not bare_writes)
+for ln in bare_writes:
+    print(f"  {ln}")
 
 print()
 if FAILS:
