@@ -440,6 +440,12 @@ check("dps frame drops rows with junk deaths",
                    [["Me", "BLM", 100.0, 50.0, 1.0, True, -1],
                     ["You", "WHM", 90.0, 45.0, 2.0, False]])["rows"]
       == [["You", "WHM", 90.0, 45.0, 2.0, False, 0]])
+check("dps frame drops rows with non-finite deaths",
+      pl.dps_frame({"dps": 1.0},
+                   [["Me", "BLM", 100.0, 50.0, 1.0, True, INF],
+                    ["Me", "BLM", 100.0, 50.0, 1.0, True, NAN],
+                    ["You", "WHM", 90.0, 45.0, 2.0, False]])["rows"]
+      == [["You", "WHM", 90.0, 45.0, 2.0, False, 0]])
 check("dps JSON carries no bare Infinity or NaN token",
       all(token not in json.dumps(pl.dps_frame({"t": "F", "d": "1:23", "dps": bad},
                                                [["Me", "BLM", bad, 50.0, 1.0, True]]))

@@ -228,7 +228,9 @@ def dps_frame(enc, rows, show=True) -> dict:
             if not all(math.isfinite(v) for v in vals):
                 raise ValueError("non-finite dps row value")
             clean_rows.append([str(name), str(job), *vals, is_self, deaths])
-        except (TypeError, ValueError, IndexError):
+        except (TypeError, ValueError, IndexError, OverflowError):
+            # int of an infinite float raises OverflowError, that junk drops
+            # the row like any other bad field instead of escaping.
             continue
     return {"c": "dps", "show": True,
             "enc": {"t": str(enc.get("t", "")), "d": str(enc.get("d", "")),
