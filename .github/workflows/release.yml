@@ -94,6 +94,32 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Building tag=$TAG version=$VER prerelease=$PRE rolling=$ROLL"
 
+      # A re-run of an old run keeps its old run_number, and renaming this
+      # workflow file resets the counter. Either way the new tag sorts at or
+      # below the rolling release users already update from and the channel
+      # silently stops moving, so refuse unless the new tag sorts strictly
+      # above the newest published one. Drafts do not count: a draft may be
+      # another in-flight run and /releases/latest never saw it. The first
+      # run finds nothing and passes. Hand-cut tags are exempt by the if.
+      - name: Refuse to regress the rolling channel
+        if: steps.v.outputs.rolling == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.v.outputs.tag }}
+          SUFFIX: ${{ steps.v.outputs.suffix }}
+        run: |
+          LATEST=$(gh release list -R "${{ github.repository }}" --limit 100 --json tagName,isDraft,isPrerelease \
+            --jq '.[] | select(.isDraft | not) | select(.isPrerelease | not) | .tagName' \
+            | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+${SUFFIX}$" | sort -V | tail -1 || true)
+          if [ -z "$LATEST" ]; then
+            echo "No published rolling release yet; $TAG is the first"
+          elif [ "$TAG" = "$LATEST" ] || [ "$(printf '%s\n%s\n' "${TAG#v}" "${LATEST#v}" | sort -V | tail -1)" != "${TAG#v}" ]; then
+            echo "::error::$TAG is not newer than the current latest rolling release $LATEST; refusing to regress the channel (re-run of an old run or renamed workflow file? bump _VERSION in app_common.py if the rename was intended)"
+            exit 1
+          else
+            echo "$TAG sorts above current latest $LATEST"
+          fi
+
   # Run the test suite on every push and tag. Every build/publish job below
   # depends on this, so a commit that breaks the rollback contract or DPS
   # totals never ships to auto-updating users. Tests are standalone scripts
