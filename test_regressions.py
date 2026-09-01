@@ -456,7 +456,7 @@ def test_r2_timeline_nonfinite_dropped():
     check("timeline_frame drops non-finite times",
           plugin_link.timeline_frame([(float("inf"), "x"), (float("nan"), "y"),
                                       (1.0, "z")])
-          == {"c": "timeline", "v": [[1.0, "z"]]})
+          == {"c": "timeline", "v": [[1.0, "z", "mechanic"]]})
 
 
 # ── C7: BlackHoleChains.on_loss ignores stale Crust losses ───────────────────

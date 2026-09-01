@@ -234,10 +234,10 @@ check("overlay rows sorted by encdps desc",
       [r[0] for r in rows] == [ME_NAME, P2_NAME])
 check("overlay row shape",
       rows[0] == [ME_NAME, "AST", round(62500 / 12, 1),
-                  round(62500 / 75500 * 100, 1), 0.0, True])
-check("overlay row shape (hps + not self)",
+                  round(62500 / 75500 * 100, 1), 0.0, True, 0])
+check("overlay row shape (hps + not self + deaths)",
       rows[1] == [P2_NAME, "MCH", round(13000 / 12, 1),
-                  round(13000 / 75500 * 100, 1), round(700 / 12, 1), False])
+                  round(13000 / 75500 * 100, 1), round(700 / 12, 1), False, 1])
 
 m.set_in_combat(False, True)
 check("finalize on combat flag drop fires once", len(ended) == 1)
@@ -535,12 +535,12 @@ check("dps frame enc shape",
       frame["enc"] == {"t": "Everkeep", "d": "00:12", "dps": 6291.7})
 check("dps frame rows shape",
       frame["rows"][0] == [ME_NAME, "AST", round(62500 / 12, 1),
-                           round(62500 / 75500 * 100, 1), 0.0, True])
+                           round(62500 / 75500 * 100, 1), 0.0, True, 0])
 big = [["n" + str(i), "JOB", 1.0, 1.0] for i in range(30)]
 check("dps frame caps rows at MAX_OVERLAY_ROWS",
       len(pl.dps_frame({}, big)["rows"]) == 24)
 check("dps frame defaults the trailing fields for old 4-field rows",
-      pl.dps_frame({}, big)["rows"][0] == ["n0", "JOB", 1.0, 1.0, 0.0, False])
+      pl.dps_frame({}, big)["rows"][0] == ["n0", "JOB", 1.0, 1.0, 0.0, False, 0])
 check("dps frame hide", pl.dps_frame(None, [], show=False)
       == {"c": "dps", "show": False})
 

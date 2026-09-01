@@ -118,9 +118,14 @@ check("tick frame exact",
       pl.tick_frame(12.5) == {"c": "tick", "t": 12.5})
 check("tick frame int seconds become float",
       pl.tick_frame(3) == {"c": "tick", "t": 3.0})
-check("timeline frame exact",
+check("timeline frame exact, tagged with kinds",
       pl.timeline_frame([(18.0, "Wing"), (24.5, "Dive")])
-      == {"c": "timeline", "v": [[18.0, "Wing"], [24.5, "Dive"]]})
+      == {"c": "timeline", "v": [[18.0, "Wing", "mechanic"], [24.5, "Dive", "mechanic"]]})
+check("timeline kind tags the words authors write",
+      pl.timeline_kind("Tankbuster on MT") == "tankbuster"
+      and pl.timeline_kind("Akh Morn raidwide") == "raidwide"
+      and pl.timeline_kind("Raid-wide bleed") == "raidwide"
+      and pl.timeline_kind("Wing of Ruin") == "mechanic")
 check("alert frame exact",
       pl.alert_frame("Stack", "alarm") == {"c": "alert", "text": "Stack", "sev": "alarm"})
 check("alert severities pass through 1:1",
@@ -170,7 +175,8 @@ check("alert frame arrives verbatim",
 
 link.send_timeline([(18.0, "Wing"), (24.5, "Dive")])
 check("timeline frame arrives verbatim",
-      wait_for(lambda: {"c": "timeline", "v": [[18.0, "Wing"], [24.5, "Dive"]]}
+      wait_for(lambda: {"c": "timeline",
+                        "v": [[18.0, "Wing", "mechanic"], [24.5, "Dive", "mechanic"]]}
                in fake.snapshot()))
 
 link.send_tick(12.5)
@@ -422,7 +428,18 @@ check("dps frame drops rows holding a non-finite value",
                     ["Me", "BLM", 100.0, INF, 1.0, True],
                     ["Me", "BLM", 100.0, 50.0, -INF, True],
                     ["You", "WHM", 90.0, 45.0, 2.0, False]])["rows"]
-      == [["You", "WHM", 90.0, 45.0, 2.0, False]])
+      == [["You", "WHM", 90.0, 45.0, 2.0, False, 0]])
+check("dps frame carries the deaths field and defaults it",
+      pl.dps_frame({"dps": 1.0},
+                   [["Me", "BLM", 100.0, 50.0, 1.0, True, 2],
+                    ["You", "WHM", 90.0, 45.0, 2.0, False]])["rows"]
+      == [["Me", "BLM", 100.0, 50.0, 1.0, True, 2],
+          ["You", "WHM", 90.0, 45.0, 2.0, False, 0]])
+check("dps frame drops rows with junk deaths",
+      pl.dps_frame({"dps": 1.0},
+                   [["Me", "BLM", 100.0, 50.0, 1.0, True, -1],
+                    ["You", "WHM", 90.0, 45.0, 2.0, False]])["rows"]
+      == [["You", "WHM", 90.0, 45.0, 2.0, False, 0]])
 check("dps JSON carries no bare Infinity or NaN token",
       all(token not in json.dumps(pl.dps_frame({"t": "F", "d": "1:23", "dps": bad},
                                                [["Me", "BLM", bad, 50.0, 1.0, True]]))

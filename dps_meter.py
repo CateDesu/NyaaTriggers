@@ -782,8 +782,8 @@ class DpsMeter:
     def overlay_rows(self) -> list:
         """Top players by ENCDPS in the current display view, capped at
         MAX_OVERLAY_ROWS, returned as [name, job, encdps, damage%, enchps,
-        is_self] rows for the in-game overlay. Empty when no encounter is
-        running."""
+        is_self, deaths] rows for the in-game overlay. Empty when no
+        encounter is running."""
         enc = self._view if self._view is not None else self.current
         if enc is None:
             return []
@@ -801,6 +801,7 @@ class DpsMeter:
             rows.append([c.name or f"{c.aid:X}", JOB_ACRONYMS.get(c.job, ""),
                          round(encdps, 1), round(pct, 1),
                          round(c.healed / enc_per, 1),
-                         bool(self._me_id is not None and c.aid == self._me_id)])
+                         bool(self._me_id is not None and c.aid == self._me_id),
+                         c.deaths])
         rows.sort(key=lambda r: r[2], reverse=True)
         return rows[:MAX_OVERLAY_ROWS]

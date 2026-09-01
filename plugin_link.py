@@ -6,13 +6,19 @@ loopback, default port 27080. This client connects to it, so the two can
 start in either order. Wire protocol, one JSON object per text frame.
 
     app -> plugin  {"c":"tick","t":secs}            fight clock
-                   {"c":"timeline","v":[[t,label]]} replace the schedule
+                   {"c":"timeline","v":[[t,label,kind]]}  replace the schedule
                    {"c":"alert","text":...,"sev":...}  show a callout
                    {"c":"clear"}                    zone change / fight end
                    {"c":"dps","show":bool,...}       live DPS meter window
                    {"c":"ping"}                     liveness, answered by pong
     plugin -> app  {"ev":"hello","protocol":1,"plugin":"x.y.z"}  on connect
                    {"ev":"pong"}
+
+The timeline kind is a tag derived from the label text, tankbuster or
+raidwide or the mechanic default, so the plugin can colour bars by it. The
+dps rows carry deaths as a trailing field. Both are additive: a plugin that
+predates them reads the frames it already knew, and this client never hears
+back either way.
 
 The plugin refuses any handshake carrying an Origin header. The websockets
 client sends none unless asked, so none gets asked for.
@@ -134,10 +140,25 @@ def tick_frame(seconds) -> dict:
         return None
 
 
+def timeline_kind(label) -> str:
+    """The kind tag for one timeline label. Timeline sources, cactbot's txt
+    files included, carry no kind of their own, so the label text is matched
+    against the words timeline authors actually write in them. Anything
+    without a match is a plain mechanic, which the plugin draws with the
+    shared bar colour anyway."""
+    text = str(label).lower()
+    if "tankbuster" in text or "tank buster" in text:
+        return "tankbuster"
+    if "raidwide" in text or "raid wide" in text or "raid-wide" in text:
+        return "raidwide"
+    return "mechanic"
+
+
 def timeline_frame(entries) -> dict:
     """Replace the schedule. `entries` is TimelineEngine.upcoming's shape,
-    timeline second and label pairs. Junk entries drop out rather than raise,
-    the sends-never-raise contract covers the frame builders too."""
+    timeline second and label pairs; each leaves here tagged with its kind
+    from timeline_kind. Junk entries drop out rather than raise, the
+    sends-never-raise contract covers the frame builders too."""
     clean = []
     for entry in entries:
         try:
@@ -147,7 +168,8 @@ def timeline_frame(entries) -> dict:
             # strict parser rejects wholesale. Non-finite is junk too.
             if not math.isfinite(ft):
                 raise ValueError("non-finite timeline time")
-            clean.append([ft, str(label)])
+            label = str(label)
+            clean.append([ft, label, timeline_kind(label)])
         except (TypeError, ValueError):
             log_drop("plugin-tx", f"timeline entry dropped: {entry!r}")
     return {"c": "timeline", "v": clean}
@@ -176,10 +198,10 @@ def dps_frame(enc, rows, show=True) -> dict:
     """DPS meter state for the in-game meter window. `show` False hides it
     encounter ended. Otherwise `enc` is {"t": title, "d": "mm:ss",
     "dps": party encdps} and `rows` are [name, job, encdps, damage%, enchps,
-    is_self] entries, capped at MAX_OVERLAY_ROWS. The trailing two fields are
-    optional on the way in, older callers send the 4-field shape, and default
-    to 0.0/False. Values are coerced so a sloppy caller can't break the
-    plugin's JSON contract."""
+    is_self, deaths] entries, capped at MAX_OVERLAY_ROWS. The trailing three
+    fields are optional on the way in, older callers send the 4-field shape,
+    and default to 0.0/False/0. Values are coerced so a sloppy caller can't
+    break the plugin's JSON contract."""
     if not show:
         return {"c": "dps", "show": False}
     enc = enc if isinstance(enc, dict) else {}
@@ -197,12 +219,15 @@ def dps_frame(enc, rows, show=True) -> dict:
             name, job, encdps, share = row[0], row[1], row[2], row[3]
             hps = row[4] if len(row) > 4 else 0.0
             is_self = bool(row[5]) if len(row) > 5 else False
+            deaths = int(row[6]) if len(row) > 6 else 0
+            if deaths < 0:
+                raise ValueError("negative deaths")
             vals = [float(encdps), float(share), float(hps)]
             # json.dumps writes inf as bare Infinity, which the plugin's
             # strict parser rejects wholesale. Non-finite is junk too.
             if not all(math.isfinite(v) for v in vals):
                 raise ValueError("non-finite dps row value")
-            clean_rows.append([str(name), str(job), *vals, is_self])
+            clean_rows.append([str(name), str(job), *vals, is_self, deaths])
         except (TypeError, ValueError, IndexError):
             continue
     return {"c": "dps", "show": True,
