@@ -54,12 +54,16 @@ class FakeLink:
     def __init__(self):
         self.clears = 0
         self.schedules = []
+        self.dps_frames = []
 
     def send_clear(self):
         self.clears += 1
 
     def send_timeline(self, rows):
         self.schedules.append(list(rows))
+
+    def send_dps(self, enc, rows, show=True):
+        self.dps_frames.append((enc, rows, show))
 
 
 def make_window():
@@ -75,6 +79,7 @@ def make_window():
     # _on_in_combat also feeds the DPS meter (settings-gated). Provide both.
     w._settings = {"dps_meter_enabled": True}
     w._dps_meter = DpsMeter()
+    w._dps_last_end = 0.0
     w._push_timeline_to_plugin = lambda: MainWindow._push_timeline_to_plugin(w)
     return w
 
@@ -250,6 +255,16 @@ check("wipe re-pushes the schedule right after the clear",
       and w7._plugin_link.schedules[0] == w7._timeline.upcoming())
 check("wipe re-push is the loaded schedule, not an empty one",
       len(w7._plugin_link.schedules[0]) > 0)
+check("wipe with no pull just ended sends no dps frame",
+      w7._plugin_link.dps_frames == [])
+
+# A wipe moments after a pull ended re-asserts the end frame after the
+# clear, so the plugin's hold-last keeps the final numbers up.
+w7._dps_last_end = time.monotonic()
+MainWindow._dispatch_log_line(w7, ["33", "ts", "0", "4000000F"], "33|ts|0|4000000F")
+check("wipe after a pull re-asserts the dps end frame",
+      w7._plugin_link.dps_frames == [(None, [], False)])
+check("second wipe clears the plugin again", w7._plugin_link.clears == 2)
 
 # ── Window glue: re-enabling local callouts re-pushes the schedule ─────────
 

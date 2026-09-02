@@ -315,6 +315,12 @@ class InstanceTabMixin:
             # Wipe and fight end. The plugin drops the schedule and live
             # alerts instead of interpolating a clock that just stopped.
             self._plugin_link.send_clear()
+            # The clear takes the meter's end state down with it, so the
+            # overlay's hold-last never survived a wipe. When this wipe just
+            # closed a pull, re-assert the end after the clear and the held
+            # final numbers stay up the way they do after a kill.
+            if time.monotonic() - self._dps_last_end < 10.0:
+                self._plugin_link.send_dps(None, [], show=False)
             # Re-push the schedule at once. The engine reset keeps its
             # entries, and the re-arm guard in _on_in_combat skips while the
             # schedule is non-empty, so without this the overlay stays blank

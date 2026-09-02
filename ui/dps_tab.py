@@ -41,6 +41,9 @@ class DpsTabMixin:
         self._dps_meter.set_idle_timeout(self._dps_idle_timeout)
         self._dps_meter.on_encounter_end = self._on_meter_encounter_end
         self._fflogs_last_title = ""           # last finalized encounter, for the FFLogs refresh button
+        # Monotonic stamp of the last finalize. The wipe branch re-asserts
+        # the overlay's end frame only when a pull just closed.
+        self._dps_last_end = 0.0
         # In app session pull history, newest first, the entry being reviewed,
         # None means the live main feed, and whether the live pull currently
         # has damage so a new pull's first strike can reclaim the main feed.
@@ -167,6 +170,7 @@ class DpsTabMixin:
         the in-app history, newest first. The live table keeps showing the
         final numbers as the last-pull view."""
         self._plugin_link.send_dps(None, [], show=False)
+        self._dps_last_end = time.monotonic()
         enc = snapshot.get("Encounter") or {}
         title = enc.get("title") or ""
         if title:
