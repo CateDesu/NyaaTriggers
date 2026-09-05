@@ -251,6 +251,7 @@ class EnginesMixin:
             self._triggevent.telesto.connect(self._on_telesto_status)   # automark link status
             self._triggevent.status.connect(
                 lambda active, msg: self._on_engine_sidecar_status("triggevent", active, msg))
+            self._triggevent.chain_failure.connect(self._on_engine_chain_failure)
             self._ws.raw_message.connect(self._triggevent.feed)   # the tee
             # the sidecar boots ~10s after we connect, so it misses the zone/party
             # state IINACT sends once on subscribe. When it signals ready, replay
@@ -311,7 +312,33 @@ class EnginesMixin:
         state = "good" if active else ("unknown" if msg == "Off" else "bad")
         self._engine_sidecar_state[src] = (state, msg)
         (_te_log if src == "triggevent" else _tn_log)(f"status: active={active} {msg}")
+        if src == "triggevent" and active:
+            # A fresh engine generation starts the chain failure count over.
+            self._engine_chain_failures = []
+            self._update_engine_chain_label()
         self._update_engine_status_label()
+
+    def _on_engine_chain_failure(self, line: str) -> None:
+        """A Triggevent chain died, connected in _ensure_triggevent_bridge.
+        Count it on the top-bar badge so a silently dead callout chain gets
+        noticed mid-fight instead of in a postmortem."""
+        self._engine_chain_failures.append(line)
+        self._update_engine_chain_label()
+
+    def _update_engine_chain_label(self) -> None:
+        # mirrors _update_engine_status_label. Hidden until the first dead
+        # chain, then amber with a session count and the latest lines on the
+        # tooltip.
+        lbl = getattr(self, "_engine_chain_lbl", None)
+        if lbl is None:
+            return
+        failures = getattr(self, "_engine_chain_failures", [])
+        if not failures:
+            lbl.setVisible(False)
+            return
+        lbl.setText(_("● {n} chain failures").format(n=len(failures)))
+        lbl.setToolTip("\n".join(failures[-5:]))
+        lbl.setVisible(True)
 
     def _note_triggevent_unavailable(self) -> None:
         """Explain an empty Triggevent section. A source install ships no engine

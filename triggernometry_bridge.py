@@ -37,7 +37,7 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, pyqtSignal
 
 import proc_env
-from drop_log import log_drop
+from drop_log import log_drop, rotate_one_generation
 from trigger_engine import _safe_sub, compile_user_regex
 
 _STOP = object()
@@ -220,9 +220,9 @@ def _log(msg: str) -> None:
     try:
         import time
         with _LOG_LOCK:
-            try:                               # bound growth
+            try:                               # bound growth, keep one old generation
                 if p.exists() and p.stat().st_size > (1 << 20):
-                    p.unlink()
+                    rotate_one_generation(p)
             except OSError:
                 pass
             with open(p, "a", encoding="utf-8", errors="replace") as fh:

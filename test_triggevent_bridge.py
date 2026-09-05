@@ -167,6 +167,38 @@ with mock.patch.object(tb, "_find_java", return_value="/usr/bin/java"), \
     tv2.stop()
 check("stop after a spontaneous exit is a clean no-op", tv2._proc is None)
 
+
+# ── a dead engine chain on stderr raises the engine-chain drop and signal ─────
+# The chain failure line only ever appears on the sidecar stderr stream, never
+# in the callout stream. The watch must log_drop it and fire chain_failure.
+drops = []
+_o_drop = tb.log_drop
+tb.log_drop = lambda site, detail, *a, **k: drops.append((site, detail))
+try:
+    tv3 = tb.TriggeventBridge()
+    seen = []
+    tv3.chain_failure.connect(lambda line: seen.append(line))
+
+    class _ErrProc:
+        stderr = io.StringIO(
+            "some boot line\n"
+            "18:00:00.000 [SequentialTrigger-3] ERROR gg.xp.SequentialTriggerController - "
+            "Error in sequential trigger 'DMU.ttSq' while waiting for 'BuffApplied'\n")
+
+    class _QuietProc:
+        stderr = io.StringIO("some boot line\nreading WS messages on stdin\n")
+
+    tv3._err_loop(_ErrProc())
+    check("an Error in sequential trigger line logs an engine-chain drop",
+          any(site == "engine-chain" and "DMU.ttSq" in d for site, d in drops))
+    check("an Error in sequential trigger line fires the chain_failure signal",
+          len(seen) == 1 and "DMU.ttSq" in seen[0])
+    drops.clear()
+    tv3._err_loop(_QuietProc())
+    check("benign stderr lines raise no engine-chain drop", drops == [])
+finally:
+    tb.log_drop = _o_drop
+
 print()
 if FAILS:
     print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

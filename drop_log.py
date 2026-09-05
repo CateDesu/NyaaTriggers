@@ -26,10 +26,22 @@ _last: dict[str, float] = {}
 
 # Cap the log at 1 MiB, the same ceiling the sidecar logs use. Without this the
 # file grows forever across sessions. The plugin-tx site alone logs on every
-# alert/timeline push. Past the cap the whole file is unlinked and the log
-# starts fresh, history is dropped rather than trimmed. Checked under _lock so
-# the size-check, unlink, append sequence is atomic.
+# alert/timeline push. Past the cap the file rotates one generation to .1 so
+# recent history survives instead of dropping everything. Checked under _lock
+# so the size-check, rotate, append sequence is atomic.
 _MAX_BYTES = 1 << 20
+
+
+def rotate_one_generation(path: Path) -> None:
+    """Rename path to path.1, overwriting any prior .1. Keeps one old
+    generation of history instead of deleting the whole log at the cap.
+    The rename carries the file's permissions over to the .1."""
+    try:
+        path.replace(path.with_name(path.name + ".1"))
+    except FileNotFoundError:
+        # A racing process rotated first. The append below still lands on
+        # the fresh file instead of being dropped.
+        pass
 
 
 def _owner_only(path, flags):
@@ -55,12 +67,7 @@ def log_drop(site: str, detail: str, throttle_s: float = 1.0) -> None:
         _last[site] = now
         try:
             if _LOG_FILE.exists() and _LOG_FILE.stat().st_size > _MAX_BYTES:
-                try:
-                    _LOG_FILE.unlink()
-                except FileNotFoundError:
-                    # A racing process rotated first. The append below still
-                    # lands on the fresh file instead of being dropped.
-                    pass
+                rotate_one_generation(_LOG_FILE)
             with open(_LOG_FILE, "a", encoding="utf-8", errors="replace",
                       opener=_owner_only) as f:
                 f.write(f"DROP {datetime.now():%Y-%m-%d %H:%M:%S} [{site}] {detail}\n")
@@ -80,12 +87,7 @@ def log_crash(text: str) -> None:
     with _lock:
         try:
             if _LOG_FILE.exists() and _LOG_FILE.stat().st_size > _MAX_BYTES:
-                try:
-                    _LOG_FILE.unlink()
-                except FileNotFoundError:
-                    # Same rotation race log_drop tolerates. The append below
-                    # still lands on the fresh file.
-                    pass
+                rotate_one_generation(_LOG_FILE)
             with open(_LOG_FILE, "a", encoding="utf-8", errors="replace",
                       opener=_owner_only) as f:
                 f.write(text)

@@ -446,5 +446,6 @@
   "● WebEngine failed to load": "● WebEngine の読み込みに失敗しました",
   "● {names} Engine": "● {names} エンジン",
   "● {name} Engine: {msg}": "● {name} エンジン: {msg}",
+  "● {n} chain failures": "",
   "日本語 (Japanese)": "日本語"
 }

@@ -328,6 +328,9 @@ class MainWindow(AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin,
         # mapping to a good, bad or unknown state plus a message. Drives the
         # top bar engine indicator.
         self._engine_sidecar_state: dict = {}
+        # "Error in sequential trigger" lines seen this engine session, newest
+        # last. Drives the small amber chain failure badge in the top bar.
+        self._engine_chain_failures: list = []
         self._telesto_status: str = "unknown"   # Telesto reachability, good, bad or unknown
         self._telesto_client = None             # real client built after _load_settings
         self._cactbot_disabled: set[str] = set()           # cactbot trigger ids the user silenced
@@ -682,6 +685,12 @@ class MainWindow(AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin,
         self._engine_status_lbl.setStyleSheet("color:#8f8f9a; font-weight:bold;")
         self._engine_status_lbl.setVisible(False)
         conn.addWidget(self._engine_status_lbl)
+        # Dead engine chains this session. Hidden until the first one. Amber,
+        # a dead chain is a degraded engine, not a dead one.
+        self._engine_chain_lbl = QLabel("")
+        self._engine_chain_lbl.setStyleSheet("color:#f9e2af; font-weight:bold;")
+        self._engine_chain_lbl.setVisible(False)
+        conn.addWidget(self._engine_chain_lbl)
         conn.addStretch()
         content_col.addLayout(conn)
 

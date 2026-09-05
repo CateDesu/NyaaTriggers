@@ -29,7 +29,7 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, pyqtSignal
 
 import proc_env
-from drop_log import log_drop
+from drop_log import log_drop, rotate_one_generation
 from trigger_engine import _safe_sub, compile_user_regex
 
 # PyInstaller puts the a.datas jar under sys._MEIPASS, but the Tree-added JRE
@@ -174,9 +174,9 @@ def _log(msg: str) -> None:
     try:
         import time
         with _LOG_LOCK:
-            try:                               # bound the growth
+            try:                               # bound the growth, keep one old generation
                 if p.exists() and p.stat().st_size > (1 << 20):
-                    p.unlink()
+                    rotate_one_generation(p)
             except OSError:
                 pass
             with open(p, "a", encoding="utf-8", errors="replace") as fh:
@@ -512,6 +512,7 @@ class TriggeventBridge(QObject):
     inventory   = pyqtSignal(str)        # one-shot JSON [{id,name,fight,group,text}] of all engine callouts
     telesto     = pyqtSignal(str)        # Telesto automark connection status, "good"|"bad"|"unknown"
     ready       = pyqtSignal()           # sidecar is up and reading stdin, time to replay world state
+    chain_failure = pyqtSignal(str)      # an engine chain died, the "Error in sequential trigger" line
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -906,6 +907,11 @@ class TriggeventBridge(QObject):
             if not line:
                 continue
             _log(f"[sidecar stderr] {line}")
+            # A dead sequential chain only ever shows up here, never in the
+            # callout stream. Raise it so a silent pull gets noticed mid-fight.
+            if "Error in sequential trigger" in line:
+                log_drop("engine-chain", line, 0)
+                self.chain_failure.emit(line)
             # Printed once the sidecar starts reading stdin. That's when a replayed
             # zone/party actually lands, so tell the app to send the world state.
             if "reading WS messages on stdin" in line:

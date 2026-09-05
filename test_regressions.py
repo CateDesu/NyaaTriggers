@@ -938,6 +938,31 @@ def test_setup_main_crash_log_owner_only():
             drop_log._perms_tightened = False
 
 
+# ── L-7: drop_log rotates one generation to .1 at the cap ────────────────────
+def test_drop_log_rotation_keeps_one_generation():
+    with tempfile.TemporaryDirectory() as td:
+        log = Path(td) / "nyaatriggers.log"
+        orig_file = drop_log._LOG_FILE
+        drop_log._LOG_FILE = log
+        try:
+            drop_log._last.clear()
+            drop_log._perms_tightened = False
+            log.write_text("x" * (drop_log._MAX_BYTES + 1), encoding="utf-8")
+            drop_log.log_drop("audit-rotate", "after cap", throttle_s=0)
+            rotated = log.with_name(log.name + ".1")
+            check("an over-cap drop log rotates to .1", rotated.exists())
+            check("the .1 keeps the old content",
+                  rotated.stat().st_size == drop_log._MAX_BYTES + 1)
+            check("the fresh log keeps appending",
+                  "[audit-rotate] after cap" in log.read_text(encoding="utf-8"))
+            check("the fresh log is created 0600",
+                  stat.S_IMODE(log.stat().st_mode) == 0o600)
+        finally:
+            drop_log._LOG_FILE = orig_file
+            drop_log._last.clear()
+            drop_log._perms_tightened = False
+
+
 # ── H-4: both installers pin piper-tts ───────────────────────────────────────
 def test_setup_installers_pin_piper():
     install_src = (REPO_DIR / "install.py").read_text(encoding="utf-8")
