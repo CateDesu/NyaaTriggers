@@ -257,6 +257,7 @@
   "Reapply warning:": "再付与警告:",
   "Recent pulls": "",
   "Record encounters": "エンカウントを記録",
+  "Record pulls to pull_logs for engine replay": "",
   "Refresh list": "リストを更新",
   "Regex matched against zone name - leave blank for any zone": "ゾーン名にマッチする正規表現（空欄で全ゾーン）",
   "Regex on ability name - used when Ability ID is blank": "アビリティ名の正規表現（アビリティIDが空欄のときに使用）",

@@ -28,6 +28,7 @@ from PyQt6.QtGui import (
 
 from trigger_engine import Trigger
 from ws_client import WSClient
+from pull_capture import PullCapture
 from tts import speak, play_sound, interrupt as tts_interrupt, set_model, set_venv_path, set_master_volume, set_engine, default_engine, set_jp_voice, set_jp_auto, set_jp_neural, kokoro_ready, _ensure_worker, _load_piper
 from locale_util import _, effective_locale, set_locale, active_locale
 from sequential import SequentialRunner
@@ -366,6 +367,16 @@ class MainWindow(AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin,
         self._settings: dict = {}
         self._settings_load_warning = None   # set by _load_settings on a corrupt file, shown below
         self._load_settings()
+        # Per-pull raw feed capture for engine replay, opt-in from Settings.
+        # Rides the same WS signals as the sidecar tee but writes pulls to
+        # pull_logs/ so tools/replay_pull.py can run them through the jar.
+        self._pull_capture = PullCapture(_DATA_DIR / "pull_logs", self)
+        self._pull_capture.context = lambda: (self._current_fight_tag, self._current_zone)
+        self._ws.log_line.connect(self._pull_capture.on_log_line)
+        self._ws.raw_message.connect(self._pull_capture.on_raw_message)
+        self._ws.in_combat.connect(self._pull_capture.on_in_combat)
+        self._ws.zone_changed.connect(self._pull_capture.on_zone_changed)
+        self._pull_capture.set_recording(bool(self._settings.get("triggevent_record_pulls", False)))
         # Resolve the UI locale ONCE, before any widget text or trigger fire
         # reads it. auto follows the system locale, explicit en/ja wins. Then
         # load the per callout Japanese overlay so the first fire can localize.
@@ -791,6 +802,10 @@ class MainWindow(AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin,
         self._auto_connect_cb.setChecked(bool(self._settings.get("auto_connect", False)))
         self._auto_connect_cb.stateChanged.connect(self._on_auto_connect_changed)
         settings_layout.addWidget(self._auto_connect_cb)
+        self._record_pulls_cb = QCheckBox(_("Record pulls to pull_logs for engine replay"))
+        self._record_pulls_cb.setChecked(bool(self._settings.get("triggevent_record_pulls", False)))
+        self._record_pulls_cb.stateChanged.connect(self._on_record_pulls_changed)
+        settings_layout.addWidget(self._record_pulls_cb)
 
         char_row = QHBoxLayout()
         char_row.addWidget(QLabel(_("My character:")))
@@ -1567,6 +1582,8 @@ class MainWindow(AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin,
         step = self._teardown_step
         try:
             step("ws disconnect", lambda: self._ws.disconnect_from())
+            # Close out any open pull so the capture and its meta land on disk.
+            step("pull capture finalize", lambda: self._pull_capture.close())
             # Stop periodic and pending timers first so no slot fires into
             # a half-torn-down window, say a party refresh after telesto
             # stops.

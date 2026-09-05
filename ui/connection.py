@@ -23,6 +23,11 @@ class ConnectionMixin:
         self._settings["auto_connect"] = bool(state)
         self._save_settings()
 
+    def _on_record_pulls_changed(self, state: int) -> None:
+        self._settings["triggevent_record_pulls"] = bool(state)
+        self._save_settings()
+        self._pull_capture.set_recording(bool(state))
+
     def _push_plugin_tick(self) -> None:
         """Fight-clock push. Sent only while the timeline clock runs. Every
         path that stops the clock, zone change, wipe, feed loss, local off,
