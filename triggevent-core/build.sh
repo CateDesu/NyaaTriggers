@@ -9,11 +9,11 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ET_DIR="${EVENT_TRIGGER_DIR:-$HERE/event-trigger}"
-ET_REPO="${EVENT_TRIGGER_REPO:-https://github.com/xpdota/event-trigger.git}"
-# Pinned to a specific event-trigger commit so the vendored patches/ apply
-# deterministically (upstream master drifts and would break them). Bump this
-# together with re-checking patches/ against the new source.
-ET_REF="${EVENT_TRIGGER_REF:-43bcf52782922360daf66bfb57e22d9251111a0e}"
+ET_REPO="${EVENT_TRIGGER_REPO:-https://github.com/CateDesu/event-trigger.git}"
+# Pinned to a commit on the fork's guards branch, which carries the engine
+# guards as real commits. Bump this after a deliberate upstream sync or when
+# new guard commits land.
+ET_REF="${EVENT_TRIGGER_REF:-2491d56d3ed66c79085a78fd1090dc0f3bbb3409}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -33,32 +33,17 @@ if [ ! -d "$ET_DIR/.git" ]; then
   git -C "$ET_DIR" checkout "$ET_REF"
 else
   echo ">> reusing existing clone at $ET_DIR"
+  # Older clones point origin at upstream. The engine comes from the fork now.
+  if [ "$(git -C "$ET_DIR" remote get-url origin 2>/dev/null || true)" != "$ET_REPO" ]; then
+    echo ">> repointing origin at $ET_REPO"
+    git -C "$ET_DIR" remote set-url origin "$ET_REPO"
+  fi
   # Re-assert the pin: a reused clone may have drifted (branch pull, local
-  # checkout), and the patch checks below only say whether the patch applies,
-  # not that the tree IS the pinned source.
+  # checkout), and only an exact HEAD match proves the tree IS the pinned source.
   if [ "$(git -C "$ET_DIR" rev-parse HEAD)" != "$ET_REF" ]; then
     echo ">> existing clone is not at the pinned ref; checking out $ET_REF"
     git -C "$ET_DIR" checkout "$ET_REF"
   fi
-fi
-
-# 1b. Apply the vendored engine patches on top of the pinned source. Idempotent:
-#     skip if already applied, FAIL the build if one applies neither way (source
-#     drifted from the pin). A jar without the DMU crash guards must never ship.
-if [ -d "$HERE/patches" ]; then
-  for p in "$HERE"/patches/*.patch; do
-    [ -e "$p" ] || continue
-    if git -C "$ET_DIR" apply --reverse --check "$p" 2>/dev/null; then
-      echo ">> patch already applied: $(basename "$p")"
-    elif git -C "$ET_DIR" apply --check "$p" 2>/dev/null; then
-      echo ">> applying patch: $(basename "$p")"
-      git -C "$ET_DIR" apply "$p"
-    else
-      echo "ERROR: patch does not apply cleanly (event-trigger drifted from the pin?): $(basename "$p")" >&2
-      echo "Refusing to build a jar without the vendored engine guards. Re-check patches/ against $ET_REF or bump the pin." >&2
-      exit 1
-    fi
-  done
 fi
 
 # 2. Install just the engine modules (+ their upstream deps via -am) into ~/.m2.

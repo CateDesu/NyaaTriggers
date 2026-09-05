@@ -125,6 +125,31 @@ NyaaTriggers auto-discovers the jar at `triggevent-core/target/triggevent-core.j
 
 ---
 
+## Engine source: the CateDesu fork and the guards branch
+
+Since 2026-09 the engine builds from `CateDesu/event-trigger`, branch `guards`,
+not directly from upstream. The guards that used to be `patches/*.patch` now
+live there as plain commits. `build.sh` pins a commit on that branch (`ET_REF`),
+and `update_engine` fast-forwards the local clone to the branch head and builds
+that instead.
+
+Syncing upstream is a deliberate manual ritual, never automatic:
+
+```bash
+cd triggevent-core/event-trigger
+git remote add upstream https://github.com/xpdota/event-trigger.git   # once
+git fetch upstream master
+git merge upstream/master        # into guards, resolve conflicts, test
+git push fork guards
+# then bump ET_REF in build.sh to the new guards tip and rebuild
+```
+
+Use merge, not rebase, and never force-push guards. The fork runs a weekly
+"Upstream drift" workflow that opens an issue when guards falls behind, so
+stagnation is loud instead of silent.
+
+---
+
 ## STATUS (built + shipped in v0.5.1, 2026-06-14)
 
 > **Historical snapshot (v0.5.1).** This records the initial sidecar bring-up. Since v0.8

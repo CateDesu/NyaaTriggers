@@ -222,6 +222,11 @@ def has_java() -> bool:
 _CORE_DIR     = _BASE / "triggevent-core"
 _ET_DIR       = _CORE_DIR / "event-trigger"
 _BUILD_SCRIPT = _CORE_DIR / ("build.bat" if os.name == "nt" else "build.sh")
+# The engine is our fork of xpdota/event-trigger. Engine guards live as commits
+# on its guards branch, and upstream master only enters through a deliberate
+# merge into that branch.
+_ET_REPO_URL  = "https://github.com/CateDesu/event-trigger.git"
+_ET_BRANCH    = "guards"
 # Records the event-trigger HEAD the jar was built from. update_engine trusts
 # it over a bare behind count, which a failed build leaves pointing at code
 # the jar does not contain. Written only after a successful build.
@@ -297,40 +302,38 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
                               capture_output=True, text=True, timeout=120)
 
     try:
-        f = _git("fetch", "origin", "master")
+        # Point the clone at the fork. Installs from before the fork cloned
+        # upstream directly, and a fetch of the guards branch against upstream
+        # would just fail.
+        u = _git("remote", "get-url", "origin")
+        if u.returncode == 0 and u.stdout.strip() != _ET_REPO_URL:
+            _git("remote", "set-url", "origin", _ET_REPO_URL)
+        f = _git("fetch", "origin", _ET_BRANCH)
         if f.returncode != 0:
             return (False, f"Triggevent fetch failed: {f.stderr.strip()[:200]}")
-        r = _git("rev-list", "--count", "HEAD..origin/master")
+        r = _git("rev-list", "--count", f"HEAD..origin/{_ET_BRANCH}")
         if r.returncode != 0:
             return (False, f"Triggevent rev-list failed: {r.stderr.strip()[:200]}")
-        h = _git("rev-parse", "origin/master")
+        h = _git("rev-parse", f"origin/{_ET_BRANCH}")
         if h.returncode != 0:
             return (False, f"Triggevent rev-parse failed: {h.stderr.strip()[:200]}")
         head = h.stdout.strip()
         behind = r.stdout.strip()
         if not behind.isdigit() or int(behind) == 0:
             # behind==0 says the clone caught up, it says nothing about the
-            # jar. A failed or timed-out build leaves HEAD at origin/master
+            # jar. A failed or timed-out build leaves HEAD at origin/guards
             # with the old jar in place, so behind alone would report the
             # engine current forever. Trust only the stamp a successful build
             # writes. A missing or unreadable stamp means rebuild.
             if _jar_built_from() == head:
                 return (False, "Triggevent Engine already up to date")
-        # The vendored patches leave the tree dirty after every build, and a
-        # fast forward refuses to run over modified files, so the merge would
-        # abort on the patched sources forever. Discard them, the build
-        # reapplies the patches right after.
-        c = _git("checkout", "--", ".")
-        if c.returncode != 0:
-            return (False, f"Triggevent checkout failed: {c.stderr.strip()[:200]}")
-        if _git("merge", "--ff-only", "origin/master").returncode != 0:
-            return (False, "Triggevent pull skipped: local event-trigger clone has diverged")
+        if _git("merge", "--ff-only", f"origin/{_ET_BRANCH}").returncode != 0:
+            return (False, "Triggevent pull skipped: local event-trigger clone has diverged or has uncommitted changes")
         cmd = [str(_BUILD_SCRIPT)] if os.name == "nt" else ["bash", str(_BUILD_SCRIPT)]
         # Build what was just merged, not the stale pin. Otherwise the build
         # script checks the pin back out, rebuilds the old source every time
-        # and still reports an update. If upstream drifted where a patch
-        # applies, the build now fails loudly instead of shipping old code.
-        env = {**os.environ, "EVENT_TRIGGER_REF": "origin/master"}
+        # and still reports an update.
+        env = {**os.environ, "EVENT_TRIGGER_REF": f"origin/{_ET_BRANCH}"}
         # A Maven build legitimately takes minutes. Half an hour means it hung.
         # Popen by hand, not subprocess.run. run's timeout kills only the
         # direct bash or build.bat child and orphans Maven and its java
