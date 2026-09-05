@@ -36,7 +36,7 @@ else
   # Older clones point origin at upstream. The engine comes from the fork now.
   if [ "$(git -C "$ET_DIR" remote get-url origin 2>/dev/null || true)" != "$ET_REPO" ]; then
     echo ">> repointing origin at $ET_REPO"
-    git -C "$ET_DIR" remote set-url origin "$ET_REPO"
+    git -C "$ET_DIR" remote add origin "$ET_REPO" 2>/dev/null || git -C "$ET_DIR" remote set-url origin "$ET_REPO"
   fi
   # Re-assert the pin: a reused clone may have drifted (branch pull, local
   # checkout), and only an exact HEAD match proves the tree IS the pinned source.

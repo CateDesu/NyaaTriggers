@@ -26,7 +26,7 @@ if not exist "%EVENT_TRIGGER_DIR%\.git" (
   for /f %%i in ('git -C "%EVENT_TRIGGER_DIR%" remote get-url origin 2^>nul') do set "ET_ORIGIN=%%i"
   if not "!ET_ORIGIN!"=="%EVENT_TRIGGER_REPO%" (
     echo ^>^> repointing origin at %EVENT_TRIGGER_REPO%
-    git -C "%EVENT_TRIGGER_DIR%" remote set-url origin "%EVENT_TRIGGER_REPO%" || exit /b 1
+    git -C "%EVENT_TRIGGER_DIR%" remote add origin "%EVENT_TRIGGER_REPO%" 2>nul || git -C "%EVENT_TRIGGER_DIR%" remote set-url origin "%EVENT_TRIGGER_REPO%" || exit /b 1
   )
   REM Re-assert the pin, a reused clone may have drifted.
   for /f %%i in ('git -C "%EVENT_TRIGGER_DIR%" rev-parse HEAD') do set "ET_HEAD=%%i"
