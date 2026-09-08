@@ -64,6 +64,13 @@ REPO_DIR = Path(__file__).parent
 FAILS = []
 
 
+class _CheckFailed(Exception):
+    """A recorded check() failure. Kept distinct from AssertionError so the
+    direct-run loop can tell a recorded failure apart from a stray assert in
+    a helper or fake. Only this type is swallowed there, anything else lands
+    in FAILS instead of passing silently."""
+
+
 def _program_sources():
     """main_window.py plus the modules the MainWindow split moved code into,
     one combined source for the source level checks below."""
@@ -79,7 +86,7 @@ def check(name, cond):
         FAILS.append(name)
         # Under pytest this fails the calling test; the direct-run loop below
         # catches it and moves on to the next test function.
-        raise AssertionError(name)
+        raise _CheckFailed(name)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1978,7 +1985,8 @@ def test_te_update_stamp_gate():
 
     def run_once(behind, head, build_rc, stamp, remote_url=None):
         """Run update_engine against a temp clone layout with git and the
-        build scripted. Returns (ok, msg, build_calls, stamp_text, remote_calls)."""
+        build scripted. Returns (ok, msg, build_calls, stamp_text, remote_calls,
+        git ops in call order)."""
         remote_url = remote_url or tev._ET_REPO_URL
         td = tempfile.TemporaryDirectory()
         root = Path(td.name)
@@ -1992,15 +2000,18 @@ def test_te_update_stamp_gate():
             stamp_p.write_text(stamp, encoding="utf-8")
         builds = []
         remotes = []
+        ops = []
 
         def fake_run(argv, **kw):
             sub = argv[3:]
             if sub[0] == "remote":
                 remotes.append(sub[1])
+                ops.append(tuple(sub))
                 if sub[1] == "get-url":
                     return _R(0, remote_url + "\n")
                 return _R(0)
             if sub[0] == "fetch":
+                ops.append(tuple(sub))
                 return _R(0)
             if sub[0] == "rev-list":
                 return _R(0, behind + "\n")
@@ -2027,41 +2038,45 @@ def test_te_update_stamp_gate():
              tev.shutil.which, tev.subprocess.run, tev.subprocess.Popen) = orig
         stamp_text = stamp_p.read_text(encoding="utf-8") if stamp_p.exists() else None
         td.cleanup()
-        return ok, msg, builds, stamp_text, remotes
+        return ok, msg, builds, stamp_text, remotes, ops
 
     # A build that fails after the merge leaves no stamp, and the next call
     # at behind==0 must rebuild instead of reporting the engine current.
-    ok, msg, builds, stamp_text, _r1 = run_once("3", "aaa111", 1, None)
+    ok, msg, builds, stamp_text, _r1, _o1 = run_once("3", "aaa111", 1, None)
     check("failed build reports the failure", not ok and "rebuild failed" in msg)
     check("failed build writes no stamp", stamp_text is None)
-    ok, msg, builds, stamp_text, _r2 = run_once("0", "aaa111", 0, None)
+    ok, msg, builds, stamp_text, _r2, _o2 = run_once("0", "aaa111", 0, None)
     check("behind==0 with no stamp rebuilds", len(builds) == 1)
     check("rebuild at behind==0 is not reported as up to date",
           ok and "already up to date" not in msg)
     check("a successful rebuild writes the HEAD stamp", stamp_text == "aaa111\n")
 
     # The normal nothing to do path. A matching stamp stays cheap, no build.
-    ok, msg, builds, stamp_text, remotes = run_once("0", "aaa111", 0, "aaa111\n")
+    ok, msg, builds, stamp_text, remotes, _o3 = run_once("0", "aaa111", 0, "aaa111\n")
     check("matching stamp reports already up to date",
           not ok and "already up to date" in msg)
     check("matching stamp never starts a build", builds == [])
     check("a fork-pointing clone is left alone", "set-url" not in remotes)
 
     # An old clone still pointing at upstream gets repointed before the fetch.
-    ok, msg, builds, stamp_text, remotes = run_once(
+    ok, msg, builds, stamp_text, remotes, ops = run_once(
         "0", "aaa111", 0, "aaa111\n",
         remote_url="https://github.com/xpdota/event-trigger.git")
     check("an upstream-pointing clone is repointed at the fork", "set-url" in remotes)
+    set_url = ("remote", "set-url", "origin", tev._ET_REPO_URL)
+    check("the repoint targets the fork URL", set_url in ops)
+    first_fetch = next(i for i, op in enumerate(ops) if op[0] == "fetch")
+    check("the repoint lands before the first fetch", ops.index(set_url) < first_fetch)
     check("a repointed clone still reports up to date",
           not ok and "already up to date" in msg)
 
     # A stamp from an older HEAD is stale, the jar must be rebuilt.
-    ok, msg, builds, stamp_text, _r3 = run_once("0", "bbb222", 0, "aaa111\n")
+    ok, msg, builds, stamp_text, _r4, _o4 = run_once("0", "bbb222", 0, "aaa111\n")
     check("stale stamp rebuilds", len(builds) == 1)
     check("rebuild replaces the stale stamp", stamp_text == "bbb222\n")
 
     # The ordinary update path still fast forwards, builds and stamps.
-    ok, msg, builds, stamp_text, _r4 = run_once("5", "ccc333", 0, None)
+    ok, msg, builds, stamp_text, _r5, _o5 = run_once("5", "ccc333", 0, None)
     check("a real update builds and reports the new commits",
           ok and "5 new commit(s)" in msg)
     check("a real update stamps the new HEAD", stamp_text == "ccc333\n")
@@ -2422,7 +2437,7 @@ if __name__ == "__main__":
         if _name.startswith("test_") and callable(_fn):
             try:
                 _fn()
-            except AssertionError:
+            except _CheckFailed:
                 pass            # check() already recorded the failed step
             except Exception as exc:
                 print(f"FAIL  {_name}: {exc!r}")
