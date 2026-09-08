@@ -674,6 +674,7 @@ check("feed loss finalizes the open pull",
       len(ended18) == 1 and ended18[0]["Combatant"][ME_NAME]["damage"] == 1000)
 # The reconnect replay reports combat on. With the edge reset that is a
 # rising edge again, so the next pull stands alone instead of merging.
+roster(m18)
 m18.set_in_combat(True, True)
 m18.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
                     [("750003", dmg(2000))]), "")
@@ -723,6 +724,26 @@ m21.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
 m21.set_zone_metadata("Elsewhere")
 check("a zone event without its 01 line never ends the pull",
       ended21 == [] and m21.current is not None)
+
+for reconnect in (False, True):
+    for player_first in (False, True):
+        meter = DpsMeter(clock=Clock())
+        if reconnect:
+            roster(meter)
+            meter.feed_lost()
+            check("feed loss drops the old actor roster",
+                  meter._me_id is None and not meter._jobs)
+        if not player_first:
+            meter.set_zone_metadata("New instance")
+        meter.set_me(int(ME, 16))
+        meter.note_job(int(P2, 16), 31)
+        if player_first:
+            meter.set_zone_metadata("New instance")
+        meter.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Boss",
+                              [("750003", dmg(100))]), "")
+        check(f"metadata preserves fresh identity {reconnect=} {player_first=}",
+              meter.snapshot()["Combatant"][ME_NAME]["damage"] == 100
+              and meter._jobs.get(int(P2, 16)) == 31)
 
 print()
 if FAILS:

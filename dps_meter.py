@@ -247,6 +247,7 @@ class DpsMeter:
     def __init__(self, clock=None) -> None:
         self._clock = clock or time.monotonic
         self._zone = ""
+        self._awaiting_zone_metadata = True
         self._me_id: "int | None" = None
         self._jobs: "dict[int, int]" = {}      # actor id -> ClassJob id, nonzero means a player
         self._owners: "dict[int, int]" = {}    # pet or summon id -> owner id
@@ -410,6 +411,11 @@ class DpsMeter:
         self.finalize()
         self._in_act = False
         self._in_game = False
+        self._jobs.clear()
+        self._owners.clear()
+        self._names.clear()
+        self._me_id = None
+        self._awaiting_zone_metadata = True
 
     def set_zone_metadata(self, name: str) -> None:
         """Zone name from a ChangeZone event rather than the raw 01 line.
@@ -419,16 +425,20 @@ class DpsMeter:
         Real transitions still arrive as raw 01 lines and take _on_zone,
         where the finalize happens."""
         name = (name or "").strip()
-        if not name or name == self._zone:
+        if not name:
+            return
+        first_metadata = self._awaiting_zone_metadata
+        self._awaiting_zone_metadata = False
+        if name == self._zone:
             return
         self._zone = name
-        # A different zone than the last one heard means a transition passed
-        # without its 01 line. Actor ids were already reassigned, drop the
-        # stale knowledge like _on_zone does.
-        self._jobs.clear()
-        self._owners.clear()
-        self._names.clear()
-        self._me_id = None
+        # The first metadata belongs to this connection. Its roster may
+        # already have arrived. Later changes invalidate the old roster.
+        if not first_metadata:
+            self._jobs.clear()
+            self._owners.clear()
+            self._names.clear()
+            self._me_id = None
         # Retitle a pull opened under the placeholder. Replay order inside
         # the resubscribe burst is not guaranteed.
         for enc in (self.current, self._view):
@@ -492,6 +502,7 @@ class DpsMeter:
         # local player id too. The next 02 line pins it again.
         self.finalize()
         self._zone = fields[3].strip()
+        self._awaiting_zone_metadata = False
         self._jobs.clear()
         self._owners.clear()
         self._names.clear()

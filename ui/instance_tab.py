@@ -175,6 +175,11 @@ class InstanceTabMixin:
             self._current_zone_id = zone_id
         else:
             prev_zone_id = 0
+        meter = getattr(self, "_dps_meter", None)
+        if meter is not None:
+            # Reconnect metadata may repeat the zone while starting a fresh
+            # roster. The meter accepts it without ending the encounter.
+            meter.set_zone_metadata(zone)
         if zone == self._current_zone:
             # Same zone, but this event may be the one that carries the
             # id, the 01 line and the ChangeZone event arrive in either
@@ -195,13 +200,6 @@ class InstanceTabMixin:
         if not zone_id:
             # The previous zone's id must not leak into this one's lookups.
             self._current_zone_id = 0
-        meter = getattr(self, "_dps_meter", None)
-        if meter is not None:
-            # The meter only learns zones from the raw 01 line, one shot and
-            # long gone for a session that connected mid instance. Hand it
-            # the name here too. Metadata only, it never finalizes from this
-            # path, so a same zone replay cannot end a live pull.
-            meter.set_zone_metadata(zone)
         self._set_zone_aliases(zone, zone_id)
         # Zone change. The plugin drops the old schedule and any live
         # alerts. The new zone's schedule arrives from

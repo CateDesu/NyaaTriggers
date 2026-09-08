@@ -30,7 +30,7 @@ if not exist "%EVENT_TRIGGER_DIR%\.git" (
   )
   REM A repointed clone has none of the fork's objects yet, fetch when the pin
   REM is unknown locally or the checkout below fails on an unknown ref.
-  git -C "%EVENT_TRIGGER_DIR%" cat-file -e %EVENT_TRIGGER_REF%^{commit} 2>nul
+  git -C "%EVENT_TRIGGER_DIR%" cat-file -e "%EVENT_TRIGGER_REF%^{commit}" 2>nul
   if errorlevel 1 (
     echo ^>^> fetching %EVENT_TRIGGER_REPO%
     git -C "%EVENT_TRIGGER_DIR%" fetch origin || exit /b 1

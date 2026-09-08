@@ -107,6 +107,21 @@ check("no id: falls back to the reported name",
 z._set_zone_aliases("", 0)
 check("empty zone matches nothing", not z._zone_matches(re.compile(".")))
 
+from dps_meter import DpsMeter
+from types import SimpleNamespace
+
+meter = DpsMeter()
+meter.set_zone_metadata("Known instance")
+meter.feed_lost()
+meter.set_me(0x10FF0001)
+window = SimpleNamespace(_current_zone="Known instance", _dps_meter=meter)
+mw.MainWindow._apply_zone(window, "Known instance")
+check("same zone reconnect replay preserves the fresh player id",
+      meter._me_id == 0x10FF0001)
+meter.set_zone_metadata("Next instance")
+check("the next zone transition clears the old roster",
+      meter._me_id is None)
+
 # ── the six fights that were dead now point at their real zones ───────────
 EXPECTED = {
     "Queen EX":                "The Minstrel's Ballad: Sphene's Burden",

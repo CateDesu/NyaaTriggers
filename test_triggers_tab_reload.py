@@ -157,6 +157,22 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
     check("the edited trigger's pending warning is invalidated",
           w.fired == ["warning", "seq", "warning"])
 
+    for path in (ac.TRIGGERS_FILE, ac._REPO_TRIGGERS_FILE):
+        path.write_text(json.dumps([
+            {"id": "official", "name": "changed outside the program"}]),
+            encoding="utf-8")
+        local = next(t for t in w._triggers if t.id == "warning")
+        local.name = "local edit while a reload is pending"
+        w._save_triggers()
+        check("local save keeps other files pending",
+              w._triggers_mtime != w._trigger_files_stamp())
+        w._maybe_reload_triggers()
+        check("poll loads the pending external change",
+              any(t.id == "official" and t.name == "changed outside the program"
+                  for t in w._triggers))
+        check("pending external reload preserves the saved local object",
+              next(t for t in w._triggers if t.id == "warning") is local)
+
 print()
 if FAILS:
     print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

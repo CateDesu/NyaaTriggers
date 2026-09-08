@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import signal
@@ -30,7 +31,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -61,12 +62,17 @@ def _line_time(line: str):
     ride at the previous message's time."""
     try:
         msg = json.loads(line)
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         return None
-    if msg.get("type") != "LogLine":
+    if not isinstance(msg, dict) or msg.get("type") != "LogLine":
         return None
     try:
-        return datetime.fromisoformat(str(msg["line"][1]))
+        fields = msg["line"]
+        if not isinstance(fields, list):
+            return None
+        stamp = datetime.fromisoformat(str(fields[1]))
+        # Captures without an offset use UTC throughout duration and pacing.
+        return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
     except (KeyError, IndexError, TypeError, ValueError):
         return None
 
@@ -78,7 +84,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
     group is already gone."""
     try:
         if os.name == "posix":
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            os.killpg(proc.pid, signal.SIGKILL)
         else:
             proc.kill()
     except (OSError, ProcessLookupError):
@@ -118,8 +124,11 @@ def main() -> int:
         print(f"ERROR: engine jar not found: {args.jar}\n"
               f"build it with triggevent-core/build.sh or pass --jar", file=sys.stderr)
         return 1
-    if args.speed <= 0:
+    if not math.isfinite(args.speed) or args.speed <= 0:
         print("ERROR: --speed must be positive", file=sys.stderr)
+        return 1
+    if not math.isfinite(args.hold) or args.hold < 0 or args.timeout < 0:
+        print("ERROR: --hold and --timeout must be finite and nonnegative", file=sys.stderr)
         return 1
     java = _java_cmd()
     if not java:
@@ -133,8 +142,16 @@ def main() -> int:
         return 1
 
     stamps = [t for t in (_line_time(l) for l in lines) if t is not None]
-    duration = (stamps[-1] - stamps[0]).total_seconds() if len(stamps) > 1 else 0.0
-    budget = args.timeout or (duration / args.speed + args.hold + _TIMEOUT_MARGIN_S)
+    duration = max(((t - stamps[0]).total_seconds() for t in stamps), default=0.0)
+    try:
+        paced_duration = duration / args.speed
+        budget = float(args.timeout) or (paced_duration + args.hold + _TIMEOUT_MARGIN_S)
+        valid_budget = math.isfinite(budget) and math.isfinite(paced_duration)
+    except OverflowError:
+        valid_budget = False
+    if not valid_budget:
+        print("ERROR: replay duration exceeds the supported time budget", file=sys.stderr)
+        return 1
     print(f"replaying {args.capture.name}: {len(lines)} raw lines, "
           f"{duration:.0f}s of pull at {args.speed:g}x through {args.jar.name}")
     if args.speed != 1.0:
@@ -160,35 +177,54 @@ def main() -> int:
     start = time.monotonic()
     deadline = start + budget
     failed = None
-    try:
+    stopped = threading.Event()
+    feed_errors = []
+
+    def feed():
         first = None
-        for line in lines:
-            if time.monotonic() > deadline:
-                raise TimeoutError
-            t = _line_time(line)
-            if t is not None:
-                if first is None:
-                    first = t
-                try:
+        try:
+            for line in lines:
+                if stopped.is_set():
+                    return
+                t = _line_time(line)
+                if t is not None:
+                    if first is None:
+                        first = t
                     due = (t - first).total_seconds() / args.speed
-                except TypeError:
-                    due = 0.0  # mixed aware and naive stamps, just keep going
-                wait = due - (time.monotonic() - start)
-                if wait > 0:
-                    time.sleep(wait)
-            proc.stdin.write(line + "\n")
-        if args.hold > 0:
-            time.sleep(min(args.hold, max(0.0, deadline - time.monotonic())))
-        proc.stdin.close()
-        proc.wait(timeout=max(1.0, deadline - time.monotonic()))
-    except BrokenPipeError:
-        failed = f"engine died mid-replay, exit {proc.poll()}"
-    except (TimeoutError, subprocess.TimeoutExpired):
+                    wait = due - (time.monotonic() - start)
+                    if wait > 0 and stopped.wait(wait):
+                        return
+                proc.stdin.write(line + "\n")
+                proc.stdin.flush()
+            stopped.wait(args.hold)
+        except (OSError, ValueError) as exc:
+            feed_errors.append(str(exc))
+        finally:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+
+    # Keep the deadline independent of pipe writes and timestamp waits.
+    writer = threading.Thread(target=feed, daemon=True)
+    writer.start()
+    try:
+        writer.join(timeout=max(0.0, deadline - time.monotonic()))
+        if writer.is_alive():
+            raise subprocess.TimeoutExpired(proc.args, budget)
+        proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        if feed_errors:
+            failed = f"engine died mid-replay, exit {proc.returncode}: {feed_errors[0]}"
+        elif time.monotonic() > deadline:
+            raise subprocess.TimeoutExpired(proc.args, budget)
+    except subprocess.TimeoutExpired:
         failed = f"replay did not finish within {budget:.0f}s"
     finally:
-        if proc.poll() is None:
+        stopped.set()
+        if failed or proc.poll() is None:
             _kill_tree(proc)
             proc.wait()
+        writer.join(timeout=5)
         t_out.join(timeout=5)
         t_err.join(timeout=5)
     if failed:
@@ -203,7 +239,7 @@ def main() -> int:
             msg = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if msg.get("t") == "callout" and not msg.get("expired"):
+        if isinstance(msg, dict) and msg.get("t") == "callout" and not msg.get("expired"):
             callouts.append(msg)
 
     chain_failures = [l for l in err.splitlines() if "Error in sequential trigger" in l]

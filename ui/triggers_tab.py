@@ -295,11 +295,14 @@ class TriggersTabMixin:
                 "folders":  self._folders,
             }
             _atomic_write_json(ac.TRIGGERS_LOCAL_FILE, data, indent=2)
-            # Re-baseline the hot-reload snapshot over our own write. The 30 s
-            # poll reads any stamp change as an external edit and rebuilds
-            # every trigger object, which orphans armed status timers and
-            # sequence runners and throws away cooldown history.
-            self._triggers_mtime = self._trigger_files_stamp()
+            # Acknowledge only our local write. Other files may have changed
+            # since the last poll and still need to be loaded.
+            previous = getattr(self, "_triggers_mtime", ())
+            current = self._trigger_files_stamp()
+            if len(previous) == len(current):
+                self._triggers_mtime = tuple(
+                    current[i] if path == ac.TRIGGERS_LOCAL_FILE else previous[i]
+                    for i, path in enumerate(_watched_trigger_files()))
         except (OSError, TypeError, ValueError) as exc:
             # A read-only install dir, say onedir under Program Files, must not
             # crash on every edit. Degrade to an in-memory-only change.
