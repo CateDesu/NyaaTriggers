@@ -28,6 +28,13 @@ if not exist "%EVENT_TRIGGER_DIR%\.git" (
     echo ^>^> repointing origin at %EVENT_TRIGGER_REPO%
     git -C "%EVENT_TRIGGER_DIR%" remote add origin "%EVENT_TRIGGER_REPO%" 2>nul || git -C "%EVENT_TRIGGER_DIR%" remote set-url origin "%EVENT_TRIGGER_REPO%" || exit /b 1
   )
+  REM A repointed clone has none of the fork's objects yet, fetch when the pin
+  REM is unknown locally or the checkout below fails on an unknown ref.
+  git -C "%EVENT_TRIGGER_DIR%" cat-file -e %EVENT_TRIGGER_REF%^{commit} 2>nul
+  if errorlevel 1 (
+    echo ^>^> fetching %EVENT_TRIGGER_REPO%
+    git -C "%EVENT_TRIGGER_DIR%" fetch origin || exit /b 1
+  )
   REM Re-assert the pin, a reused clone may have drifted.
   for /f %%i in ('git -C "%EVENT_TRIGGER_DIR%" rev-parse HEAD') do set "ET_HEAD=%%i"
   if not "!ET_HEAD!"=="%EVENT_TRIGGER_REF%" (
@@ -38,7 +45,7 @@ if not exist "%EVENT_TRIGGER_DIR%\.git" (
 
 echo ^>^> installing Triggevent Engine modules to local Maven repo
 pushd "%EVENT_TRIGGER_DIR%"
-call mvn -q -Dmaven.test.skip=true -pl :xivsupport,:trigger-support,:triggers-general,:triggers-ew,:triggers-sb,:triggers-dt,:titan-jails,:easytriggers,:timelines -am clean install || (popd & exit /b 1)
+call mvn -q -Dmaven.test.skip=true -pl :xivsupport,:trigger-support,:triggers-general,:triggers-ew,:triggers-sb,:triggers-dt,:titan-jails,:easytriggers,:timelines,:telesto-core -am clean install || (popd & exit /b 1)
 popd
 
 echo ^>^> building triggevent-core.jar

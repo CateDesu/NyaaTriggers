@@ -38,6 +38,13 @@ else
     echo ">> repointing origin at $ET_REPO"
     git -C "$ET_DIR" remote add origin "$ET_REPO" 2>/dev/null || git -C "$ET_DIR" remote set-url origin "$ET_REPO"
   fi
+  # A repointed clone has none of the fork's objects yet. Fetch when the pin
+  # is unknown locally or the checkout below fails on a ref the clone never
+  # heard of.
+  if ! git -C "$ET_DIR" cat-file -e "$ET_REF^{commit}" 2>/dev/null; then
+    echo ">> fetching $ET_REPO"
+    git -C "$ET_DIR" fetch origin
+  fi
   # Re-assert the pin: a reused clone may have drifted (branch pull, local
   # checkout), and only an exact HEAD match proves the tree IS the pinned source.
   if [ "$(git -C "$ET_DIR" rev-parse HEAD)" != "$ET_REF" ]; then
