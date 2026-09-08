@@ -2558,6 +2558,63 @@ def test_engine_chain_badge_caps_and_escapes():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Feed loss cancels pending local warnings and closes the meter encounter
+# ─────────────────────────────────────────────────────────────────────────────
+def test_feed_loss_cancels_pending_local_warnings():
+    import types
+    from PyQt6.QtWidgets import QApplication
+    from ui.instance_tab import InstanceTabMixin
+    app = QApplication.instance() or QApplication([])
+
+    class _Lbl:
+        def setText(self, _t):
+            pass
+
+        def setStyleSheet(self, _s):
+            pass
+
+    class _Host:
+        _on_status_changed = InstanceTabMixin._on_status_changed
+
+        def __init__(self):
+            self._status_lbl = _Lbl()
+            self._conn_btn = _Lbl()
+            self._zone_lbl = _Lbl()
+            self._plugin_link = types.SimpleNamespace(send_clear=lambda: None)
+            meter = types.SimpleNamespace()
+            meter.calls = []
+            meter.feed_lost = lambda: meter.calls.append("feed_lost")
+            self._dps_meter = meter
+            self.cleared = []
+
+        def _zone_banner_text(self):
+            return "z"
+
+        def _clear_status_timers(self):
+            self.cleared.append("status")
+
+        def _clear_seq_runners(self):
+            self.cleared.append("seq")
+
+    host = _Host()
+    host._on_status_changed(False, "Disconnected")
+    check("feed loss drops pending status warnings", "status" in host.cleared)
+    check("feed loss drops in-flight sequences", "seq" in host.cleared)
+    check("feed loss closes the meter encounter and combat edge",
+          "feed_lost" in host._dps_meter.calls)
+
+    # A connect must not cancel anything, warnings armed after replay re-arm
+    # from real gain lines.
+    host2 = _Host()
+    host2._ws = types.SimpleNamespace(request_combatants_once=lambda: None)
+    host2._push_timeline_to_plugin = lambda: None
+    host2._umad_chain_enabled = False
+    host2._on_status_changed(True, "Connected")
+    check("a connect clears nothing",
+          host2.cleared == [] and host2._dps_meter.calls == [])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

@@ -401,6 +401,41 @@ class DpsMeter:
     # ------------------------------------------------------------------
     # feed
     # ------------------------------------------------------------------
+    def feed_lost(self) -> None:
+        """The feed dropped. Close out the open encounter, the damage up to
+        the drop is real and worth keeping, and reset the combat edge state.
+        The reconnect replay reports combat on, and with the flags still
+        high from before the drop there is no rising edge to begin a fresh
+        encounter, the next pull would merge into this one."""
+        self.finalize()
+        self._in_act = False
+        self._in_game = False
+
+    def set_zone_metadata(self, name: str) -> None:
+        """Zone name from a ChangeZone event rather than the raw 01 line.
+        That line is one shot, a session that connected mid instance never
+        saw it and titles every pull Encounter. Metadata only, a repeated
+        name is a strict no-op so cached replay cannot end a live pull.
+        Real transitions still arrive as raw 01 lines and take _on_zone,
+        where the finalize happens."""
+        name = (name or "").strip()
+        if not name or name == self._zone:
+            return
+        self._zone = name
+        # A different zone than the last one heard means a transition passed
+        # without its 01 line. Actor ids were already reassigned, drop the
+        # stale knowledge like _on_zone does.
+        self._jobs.clear()
+        self._owners.clear()
+        self._names.clear()
+        self._me_id = None
+        # Retitle a pull opened under the placeholder. Replay order inside
+        # the resubscribe burst is not guaranteed.
+        for enc in (self.current, self._view):
+            if enc is not None and not enc.zone:
+                enc.zone = name
+                enc.title = name
+
     def set_in_combat(self, in_act: bool, in_game: bool) -> None:
         """InCombat event, inACTCombat and inGameCombat. A rising edge on either
         flag begins the encounter. A falling edge on either ends it. ACT can

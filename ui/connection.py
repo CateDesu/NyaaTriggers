@@ -204,6 +204,9 @@ class ConnectionMixin:
         # or a handoff mid-fight loses the active pull.
         step("meter encounter finalize", lambda: self._finalize_live_encounter())
         step("ws disconnect", lambda: self._ws.disconnect_from())
+        # This path bypasses closeEvent, so the open pull capture needs the
+        # same finalize the ordinary close gives it, meta and all.
+        step("pull capture finalize", lambda: self._pull_capture.close())
         step("cactbot reader stop", lambda: self._stop_cactbot_reader())
         step("triggevent stop", lambda: self._stop_sidecar("_triggevent", wait=True))
         # The Triggernometry sidecar is also a child process launched

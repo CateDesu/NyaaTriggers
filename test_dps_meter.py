@@ -661,6 +661,69 @@ check("a valid 02 line corrects the pin",
 check("the corrected pin notes the new name",
       m17._names.get(int(P2, 16)) == P2_NAME)
 
+# ── feed loss: the encounter closes and the combat edge resets ───────────
+m18 = DpsMeter(clock=Clock())
+ended18 = []
+m18.on_encounter_end = ended18.append
+roster(m18)
+m18.set_in_combat(True, True)
+m18.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
+                    [("750003", dmg(1000))]), "")
+m18.feed_lost()
+check("feed loss finalizes the open pull",
+      len(ended18) == 1 and ended18[0]["Combatant"][ME_NAME]["damage"] == 1000)
+# The reconnect replay reports combat on. With the edge reset that is a
+# rising edge again, so the next pull stands alone instead of merging.
+m18.set_in_combat(True, True)
+m18.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
+                    [("750003", dmg(2000))]), "")
+m18.set_in_combat(True, False)
+check("the post-reconnect pull does not merge into the old one",
+      len(ended18) == 2 and ended18[1]["Combatant"][ME_NAME]["damage"] == 2000)
+
+# ── zone metadata from cached ChangeZone replay ──────────────────────────
+# A session that connected mid instance missed the one shot raw 01 line.
+m19 = DpsMeter(clock=Clock())
+ended19 = []
+m19.on_encounter_end = ended19.append
+m19.process(["03", "ts", ME, ME_NAME, "21", "5A", "0000"], "")
+m19.process(["03", "ts", BOSS, "Zeromus", "00", "5A", "0000"], "")
+m19.set_in_combat(True, True)
+m19.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
+                    [("750003", dmg(1000))]), "")
+check("a zoneless meter titles the pull Encounter",
+      m19.current.title == "Encounter")
+m19.set_zone_metadata("Everkeep")
+check("cached zone replay retitles the open pull",
+      m19.current.title == "Everkeep" and m19.current.zone == "Everkeep")
+check("cached zone replay never finalizes",
+      ended19 == [] and m19.current is not None)
+m19.set_zone_metadata("Everkeep")
+check("a repeated same zone is a strict no-op",
+      ended19 == [] and m19.current is not None)
+m19.set_in_combat(True, False)
+check("the retitled pull saves under the zone",
+      len(ended19) == 1 and ended19[0]["Encounter"]["title"] == "Everkeep")
+
+m20 = DpsMeter(clock=Clock())
+roster(m20)
+check("the roster pins the local player", m20._me_id is not None)
+m20.set_zone_metadata("Elsewhere")
+check("a transition missed with its 01 line drops stale actor knowledge",
+      m20._me_id is None and m20._zone == "Elsewhere"
+      and not m20._jobs and not m20._names)
+
+m21 = DpsMeter(clock=Clock())
+ended21 = []
+m21.on_encounter_end = ended21.append
+roster(m21)
+m21.set_in_combat(True, True)
+m21.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
+                    [("750003", dmg(1000))]), "")
+m21.set_zone_metadata("Elsewhere")
+check("a zone event without its 01 line never ends the pull",
+      ended21 == [] and m21.current is not None)
+
 print()
 if FAILS:
     print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

@@ -120,6 +120,17 @@ class InstanceTabMixin:
             # Feed loss stops the fight clock, timeline.feed_status_changed.
             # The plugin must not keep drawing that dead pull.
             self._plugin_link.send_clear()
+            # A pending warning can no longer be cancelled by its dispel or
+            # wipe, those lines died with the feed. Drop them like a zone
+            # change does, a still valid one re-arms on the next real gain.
+            self._clear_status_timers()
+            self._clear_seq_runners()       # same hazard for in-flight sequences
+            meter = getattr(self, "_dps_meter", None)
+            if meter is not None:
+                # Close the open pull and reset the combat edge, or the
+                # replay's combat on finds no rising edge and the next pull
+                # merges into this one.
+                meter.feed_lost()
 
     def _set_zone_aliases(self, zone: str, zone_id: int) -> None:
         """Resolve the names this zone matches against. What the feed
@@ -184,6 +195,13 @@ class InstanceTabMixin:
         if not zone_id:
             # The previous zone's id must not leak into this one's lookups.
             self._current_zone_id = 0
+        meter = getattr(self, "_dps_meter", None)
+        if meter is not None:
+            # The meter only learns zones from the raw 01 line, one shot and
+            # long gone for a session that connected mid instance. Hand it
+            # the name here too. Metadata only, it never finalizes from this
+            # path, so a same zone replay cannot end a live pull.
+            meter.set_zone_metadata(zone)
         self._set_zone_aliases(zone, zone_id)
         # Zone change. The plugin drops the old schedule and any live
         # alerts. The new zone's schedule arrives from
