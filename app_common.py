@@ -608,6 +608,15 @@ def _engine_preview_text(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _stale_gen(bridge, gen) -> bool:
+    """True when a sidecar payload's generation is no longer the bridge's
+    live one. Qt queued delivery can land a pre restart signal at the slot
+    after the restart, and only the generation token riding the payload
+    catches that. A None gen is a direct internal call, never a sidecar
+    emit, and always passes."""
+    return gen is not None and (bridge is None or gen != bridge.generation())
+
+
 class _AbilityData(QTextBlockUserData):
     __slots__ = ("log_type", "ability_name", "ability_id", "source", "target")
 

@@ -268,10 +268,14 @@ def is_available() -> bool:
 class TriggernometryBridge(QObject):
     """Manages the triggernometry-core subprocess and relays callouts as Qt signals."""
 
-    callout   = pyqtSignal(str, str)   # on-screen text, severity in {info, alert, alarm}
-    tts       = pyqtSignal(str)        # spoken text
-    sound     = pyqtSignal(str, int)   # sound file path, volume 0-100
-    status    = pyqtSignal(bool, str)  # active, message
+    # The trailing int on the UI bound signals is the emitter's sidecar
+    # generation. It rides the payload so the slot can re-check it against
+    # the bridge's live generation, Qt queued delivery can land a pre
+    # restart signal at the slot after the restart.
+    callout   = pyqtSignal(str, str, int)   # on-screen text, severity in {info, alert, alarm}, generation
+    tts       = pyqtSignal(str, int)        # spoken text, generation
+    sound     = pyqtSignal(str, int, int)   # sound file path, volume 0-100, generation
+    status    = pyqtSignal(bool, str, int)  # active, message, generation
     inventory = pyqtSignal(str)        # one-shot JSON [{id,name,fight,text}] of editable UseTTS callouts
 
     def __init__(self, parent=None) -> None:
@@ -282,6 +286,12 @@ class TriggernometryBridge(QObject):
         self._writer: "threading.Thread | None" = None
         self._wq: queue.Queue = _ByteQueue(maxsize=20000)
         self._active = False
+        # The live sidecar generation, bumped by every start and stop. The
+        # reader thread carries its own in its args like proc and wq, and
+        # every UI bound emit is stamped with it. _active alone cannot gate
+        # dispatch, a restart flips it back on while a previous generation's
+        # reader is still draining its buffered output.
+        self._gen = 0
         self._replacements: list = []          # user find->replace callout overrides
         self._disabled: frozenset = frozenset()  # callout ids the user switched OFF
         # Makes the stop and reader-exit check-and-clear of _proc and _active atomic.
@@ -293,6 +303,17 @@ class TriggernometryBridge(QObject):
 
     def is_active(self) -> bool:
         return self._active
+
+    def generation(self) -> int:
+        """The live sidecar generation. Every UI bound emit carries the
+        emitter's generation and the slots compare it against this."""
+        return self._gen
+
+    def _gen_live(self, gen: "int | None") -> bool:
+        """True when gen names the live generation and the engine is on.
+        A previous generation's reader fails this once stop or a restart
+        swapped the state out from under it."""
+        return gen is not None and gen == self._gen and self._active
 
     def set_replacements(self, rules: list) -> None:
         """Set callout find->replace overrides, applied before speaking/showing."""
@@ -364,7 +385,7 @@ class TriggernometryBridge(QObject):
         if exe is None or not has_mono():
             _log(f"cannot start: exe={exe!r} mono={_find_mono()!r} has_mono={has_mono()} "
                  f"packs={_find_packs()!r}")
-            self.status.emit(False, "Mono runtime or triggernometry-core.exe not found")
+            self.status.emit(False, "Mono runtime or triggernometry-core.exe not found", self._gen)
             return
 
         # PyInstaller data can lose exec bits. Restore them.
@@ -375,7 +396,7 @@ class TriggernometryBridge(QObject):
             cmd = self._launch_cmd(exe)
         except OSError as e:
             _log(f"launch failed: {e!r}")
-            self.status.emit(False, f"Failed to launch sidecar: {e}")
+            self.status.emit(False, f"Failed to launch sidecar: {e}", self._gen)
             self._proc = None
             return
         _log("launch: " + shlex.join(str(c) for c in cmd) + f"  (cwd={exe.parent})")
@@ -400,7 +421,7 @@ class TriggernometryBridge(QObject):
             proc = subprocess.Popen(cmd, **popen_kwargs)
         except OSError as e:
             _log(f"launch failed: {e!r}")
-            self.status.emit(False, f"Failed to launch sidecar: {e}")
+            self.status.emit(False, f"Failed to launch sidecar: {e}", self._gen)
             self._proc = None
             return
         _log(f"sidecar spawned pid={proc.pid}")
@@ -410,7 +431,9 @@ class TriggernometryBridge(QObject):
             self._proc = proc
             self._wq = wq
             self._active = True
-        self._reader = threading.Thread(target=self._read_loop, args=(proc, wq), daemon=True, name="tn-reader")
+            self._gen += 1
+            gen = self._gen
+        self._reader = threading.Thread(target=self._read_loop, args=(proc, wq, gen), daemon=True, name="tn-reader")
         self._errpump = threading.Thread(target=self._err_loop, args=(proc,), daemon=True, name="tn-stderr")
         self._writer = threading.Thread(target=self._write_loop, args=(proc, wq), daemon=True, name="tn-writer")
         self._reader.start()
@@ -422,13 +445,18 @@ class TriggernometryBridge(QObject):
         # callout messages carry no id, so unlike TriggeventBridge, _dispatch
         # cannot re-check locally. The sidecar's blanking is the only gate.
         self._send_command({"t": "set_disabled", "ids": sorted(self._disabled)})
-        self.status.emit(True, "Starting Triggernometry engine...")
+        self.status.emit(True, "Starting Triggernometry engine...", gen)
 
     def stop(self, wait: bool = False) -> None:
         if not self._active and self._proc is None:
             return
         with self._state_lock:
             self._active = False
+            # A stopped engine has no live generation. Bumping here retires
+            # every token the old threads could still stamp, so their queued
+            # emits fail the slot check too, not just the dispatch gate.
+            self._gen += 1
+            gen = self._gen
             proc, self._proc = self._proc, None
             wq = self._wq   # capture this generation's queue under the lock
         # A full queue must not swallow the sentinel or the writer can stay
@@ -451,7 +479,7 @@ class TriggernometryBridge(QObject):
                 self._reap(proc)
             else:
                 threading.Thread(target=self._reap, args=(proc,), daemon=True, name="tn-reap").start()
-        self.status.emit(False, "Off")
+        self.status.emit(False, "Off", gen)
 
     @staticmethod
     def _signal_group(proc: subprocess.Popen, graceful: bool) -> None:
@@ -542,7 +570,7 @@ class TriggernometryBridge(QObject):
         except OSError:
             pass
 
-    def _read_loop(self, proc: subprocess.Popen, wq: queue.Queue) -> None:
+    def _read_loop(self, proc: subprocess.Popen, wq: queue.Queue, gen: int) -> None:
         if proc.stdout is None:
             return
         for line in _read_lines_bounded(proc.stdout):
@@ -558,7 +586,7 @@ class TriggernometryBridge(QObject):
                 log_drop("engine-parse", f"unparsed trig sidecar line {line[:160]!r}", 0)
                 continue
             try:
-                self._dispatch(msg)
+                self._dispatch(msg, gen)
             except Exception as exc:  # noqa: BLE001 - a bad message must never kill the reader
                 _log(f"dispatch error: {exc!r}")
         # Check-and-clear under the lock, or a concurrent stop+start between
@@ -570,7 +598,7 @@ class TriggernometryBridge(QObject):
                 self._proc = None
         if was_current:
             _log(f"sidecar exited (returncode={proc.poll()})")
-            self.status.emit(False, "Sidecar exited")
+            self.status.emit(False, "Sidecar exited", gen)
         # Always release this generation's writer thread and reap the child.
         # A spontaneous sidecar exit otherwise leaks the writer, blocked in
         # wq.get forever, pinning the Popen and its stdin pipe FD, and leaves
@@ -623,13 +651,18 @@ class TriggernometryBridge(QObject):
             out = _safe_sub(rx, repl, out)
         return out.strip()
 
-    def _dispatch(self, msg: dict) -> None:
+    def _dispatch(self, msg: dict, gen: "int | None" = None) -> None:
         kind = msg.get("t")
-        # Teardown race. stop flips _active while the reader thread still has
-        # queued lines. Output already in flight must not fire after the engine
-        # was switched off, and a late boot status would flip the indicator back
-        # on for a dying engine. Inventory frames stay useful either way.
-        if kind in ("callout", "sound", "status") and not self._active:
+        # Stale generation gate. stop flips _active and retires the
+        # generation while the reader thread still has queued lines, and a
+        # restart swaps _proc and flips _active back on while the previous
+        # reader is still draining its buffered stdout. Output from a dead
+        # generation must not fire into the live session, and a late boot
+        # status would flip the indicator back on for a dying engine. The gen
+        # token rides each emit below so the UI slot drops it too, queued
+        # delivery can outlive the generation. Inventory frames stay useful
+        # either way.
+        if kind in ("callout", "sound", "status") and not self._gen_live(gen):
             return
         if kind == "callout":
             tts = self._apply_replacements((msg.get("tts") or "").strip())
@@ -638,9 +671,9 @@ class TriggernometryBridge(QObject):
             if sev not in ("info", "alert", "alarm"):
                 sev = "info"
             if text:
-                self.callout.emit(text, sev)
+                self.callout.emit(text, sev, gen)
             if tts:
-                self.tts.emit(tts)
+                self.tts.emit(tts, gen)
         elif kind == "sound":
             f = msg.get("file") or ""
             if f:
@@ -652,9 +685,9 @@ class TriggernometryBridge(QObject):
                     vol = int(msg.get("volume", 100))
                 except (TypeError, ValueError):
                     vol = 100
-                self.sound.emit(f, max(0, min(100, vol)))
+                self.sound.emit(f, max(0, min(100, vol)), gen)
         elif kind == "status":
-            self.status.emit(bool(msg.get("active", self._active)), str(msg.get("msg", "")))
+            self.status.emit(bool(msg.get("active", self._active)), str(msg.get("msg", "")), gen)
         elif kind == "inventory":
             triggers = msg.get("triggers")
             if isinstance(triggers, list):

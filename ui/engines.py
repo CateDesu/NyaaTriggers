@@ -46,7 +46,7 @@ import app_common as ac
 from app_common import (
     _C_EN, _C_FIGHT, _C_NAME, _C_RE, _C_TTS, _C_TYPE, _C_ZONE, _SECTION_ROLE, _as_str,
     _as_strdict, _as_strset, _as_text_overrides, _atomic_write_json, _engine_preview_text,
-    cactbot_timeline_for_zone,
+    _stale_gen, cactbot_timeline_for_zone,
 )
 
 
@@ -252,7 +252,7 @@ class EnginesMixin:
             self._triggevent.inventory.connect(self._on_triggevent_inventory)
             self._triggevent.telesto.connect(self._on_telesto_status)   # automark link status
             self._triggevent.status.connect(
-                lambda active, msg: self._on_engine_sidecar_status("triggevent", active, msg))
+                lambda active, msg, gen: self._on_engine_sidecar_status("triggevent", active, msg, gen))
             self._triggevent.chain_failure.connect(self._on_engine_chain_failure)
             self._ws.raw_message.connect(self._triggevent.feed)   # the tee
             # the sidecar boots ~10s after we connect, so it misses the zone/party
@@ -306,11 +306,18 @@ class EnginesMixin:
         self._save_settings()
         self._reconcile_triggevent_engine()
 
-    def _on_engine_sidecar_status(self, src: str, active: bool, msg: str) -> None:
+    def _on_engine_sidecar_status(self, src: str, active: bool, msg: str,
+                                  gen: "int | None" = None) -> None:
         """Lifecycle status from a sidecar bridge, connected in _ensure_*_bridge.
         Drives the top-bar engine indicator and leaves a copy in the engine's
         log so a frozen windowless build keeps a trace. A plain "Off" is a
         requested stop, not a failure."""
+        # Qt queued delivery can land a pre restart status after the restart.
+        # Only the generation token riding the payload tells those apart.
+        bridge = (getattr(self, "_triggevent", None) if src == "triggevent"
+                  else getattr(self, "_triggernometry", None))
+        if _stale_gen(bridge, gen):
+            return
         state = "good" if active else ("unknown" if msg == "Off" else "bad")
         self._engine_sidecar_state[src] = (state, msg)
         (_te_log if src == "triggevent" else _tn_log)(f"status: active={active} {msg}")
@@ -321,10 +328,15 @@ class EnginesMixin:
             self._update_engine_chain_label()
         self._update_engine_status_label()
 
-    def _on_engine_chain_failure(self, line: str) -> None:
+    def _on_engine_chain_failure(self, line: str, gen: "int | None" = None) -> None:
         """A Triggevent chain died, connected in _ensure_triggevent_bridge.
         Count it on the top-bar badge so a silently dead callout chain gets
         noticed mid-fight instead of in a postmortem."""
+        # A dead sidecar's buffered stderr can deliver after a restart. The
+        # generation token riding the payload keeps those off the new
+        # session's badge.
+        if _stale_gen(getattr(self, "_triggevent", None), gen):
+            return
         failures = getattr(self, "_engine_chain_failures", None)
         if failures is None:
             failures = self._engine_chain_failures = deque(maxlen=50)
@@ -387,10 +399,15 @@ class EnginesMixin:
                 self._settings["te_engine_offer_declined"] = True
                 self._save_settings()
 
-    def _on_triggevent_callout(self, text: str, severity: str) -> None:
+    def _on_triggevent_callout(self, text: str, severity: str,
+                               gen: "int | None" = None) -> None:
         # on-screen only. TTS comes via the separate tts signal so we never
         # double-speak when the spoken phrase differs from the on-screen text.
         # While Cactbot is on the engine still runs but must stay silent.
+        # The gen check drops a stale emit that queued delivery landed after
+        # a restart, the token rides the payload for exactly that.
+        if _stale_gen(getattr(self, "_triggevent", None), gen):
+            return
         if not self._triggevent_mode:
             return
         self._emit_alert(self._localize_text(text), severity)
@@ -412,7 +429,7 @@ class EnginesMixin:
             self._triggernometry.sound.connect(self._on_triggernometry_sound)
             self._triggernometry.inventory.connect(self._on_triggernometry_inventory)
             self._triggernometry.status.connect(
-                lambda active, msg: self._on_engine_sidecar_status("triggernometry", active, msg))
+                lambda active, msg, gen: self._on_engine_sidecar_status("triggernometry", active, msg, gen))
             self._ws.log_line.connect(self._triggernometry.feed_log)           # log tee, no-op until started
             self._ws.combatants.connect(self._triggernometry.feed_combatants)  # positions/HP for ${_me}
             self._ws.zone_changed.connect(self._triggernometry.feed_zone)       # zone changes -> ${_ffxivzoneid}
@@ -458,9 +475,14 @@ class EnginesMixin:
             except Exception:  # noqa: BLE001
                 pass
 
-    def _on_triggernometry_callout(self, text: str, severity: str) -> None:
+    def _on_triggernometry_callout(self, text: str, severity: str,
+                                   gen: "int | None" = None) -> None:
         # Same teardown guard as the Triggevent siblings. Callouts already
-        # in flight when the engine was switched off must not speak.
+        # in flight when the engine was switched off must not speak. The gen
+        # check drops a stale emit that queued delivery landed after a
+        # restart, the token rides the payload for exactly that.
+        if _stale_gen(getattr(self, "_triggernometry", None), gen):
+            return
         if not self._triggernometry_mode:
             return
         self._emit_alert(self._localize_text(text), severity)

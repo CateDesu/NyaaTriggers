@@ -337,21 +337,29 @@ class VoiceTabMixin:
         self._alert_sound_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._alert_sound_combo.blockSignals(False)
 
-    def _on_triggevent_tts(self, text: str) -> None:
+    def _on_triggevent_tts(self, text: str, gen: "int | None" = None) -> None:
         # see _on_triggevent_callout. Stay silent while the engine runs but
-        # callouts are off, i.e. Cactbot is on
+        # callouts are off, i.e. Cactbot is on. The gen check drops a stale
+        # emit that queued delivery landed after a restart.
+        if ac._stale_gen(getattr(self, "_triggevent", None), gen):
+            return
         if not self._triggevent_mode:
             return
         self._triggevent_speak(text)
 
-    def _on_triggernometry_tts(self, text: str) -> None:
+    def _on_triggernometry_tts(self, text: str, gen: "int | None" = None) -> None:
+        if ac._stale_gen(getattr(self, "_triggernometry", None), gen):
+            return
         if not self._triggernometry_mode:
             return
         self._triggernometry_speak(text)
 
-    def _on_triggernometry_sound(self, file: str, volume: int) -> None:
+    def _on_triggernometry_sound(self, file: str, volume: int,
+                                 gen: "int | None" = None) -> None:
         # SoundMethod=ACT routes engine sound files here. Best effort.
         # Volume is a 0-100 int, play_sound wants 0.0-1.0.
+        if ac._stale_gen(getattr(self, "_triggernometry", None), gen):
+            return
         if not self._triggernometry_mode:
             return
         try:

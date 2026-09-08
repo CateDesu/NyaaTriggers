@@ -524,14 +524,18 @@ def _make_bundled_jre_executable() -> None:
 class TriggeventBridge(QObject):
     """Owns the triggevent-core subprocess and relays its callouts as Qt signals."""
 
-    callout     = pyqtSignal(str, str)   # on-screen text, severity in {info, alert, alarm}
-    tts         = pyqtSignal(str)        # spoken text
-    status      = pyqtSignal(bool, str)  # active, message
+    # The trailing int on the UI bound signals is the emitter's sidecar
+    # generation. It rides the payload so the slot can re-check it against
+    # the bridge's live generation, Qt queued delivery can land a pre
+    # restart signal at the slot after the restart.
+    callout     = pyqtSignal(str, str, int)   # on-screen text, severity in {info, alert, alarm}, generation
+    tts         = pyqtSignal(str, int)        # spoken text, generation
+    status      = pyqtSignal(bool, str, int)  # active, message, generation
     phrase_seen = pyqtSignal(str)        # a callout phrase observed, for the override UI
     inventory   = pyqtSignal(str)        # one-shot JSON [{id,name,fight,group,text}] of all engine callouts
-    telesto     = pyqtSignal(str)        # Telesto automark connection status, "good"|"bad"|"unknown"
+    telesto     = pyqtSignal(str, int)   # Telesto automark connection status, "good"|"bad"|"unknown", generation
     ready       = pyqtSignal()           # sidecar is up and reading stdin, time to replay world state
-    chain_failure = pyqtSignal(str)      # an engine chain died, the "Error in sequential trigger" line
+    chain_failure = pyqtSignal(str, int)  # an engine chain died, the "Error in sequential trigger" line, generation
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -541,6 +545,12 @@ class TriggeventBridge(QObject):
         self._writer: threading.Thread | None = None
         self._wq: queue.Queue = _ByteQueue(maxsize=10000)
         self._active = False
+        # The live sidecar generation, bumped by every start and stop. Reader
+        # threads carry their own in their args like proc and wq, and every
+        # UI bound emit is stamped with it. _active alone cannot gate
+        # dispatch, a restart flips it back on while a previous generation's
+        # reader is still draining its buffered output.
+        self._gen = 0
         # Find->replace rules {find, replace, regex, enabled}, applied before a
         # callout is spoken or shown. Atomic list swap so the reader thread can
         # snapshot it lock-free.
@@ -561,6 +571,17 @@ class TriggeventBridge(QObject):
 
     def is_active(self) -> bool:
         return self._active
+
+    def generation(self) -> int:
+        """The live sidecar generation. Every UI bound emit carries the
+        emitter's generation and the slots compare it against this."""
+        return self._gen
+
+    def _gen_live(self, gen: "int | None") -> bool:
+        """True when gen names the live generation and the engine is on.
+        A previous generation's reader fails this once stop or a restart
+        swapped the state out from under it."""
+        return gen is not None and gen == self._gen and self._active
 
     # ------------------------------------------------------------------
     def set_replacements(self, rules: list) -> None:
@@ -678,7 +699,7 @@ class TriggeventBridge(QObject):
         jar = _find_jar()
         if java is None or jar is None:
             _log(f"cannot start: java={java!r} jar={jar!r}")
-            self.status.emit(False, "Java runtime or triggevent-core.jar not found")
+            self.status.emit(False, "Java runtime or triggevent-core.jar not found", self._gen)
             return
 
         # PyInstaller data can lose exec bits. Restore them so the JVM can start.
@@ -726,7 +747,7 @@ class TriggeventBridge(QObject):
             proc = subprocess.Popen(cmd, **popen_kwargs)
         except OSError as e:
             _log(f"launch failed: {e!r}")
-            self.status.emit(False, f"Failed to launch sidecar: {e}")
+            self.status.emit(False, f"Failed to launch sidecar: {e}", self._gen)
             self._proc = None
             return
         _log(f"sidecar spawned pid={proc.pid}")
@@ -736,9 +757,14 @@ class TriggeventBridge(QObject):
             self._proc = proc
             self._wq = wq
             self._active = True
+            self._gen += 1
+            gen = self._gen
         # Bind workers to this generation's proc and queue via args so a quick
         # stop->start can't leave a stale thread on the new queue/proc. The
-        # seq gap high-water mark rides along for the same reason: a shared
+        # generation id rides along too and stamps every UI bound emit from
+        # these threads, so a stale reader's output is dropped at dispatch
+        # and again at the slot. The seq gap high-water mark rides along for
+        # the same reason: a shared
         # self._last_callout_seq survived a spontaneous sidecar exit plus the
         # reconcile restart, since stop() early-returns once the reader-exit
         # path cleared the state, and a late write from the old generation's
@@ -746,22 +772,27 @@ class TriggeventBridge(QObject):
         # each generation, so the mark must die with its generation too or
         # real gaps below the old mark go unreported.
         seq_state: dict = {"last": None}
-        self._reader = threading.Thread(target=self._read_loop, args=(proc, wq, seq_state),
+        self._reader = threading.Thread(target=self._read_loop, args=(proc, wq, seq_state, gen),
                                         daemon=True, name="triggevent-reader")
-        self._errpump = threading.Thread(target=self._err_loop, args=(proc,),
+        self._errpump = threading.Thread(target=self._err_loop, args=(proc, gen),
                                          daemon=True, name="triggevent-stderr")
         self._writer = threading.Thread(target=self._write_loop, args=(proc, wq),
                                         daemon=True, name="triggevent-writer")
         self._reader.start()
         self._errpump.start()
         self._writer.start()
-        self.status.emit(True, "Starting Triggevent Engine...")
+        self.status.emit(True, "Starting Triggevent Engine...", gen)
 
     def stop(self, wait: bool = False) -> None:
         if not self._active and self._proc is None:
             return
         with self._state_lock:
             self._active = False
+            # A stopped engine has no live generation. Bumping here retires
+            # every token the old threads could still stamp, so their queued
+            # emits fail the slot check too, not just the dispatch gate.
+            self._gen += 1
+            gen = self._gen
             proc, self._proc = self._proc, None
             wq = self._wq   # capture this generation's queue under the lock
         # Forget observed phrases with the session. A phrase seen by a previous
@@ -795,7 +826,7 @@ class TriggeventBridge(QObject):
                 # runs on the GUI thread via closeEvent, which must never block.
                 threading.Thread(target=self._reap, args=(proc,), daemon=True,
                                  name="triggevent-reap").start()
-        self.status.emit(False, "Off")
+        self.status.emit(False, "Off", gen)
 
     @staticmethod
     def _signal_group(proc: subprocess.Popen, graceful: bool) -> None:
@@ -869,7 +900,7 @@ class TriggeventBridge(QObject):
         except OSError:
             pass
 
-    def _read_loop(self, proc: subprocess.Popen, wq: queue.Queue, seq_state: dict) -> None:
+    def _read_loop(self, proc: subprocess.Popen, wq: queue.Queue, seq_state: dict, gen: int) -> None:
         if proc.stdout is None:
             return
         for line in _read_lines_bounded(proc.stdout):
@@ -888,7 +919,7 @@ class TriggeventBridge(QObject):
                 log_drop("engine-parse", f"unparsed sidecar line {line[:160]!r}", 0)
                 continue
             try:
-                self._dispatch(msg, seq_state)
+                self._dispatch(msg, seq_state, gen)
             except Exception as exc:  # noqa: BLE001 - a bad message must never kill the reader
                 _log(f"dispatch error: {exc!r}")
         # stdout closed means the process ended. Only touch shared state if we're
@@ -902,7 +933,7 @@ class TriggeventBridge(QObject):
                 self._proc = None
         if was_current:
             _log(f"sidecar exited (returncode={proc.poll()})")
-            self.status.emit(False, "Sidecar exited")
+            self.status.emit(False, "Sidecar exited", gen)
         # Always release this generation's writer thread and reap the child.
         # A spontaneous sidecar exit otherwise leaks the writer, blocked in
         # wq.get forever, pinning the Popen and its stdin pipe FD, and leaves
@@ -918,7 +949,7 @@ class TriggeventBridge(QObject):
                 pass
         self._reap(proc)
 
-    def _err_loop(self, proc: subprocess.Popen) -> None:
+    def _err_loop(self, proc: subprocess.Popen, gen: int) -> None:
         if proc.stderr is None:
             return
         for line in _read_lines_bounded(proc.stderr):
@@ -928,15 +959,21 @@ class TriggeventBridge(QObject):
             _log(f"[sidecar stderr] {line}")
             # A dead sequential chain only ever shows up here, never in the
             # callout stream. Raise it so a silent pull gets noticed mid-fight.
+            # Only the live generation may raise the badge. Lines buffered in
+            # a dead proc's pipe and the JVM teardown flush during stop belong
+            # to a session that already moved on.
             if "Error in sequential trigger" in line:
                 log_drop("engine-chain", line, 0)
-                self.chain_failure.emit(line)
+                if self._gen_live(gen):
+                    self.chain_failure.emit(line, gen)
             # Printed once the sidecar starts reading stdin. That's when a replayed
             # zone/party actually lands, so tell the app to send the world state.
-            if "reading WS messages on stdin" in line:
+            # Same generation gate, a dead proc's late boot line must not fire it.
+            if "reading WS messages on stdin" in line and self._gen_live(gen):
                 self.ready.emit()
 
-    def _dispatch(self, msg: dict, seq_state: "dict | None" = None) -> None:
+    def _dispatch(self, msg: dict, seq_state: "dict | None" = None,
+                  gen: "int | None" = None) -> None:
         kind = msg.get("t")
         if kind == "callout":
             # Gap-check the engine's callout sequence before any gate, so a
@@ -955,11 +992,15 @@ class TriggeventBridge(QObject):
                     log_drop("engine-seq",
                              f"callout seq gap {last} -> {seq}, "
                              f"{seq - last - 1} lost between engine and app", 0)
-            # Drop callouts whose dispatch lands after stop flipped _active.
-            # Stdout already buffered in the kernel pipe when stop ran would
-            # otherwise fire callout/phrase_seen into a torn-down UI. Triggernometry
-            # gates the same way in triggernometry_bridge._dispatch.
-            if not self._active:
+            # Drop callouts from a dead generation. Stdout buffered in the
+            # kernel pipe when stop ran, or still drained by a previous
+            # generation's reader after a restart swapped _proc and flipped
+            # _active back on, would otherwise fire callout/phrase_seen into
+            # a session that moved on. The gen token rides each emit below so
+            # the UI slot drops it too, queued delivery can outlive the
+            # generation. Triggernometry gates the same way in
+            # triggernometry_bridge._dispatch.
+            if not self._gen_live(gen):
                 return
             cid = msg.get("id")
             if cid and cid in self._disabled:
@@ -984,30 +1025,31 @@ class TriggeventBridge(QObject):
                 # resurrect the spoken line onto the overlay.
                 text = tts
             if text:
-                self.callout.emit(text, sev)
+                self.callout.emit(text, sev, gen)
             if tts:
-                self.tts.emit(tts)
+                self.tts.emit(tts, gen)
         elif kind == "status":
-            # A status frame that lands after stop flipped _active is stale,
-            # a late boot ready would flip the indicator back on for a dying
-            # engine. stop already said Off.
-            if not self._active:
+            # A status frame from a dead generation is stale, a late boot
+            # ready would flip the indicator back on for an engine that
+            # already stopped or got replaced. stop already said Off.
+            if not self._gen_live(gen):
                 return
             active = bool(msg.get("active", self._active))
-            self.status.emit(active, str(msg.get("message", "")))
+            self.status.emit(active, str(msg.get("message", "")), gen)
         elif kind == "inventory":
             triggers = msg.get("triggers")
             if isinstance(triggers, list):
                 self.inventory.emit(json.dumps(triggers))
         elif kind == "telesto":
-            # A late frame after stop flipped _active is stale, it would flip
-            # the Telesto indicator for a dying engine. Same gate as status
-            # above. Inventory stays ungated on purpose, the harvest is
-            # useful either way, matching triggernometry_bridge.
-            if not self._active:
+            # A late frame from a dead generation is stale, it would flip the
+            # Telesto indicator for an engine that already stopped or got
+            # replaced. Same gate as status above. Inventory stays ungated on
+            # purpose, the harvest is useful either way, matching
+            # triggernometry_bridge.
+            if not self._gen_live(gen):
                 return
             st = str(msg.get("status", "unknown")).lower()
             if st not in ("good", "bad", "unknown"):
                 st = "unknown"
-            self.telesto.emit(st)
+            self.telesto.emit(st, gen)
         # unknown kinds get ignored

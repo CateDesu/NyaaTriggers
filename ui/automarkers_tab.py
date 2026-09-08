@@ -1000,11 +1000,15 @@ class AutomarkersTabMixin:
         self._telesto_status = "bad" if not reachable else ("degraded" if degraded else "good")
         self._update_automark_status_label()
 
-    def _on_telesto_status(self, _status: str) -> None:
+    def _on_telesto_status(self, _status: str, gen: "int | None" = None) -> None:
         # marking is native now so the engine's own Telesto probe is vestigial.
         # It used to clobber the real client status here, the green light
         # flapping to "off" a moment after boot. _on_telesto_client_status is
         # the single source of truth for the indicator. Ignore the engine's view.
+        # The gen check stays anyway, a stale emit from a dead sidecar
+        # generation gets dropped before it can do anything at all.
+        if ac._stale_gen(getattr(self, "_triggevent", None), gen):
+            return
         return
 
     @staticmethod

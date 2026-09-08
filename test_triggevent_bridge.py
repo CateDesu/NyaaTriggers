@@ -14,10 +14,19 @@ restart because stop() early-returns once the reader-exit path cleared the
 state, muted real gap reports below the old mark. The mark now rides the
 generation via the reader thread args, same as proc and wq.
 
+Also covers the sidecar generation gate. start and stop bump a generation id
+that reader threads carry in their args like proc and wq, every UI bound
+emit is stamped with it and dropped at dispatch once the generation dies,
+and the UI slots re-check the token since Qt queued delivery can land a pre
+restart signal after the restart. The stderr chain watch is gated the same
+way: a never started or stopped bridge does not emit, and neither does a
+previous generation's still draining pipe.
+
 Run directly:  python test_triggevent_bridge.py   (exit 0 = all pass)
 """
 import io
 import os
+import queue
 import signal
 import subprocess
 import sys
@@ -26,6 +35,7 @@ import time
 import unittest.mock as mock
 from pathlib import Path
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import triggevent_bridge as tb
@@ -168,36 +178,149 @@ with mock.patch.object(tb, "_find_java", return_value="/usr/bin/java"), \
 check("stop after a spontaneous exit is a clean no-op", tv2._proc is None)
 
 
-# ── a dead engine chain on stderr raises the engine-chain drop and signal ─────
+# ── the stderr chain watch is gated to the live sidecar generation ────────────
 # The chain failure line only ever appears on the sidecar stderr stream, never
-# in the callout stream. The watch must log_drop it and fire chain_failure.
+# in the callout stream. The watch must log_drop every line but fire
+# chain_failure only for the live generation. Lines buffered in a dead proc's
+# pipe, the JVM teardown flush during stop, and a previous generation's still
+# draining stderr after a restart must not reach the badge.
 drops = []
 _o_drop = tb.log_drop
 tb.log_drop = lambda site, detail, *a, **k: drops.append((site, detail))
 try:
     tv3 = tb.TriggeventBridge()
     seen = []
-    tv3.chain_failure.connect(lambda line: seen.append(line))
+    tv3.chain_failure.connect(lambda line, gen: seen.append((line, gen)))
 
     class _ErrProc:
-        stderr = io.StringIO(
-            "some boot line\n"
-            "18:00:00.000 [SequentialTrigger-3] ERROR gg.xp.SequentialTriggerController - "
-            "Error in sequential trigger 'DMU.ttSq' while waiting for 'BuffApplied'\n")
+        def __init__(self):
+            self.stderr = io.StringIO(
+                "some boot line\n"
+                "18:00:00.000 [SequentialTrigger-3] ERROR gg.xp.SequentialTriggerController - "
+                "Error in sequential trigger 'DMU.ttSq' while waiting for 'BuffApplied'\n")
 
     class _QuietProc:
-        stderr = io.StringIO("some boot line\nreading WS messages on stdin\n")
+        def __init__(self):
+            self.stderr = io.StringIO("some boot line\nreading WS messages on stdin\n")
 
-    tv3._err_loop(_ErrProc())
+    # a never started bridge has no live generation, the drop is still logged
+    # but the signal must not fire
+    tv3._err_loop(_ErrProc(), 0)
     check("an Error in sequential trigger line logs an engine-chain drop",
           any(site == "engine-chain" and "DMU.ttSq" in d for site, d in drops))
-    check("an Error in sequential trigger line fires the chain_failure signal",
-          len(seen) == 1 and "DMU.ttSq" in seen[0])
+    check("a never started bridge does not fire chain_failure", seen == [])
+
+    # the live generation fires, stamped with its generation
+    tv3._active = True
+    tv3._gen = 1
+    tv3._err_loop(_ErrProc(), 1)
+    check("the live generation fires chain_failure with its generation",
+          len(seen) == 1 and "DMU.ttSq" in seen[0][0] and seen[0][1] == 1)
+
+    # a restart bumped the generation, the old reader's buffered stderr dies
+    tv3._gen = 2
+    tv3._err_loop(_ErrProc(), 1)
+    check("a previous generation's stderr does not fire after a restart",
+          len(seen) == 1)
+
+    # stop left no live generation, the JVM teardown flush must not fire
+    tv3._gen = 3
+    tv3._active = False
+    tv3._err_loop(_ErrProc(), 2)
+    check("a stopped bridge does not fire chain_failure", len(seen) == 1)
+
     drops.clear()
-    tv3._err_loop(_QuietProc())
+    ready = []
+    tv3.ready.connect(lambda: ready.append(True))
+    tv3._active = True
+    tv3._gen = 4
+    tv3._err_loop(_QuietProc(), 4)
     check("benign stderr lines raise no engine-chain drop", drops == [])
+    check("the live generation still fires ready", ready == [True])
+    tv3._gen = 5
+    tv3._err_loop(_QuietProc(), 4)
+    check("a stale generation does not fire ready", ready == [True])
 finally:
     tb.log_drop = _o_drop
+
+
+# ── a previous generation's reader cannot fire into the live session ──────────
+# stop+start swaps _proc and bumps the generation while the old reader is
+# still draining its buffered stdout. The old reader's callouts must die at
+# dispatch, and the generation token riding each emit must fail the UI slot's
+# re-check when queued delivery lands after the restart.
+fired = []
+tv4 = tb.TriggeventBridge()
+tv4.callout.connect(lambda text, sev, gen: fired.append(("callout", text, gen)))
+tv4.tts.connect(lambda text, gen: fired.append(("tts", text, gen)))
+tv4.status.connect(lambda active, msg, gen: fired.append(("status", msg, gen)))
+
+
+class _OldProc:
+    def __init__(self, stdout_text):
+        self.pid = 4871
+        self.stdin = None
+        self.stdout = io.StringIO(stdout_text)
+        self.stderr = io.StringIO("")
+
+    def poll(self):
+        return 0
+
+    def wait(self, timeout=None):
+        return 0
+
+
+_CALLOUT_LINE = '{"t":"callout","seq":1,"tts":"old gen","text":"old gen","severity":"alert"}\n'
+
+# generation 1 was live, then stop+start installed the replacement and bumped
+# the generation past it while the old reader still held a buffered callout
+old_proc = _OldProc(_CALLOUT_LINE)
+tv4._active = True
+tv4._proc = _OldProc("")        # the replacement generation's proc
+tv4._gen = 3                    # stop bumped 1 -> 2, start bumped 2 -> 3
+tv4._read_loop(old_proc, queue.Queue(), {"last": None}, 1)
+check("a buffered callout from the old generation is not emitted", fired == [])
+
+# the live generation's reader fires, stamped with its generation
+live_proc = _OldProc(_CALLOUT_LINE)
+tv4._proc = live_proc
+tv4._read_loop(live_proc, queue.Queue(), {"last": None}, 3)
+check("the live generation's callout is emitted with its generation",
+      ("callout", "old gen", 3) in fired and ("tts", "old gen", 3) in fired)
+check("the live generation's exit status is emitted with its generation",
+      ("status", "Sidecar exited", 3) in fired)
+
+# the slot half, a stale emit that slipped out before the restart must be
+# dropped when queued delivery lands after it
+from ui.engines import EnginesMixin
+
+
+class _CalloutHost:
+    _on_triggevent_callout = EnginesMixin._on_triggevent_callout
+
+    def __init__(self, bridge):
+        self._triggevent = bridge
+        self._triggevent_mode = True
+        self.shown = []
+
+    def _localize_text(self, text):
+        return text
+
+    def _emit_alert(self, text, severity):
+        self.shown.append((text, severity))
+
+
+tv5 = tb.TriggeventBridge()
+tv5._gen = 7
+host = _CalloutHost(tv5)
+host._on_triggevent_callout("pre restart", "info", 3)
+check("the UI slot drops a stale generation's queued callout", host.shown == [])
+host._on_triggevent_callout("live", "alert", 7)
+check("the UI slot accepts the live generation's callout",
+      host.shown == [("live", "alert")])
+host._on_triggevent_callout("internal", "info")
+check("a direct internal call without a token still lands",
+      host.shown == [("live", "alert"), ("internal", "info")])
 
 print()
 if FAILS:
