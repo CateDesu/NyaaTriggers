@@ -28,7 +28,7 @@ The Windows and Linux release builds bundle everything below. This table applies
 |---|---|
 | [IINACT](https://github.com/marzent/IINACT) | Running and connected to the game |
 | Python 3.11+ | System Python is fine |
-| PyQt6 | `sudo pacman -S python-pyqt6` / `sudo apt install python3-pyqt6` / `pip install PyQt6` |
+| PyQt6 | `sudo pacman -S python-pyqt6` / `sudo apt install python3-pyqt6 python3-pyqt6.qtwebsockets` / `pip install PyQt6`. Debian splits the WebSockets binding into its own package and the program needs it for the game feed. |
 | piper-tts | Installed automatically on first launch into `~/.venv/ffxiv` |
 | Audio backend | `aplay` via `alsa-utils` |
 | PyQt6-WebEngine | **Optional** on source installs, only for the cactbot source in **Settings - Cactbot**. `sudo pacman -S python-pyqt6-webengine` or `pip install PyQt6-WebEngine`. The rest of the program works without it. The packaged release builds bundle it. |

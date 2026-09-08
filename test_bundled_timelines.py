@@ -76,6 +76,28 @@ check("runtime never writes a cactbot timeline under a shipped name",
 for ln in bare_writes:
     print(f"  {ln}")
 
+# Every sync field the shipped timelines use must be indexed in the engine's
+# _SYNC_TYPES map. An unindexed field used to count as satisfied, which let a
+# 7DC arena seal shared across Aloalo bosses sync the wrong section when the
+# distinguishing param1 went unread. Now the entry never matches instead.
+# Either way an unindexed field is a bug, so fail when a shipped file starts
+# using one.
+sys.path.insert(0, str(ROOT))
+import timeline_parser
+from timeline_engine import _SYNC_TYPES
+
+unmapped = {}
+for p in sorted((ROOT / "timelines").glob("*.txt")):
+    for e in timeline_parser.parse(p.read_text(encoding="utf-8")):
+        if not e.event_type or e.event_type not in _SYNC_TYPES:
+            continue
+        for key in e.event_fields:
+            if key not in _SYNC_TYPES[e.event_type][1]:
+                unmapped.setdefault(f"{e.event_type}.{key}", set()).add(p.name)
+check("every sync field the shipped timelines use is indexed", not unmapped)
+for field, names in unmapped.items():
+    print(f"  {field}: {', '.join(sorted(names)[:3])}")
+
 print()
 if FAILS:
     print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

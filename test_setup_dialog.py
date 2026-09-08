@@ -142,6 +142,15 @@ for _ in range(100):
 check("success accepts the dialog", dlg2.result() == QDialog.DialogCode.Accepted)
 check("thread reaped before accept", not dlg2._worker.isRunning())
 
+# ── setup.sh installs the Qt WebSockets binding on apt systems ──────────────
+# Debian splits PyQt6.QtWebSockets out of python3-pyqt6 and nothing else
+# pulls it in. ws_client imports it unconditionally, so a clean apt install
+# that followed setup.sh failed before the connection UI opened.
+_setup_sh = (Path(__file__).parent / "setup.sh").read_text(encoding="utf-8")
+_apt_line = next((ln for ln in _setup_sh.splitlines() if "apt install" in ln), "")
+check("setup.sh apt branch installs the Qt WebSockets binding",
+      "python3-pyqt6.qtwebsockets" in _apt_line)
+
 if FAILS:
     print(f"\n{len(FAILS)} failed: {', '.join(FAILS)}")
     sys.exit(1)

@@ -208,6 +208,18 @@ class TriggersTabMixin:
         for t in local_triggers:
             if t.id not in self._official_ids:
                 merged.append(t)
+        # A reload rebuilds every trigger from disk. Hand the live object back
+        # to a trigger whose persisted content did not change. Armed status
+        # timers and sequence runners point at the old object and their
+        # completion guards require that same object in _triggers, and
+        # cooldown history rides on it. Only a trigger whose file content
+        # actually changed gets a fresh object, which is what invalidates its
+        # own pending work.
+        prev = {t.id: t for t in getattr(self, "_triggers", [])}
+        for i, t in enumerate(merged):
+            old = prev.get(t.id)
+            if old is not None and old.to_dict() == t.to_dict():
+                merged[i] = old
         self._triggers = merged
 
         self._folders = []
@@ -283,6 +295,11 @@ class TriggersTabMixin:
                 "folders":  self._folders,
             }
             _atomic_write_json(ac.TRIGGERS_LOCAL_FILE, data, indent=2)
+            # Re-baseline the hot-reload snapshot over our own write. The 30 s
+            # poll reads any stamp change as an external edit and rebuilds
+            # every trigger object, which orphans armed status timers and
+            # sequence runners and throws away cooldown history.
+            self._triggers_mtime = self._trigger_files_stamp()
         except (OSError, TypeError, ValueError) as exc:
             # A read-only install dir, say onedir under Program Files, must not
             # crash on every edit. Degrade to an in-memory-only change.

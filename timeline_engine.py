@@ -25,8 +25,10 @@ if TYPE_CHECKING:
     from timeline_parser import TimelineEntry
 
 # cactbot event type -> ACT log line types plus netregex key -> field index.
-# Keys absent from the index map are ignored rather than failing the match,
-# so timelines using fields we don't track still sync on the ones we do.
+# A key absent from the index map makes the entry never match. Counting it as
+# satisfied let a boss arena seal id shared across bosses sync the wrong
+# section, SystemLogMessage carried the distinguishing param1 while the map
+# only indexed id. load names unmapped fields once.
 _SYNC_TYPES: dict[str, tuple[tuple[str, ...], dict[str, int]]] = {
     "Ability":          (("21", "22"), {"id": 4, "source": 3}),
     "StartsUsing":      (("20",),      {"id": 4, "source": 3}),
@@ -36,9 +38,9 @@ _SYNC_TYPES: dict[str, tuple[tuple[str, ...], dict[str, int]]] = {
     "InCombat":         (("260",),     {"inACTCombat": 2, "inGameCombat": 3}),
     "AddedCombatant":   (("03",),      {"id": 2, "name": 3}),
     "RemovedCombatant": (("04",),      {"id": 2, "name": 3}),
-    "GameLog":          (("00",),      {"code": 2, "line": 4}),
+    "GameLog":          (("00",),      {"code": 2, "name": 3, "line": 4}),
     "NameToggle":       (("34",),      {"id": 2, "name": 3, "toggle": 6}),
-    "SystemLogMessage": (("41",),      {"id": 3}),
+    "SystemLogMessage": (("41",),      {"id": 3, "param1": 5}),
     "HeadMarker":       (("27",),      {"targetId": 2, "target": 3, "id": 6}),
 }
 
@@ -117,6 +119,18 @@ class TimelineEngine(QObject):
             log_drop("timeline-sync",
                      "unsupported sync types, those entries never sync: "
                      + ", ".join(unsupported))
+        # A sync field with no index in _SYNC_TYPES can never be checked, so
+        # the matcher rejects the whole entry rather than counting the
+        # constraint as satisfied. Name such fields once at load, the same
+        # silent-drift hazard as an unknown event type.
+        unmapped = sorted({f"{e.event_type}.{key}"
+                           for e in entries if e.event_type in _SYNC_TYPES
+                           for key in e.event_fields
+                           if key not in _SYNC_TYPES[e.event_type][1]})
+        if unmapped:
+            log_drop("timeline-sync",
+                     "unsupported sync fields, those entries never sync: "
+                     + ", ".join(unmapped))
         # Old-style sync /regex/ entries parse as display-only. Name them once
         # too, same silent-drift hazard as an unknown event type.
         legacy = sum(1 for e in entries if e.legacy_sync and not e.event_type)
@@ -215,7 +229,11 @@ class TimelineEngine(QObject):
         for key, pattern in entry.event_fields.items():
             idx = idx_map.get(key)
             if idx is None:
-                continue
+                # A field with no index is a constraint we cannot check.
+                # Counting it as satisfied let a seal id shared across bosses
+                # match the wrong section, so the entry never syncs. load
+                # names such fields once.
+                return False
             if len(fields) <= idx or not _field_matches(pattern, fields[idx]):
                 return False
         return True

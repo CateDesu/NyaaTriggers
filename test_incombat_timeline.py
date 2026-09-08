@@ -431,5 +431,85 @@ import re as _re
 check("the kept escape still matches the literal text downstream",
       _re.fullmatch(x.event_fields["id"], '9D"0') is not None)
 
+# ── Engine: SystemLogMessage seals distinguish bosses on param1 ─────────────
+# Boss arena seals share the 7DC id across bosses. The distinguishing field
+# is param1, field 5 in the 41 line. The map used to index only id, so a seal
+# for a later boss matched the first boss's anchor and snapped the clock a
+# whole section behind. Shipped Aloalo Savage hit exactly this.
+SEALS = """hideall "--sync--"
+
+0.0 "--sync--" InCombat { inGameCombat: "1" } window 0,1
+1000.0 "--sync--" SystemLogMessage { id: "7DC", param1: "1146" } window 10000,0
+2000.0 "--sync--" SystemLogMessage { id: "7DC", param1: "1147" } window 10000,0
+"""
+
+
+def seal_engine():
+    eng = TimelineEngine()
+    eng.load(timeline_parser.parse(SEALS))
+    eng.process_line(["260", "", "1", "1"])
+    return eng
+
+
+# 41 is type|ts|instance|id|param0|param1|param2.
+eng = seal_engine()
+eng.process_line(["41", "", "0", "7DC", "0", "1147", "0"])
+check("a seal with param1 1147 syncs the second boss anchor",
+      abs(eng.current_time() - 2000.0) < 5.0)
+
+eng = seal_engine()
+eng.process_line(["41", "", "0", "7DC", "0", "1146", "0"])
+check("a seal with param1 1146 syncs the first boss anchor",
+      abs(eng.current_time() - 1000.0) < 5.0)
+
+eng = seal_engine()
+eng.process_line(["41", "", "0", "7DC", "0", "9999", "0"])
+check("a seal with an unlisted param1 syncs nothing",
+      eng.current_time() < 5.0)
+
+# ── Engine: a sync field with no index disqualifies the entry ───────────────
+# Counting an unindexed constraint as satisfied is what let the seals above
+# mis-sync, so the entry never matches and load names the field once.
+UNMAPPED = """hideall "--sync--"
+
+0.0 "--sync--" InCombat { inGameCombat: "1" } window 0,1
+100.0 "--sync--" SystemLogMessage { id: "7DC", param2: "5" } window 10000,0
+"""
+
+import timeline_engine
+drops = []
+_real_log_drop = timeline_engine.log_drop
+timeline_engine.log_drop = lambda tag, msg: drops.append((tag, msg))
+try:
+    eng = TimelineEngine()
+    eng.load(timeline_parser.parse(UNMAPPED))
+finally:
+    timeline_engine.log_drop = _real_log_drop
+check("load names an unindexed sync field",
+      any("SystemLogMessage.param2" in msg for _tag, msg in drops))
+eng.process_line(["260", "", "1", "1"])
+eng.process_line(["41", "", "0", "7DC", "0", "0", "5"])
+check("an unindexed sync field never matches", eng.current_time() < 5.0)
+
+# ── Engine: GameLog syncs check the speaker name ────────────────────────────
+# The one shipped GameLog sync constrains name, field 3 in the 00 line. The
+# map indexed only code and line, so any speaker's matching line synced.
+CHAT = """hideall "--sync--"
+
+0.0 "--sync--" InCombat { inGameCombat: "1" } window 0,1
+2500.0 "--sync--" GameLog { code: "0044", name: "Cagnazzo", line: "No more games!.*?" } window 10000,0
+"""
+
+eng = TimelineEngine()
+eng.load(timeline_parser.parse(CHAT))
+eng.process_line(["260", "", "1", "1"])
+# 00 is type|ts|code|name|line.
+eng.process_line(["00", "", "0044", "Not Cagnazzo", "No more games! Enough."])
+check("a matching line from the wrong speaker syncs nothing",
+      eng.current_time() < 5.0)
+eng.process_line(["00", "", "0044", "Cagnazzo", "No more games! Enough."])
+check("the named speaker's line syncs",
+      abs(eng.current_time() - 2500.0) < 5.0)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
