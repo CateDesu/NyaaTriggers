@@ -197,20 +197,32 @@ with tempfile.TemporaryDirectory() as td:
     finally:
         drop_log._LOG_FILE = orig_log
 
-# Replay smoke, opt-in since it boots the real engine jar. The capture above
-# is synthetic and fires no callouts, this only proves the jar takes the file.
-jar = Path("triggevent-core/target/triggevent-core.jar")
+# Replay smoke, opt-in since it boots the real engine jar. The capture holds
+# real feed lines so a feed path that rejects every line cannot pass, and the
+# jar is resolved from this file so any cwd works.
+REPO = Path(__file__).resolve().parent
+jar = REPO / "triggevent-core" / "target" / "triggevent-core.jar"
 if os.environ.get("NYAA_REPLAY_TEST") == "1" and jar.is_file():
     with tempfile.TemporaryDirectory() as td:
         cap = PullCapture(Path(td))
         cap.context = lambda: ("DMU", "The Hole")
         cap.set_recording(True)
+        cap.on_raw_message('{"type":"ChangeZone","zoneID":1234,"zoneName":"The Hole"}')
         cap.on_log_line(_BOSS_CAST)
+        cap.on_raw_message('{"type":"LogLine","line":["20","2026-09-05T21:00:00.0000000-05:00",'
+                           '"40001234","Boss","BAB9","Tele-trouncing","40001234","Boss"]}')
+        cap.on_raw_message('{"type":"LogLine","line":["21","2026-09-05T21:00:02.0000000-05:00",'
+                           '"10700001","Player","BABA","Some Cast","10700001","Player"]}')
         cap.on_in_combat(True, False)
         capture = _pull_files(td)[0]
-        r = subprocess.run([sys.executable, "tools/replay_pull.py", str(capture)],
-                           capture_output=True, text=True, timeout=660)
+        check("the smoke capture holds raw feed lines",
+              len(capture.read_text(encoding="utf-8").splitlines()) >= 3)
+        r = subprocess.run([sys.executable, str(REPO / "tools" / "replay_pull.py"),
+                            str(capture), "--hold", "2"],
+                           capture_output=True, text=True, timeout=660, cwd=REPO)
         check("the capture replays through the engine jar cleanly", r.returncode == 0)
+        check("the engine's chain machinery survived the feed",
+              "0 chain failures" in r.stdout)
 else:
     print("SKIP  engine replay smoke (set NYAA_REPLAY_TEST=1 with the jar built)")
 
