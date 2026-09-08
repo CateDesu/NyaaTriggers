@@ -376,6 +376,7 @@ class MainWindow(AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin,
         self._ws.raw_message.connect(self._pull_capture.on_raw_message)
         self._ws.in_combat.connect(self._pull_capture.on_in_combat)
         self._ws.zone_changed.connect(self._pull_capture.on_zone_changed)
+        self._ws.status_changed.connect(self._pull_capture.on_status_changed)
         self._pull_capture.set_recording(bool(self._settings.get("triggevent_record_pulls", False)))
         # Resolve the UI locale ONCE, before any widget text or trigger fire
         # reads it. auto follows the system locale, explicit en/ja wins. Then

@@ -17,6 +17,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from pull_capture import PullCapture
+import drop_log
+import pull_capture
 
 FAILS = []
 
@@ -99,6 +101,101 @@ with tempfile.TemporaryDirectory() as td:
     check("switching off finalizes as ended", meta4.get("outcome") == "ended")
     cap.on_log_line(_BOSS_CAST)
     check("off stays off", len(_pull_files(td)) == 4)
+
+with tempfile.TemporaryDirectory() as td:
+    cap = PullCapture(Path(td))
+    cap.context = lambda: ("..", "The Hole")
+    cap.set_recording(True)
+
+    # An all-dots fight tag cannot escape the capture tree.
+    cap.on_log_line(_BOSS_CAST)
+    files = _pull_files(td)
+    check("an all dots fight tag lands in Unknown",
+          len(files) == 1 and files[0].parent.name == "Unknown")
+
+    # A raw zone line finalizes like the WS zone event does.
+    cap.on_log_line("01|ts|1234|The Dead-End|")
+    meta = json.loads(_meta_files(td)[0].read_text(encoding="utf-8"))
+    check("a raw zone line finalizes as a reset", meta.get("outcome") == "reset")
+
+    # A feed drop closes the pull with its own outcome, and the reconnect
+    # burst of a still running fight starts a fresh file instead of merging
+    # into the stale one.
+    cap.on_log_line(_BOSS_CAST)
+    cap.on_status_changed(False, "Disconnected")
+    meta = json.loads(_meta_files(td)[1].read_text(encoding="utf-8"))
+    check("a feed drop finalizes as feed-lost", meta.get("outcome") == "feed-lost")
+    cap.on_status_changed(True, "Connected")
+    cap.on_log_line(_BOSS_CAST)
+    check("the next pull opens its own file after a feed drop",
+          len(_pull_files(td)) == 3)
+    cap.set_recording(False)
+
+with tempfile.TemporaryDirectory() as td:
+    cap = PullCapture(Path(td))
+    cap.context = lambda: ("Cap", "Zone")
+    cap.set_recording(True)
+
+    # The pre-pull ring is bounded in count, not only in seconds.
+    for i in range(pull_capture._PRE_PULL_MAX_MESSAGES + 100):
+        cap.on_raw_message(f'{{"n":{i}}}')
+    cap.on_log_line(_BOSS_CAST)
+    content = _pull_files(td)[0].read_text(encoding="utf-8")
+    check("the pre-pull ring keeps only the newest messages",
+          '{"n":0}' not in content
+          and f'{{"n":{pull_capture._PRE_PULL_MAX_MESSAGES + 99}}}' in content)
+
+    # Duration and size caps truncate a pull that never closes on its own.
+    orig_s = pull_capture._MAX_PULL_SECONDS
+    orig_b = pull_capture._MAX_PULL_BYTES
+    try:
+        pull_capture._MAX_PULL_SECONDS = 0
+        cap.on_raw_message('{"type":"slow"}')
+        meta = json.loads(_meta_files(td)[0].read_text(encoding="utf-8"))
+        check("an overlong pull is truncated", meta.get("outcome") == "truncated")
+        cap.on_log_line(_BOSS_CAST)
+        pull_capture._MAX_PULL_BYTES = 100
+        cap.on_raw_message('{"type":"' + "x" * 200 + '"}')
+        meta = json.loads(_meta_files(td)[1].read_text(encoding="utf-8"))
+        check("an oversized pull is truncated", meta.get("outcome") == "truncated")
+    finally:
+        pull_capture._MAX_PULL_SECONDS = orig_s
+        pull_capture._MAX_PULL_BYTES = orig_b
+
+with tempfile.TemporaryDirectory() as td:
+    cap = PullCapture(Path(td))
+    cap.context = lambda: ("Keep", "Zone")
+    cap.set_recording(True)
+    orig_k = pull_capture._KEEP_CAPTURES
+    pull_capture._KEEP_CAPTURES = 3
+    try:
+        for _ in range(6):
+            cap.on_log_line(_BOSS_CAST)
+            cap.on_in_combat(True, False)
+        check("old captures are pruned to the keep count",
+              len(_pull_files(td)) == 3)
+        check("their metas are pruned too", len(_meta_files(td)) == 3)
+    finally:
+        pull_capture._KEEP_CAPTURES = orig_k
+
+with tempfile.TemporaryDirectory() as td:
+    blocker = Path(td) / "not-a-dir"
+    blocker.write_text("x", encoding="utf-8")
+    dlog = Path(td) / "nyaatriggers.log"
+    orig_log = drop_log._LOG_FILE
+    drop_log._LOG_FILE = dlog
+    try:
+        cap = PullCapture(blocker)
+        cap.context = lambda: ("DMU", "Zone")
+        cap.set_recording(True)
+        cap.on_log_line(_BOSS_CAST)
+        cap.on_log_line(_BOSS_CAST)
+        check("an unwritable folder records nothing",
+              _pull_files(td) == [])
+        check("and leaves exactly one drop log line",
+              dlog.read_text(encoding="utf-8").count("[pull-capture]") == 1)
+    finally:
+        drop_log._LOG_FILE = orig_log
 
 # Replay smoke, opt-in since it boots the real engine jar. The capture above
 # is synthetic and fires no callouts, this only proves the jar takes the file.
