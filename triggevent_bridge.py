@@ -304,10 +304,17 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
     try:
         # Point the clone at the fork. Installs from before the fork cloned
         # upstream directly, and a fetch of the guards branch against upstream
-        # would just fail.
+        # would just fail. A clone with no origin at all gets one added, same
+        # as the build scripts do, or the fetch below fails forever.
         u = _git("remote", "get-url", "origin")
-        if u.returncode == 0 and u.stdout.strip() != _ET_REPO_URL:
-            _git("remote", "set-url", "origin", _ET_REPO_URL)
+        if u.returncode != 0:
+            a = _git("remote", "add", "origin", _ET_REPO_URL)
+            if a.returncode != 0:
+                return (False, f"Triggevent could not add the origin remote: {a.stderr.strip()[:200]}")
+        elif u.stdout.strip() != _ET_REPO_URL:
+            s = _git("remote", "set-url", "origin", _ET_REPO_URL)
+            if s.returncode != 0:
+                return (False, f"Triggevent could not repoint the origin remote: {s.stderr.strip()[:200]}")
         f = _git("fetch", "origin", _ET_BRANCH)
         if f.returncode != 0:
             return (False, f"Triggevent fetch failed: {f.stderr.strip()[:200]}")
@@ -327,8 +334,20 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
             # writes. A missing or unreadable stamp means rebuild.
             if _jar_built_from() == head:
                 return (False, "Triggevent Engine already up to date")
+        # Installs from the patch era still carry uncommitted patch edits, and
+        # the merge refuses to overwrite them, wedging every run on the same
+        # message. Nothing re-applies patches anymore, so discarding the dirt
+        # is correct and final. Genuinely committed divergence still fails the
+        # ff-only merge and gets reported.
+        _git("checkout", "--", ".")
         if _git("merge", "--ff-only", f"origin/{_ET_BRANCH}").returncode != 0:
             return (False, "Triggevent pull skipped: local event-trigger clone has diverged or has uncommitted changes")
+        # The stamp vouches the jar was built from pristine origin/guards. If
+        # anything is still dirty after the clean, refuse rather than compile
+        # uncommitted code into a jar the stamp then certifies as clean HEAD.
+        d = _git("status", "--porcelain")
+        if d.returncode == 0 and d.stdout.strip():
+            return (False, "Triggevent pull skipped: local event-trigger clone has uncommitted changes")
         cmd = [str(_BUILD_SCRIPT)] if os.name == "nt" else ["bash", str(_BUILD_SCRIPT)]
         # Build what was just merged, not the stale pin. Otherwise the build
         # script checks the pin back out, rebuilds the old source every time

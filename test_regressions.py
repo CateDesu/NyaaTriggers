@@ -1983,7 +1983,8 @@ def test_te_update_stamp_gate():
         def kill(self):
             pass
 
-    def run_once(behind, head, build_rc, stamp, remote_url=None):
+    def run_once(behind, head, build_rc, stamp, remote_url=None, dirty=False,
+                 clean_works=True, has_origin=True, set_url_rc=0):
         """Run update_engine against a temp clone layout with git and the
         build scripted. Returns (ok, msg, build_calls, stamp_text, remote_calls,
         git ops in call order)."""
@@ -2001,23 +2002,33 @@ def test_te_update_stamp_gate():
         builds = []
         remotes = []
         ops = []
+        state = {"dirty": dirty}
 
         def fake_run(argv, **kw):
             sub = argv[3:]
+            ops.append(tuple(sub))
             if sub[0] == "remote":
                 remotes.append(sub[1])
-                ops.append(tuple(sub))
                 if sub[1] == "get-url":
+                    if not has_origin:
+                        return _R(2, "", "error: No such remote 'origin'")
                     return _R(0, remote_url + "\n")
+                if sub[1] == "set-url":
+                    return _R(set_url_rc)
                 return _R(0)
             if sub[0] == "fetch":
-                ops.append(tuple(sub))
                 return _R(0)
             if sub[0] == "rev-list":
                 return _R(0, behind + "\n")
             if sub[0] == "rev-parse":
                 return _R(0, head + "\n")
-            if sub[0] in ("checkout", "merge"):
+            if sub[0] == "status":
+                return _R(0, " M triggers/DMU.java\n" if state["dirty"] else "")
+            if sub[0] == "checkout":
+                if sub[1:] == ["--", "."] and clean_works:
+                    state["dirty"] = False
+                return _R(0)
+            if sub[0] == "merge":
                 return _R(0)
             raise AssertionError(f"unexpected git argv: {argv}")
 
@@ -2080,6 +2091,47 @@ def test_te_update_stamp_gate():
     check("a real update builds and reports the new commits",
           ok and "5 new commit(s)" in msg)
     check("a real update stamps the new HEAD", stamp_text == "ccc333\n")
+
+    # Patch era dirt is discarded before the merge, and the build then sees a
+    # clean tree.
+    ok, msg, builds, stamp_text, _r6, ops = run_once("3", "ddd444", 0, None, dirty=True)
+    clean = ("checkout", "--", ".")
+    merge = ("merge", "--ff-only", "origin/guards")
+    check("a dirty tree is cleaned before the merge",
+          clean in ops and merge in ops and ops.index(clean) < ops.index(merge))
+    check("a cleaned clone updates and stamps", ok and stamp_text == "ddd444\n")
+
+    # Dirt that survives the clean refuses the build instead of being compiled
+    # into a jar the stamp would certify as pristine.
+    ok, msg, builds, stamp_text, _r7, _o7 = run_once("0", "aaa111", 0, None,
+                                                     dirty=True, clean_works=False)
+    check("a tree that will not come clean refuses the build",
+          not ok and "uncommitted changes" in msg)
+    check("a refused build never starts", builds == [])
+    check("a refused build writes no stamp", stamp_text is None)
+
+    # A current jar leaves the tree alone even when it is dirty. The stamp
+    # already vouches for what was built, the dirt is for standalone builds.
+    ok, msg, builds, stamp_text, _r8, ops = run_once("0", "aaa111", 0, "aaa111\n",
+                                                     dirty=True)
+    check("a current jar reports up to date with a dirty tree",
+          not ok and "already up to date" in msg)
+    check("a current jar never touches the tree", ("checkout", "--", ".") not in ops)
+
+    # A clone with no origin gets one added at the fork, then fetches.
+    ok, msg, builds, stamp_text, _r9, ops = run_once("0", "aaa111", 0, "aaa111\n",
+                                                     has_origin=False)
+    check("a missing origin remote is added at the fork",
+          ("remote", "add", "origin", tev._ET_REPO_URL) in ops)
+    check("a remote add still reaches the up to date report",
+          not ok and "already up to date" in msg)
+
+    # A failed set-url is reported instead of fetching from the wrong remote.
+    ok, msg, builds, stamp_text, _r10, ops = run_once(
+        "0", "aaa111", 0, "aaa111\n",
+        remote_url="https://github.com/xpdota/event-trigger.git", set_url_rc=1)
+    check("a failed repoint is reported", not ok and "repoint" in msg)
+    check("a failed repoint never fetches", not any(op[0] == "fetch" for op in ops))
 
 
 # ── a downloaded prebuilt jar invalidates the build stamp ────────────────────
