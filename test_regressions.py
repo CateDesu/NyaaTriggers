@@ -970,6 +970,37 @@ def test_drop_log_rotation_keeps_one_generation():
             drop_log._perms_tightened = False
 
 
+# ── a failed rotate never kills the append ───────────────────────────────────
+def test_drop_log_failed_rotate_still_appends():
+    with tempfile.TemporaryDirectory() as td:
+        log = Path(td) / "nyaatriggers.log"
+        orig_file = drop_log._LOG_FILE
+        orig_replace = Path.replace
+        drop_log._LOG_FILE = log
+        try:
+            drop_log._last.clear()
+            drop_log._perms_tightened = False
+            log.write_text("x" * (drop_log._MAX_BYTES + 1), encoding="utf-8")
+
+            def locked_replace(self, target):
+                # A viewer holding the .1 open on Windows raises this.
+                raise PermissionError("the .1 is held open")
+            Path.replace = locked_replace
+            drop_log.log_drop("audit-locked", "still logged", throttle_s=0)
+            check("a failed rotate still appends the line",
+                  "[audit-locked] still logged" in log.read_text(encoding="utf-8"))
+            # The log stays over the cap while the blockage lasts, so every
+            # later line retries the rename. Those lines must land too.
+            drop_log.log_drop("audit-locked2", "and again", throttle_s=0)
+            check("logging keeps working while the blockage stays",
+                  "[audit-locked2] and again" in log.read_text(encoding="utf-8"))
+        finally:
+            Path.replace = orig_replace
+            drop_log._LOG_FILE = orig_file
+            drop_log._last.clear()
+            drop_log._perms_tightened = False
+
+
 # ── H-4: both installers pin piper-tts ───────────────────────────────────────
 def test_setup_installers_pin_piper():
     install_src = (REPO_DIR / "install.py").read_text(encoding="utf-8")

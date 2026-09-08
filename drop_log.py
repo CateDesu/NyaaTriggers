@@ -38,9 +38,12 @@ def rotate_one_generation(path: Path) -> None:
     The rename carries the file's permissions over to the .1."""
     try:
         path.replace(path.with_name(path.name + ".1"))
-    except FileNotFoundError:
-        # A racing process rotated first. The append below still lands on
-        # the fresh file instead of being dropped.
+    except OSError:
+        # FileNotFoundError: a racing process rotated first, the append still
+        # lands on the fresh file. Anything else, like a locked or read-only
+        # .1 on Windows, must not skip the append either. The log stays over
+        # the cap and every later line would retry the rename and drop too,
+        # killing all drop and crash logging until the blockage cleared.
         pass
 
 
