@@ -3,12 +3,14 @@ sidecar lifecycle UI. Mixin for MainWindow, all state rides on self.
 """
 
 from pathlib import Path
+import html
 import json
 import re
 import shutil
 import sys
 import time
 import uuid
+from collections import deque
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QBrush, QColor
@@ -314,7 +316,8 @@ class EnginesMixin:
         (_te_log if src == "triggevent" else _tn_log)(f"status: active={active} {msg}")
         if src == "triggevent" and active:
             # A fresh engine generation starts the chain failure count over.
-            self._engine_chain_failures = []
+            self._engine_chain_failures = deque(maxlen=50)
+            self._engine_chain_failure_count = 0
             self._update_engine_chain_label()
         self._update_engine_status_label()
 
@@ -322,7 +325,15 @@ class EnginesMixin:
         """A Triggevent chain died, connected in _ensure_triggevent_bridge.
         Count it on the top-bar badge so a silently dead callout chain gets
         noticed mid-fight instead of in a postmortem."""
-        self._engine_chain_failures.append(line)
+        failures = getattr(self, "_engine_chain_failures", None)
+        if failures is None:
+            failures = self._engine_chain_failures = deque(maxlen=50)
+        # The deque keeps the newest lines for the tooltip while the counter
+        # stays exact. A broken pack erroring every engine cycle must not
+        # grow the list for the whole session.
+        failures.append(line)
+        self._engine_chain_failure_count = getattr(
+            self, "_engine_chain_failure_count", 0) + 1
         self._update_engine_chain_label()
 
     def _update_engine_chain_label(self) -> None:
@@ -332,12 +343,16 @@ class EnginesMixin:
         lbl = getattr(self, "_engine_chain_lbl", None)
         if lbl is None:
             return
-        failures = getattr(self, "_engine_chain_failures", [])
-        if not failures:
+        count = getattr(self, "_engine_chain_failure_count", 0)
+        if not count:
             lbl.setVisible(False)
             return
-        lbl.setText(_("● {n} chain failures").format(n=len(failures)))
-        lbl.setToolTip("\n".join(failures[-5:]))
+        lbl.setText(_("● {n} chain failures").format(n=count))
+        failures = getattr(self, "_engine_chain_failures", [])
+        # Tooltips auto-detect rich text, and the line embeds the pack
+        # authored trigger name. Escape it or markup in a name would spoof
+        # the display.
+        lbl.setToolTip("\n".join(html.escape(line) for line in list(failures)[-5:]))
         lbl.setVisible(True)
 
     def _note_triggevent_unavailable(self) -> None:

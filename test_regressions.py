@@ -2515,6 +2515,49 @@ def test_is_duplicate_pipe_overlap():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Engine chain badge: capped history, exact count, escaped tooltip
+# ─────────────────────────────────────────────────────────────────────────────
+def test_engine_chain_badge_caps_and_escapes():
+    from PyQt6.QtWidgets import QApplication, QLabel
+    from ui.engines import EnginesMixin
+    app = QApplication.instance() or QApplication([])
+
+    class _Host:
+        _on_engine_chain_failure = EnginesMixin._on_engine_chain_failure
+        _on_engine_sidecar_status = EnginesMixin._on_engine_sidecar_status
+        _update_engine_chain_label = EnginesMixin._update_engine_chain_label
+
+        def __init__(self):
+            self._engine_chain_lbl = QLabel()
+            self._engine_sidecar_state = {}
+
+        def _update_engine_status_label(self):
+            pass
+
+    host = _Host()
+    for i in range(60):
+        host._on_engine_chain_failure(f"Error in sequential trigger 't{i}'")
+    check("the badge counts every failure of the session",
+          host._engine_chain_failure_count == 60)
+    check("the retained tooltip lines are capped",
+          len(host._engine_chain_failures) == 50)
+    check("the label shows the total count", "60" in host._engine_chain_lbl.text())
+
+    host._engine_chain_failures.clear()
+    host._on_engine_chain_failure(
+        "Error in sequential trigger '<b>spoof</b>' while waiting for 'x'")
+    tip = host._engine_chain_lbl.toolTip()
+    check("tooltip lines are escaped against rich text spoofing",
+          "<b>spoof</b>" not in tip and "&lt;b&gt;spoof&lt;/b&gt;" in tip)
+
+    host._on_engine_sidecar_status("triggevent", True, "ready")
+    check("a fresh engine generation resets the count",
+          host._engine_chain_failure_count == 0)
+    check("the badge hides when the count resets",
+          not host._engine_chain_lbl.isVisible())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):
