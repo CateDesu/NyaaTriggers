@@ -189,6 +189,7 @@ class DataSafetyTests(unittest.TestCase):
             warning = stack.enter_context(patch.object(ac.QMessageBox, "warning"))
             ac.TRIGGERS_FILE.write_text('[]')
             ac.TRIGGERS_LOCAL_FILE.write_text('{"triggers": []}')
+            original = ac.TRIGGERS_LOCAL_FILE.stat()
             host = TriggerHost()
             host._load_triggers()
             broken = '{"triggers": [recoverable hand edit'
@@ -197,12 +198,17 @@ class DataSafetyTests(unittest.TestCase):
             warning.assert_not_called()
             host._save_triggers()
             host._save_triggers()
+            host._maybe_reload_triggers()
+            self.assertTrue(host._local_corrupt)
             self.assertEqual(ac.TRIGGERS_LOCAL_FILE.read_text(), broken)
             self.assertEqual(warning.call_count, 1)
             backups = [p for p in root.iterdir() if '.bad' in p.name]
             self.assertEqual(len(backups), 1)
             self.assertEqual(backups[0].read_text(), broken)
             ac.TRIGGERS_LOCAL_FILE.write_text('{"triggers": []}')
+            os.utime(ac.TRIGGERS_LOCAL_FILE,
+                     ns=(original.st_atime_ns, original.st_mtime_ns))
+            self.assertEqual(host._trigger_files_stamp(), host._triggers_mtime)
             host._maybe_reload_triggers()
             self.assertFalse(host._local_corrupt)
             host._save_triggers()

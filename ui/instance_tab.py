@@ -525,7 +525,8 @@ class InstanceTabMixin:
         # matches skips its cooldown for exactly these 26 triggers.
         if t.cooldown_s > 0:
             now = time.monotonic()
-            if now - t._last_fired.get(runner.effect_id, 0.0) < t.cooldown_s:
+            last_fired = t._last_fired.get(runner.effect_id)
+            if last_fired is not None and now - last_fired < t.cooldown_s:
                 return
             t._last_fired[runner.effect_id] = now
         self._fire(t, captured)

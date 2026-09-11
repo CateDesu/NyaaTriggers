@@ -170,6 +170,23 @@ def test_r1_from_dict_scope_and_cooldown():
           Trigger.from_dict({"cooldown_s": -5}).cooldown_s == 0.0)
 
 
+def test_cooldown_at_clock_zero():
+    from unittest.mock import patch
+
+    trigger = Trigger(log_type="21", ability_id="BEEF", cooldown_s=120.0)
+    line = ["21", "ts", "40001234", "Boss", "BEEF", "Ability", "10001111", "Player"]
+    with patch("time.monotonic", return_value=0.0) as clock:
+        check("first match is allowed at clock zero", trigger.matches(line) is not None)
+        clock.return_value = 119.0
+        check("a match at clock zero starts its cooldown", trigger.matches(line) is None)
+        other_source = line.copy()
+        other_source[2] = "40005678"
+        check("a new source has no cooldown", trigger.matches(other_source) is not None)
+        clock.return_value = 120.0
+        check("the original source matches when its cooldown ends",
+              trigger.matches(line) is not None)
+
+
 # ── Cooldown map stays bounded across churning source IDs ──────────────────
 def test_r1_cooldown_map_bounded():
     t2 = Trigger(log_type="21", ability_id="BEEF", tts_text="x", cooldown_s=5.0)

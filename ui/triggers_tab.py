@@ -1709,7 +1709,9 @@ class TriggersTabMixin:
         log loop reads self._triggers live, so the running engine picks
         the set up at once."""
         stamp = self._trigger_files_stamp()
-        if stamp == self._triggers_mtime:
+        # A repaired file can have its original size and timestamp. Keep
+        # checking while saves are blocked so recovery does not need an edit.
+        if stamp == self._triggers_mtime and not getattr(self, "_local_corrupt", False):
             return
         # A half-saved hand edit, non-atomic editor, must not swap the
         # live set for a partial parse. Skip this tick, the next one

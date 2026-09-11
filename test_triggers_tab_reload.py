@@ -83,6 +83,7 @@ SEQ_STEP_LINE = ["21", "ts", "40001234", "Boss", "8F01", "Some Ability",
                  "10FF0001", "Target"]
 
 with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
+    clock = stack.enter_context(patch("time.monotonic", return_value=0.0))
     td = Path(td)
     for key in ("TRIGGERS_FILE", "TRIGGERS_LOCAL_FILE", "RETIRED_FILE",
                 "_REPO_TRIGGERS_FILE", "_REPO_RETIRED_FILE",
@@ -172,6 +173,18 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
                   for t in w._triggers))
         check("pending external reload preserves the saved local object",
               next(t for t in w._triggers if t.id == "warning") is local)
+
+    w.fired.clear()
+    arm_status(w, local, "AC0")._fire()
+    check("a new effect can warn at clock zero", w.fired == ["warning"])
+    clock.return_value = 119.0
+    arm_status(w, local, "AC0")._fire()
+    check("a warning at clock zero still starts its cooldown",
+          w.fired == ["warning"])
+    clock.return_value = 120.0
+    arm_status(w, local, "AC0")._fire()
+    check("the same effect warns again when its cooldown ends",
+          w.fired == ["warning", "warning"])
 
 print()
 if FAILS:

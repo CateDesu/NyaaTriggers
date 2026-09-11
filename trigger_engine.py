@@ -554,7 +554,8 @@ class Trigger:
         if not (self.expiry_warn_s > 0 and lt in _STATUS_TYPES):
             source_id = fields[2].upper() if len(fields) > 2 else ""
             now = time.monotonic()
-            if now - self._last_fired.get(source_id, 0.0) < self.cooldown_s:
+            last_fired = self._last_fired.get(source_id)
+            if last_fired is not None and now - last_fired < self.cooldown_s:
                 log_drop("cooldown", f"{self.name!r} suppressed ({self.cooldown_s:g}s cooldown, src {source_id})")
                 return None
             self._last_fired[source_id] = now
