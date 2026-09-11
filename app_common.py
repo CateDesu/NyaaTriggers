@@ -57,11 +57,8 @@ CACTBOT_TIMELINES_FILE = _BUNDLE_DIR / "cactbot_timelines.json"
 _REPO_TRIGGERS_FILE    = _DATA_DIR / "triggers.repo.json"
 _REPO_RETIRED_FILE     = _DATA_DIR / "retired.repo.json"
 _REPO_TRIGGERS_VERSION = _DATA_DIR / "triggers.repo.version"
-# Branch the download follows. master is the trunk. Trigger fixes land there
-# first and the app's own update stream, Master pre-releases and git checkouts,
-# tracks it. main only advances when a Stable is promoted off master, so
-# fetching main would hand every install the set it already bundles.
-_REPO_TRIGGERS_BRANCH  = "master"
+# Trigger downloads follow the same main branch as the rolling releases.
+_REPO_TRIGGERS_BRANCH  = "main"
 
 
 def _watched_trigger_files() -> tuple:

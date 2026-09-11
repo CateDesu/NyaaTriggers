@@ -200,6 +200,7 @@ def load_catalog(fight_tree: FightTree, known_tags: set[str], cache_path: Path) 
                     continue
                 if (e.get("difficulty"), e.get("name")) not in have and e.get("difficulty") in _DIFFICULTIES:
                     catalog.append(e)
+                    have.add((e["difficulty"], e["name"]))
     except Exception as e:  # noqa: BLE001
         log_drop("fight-catalog", f"cache merge skipped: {e!r}")
     return catalog

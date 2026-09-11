@@ -88,14 +88,15 @@ def main(argv: list[str] | None = None) -> int:
     existing: dict[str, str] = {}
     if cat_path.exists():
         try:
-            # utf-8-sig tolerates a BOM a hand edited catalog may carry. Plain
-            # utf-8 raises below and reads the whole catalog as empty, so every
-            # key reports new and a --prune rewrites every translation as "".
+            # Accept a BOM from editors without changing translated values.
             raw = json.loads(cat_path.read_text(encoding="utf-8-sig"))
-            if isinstance(raw, dict):
-                existing = {k: v for k, v in raw.items() if isinstance(v, str)}
-        except ValueError:
-            pass
+            if not isinstance(raw, dict):
+                raise ValueError("catalog must be an object")
+            existing = {k: v for k, v in raw.items() if isinstance(v, str)}
+        except (OSError, ValueError) as exc:
+            print(f"cannot read {cat_path}: {exc}, catalog left untouched",
+                  file=sys.stderr)
+            return 1
 
     new_keys = sorted(found - existing.keys())
     stale_keys = sorted(existing.keys() - found)

@@ -1,6 +1,9 @@
 import glob
 import importlib.util
 import os
+import re
+import tempfile
+from pathlib import Path
 
 from PyInstaller.building.datastruct import Tree
 from PyInstaller.utils.hooks import collect_all
@@ -8,6 +11,16 @@ from PyInstaller.utils.hooks import collect_all
 datas    = []
 binaries = []
 hiddenimports = []
+
+# The staged updater can read this before importing any GUI modules.
+_source_version = re.search(r'^_VERSION\s*=\s*"([^"]+)"',
+                            Path('app_common.py').read_text(encoding='utf-8'), re.M)
+if _source_version is None:
+    raise SystemExit('[spec] Could not read the release version')
+_version_root = tempfile.TemporaryDirectory(prefix='nyaa-build-version-')
+_version_stamp = Path(_version_root.name) / 'nyaatriggers.version'
+_version_stamp.write_text(_source_version.group(1), encoding='utf-8')
+datas.append((str(_version_stamp), '.'))
 
 # piper_* : the English Piper voice. kokoro_onnx + espeakng_loader + phonemizer +
 # language_tags : the in-app neural Japanese voice. espeakng_loader ships the
@@ -141,9 +154,9 @@ def _require_engine(problem):
         print(f'[spec] WARNING: {problem} (NYAA_ALLOW_NO_ENGINE=1, building anyway)')
         return False
     raise SystemExit(
-        f'[spec] {problem}. The Triggevent Engine must ship with every build; '
-        'run triggevent-core/build.sh (or restore the CI artifact), or set '
-        'NYAA_ALLOW_NO_ENGINE=1 to build without it on purpose.')
+        f'[spec] {problem}. Both engines must ship with every build. '
+        'Restore the bundled files or run the missing engine build script. '
+        'Set NYAA_ALLOW_NO_ENGINE=1 for a local build without engines.')
 
 
 _jar = os.path.join('triggevent-core', 'target', 'triggevent-core.jar')
@@ -172,8 +185,11 @@ jre_tree = Tree('jre', prefix='jre') if _have_jre else None
 # MSIL: they run NATIVELY on Windows (no Mono) and under Mono on Linux. The prebuilt bin/ is
 # vendored (git-committed in triggernometry-core/bin/) and bundled as-is. There is no CI build step.
 _tn_bin = os.path.join('triggernometry-core', 'bin')
-tn_bin_tree = (Tree(_tn_bin, prefix=_tn_bin)
-               if os.path.isfile(os.path.join(_tn_bin, 'triggernometry-core.exe')) else None)
+_tn_exe = os.path.join(_tn_bin, 'triggernometry-core.exe')
+_have_tn = os.path.isfile(_tn_exe)
+if not _have_tn:
+    _require_engine(f'{_tn_exe} is missing')
+tn_bin_tree = Tree(_tn_bin, prefix=_tn_bin) if _have_tn else None
 
 # App icon: Windows wants an .ico, falling back to the .png (PyInstaller converts
 # it when Pillow is available), else no custom icon. (Linux ignores the icon arg.)
@@ -218,3 +234,5 @@ coll = COLLECT(
     upx_exclude=[],
     name='NyaaTriggers',
 )
+
+_version_root.cleanup()

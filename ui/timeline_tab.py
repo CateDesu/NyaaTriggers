@@ -10,6 +10,8 @@ import threading
 import time
 import urllib.request
 
+from http_fetch import fetch_bytes
+
 from tts import speak
 from sequential import SequentialRunner
 import timeline_parser
@@ -201,16 +203,16 @@ class TimelineTabMixin:
             self._cactbot_tl_fetching.add(tag)
 
         def _worker() -> None:
+            tmp = None
             try:
                 url = f"{_CACTBOT_DATA_RAW}/{rel}"
                 req = urllib.request.Request(url, headers={"User-Agent": "NyaaTriggers"})
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    data = resp.read(_TIMELINE_MAX_BYTES + 1)
+                data = fetch_bytes(req, _TIMELINE_MAX_BYTES)
                 if len(data) > _TIMELINE_MAX_BYTES:
                     raise ValueError("timeline response too large")
                 ac.TIMELINES_DIR.mkdir(parents=True, exist_ok=True)
                 dest = ac.TIMELINES_DIR / f"{tag}.cactbot.cache.txt"
-                tmp = dest.with_suffix(dest.suffix + ".tmp")
+                tmp = dest.with_name(f"{dest.name}.{os.getpid()}.{threading.get_ident()}.tmp")
                 tmp.write_bytes(data)
                 _fsync_file(tmp)
                 os.replace(tmp, dest)   # never leave a half-written timeline
@@ -221,6 +223,11 @@ class TimelineTabMixin:
                 # the TTL re-fetch self-heals, exactly as before.
                 print(f"cactbot timeline fetch failed for {tag}", file=sys.stderr)
             finally:
+                if tmp is not None:
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 with self._cactbot_tl_lock:
                     self._cactbot_tl_fetching.discard(tag)
 

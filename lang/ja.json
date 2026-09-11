@@ -401,7 +401,7 @@
   "WebSocket:": "WebSocket:",
   "You - the effect is on you": "自分（効果が自分に付いている）",
   "Your UMAD rules already match the preset.": "UMAD ルールはすでにプリセットと一致しています。",
-  "Your local triggers file could not be read, so only the bundled triggers are shown. Edits are paused until the file is fixed or removed.": "ローカルトリガーファイルを読み込めなかったため、同梱トリガーのみ表示しています。ファイルを修正または削除するまで、編集は一時停止されます。",
+  "Your local triggers file could not be read. Edits are paused until the file is fixed or removed.": "ローカルトリガーファイルを読み込めませんでした。ファイルを修正または削除するまで、編集は一時停止されます。",
   "Your previous triggers were backed up to:\n{path}": "",
   "Your settings file could not be read ({err}), so defaults are in use.": "設定ファイルを読み込めませんでした ({err})。デフォルトを使用しています。",
   "Your {what} could not be written to disk, so changes will be lost when the app closes:\n{err}\n\nCheck that the folder is writable.": "{what}をディスクに書き込めなかったため、アプリを閉じると変更が失われます:\n{err}\n\nフォルダが書き込み可能か確認してください。",

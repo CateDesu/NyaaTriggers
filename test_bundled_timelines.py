@@ -87,14 +87,21 @@ import timeline_parser
 from timeline_engine import _SYNC_TYPES
 
 unmapped = {}
+unsupported = {}
 for p in sorted((ROOT / "timelines").glob("*.txt")):
     for e in timeline_parser.parse(p.read_text(encoding="utf-8")):
-        if not e.event_type or e.event_type not in _SYNC_TYPES:
+        if not e.event_type:
+            continue
+        if e.event_type not in _SYNC_TYPES:
+            unsupported.setdefault(e.event_type, set()).add(p.name)
             continue
         for key in e.event_fields:
             if key not in _SYNC_TYPES[e.event_type][1]:
                 unmapped.setdefault(f"{e.event_type}.{key}", set()).add(p.name)
 check("every sync field the shipped timelines use is indexed", not unmapped)
+check("every shipped sync event type is supported", not unsupported)
+for event, names in unsupported.items():
+    print(f"  {event}: {', '.join(sorted(names))}")
 for field, names in unmapped.items():
     print(f"  {field}: {', '.join(sorted(names)[:3])}")
 

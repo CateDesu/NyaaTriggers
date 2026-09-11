@@ -16,8 +16,12 @@ import concurrent.futures
 import json
 import os
 import re
+import sys
 import urllib.request
 from pathlib import Path, PurePosixPath
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from http_fetch import fetch_bytes
 
 API_TREE = ("https://api.github.com/repos/OverlayPlugin/cactbot/git/trees/"
             "main?recursive=1")
@@ -34,11 +38,7 @@ _MAX_FETCH = 64 << 20
 
 def _fetch(url: str) -> bytes:
     req = urllib.request.Request(url, headers=_UA)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        data = r.read(_MAX_FETCH + 1)
-    if len(data) > _MAX_FETCH:
-        raise ValueError(f"{url} exceeds {_MAX_FETCH} bytes")
-    return data
+    return fetch_bytes(req, _MAX_FETCH, timeout=30)
 
 
 def _zone_id_consts() -> dict:
@@ -95,10 +95,13 @@ def _zone_ids_for(src: str, consts: dict, names_en: dict, rel: str) -> list:
 
 def main() -> None:
     tree = json.loads(_fetch(API_TREE).decode("utf-8"))
+    if not isinstance(tree, dict) or not isinstance(tree.get("tree"), list):
+        raise SystemExit("GitHub response does not contain a file tree")
     if tree.get("truncated"):
         raise SystemExit("GitHub tree response truncated - cannot trust the walk")
     paths = [t["path"] for t in tree["tree"]
-             if t.get("type") == "blob" and t["path"].startswith(DATA_PREFIX)]
+             if isinstance(t, dict) and t.get("type") == "blob"
+             and isinstance(t.get("path"), str) and t["path"].startswith(DATA_PREFIX)]
     ts_files = sorted(p for p in paths if p.endswith(".ts"))
     txt_set = {p[len(DATA_PREFIX):] for p in paths if p.endswith(".txt")}
 

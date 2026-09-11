@@ -9,7 +9,7 @@ active log rolls over to a fresh file when either cap trips.
 - it already holds MAX_FIGHTS_PER_LOG distinct fights and a pull of a new
   fight arrives
 
-Once MAX_LOGS full logs sit in the folder, the oldest full log is culled.
+Once more than MAX_LOGS full logs sit in the folder, the oldest are culled.
 The active log still being written never counts against the cap. Culling
 is the parser's job in this ecosystem. ACT prunes its own logs and the
 uploaders downstream only ever read, so it lives here. Files are named by
@@ -31,7 +31,7 @@ from drop_log import log_drop
 MAX_PULLS_PER_LOG = 25
 # Roll the active log once it holds this many distinct fights.
 MAX_FIGHTS_PER_LOG = 5
-# Keep at most this many log files, cull the oldest.
+# Keep this many retired logs in addition to the active log.
 MAX_LOGS = 5
 
 # The file write_pull last appended to. A backward clock step makes
@@ -45,18 +45,13 @@ _last_written: "Path | None" = None
 # retention unlinks. One lock around the whole write plus cull section.
 _write_lock = threading.Lock()
 
-# os.open's mode only applies at creation, so a pre-existing 0644 log, say
-# one restored from a backup, gets one best-effort chmod after the first
-# write, when the file is known to exist. Same idiom as drop_log.
-_perms_tightened = False
-
 
 def write_pull(log_dir, data: dict, when: "datetime | None" = None) -> Path:
     """Append one pull, a snapshot dict, to the active log, rolling to a
     fresh file when the caps say so, then cull old logs. Returns the file
     written. A retention failure is logged and swallowed. It must never eat
     the pull that was just written."""
-    global _last_written, _perms_tightened
+    global _last_written
     with _write_lock:
         when = when or datetime.now()
         log_dir = Path(log_dir)
@@ -87,15 +82,14 @@ def write_pull(log_dir, data: dict, when: "datetime | None" = None) -> Path:
         except OSError:
             pass
         with open(path, "a", encoding="utf-8", opener=_owner_only) as fh:
-            if needs_newline:
-                fh.write("\n")
-            fh.write(line + "\n")
-        if not _perms_tightened:
+            # A restored file can replace the active log between pulls.
             try:
                 os.chmod(path, 0o600)
             except OSError:
                 pass
-            _perms_tightened = True
+            if needs_newline:
+                fh.write("\n")
+            fh.write(line + "\n")
         _last_written = path
         try:
             enforce_retention(log_dir, keep=path)

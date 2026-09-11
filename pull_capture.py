@@ -10,8 +10,8 @@ ability line from a non-player source and ends on a wipe, a combat end, a
 zone change, a feed drop, or the recorder switching off. Raw messages are
 buffered for a few seconds before the start line so the capture also holds
 the pre-pull state the live engine had seen. Captures are bounded in size
-and duration, and only the newest few are kept per folder, so leaving the
-opt-in on cannot fill the disk.
+and duration, and only the newest few are kept per folder. Total storage
+still grows as more fights and zones are recorded.
 
 All slots run on the GUI thread, the same one the WSClient signals fire on,
 so no locking. Nothing here fires TTS or builds triggers, it is a passive
@@ -22,6 +22,7 @@ parsed lines.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from collections import deque
@@ -52,6 +53,10 @@ _MAX_PULL_BYTES = 64 << 20
 # Newest captures kept per folder. Replay wants recent pulls, not every pull
 # since the opt-in was flipped.
 _KEEP_CAPTURES = 20
+
+
+def _owner_only(path, flags):
+    return os.open(path, flags, 0o600)
 
 
 def _sanitize(name: str) -> str:
@@ -173,7 +178,7 @@ class PullCapture(QObject):
         stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")
         path = folder / f"{stamp}.jsonl"
         try:
-            fh = open(path, "w", encoding="utf-8")
+            fh = open(path, "w", encoding="utf-8", opener=_owner_only)
         except OSError as e:
             self._warn_write("open the capture file", e)
             return
@@ -219,11 +224,12 @@ class PullCapture(QObject):
                           f"could not {what}, pulls are not being recorded: {err}",
                           throttle_s=0)
 
-    def _prune(self, folder: Path) -> None:
-        """Keep only the newest captures per folder. Names start with a
-        timestamp, so a plain sort is oldest first."""
+    def _prune(self, folder: Path, keep: Path | None = None) -> None:
+        """Keep the current capture and the newest other names in this folder."""
         try:
-            for p in sorted(folder.glob("*.jsonl"))[:-_KEEP_CAPTURES]:
+            files = sorted(folder.glob("*.jsonl"))
+            retired = [p for p in files if p != keep]
+            for p in retired[:max(0, len(files) - _KEEP_CAPTURES)]:
                 p.unlink(missing_ok=True)
                 p.with_suffix(".meta.json").unlink(missing_ok=True)
         except OSError:
@@ -251,8 +257,9 @@ class PullCapture(QObject):
             "lines": self._lines,
         }
         try:
-            path.with_suffix(".meta.json").write_text(
-                json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+            with open(path.with_suffix(".meta.json"), "w", encoding="utf-8",
+                      opener=_owner_only) as fh:
+                fh.write(json.dumps(meta, indent=2) + "\n")
         except OSError:
             pass
-        self._prune(path.parent)
+        self._prune(path.parent, keep=path)

@@ -524,7 +524,7 @@ class VoiceTabMixin:
                             # are OS-locked, so no in-place swap. Stage the
                             # new build and hand off to it.
                             self._upd_progress_signal.emit(-1, _("Preparing update..."))
-                            ok, msg = updater.apply_frozen_windows(dest)
+                            ok, msg = updater.apply_frozen_windows(dest, version=rel.version)
                         try:
                             dest.unlink()
                         except OSError:

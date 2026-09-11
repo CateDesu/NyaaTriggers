@@ -19,13 +19,19 @@ from plugin_link import DEFAULT_PORT, parse_port
 import app_common as ac
 from app_common import _AbilityData, _atomic_write_json, _fsync_file, _next_bad_name
 
+_MAX_SETTINGS_BYTES = 4 << 20
+
 
 class SettingsTabMixin:
     def _load_settings(self) -> None:
         if ac._SETTINGS_FILE.exists():
             bad = ""
             try:
-                self._settings = json.loads(ac._SETTINGS_FILE.read_text(encoding="utf-8"))
+                with ac._SETTINGS_FILE.open("rb") as fh:
+                    data = fh.read(_MAX_SETTINGS_BYTES + 1)
+                if len(data) > _MAX_SETTINGS_BYTES:
+                    raise ValueError("settings file exceeds 4 MiB")
+                self._settings = json.loads(data.decode("utf-8"))
             except (OSError, ValueError) as exc:
                 self._settings = {}
                 bad = str(exc)

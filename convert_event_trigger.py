@@ -77,20 +77,27 @@ def parse_hex_ids(annotation_body: str) -> list[str]:
     3-6 hex digits, the same window convert_triggernometry.expand_id_expr uses.
     Shorter runs are inert 0x0 placeholders, longer ones junk. Named params like
     suppressMs are stripped before the hex scan, a hex value there is a tuning
-    knob, not an id. A few annotations carry bare decimal values instead of 0x
-    hex, so fall back to decimal when no hex matched. The fallback only accepts
-    a bare value list as the whole body, which keeps suppressMs numbers from
-    minting bogus ids."""
-    # Every named param but value. The decimal fallback below still sees the
-    # raw body, its fullmatch rejects named params on its own.
+    knob, not an id. Numeric value lists accept both decimal and hexadecimal
+    tokens without interpreting tuning parameters as ability IDs."""
+    # Parse the value list one token at a time so mixed radices survive.
+    value = re.search(r'\bvalue\s*=\s*(\{[^}]*\}|[^,]+)', annotation_body)
+    body = value.group(1) if value else annotation_body
+    body = body.strip()
+    if body.startswith('{') and body.endswith('}'):
+        body = body[1:-1]
+    number = r'(?:0[xX][0-9A-Fa-f][0-9A-Fa-f_]*|[0-9][0-9_]*)'
+    if re.fullmatch(rf'\s*{number}(?:\s*,\s*{number})*\s*,?\s*', body):
+        ids = []
+        for token in body.split(','):
+            token = token.strip().replace('_', '')
+            if not token or len(token) > 16:
+                continue
+            ids.append(token[2:].upper() if token.lower().startswith('0x')
+                       else format(int(token, 10), 'X'))
+        return [h for h in ids if 3 <= len(h) <= 6]
+    # Preserve the existing hex-only support for annotation expressions.
     hex_scan = re.sub(r'\b(?!value\b)\w+\s*=\s*[^,}]+', '', annotation_body)
     ids = [h.upper() for h in re.findall(r'0x([0-9A-Fa-f]{1,8})(?![0-9A-Fa-f])', hex_scan)]
-    if not ids and re.fullmatch(r'\s*(?:value\s*=\s*)?\{?[\d,\s_]*\}?\s*', annotation_body):
-        # Cap the digit run: int() refuses past 4300 digits, and anything over
-        # 16 decimal digits hex-converts past the 6 digit id window anyway.
-        ids = [format(int(d.replace('_', '')), 'X')
-               for d in re.findall(r'\d[\d_]*', annotation_body)
-               if len(d) <= 16]
     return [h for h in ids if 3 <= len(h) <= 6]
 
 

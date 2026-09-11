@@ -31,7 +31,7 @@ elif command -v apt &>/dev/null; then
     ${SUDO[@]+"${SUDO[@]}"} apt update
     # Debian splits the Qt WebSockets binding out of python3-pyqt6 and nothing
     # else pulls it in. ws_client imports it at startup.
-    ${SUDO[@]+"${SUDO[@]}"} apt install -y python3-pyqt6 python3-pyqt6.qtwebsockets python3-websockets python3-regex alsa-utils
+    ${SUDO[@]+"${SUDO[@]}"} apt install -y python3-pyqt6 python3-pyqt6.qtwebsockets python3-websockets python3-regex python3-venv alsa-utils
 else
     echo "Could not detect pacman or apt. Install these manually:"
     echo "  python-pyqt6 (or python3-pyqt6)   python-websockets (or python3-websockets)"

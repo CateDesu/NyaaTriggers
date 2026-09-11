@@ -2,9 +2,8 @@ name: Prune old releases
 
 # Manual one-off cleanup, run from the Actions tab: deletes every release (and
 # its tag) EXCEPT the current rolling Stable (whatever /releases/latest points at).
-# Run it only while no Release build is in flight. A mid-build rolling release
-# already counts as "latest" before its platform zips upload, so a cleanup at
-# that moment would keep the assetless one and delete the last complete build.
+# Run it only while no Release build is in flight. Cleanup can delete an
+# in-progress draft, or a release published after the keep tag was sampled.
 # The dry_run input lists what would be deleted without deleting anything.
 on:
   workflow_dispatch:

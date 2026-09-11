@@ -178,6 +178,7 @@ class TelestoClient(QObject):
         # urllib.request.Request on every send and kill the transport.
         self._uri = uri if isinstance(uri, str) and uri else DEFAULT_URI
         self._enabled = bool(enabled)
+        self._command_epoch = 0
         self._delay_base = max(0, int(delay_base_ms))
         self._delay_plus = max(0, int(delay_plus_ms))
         self._timeout = float(timeout)
@@ -202,6 +203,8 @@ class TelestoClient(QObject):
                 # Same non-string guard as __init__, raw settings reach here too.
                 self._uri = uri if isinstance(uri, str) and uri else DEFAULT_URI
             if enabled is not None:
+                if self._enabled and not enabled:
+                    self._command_epoch += 1
                 self._enabled = bool(enabled)
             if delay_base_ms is not None:
                 self._delay_base = max(0, int(delay_base_ms))
@@ -209,8 +212,7 @@ class TelestoClient(QObject):
                 self._delay_plus = max(0, int(delay_plus_ms))
 
     def set_enabled(self, enabled: bool) -> None:
-        with self._lock:
-            self._enabled = bool(enabled)
+        self.configure(enabled=enabled)
 
     def is_enabled(self) -> bool:
         with self._lock:
@@ -347,17 +349,20 @@ class TelestoClient(QObject):
     def _enqueue(self, msg: dict, delay: bool, force: bool = False) -> bool:
         """Put the message on the worker queue. Returns False when it went
         nowhere, gated off or a full queue, so senders can report the drop."""
-        if not force:
-            with self._lock:
-                if not self._enabled:
-                    return False
         try:
-            self._queue.put_nowait((msg, delay))
+            with self._lock:
+                if not force and not self._enabled:
+                    return False
+                self._queue.put_nowait((msg, delay, force, self._command_epoch))
         except queue.Full:
             log_drop("telesto-queue", "command queue full, dropping message")
             self.error.emit("Telesto command queue full; command dropped")
             return False
         return True
+
+    def _can_send(self, force: bool, epoch: int) -> bool:
+        with self._lock:
+            return force or self._enabled and epoch == self._command_epoch
 
     def _run(self, q: "queue.Queue", stopping: "threading.Event") -> None:
         while not stopping.is_set():
@@ -375,13 +380,17 @@ class TelestoClient(QObject):
                 if stopping.is_set():
                     break
                 continue                       # stale sentinel from a previous generation
-            msg, delay = item
+            msg, delay, force, epoch = item
+            if not self._can_send(force, epoch):
+                continue
             if delay:
                 self._sleep_command_delay(stopping)
             # Both paths re-check after dequeue so a queued POST cannot fire
             # during shutdown.
             if stopping.is_set():
                 break
+            if not self._can_send(force, epoch):
+                continue
             try:
                 self._post(msg)
             except Exception as exc:  # never let one bad send kill the worker

@@ -42,6 +42,8 @@ _SYNC_TYPES: dict[str, tuple[tuple[str, ...], dict[str, int]]] = {
     "NameToggle":       (("34",),      {"id": 2, "name": 3, "toggle": 6}),
     "SystemLogMessage": (("41",),      {"id": 3, "param1": 5}),
     "HeadMarker":       (("27",),      {"targetId": 2, "target": 3, "id": 6}),
+    "MapEffect":        (("257",),     {"flags": 3, "location": 4}),
+    "BattleTalk2":      (("267",),     {"instanceContentTextId": 5, "npcNameId": 4}),
 }
 
 

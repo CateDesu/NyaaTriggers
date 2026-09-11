@@ -931,6 +931,21 @@ else:
             sys.modules["kokoro_onnx"] = _prior_shape
         _restore_kokoro()
 
+# A failed backend leaves a diagnostic while Japanese still avoids Piper.
+from unittest.mock import patch
+with patch.object(tts, "log_drop") as drops:
+    check("failed speech process reports failure",
+          not tts._run_speak_proc([_PY, "-c", "import sys; sys.exit(7)"], "", stdin_text=False))
+    check("failed speech process logs exit status", drops.call_count == 1 and "7" in drops.call_args.args[1])
+
+# The catalog builder must flag every ideograph that the voice strips.
+from tools import build_callouts_ja
+for cp in [0x3005, 0x3400, 0x4DBF, 0x4E00, 0x9FFF, 0xF900, 0xFAFF,
+           0x20000, 0x2A6DF, 0x2A700, 0x2CEAF, 0x4DC0]:
+    text = chr(cp)
+    check(f"builder and voice agree on U+{cp:X}",
+          bool(build_callouts_ja._KANJI.search(text)) == bool(tts._KANJI.search(text)))
+
 print()
 if FAILS:
     print(f"{len(FAILS)} FAILED: {FAILS}")

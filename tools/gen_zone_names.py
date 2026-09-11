@@ -12,8 +12,11 @@ Run:  python tools/gen_zone_names.py        (writes ../zone_names.json)
 import json
 import os
 import re
-import urllib.request
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from http_fetch import fetch_bytes
 
 SRC = ("https://raw.githubusercontent.com/OverlayPlugin/cactbot/main/"
        "resources/zone_info.ts")
@@ -23,11 +26,7 @@ _MAX_BYTES = 16 << 20
 
 
 def main() -> None:
-    with urllib.request.urlopen(SRC, timeout=30) as r:
-        data = r.read(_MAX_BYTES + 1)
-    if len(data) > _MAX_BYTES:
-        raise SystemExit(f"response exceeds {_MAX_BYTES} bytes - refusing to parse")
-    src = data.decode("utf-8")
+    src = fetch_bytes(SRC, _MAX_BYTES, timeout=30).decode("utf-8")
 
     zones: dict[str, str] = {}
     # Entries are `  <id>: {\n ... 'name': { ... 'en': '<name>', ... },\n  },`

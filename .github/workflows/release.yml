@@ -54,9 +54,12 @@ jobs:
         with:
           fetch-depth: 0
       - id: v
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            TAG="${{ github.ref_name }}"
+          if [ "$REF_TYPE" = "tag" ]; then
+            TAG="$REF_NAME"
             VER="${TAG#v}"
             # Tag builds skip the rolling version stamp, so the source version
             # must already equal the tag. Fail here: a mismatch ships a build
@@ -77,8 +80,8 @@ jobs:
             # Only main has a release channel. An unexpected ref (e.g. a manual
             # workflow_dispatch from another branch) must never publish over
             # Stable, so fail rather than guess.
-            if [ "${{ github.ref_name }}" != "main" ]; then
-              echo "::error::branch ${{ github.ref_name }} has no release channel"; exit 1
+            if [ "$REF_NAME" != "main" ]; then
+              echo "::error::branch $REF_NAME has no release channel"; exit 1
             fi
             PRE=false
             SUFFIX=""
@@ -390,14 +393,20 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller NyaaTriggers.spec
 
-      # The engine ships with every build. The spec refuses to package without
-      # it, so this only catches the packaging itself dropping it.
-      - name: Verify the Triggevent Engine shipped
+      - name: Verify bundled version stamp
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: python -c "import os; from pathlib import Path; assert Path('dist/NyaaTriggers/_internal/nyaatriggers.version').read_text(encoding='utf-8') == os.environ['VERSION']"
+
+      # Both engines ship with every build. Check the packaged files too.
+      - name: Verify both engines shipped
         run: |
           $jar = 'dist\NyaaTriggers\_internal\triggevent-core\target\triggevent-core.jar'
           $java = 'dist\NyaaTriggers\_internal\jre\bin\java.exe'
+          $tn = 'dist\NyaaTriggers\_internal\triggernometry-core\bin\triggernometry-core.exe'
           if (-not (Test-Path $jar))  { throw "engine jar missing from the build: $jar" }
           if (-not (Test-Path $java)) { throw "bundled JRE missing from the build: $java" }
+          if (-not (Test-Path $tn -PathType Leaf)) { throw "Triggernometry missing from the build: $tn" }
           if ((Get-Item $jar).Length -lt 1MB) { throw "engine jar is too small to be the fat jar" }
 
       # The loader reads the bundled timelines straight from _internal, with
@@ -523,14 +532,20 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller NyaaTriggers.spec
 
-      # The engine ships with every build. The spec refuses to package without
-      # it, so this only catches the packaging itself dropping it.
-      - name: Verify the Triggevent Engine shipped
+      - name: Verify bundled version stamp
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: python -c "import os; from pathlib import Path; assert Path('dist/NyaaTriggers/_internal/nyaatriggers.version').read_text(encoding='utf-8') == os.environ['VERSION']"
+
+      # Both engines ship with every build. Check the packaged files too.
+      - name: Verify both engines shipped
         run: |
           jar=dist/NyaaTriggers/_internal/triggevent-core/target/triggevent-core.jar
           java=dist/NyaaTriggers/_internal/jre/bin/java
+          tn=dist/NyaaTriggers/_internal/triggernometry-core/bin/triggernometry-core.exe
           test -f "$jar" || { echo "engine jar missing from the build: $jar"; exit 1; }
           test -x "$java" || { echo "bundled JRE missing from the build: $java"; exit 1; }
+          test -f "$tn" || { echo "Triggernometry missing from the build: $tn"; exit 1; }
           test "$(stat -c%s "$jar")" -ge 1000000 || { echo "engine jar too small"; exit 1; }
 
       # The launcher runs the pre boot _internal recovery the frozen exe cannot

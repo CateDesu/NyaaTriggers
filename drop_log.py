@@ -84,8 +84,8 @@ def log_drop(site: str, detail: str, throttle_s: float = 1.0) -> None:
 def log_crash(text: str) -> None:
     """Append a preformatted crash block under the same lock log_drop uses.
     main._log_crash writes to the same file. Without the shared lock a crash
-    write can land between log_drop's size check and its unlink, and go to an
-    orphaned inode instead of the fresh file."""
+    write can race rotation and land in the previous generation. The shared
+    lock keeps rotation and appends in order."""
     global _perms_tightened
     with _lock:
         try:

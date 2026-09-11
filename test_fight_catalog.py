@@ -88,12 +88,16 @@ with tempfile.TemporaryDirectory() as td:
         {"difficulty": "Ultimate", "expansion": "Dawntrail",
          "name": "Some New Ultimate", "folder_name": "Some New Ultimate",
          "has_triggers": False},
+        {"difficulty": "Ultimate", "expansion": "Dawntrail",
+         "name": "Some New Ultimate", "folder_name": "Duplicate",
+         "has_triggers": False},
     ]), encoding="utf-8")
     merged = fc.load_catalog(FIGHT_TREE, set(), cache)
     names = [e["name"] for e in merged if e["difficulty"] == "Ultimate"]
     check("cache row naming an offline fight is dropped",
           names.count("Futures Rewritten") == 1)
     check("cache row with a fresh name is kept", "Some New Ultimate" in names)
+    check("duplicate cache rows are dropped", names.count("Some New Ultimate") == 1)
 
 # Extreme Trials section of main_window._FIGHT_TREE
 TRIAL_TREE = [

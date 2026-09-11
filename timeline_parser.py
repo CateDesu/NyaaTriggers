@@ -93,7 +93,9 @@ def _strip_comment(line: str) -> str:
     quote = ''
     esc = False
     prev = ''
-    for i, ch in enumerate(line):
+    i = 0
+    while i < len(line):
+        ch = line[i]
         if esc:
             esc = False
         elif quote and ch == "\\":
@@ -105,8 +107,15 @@ def _strip_comment(line: str) -> str:
             quote = ch
         elif ch == '#':
             return line[:i]
+        else:
+            sync = _LEGACY_SYNC_RE.match(line, i)
+            if sync:
+                i = sync.end()
+                prev = '/'
+                continue
         if not ch.isspace():
             prev = ch
+        i += 1
     return line
 
 

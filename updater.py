@@ -41,7 +41,7 @@ import urllib.request
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 REPO            = "CateDesu/NyaaTriggers"
 API_LATEST_URL  = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -58,6 +58,7 @@ _BOOT_OK_MARKER = ".nyaa-boot-ok"
 # the rejected build. Best effort only. Those paths must never raise.
 _UPDATE_LOG_NAME = "nyaatriggers-update.log"
 _REJECTED_NAME   = ".nyaa-update-rejected"
+_STAGED_VERSION_NAME = ".nyaa-update-version"
 # Staging dirs apply_frozen_* create in the install dir's parent. The Windows
 # --apply-update hand-off validates against it and the next-launch sweep globs it.
 _STAGING_PREFIX  = ".nyaa-update-"
@@ -365,16 +366,24 @@ def _release_cache_path() -> Path:
 def _write_release_cache(release: Release) -> None:
     """Persist the last good release lookup. Best effort, a lost cache only
     means the rate-limit fallback has nothing to offer."""
+    path = _release_cache_path()
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
-        _release_cache_path().write_text(json.dumps({
+        tmp.write_text(json.dumps({
             "tag":      release.tag,
             "version":  release.version,
             "html_url": release.html_url,
             "body":     release.body,
             "assets":   release.assets,
         }), encoding="utf-8")
+        os.replace(tmp, path)
     except OSError:
         pass
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def read_cached_release() -> Release | None:
@@ -528,6 +537,12 @@ def verify_release_asset(release: Release, asset_name: str, archive: Path,
 
 # ── Apply - git ────────────────────────────────────────────────────────────
 
+def _git_env() -> dict[str, str]:
+    # Do not open a password dialog from a background update check.
+    return {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "",
+            "SSH_ASKPASS": "", "GCM_INTERACTIVE": "Never"}
+
+
 def _git_head(repo_dir: Path) -> str | None:
     """Current HEAD commit hash, or None when unreadable."""
     try:
@@ -557,6 +572,7 @@ def git_covers_upstream(repo_dir: Path | None = None, timeout: int = 10) -> bool
                 ["git", "-C", repo, *args],
                 capture_output=True, text=True, timeout=timeout,
                 encoding="utf-8", errors="replace",
+                env=_git_env(),
             )
         except Exception:  # noqa: BLE001 - no git binary, no network, timed out
             return None
@@ -612,7 +628,7 @@ def _git_pull(repo_dir: Path) -> subprocess.CompletedProcess:
         ["git", "-C", str(repo_dir), "pull", "--ff-only", "--tags"],
         capture_output=True, text=True, timeout=180,
         encoding="utf-8", errors="replace",
-        env={**os.environ, "LC_ALL": "C"},
+        env={**_git_env(), "LC_ALL": "C"},
     )
 
 
@@ -891,13 +907,15 @@ def _dir_writable(d: Path) -> bool:
 
 
 def apply_frozen_windows(zip_path: Path, dest_dir: Path | None = None,
-                         exe_name: str | None = None) -> tuple[bool, str]:
+                         exe_name: str | None = None, version: str = "") -> tuple[bool, str]:
     """Stage the new Windows build. The staged exe finishes the swap after this
     process exits. On success returns True and "__windows_handoff__", and the
     caller MUST quit promptly so the locked files release. On failure returns
     False and a message, with nothing on disk changed."""
     dest_dir = (dest_dir or install_dir()).resolve()
     exe_name = exe_name or Path(sys.executable).name
+    if not _valid_windows_exe_name(exe_name):
+        return False, "Invalid executable filename"
     if not _dir_writable(dest_dir):
         return False, f"No write permission for the install folder:\n{dest_dir}"
 
@@ -920,10 +938,18 @@ def apply_frozen_windows(zip_path: Path, dest_dir: Path | None = None,
         staging = Path(tempfile.mkdtemp(prefix=_STAGING_PREFIX, dir=str(dest_dir.parent)))
         _safe_extract_zip(zip_path, staging)
         new_root = _archive_app_root(staging)
-        new_exe = new_root / exe_name
+        new_exe = new_root / "NyaaTriggers.exe"
         if not (new_root / "_internal").is_dir() or not new_exe.exists():
             shutil.rmtree(staging, ignore_errors=True)
             return False, "Downloaded update is missing expected files (exe / _internal)."
+        # Keep the selected release identity outside the compiled modules.
+        staged_version = version if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}", version) else "unknown"
+        (new_root / _STAGED_VERSION_NAME).write_text(staged_version, encoding="utf-8")
+        # Carry the installed name through the staged handoff as well.
+        if exe_name != new_exe.name:
+            renamed = new_root / exe_name
+            os.replace(new_exe, renamed)
+            new_exe = renamed
         # Launch the staged exe to do the swap once we exit. DETACHED_PROCESS so
         # it outlives us. Do NOT also OR in CREATE_NO_WINDOW because CreateProcess
         # rejects the combination with WinError 87.
@@ -1063,8 +1089,8 @@ def _relaunch_installed(exe_dst: Path, dest_dir: Path):
 
 
 def _relaunch_and_verify(exe_dst: Path, dest_dir: Path, grace: float = 25.0) -> bool:
-    """Relaunch the freshly-installed exe and confirm it boots. True if it wrote
-    _BOOT_OK_MARKER, False meaning roll back, if it could not start, died
+    """Relaunch the installed exe and decide whether to keep it. True if it wrote
+    _BOOT_OK_MARKER or remains alive. False if it could not start, died
     without signalling, or a stale marker refused to clear, which the loop
     would misread as an instant boot. A process still alive at the deadline is
     kept, never killed."""
@@ -1088,7 +1114,8 @@ def _relaunch_and_verify(exe_dst: Path, dest_dir: Path, grace: float = 25.0) -> 
             time.sleep(0.3)
             return marker.exists()
         time.sleep(0.25)
-    return True                         # alive but silent at the deadline. Keep it.
+    _log_update(dest_dir, "new build is still running without a boot marker")
+    return True
 
 
 def _rollback_windows_update(internal_swapped: bool, exe_swapped: bool,
@@ -1173,20 +1200,28 @@ def _drop_recover_note(dest_dir: Path, backup: Path, target: str) -> None:
 
 
 def _mark_rejected(dest_dir: Path, staging_root: Path) -> str:
-    """Drop the sentinel naming the build a boot-verify rollback rejected, and
-    return its version string, "unknown" when it can't be read. The version
-    lives in app_common.py, which a frozen build carries only compiled, so
-    the staged source tree is the only place it may be readable. Best effort,
-    never raises."""
+    """Record the rejected release identity carried by the staging handoff.
+    Older source staging can still supply app_common.py. Best effort only."""
     version = "unknown"
-    try:
-        m = re.search(r'^_VERSION\s*=\s*"([^"]+)"',
-                      (Path(staging_root) / "app_common.py").read_text(encoding="utf-8"),
-                      re.M)
-        if m:
-            version = m.group(1)
-    except Exception:  # noqa: BLE001 - frozen staging keeps no readable source
-        pass
+    # The bundled stamp also works when an older installed updater staged us.
+    for candidate_path in (Path(staging_root) / "_internal" / "nyaatriggers.version",
+                           Path(staging_root) / _STAGED_VERSION_NAME):
+        try:
+            with candidate_path.open(encoding="utf-8") as staged:
+                candidate = staged.read(129).strip()
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}", candidate):
+                version = candidate
+                break
+        except Exception:
+            pass
+    if version == "unknown":
+        try:
+            m = re.search(r'^_VERSION\s*=\s*"([^"]+)"',
+                          (Path(staging_root) / "app_common.py").read_text(encoding="utf-8"), re.M)
+            if m:
+                version = m.group(1)
+        except Exception:
+            pass
     try:
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
         (Path(dest_dir) / _REJECTED_NAME).write_text(
@@ -1207,6 +1242,12 @@ def _is_update_staging(dest_dir: Path, staging_root: Path) -> bool:
     return False
 
 
+def _valid_windows_exe_name(name: str) -> bool:
+    return (bool(name) and name not in (".", "..", "_internal")
+            and "\x00" not in name and PureWindowsPath(name).name == name
+            and not PureWindowsPath(name).drive)
+
+
 def finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
                           exe_name: str) -> None:
     """Run by the NEW staged exe via --apply-update. Refuses to touch anything
@@ -1223,7 +1264,8 @@ def finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
     # --apply-update feeds these straight from argv, so prove they look like a
     # real apply_frozen_windows hand-off before touching a single file. A live
     # old pid, and staging inside a _STAGING_PREFIX* dir next to the install.
-    if old_pid <= 0 or not _is_update_staging(dest_dir, staging_root):
+    if (old_pid <= 0 or not _valid_windows_exe_name(exe_name)
+            or not _is_update_staging(dest_dir, staging_root)):
         _log_update(dest_dir, f"refused --apply-update: pid={old_pid}, staging "
                               f"{staging_root} is not a {_STAGING_PREFIX}* "
                               f"sibling of {dest_dir}")
@@ -1291,7 +1333,7 @@ def finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
         booted = False
     if booted:
         _force_remove(dest_dir / _REJECTED_NAME)   # clear any stale sentinel
-        _log_update(dest_dir, "update applied; the new build booted OK")
+        _log_update(dest_dir, "update applied, keeping the new build")
         return
     try:
         _rollback_windows_update(internal_swapped, exe_swapped, internal_dst,

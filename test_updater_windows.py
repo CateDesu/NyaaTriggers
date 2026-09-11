@@ -93,7 +93,7 @@ with tempfile.TemporaryDirectory() as base:
     check("user data untouched", (inst / "settings.json").read_text() == "USERDATA")
     check("relaunched the installed exe", LAUNCHED == [inst / EXE])
     check("log records the successful boot",
-          "booted OK" in (inst / updater._UPDATE_LOG_NAME).read_text())
+          "keeping the new build" in (inst / updater._UPDATE_LOG_NAME).read_text())
     baks = [n for n in leftovers(inst) if n.endswith(updater._BACKUP_SUFFIX)]
     check("backups carry _BACKUP_SUFFIX (sweepable)",
           all(b.endswith(".nyaa-old") for b in baks))
@@ -218,8 +218,8 @@ with tempfile.TemporaryDirectory() as base:
 print("Test 7: swapped build fails to boot -> rollback + relaunch OLD")
 with tempfile.TemporaryDirectory() as base:
     inst, new_root = build(base)
-    # The rejected build's version is read from its staged source when present.
-    (new_root / "app_common.py").write_text('_VERSION = "9.9.9"\n')
+    # Frozen staging carries the selected version without Python source.
+    (new_root / '_internal' / 'nyaatriggers.version').write_text('9.9.9')
     LAUNCHED.clear()
     updater._relaunch_and_verify = lambda exe_dst, dest_dir, grace=25.0: (
         LAUNCHED.append(Path(exe_dst)) or False)   # new build does NOT boot

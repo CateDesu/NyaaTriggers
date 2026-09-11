@@ -258,9 +258,8 @@ class TriggersTabMixin:
             pass
         ac.QMessageBox.warning(
             self, _("Triggers Unreadable"),
-            _("Your local triggers file could not be read, so only the bundled "
-              "triggers are shown. Edits are paused until the file is fixed or "
-              "removed.") + where)
+            _("Your local triggers file could not be read. Edits are paused "
+              "until the file is fixed or removed.") + where)
 
     def _save_triggers(self) -> None:
         if getattr(self, "_local_corrupt", False):
@@ -268,6 +267,15 @@ class TriggersTabMixin:
             # replace the backed-up corrupt original with empty data and lose any
             # recoverable content. Skip. The user was warned at load, and a fixed
             # file hot-reloads and clears the flag.
+            return
+        # An external editor can corrupt the file between polls. Check again
+        # before replacing it so the recoverable text survives an in-program edit.
+        try:
+            json.loads(ac.TRIGGERS_LOCAL_FILE.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError):
+            self._handle_local_corrupt()
             return
         to_save = [t for t in self._triggers if t.id in self._local_ids]
         records: list[dict] = []
@@ -1706,7 +1714,8 @@ class TriggersTabMixin:
         # A half-saved hand edit, non-atomic editor, must not swap the
         # live set for a partial parse. Skip this tick, the next one
         # retries.
-        for p in _watched_trigger_files():
+        # Optional repo files use the loader's bundled fallback on corruption.
+        for p in (ac.TRIGGERS_FILE, ac.TRIGGERS_LOCAL_FILE):
             try:
                 if p.exists():
                     json.loads(p.read_text(encoding="utf-8"))

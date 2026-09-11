@@ -799,7 +799,7 @@ def set_venv_path(path: str) -> None:
     global _FFXIV_VENV, _piper_voice, _piper_failed, _piper_epoch
     if getattr(sys, 'frozen', False):
         return
-    new_venv = Path(path)
+    new_venv = Path(path.strip()).expanduser() if path.strip() else Path.home() / ".venv" / "ffxiv"
     # Rebind the global too. _venv_python is the Kokoro installer's only
     # selector and it reads the global, not sys.path, so without this a
     # same-session install still targets the previous venv.
@@ -1102,8 +1102,8 @@ def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool
     # An interrupt-driven terminate also exits nonzero, but that is intentional.
     # Report it as handled so _pipeline does NOT replay the cut-off callout through
     # Piper. Otherwise report the real exit status, so a genuine synth failure is
-    # unhandled and the caller can fall back. PowerShell's SilentlyContinue exits 0,
-    # so an uninterrupted Windows run still returns True.
+    # unhandled and the caller can fall back. Japanese text remains handled
+    # by the caller so it never reaches an English-only voice.
     if was_interrupted:
         return True
     if timed_out:
@@ -1114,6 +1114,8 @@ def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool
     if kill_failed:
         log_drop("tts-backend", f"system TTS survived the kill; callout dropped: {text[:60]!r}")
         return True
+    if proc.returncode != 0:
+        log_drop("tts-backend", f"system TTS failed with exit status {proc.returncode}")
     return proc.returncode == 0
 
 
@@ -1582,10 +1584,11 @@ def _play_wav_bytes_detached(wav_bytes: bytes) -> None:
         _play_winsound(wav_bytes, winsound.SND_MEMORY | winsound.SND_NODEFAULT)
     else:
         try:
-            subprocess.run(["aplay", "-q", "-"], input=wav_bytes,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=max(60.0, _wav_seconds(wav_bytes) * 1.5 + 5),
-                           env=proc_env.child_env())
+            result = subprocess.run(["aplay", "-q", "-"], input=wav_bytes,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                    timeout=max(60.0, _wav_seconds(wav_bytes) * 1.5 + 5),
+                                    env=proc_env.child_env())
+            _log_notification_result(result)
         except FileNotFoundError:
             _aplay_missing()
         except subprocess.TimeoutExpired:
@@ -1612,6 +1615,12 @@ def _notification_bytes_worker(wav_bytes: bytes, volume: float) -> None:
         _notification_slots.release()
 
 
+def _log_notification_result(result) -> None:
+    if result.returncode:
+        detail = (result.stderr or b"").decode("utf-8", errors="replace").strip()[:240]
+        log_drop("tts-notify", f"aplay exited {result.returncode}: {detail}")
+
+
 def _play_wav_detached(wav_path: str) -> None:
     """Blocking WAV playback outside the tracked _current_proc, so a
     notification is not cut off by interrupt and, on Linux, where a local
@@ -1622,10 +1631,11 @@ def _play_wav_detached(wav_path: str) -> None:
     try:
         # Same long-sound bound as the worker path, a long chime is
         # legitimate and must not be killed mid-playback at 60 s.
-        subprocess.run(["aplay", "-q", "--", wav_path],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=max(60.0, _wav_seconds(wav_path) * 1.5 + 5),
-                       env=proc_env.child_env())
+        result = subprocess.run(["aplay", "-q", "--", wav_path],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                timeout=max(60.0, _wav_seconds(wav_path) * 1.5 + 5),
+                                env=proc_env.child_env())
+        _log_notification_result(result)
     except FileNotFoundError:
         _aplay_missing()
     except subprocess.TimeoutExpired:

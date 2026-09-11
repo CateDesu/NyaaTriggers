@@ -50,9 +50,9 @@ class DpsTabMixin:
         self._dps_history: list[dict] = []
         self._dps_selected_idx: "int | None" = None
         self._dps_live_active: bool = False
-        # The fire-and-forget snapshot write below. Tracked so the quit paths
-        # can join it, process teardown kills daemon threads mid-write.
-        self._dps_write_thread: "threading.Thread | None" = None
+        self._dps_overlay_live = False
+        # Track every snapshot writer so quit can wait for pending saves.
+        self._dps_write_threads: list[threading.Thread] = []
 
     def _dps_dir(self) -> Path:
         return ac._DATA_DIR / "dps_logs"
@@ -83,6 +83,10 @@ class DpsTabMixin:
                     {"t": enc["title"], "d": enc["duration"],
                      "dps": round(enc["encdps"], 1)},
                     self._dps_meter.overlay_rows(), show=True)
+                self._dps_overlay_live = True
+            elif self._dps_overlay_live:
+                self._plugin_link.send_dps(None, [], show=False)
+                self._dps_overlay_live = False
 
     @staticmethod
     def _fmt_dps_num(v, decimals: int = 0) -> str:
@@ -170,6 +174,7 @@ class DpsTabMixin:
         the in-app history, newest first. The live table keeps showing the
         final numbers as the last-pull view."""
         self._plugin_link.send_dps(None, [], show=False)
+        self._dps_overlay_live = False
         self._dps_last_end = time.monotonic()
         enc = snapshot.get("Encounter") or {}
         title = enc.get("title") or ""
@@ -260,8 +265,10 @@ class DpsTabMixin:
             except (OSError, ValueError, TypeError) as exc:
                 ac.log_drop("dps-snapshot", f"write failed: {exc!r}")
 
-        self._dps_write_thread = threading.Thread(target=work, daemon=True)
-        self._dps_write_thread.start()
+        self._dps_write_threads = [t for t in self._dps_write_threads if t.is_alive()]
+        worker = threading.Thread(target=work, daemon=True)
+        worker.start()
+        self._dps_write_threads.append(worker)
 
     def _fflogs_configured(self) -> bool:
         return bool(self._settings.get("fflogs_client_id")
@@ -419,9 +426,9 @@ class DpsTabMixin:
             self._dps_meter.finalize()
         # Every caller here is a quit path, closeEvent and the two restart
         # teardowns. The snapshot write rides a fire-and-forget daemon thread
-        # that interpreter teardown would kill mid-write, losing the pull this
-        # hook exists to record. Join it first. Bounded so a wedged disk
-        # cannot hang the quit.
-        t = self._dps_write_thread
-        if t is not None:
-            t.join(timeout=5.0)
+        # that interpreter teardown would interrupt. Wait for all writers
+        # under one deadline so a wedged disk cannot hang quit.
+        deadline = time.monotonic() + 5.0
+        for worker in self._dps_write_threads:
+            worker.join(timeout=max(0.0, deadline - time.monotonic()))
+        self._dps_write_threads = [t for t in self._dps_write_threads if t.is_alive()]

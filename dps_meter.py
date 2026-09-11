@@ -250,6 +250,7 @@ class DpsMeter:
         self._awaiting_zone_metadata = True
         self._me_id: "int | None" = None
         self._jobs: "dict[int, int]" = {}      # actor id -> ClassJob id, nonzero means a player
+        self._roster_jobs: dict[int, int] = {}
         self._owners: "dict[int, int]" = {}    # pet or summon id -> owner id
         self._names: "dict[int, str]" = {}     # actor id -> last seen name
         self._in_act = False
@@ -288,7 +289,9 @@ class DpsMeter:
         table.pop(aid, None)
         table[aid] = value
         while len(table) > 1024:
-            del table[next(iter(table))]
+            oldest = next(k for k in table if table is not self._jobs
+                          or k not in self._roster_jobs)
+            del table[oldest]
 
     def note_job(self, aid: int, job: int) -> None:
         """A roster job from outside the log stream, the WS PartyChanged
@@ -296,6 +299,10 @@ class DpsMeter:
         mid-instance connect stops reading the party as enemies once the
         roster lands."""
         if job:
+            self._roster_jobs.pop(aid, None)
+            self._roster_jobs[aid] = job
+            while len(self._roster_jobs) > 24:
+                del self._roster_jobs[next(iter(self._roster_jobs))]
             self._note(self._jobs, aid, job)
             # The burst can land after a pet line already opened the
             # owner's row at job 0. Run the same late upgrade the 03
@@ -399,6 +406,13 @@ class DpsMeter:
             self._view = view = _Encounter(view.title, view.zone, now)
         view.last_damage = now
 
+    def _view_paused(self, now: float) -> bool:
+        view = self._view
+        if view is None:
+            return False
+        last = view.last_damage if view.last_damage is not None else view.start
+        return now - last > self._idle_timeout
+
     # ------------------------------------------------------------------
     # feed
     # ------------------------------------------------------------------
@@ -412,6 +426,7 @@ class DpsMeter:
         self._in_act = False
         self._in_game = False
         self._jobs.clear()
+        self._roster_jobs.clear()
         self._owners.clear()
         self._names.clear()
         self._me_id = None
@@ -436,6 +451,7 @@ class DpsMeter:
         # already have arrived. Later changes invalidate the old roster.
         if not first_metadata:
             self._jobs.clear()
+            self._roster_jobs.clear()
             self._owners.clear()
             self._names.clear()
             self._me_id = None
@@ -504,6 +520,7 @@ class DpsMeter:
         self._zone = fields[3].strip()
         self._awaiting_zone_metadata = False
         self._jobs.clear()
+        self._roster_jobs.clear()
         self._owners.clear()
         self._names.clear()
         self._me_id = None
@@ -589,6 +606,8 @@ class DpsMeter:
         # display view, what the meter shows right now.
         for enc in (self.current, self._view):
             if enc is not None:
+                if enc is self._view and self._view_paused(now):
+                    continue
                 self._apply_ability(enc, fields, effects, now,
                                     src_key, tgt_key, sid, tid, owner_name)
 
@@ -673,6 +692,8 @@ class DpsMeter:
             self._note_damage(now)
         for enc in (self.current, self._view):
             if enc is not None:
+                if enc is self._view and self._view_paused(now):
+                    continue
                 self._apply_dot_hot(enc, fields, which, amount, now,
                                     app_key, tgt_key, app_id, tid)
 

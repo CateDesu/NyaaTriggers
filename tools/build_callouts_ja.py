@@ -45,9 +45,8 @@ _SUBST_TOKENS = ("source", "target", "count")
 # where English speaks two must not pass the gate, the extra mention would
 # silently drop from the spoken callout.
 _TOKENS = lambda s: {t: s.count("{" + t + "}") for t in _SUBST_TOKENS if "{" + t + "}" in s}
-# Kanji range matches locale_util.has_japanese, CJK Unified plus Extensions A
-# and B, Compatibility Ideographs, and the iteration mark 々.
-_KANJI = re.compile(r"[㐀-鿿々豈-﫿𠀀-𪛟]")
+# Match the ideographs stripped by the system voice in tts.py.
+_KANJI = re.compile(r"[\u3005\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002a6df\U0002a700-\U0002ceaf]")
 
 
 def _app_version() -> str:

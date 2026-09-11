@@ -40,6 +40,8 @@ class ConnectionMixin:
         re-pushes the schedule. The plugin drops all state when the app goes
         away, so without this a link hiccup mid-pull stays blank until the
         next zone change."""
+        if (connected, msg) != self._plugin_link.last_status():
+            return
         self._update_plugin_link_status_label(connected, msg)
         if connected:
             self._push_timeline_to_plugin()

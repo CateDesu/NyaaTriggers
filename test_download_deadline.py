@@ -37,6 +37,7 @@ import fight_catalog as fc
 import install
 import tts
 import updater
+from http_fetch import fetch_bytes
 
 # Stall window used by the cutoff tests. Small enough to keep the suite at
 # a few seconds, large enough that scheduling jitter cannot trip it on a
@@ -491,6 +492,38 @@ def test_tts_kokoro_quiet_inside_final_window_says_deadline():
             (tts._MODEL_DIR, tts._KOKORO_URLS, tts._KOKORO_DL_STALL_S,
              tts._KOKORO_DL_DEADLINE_S) = saved
             srv.close()
+
+
+def test_small_data_fetch_deadline_stall_and_size_cap():
+    for mode in ("trickle", "park"):
+        srv = _TrickleServer(mode=mode)
+        started = time.monotonic()
+        try:
+            try:
+                fetch_bytes(srv.url, 1 << 20, timeout=2, stall=.3, deadline=.6)
+                raise AssertionError("stuck response must time out")
+            except TimeoutError:
+                pass
+            assert time.monotonic() - started < 2
+            assert _wait_for(lambda: srv.connections == 0, timeout=2)
+        finally:
+            srv.close()
+    body = b"healthy body"
+    srv = _HealthyServer({"/body": body})
+    try:
+        assert fetch_bytes(srv.url, len(body)) == body
+        try:
+            fetch_bytes(srv.url, len(body) - 1)
+            raise AssertionError("oversized response must fail")
+        except ValueError:
+            pass
+    finally:
+        srv.close()
+    srv = _TrickleServer(mode="drip", interval=.05, chunk=1, body=body)
+    try:
+        assert fetch_bytes(srv.url, len(body), timeout=2, stall=.3, deadline=2) == body
+    finally:
+        srv.close()
 
 
 def test_download_slow_but_flowing_succeeds():

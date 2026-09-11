@@ -82,16 +82,12 @@ class _ByteQueue(queue.Queue):
         self._maxbytes = maxbytes
         self._nbytes = 0
 
-    def put_nowait(self, item) -> None:
+    def _put(self, item) -> None:
         n = len(item) if isinstance(item, str) else 0
         if self._nbytes + n > self._maxbytes:
             raise queue.Full
-        super().put_nowait(item)
-
-    def _put(self, item) -> None:
         super()._put(item)
-        if isinstance(item, str):
-            self._nbytes += len(item)
+        self._nbytes += n
 
     def _get(self):
         item = super()._get()

@@ -284,7 +284,7 @@ class PluginLink(QObject):
         self._thread: "threading.Thread | None" = None
         self._stopping = threading.Event()
         self._wake = threading.Event()   # interrupts backoff / the disabled wait
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._connected = False
         self._reported: "tuple | None" = None   # last connected, msg pair emitted
         self._plugin_version = ""   # last hello's version, "" before any connect
@@ -326,43 +326,46 @@ class PluginLink(QObject):
 
     # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
-        t = self._thread
-        if t and t.is_alive():
-            if not self._stopping.is_set():
-                return                         # already running
-            # stop timed out joining this worker. It's finishing one blocking
-            # call, exits on its own since its stopping event is set, and
-            # never takes from the queue again, so spawning the next is safe.
-        # Fresh events per generation, bound to the worker via args. Clearing
-        # shared events could revive an old worker that outlived the join
-        # timeout in stop. The queue is created once and kept. The worker
-        # discards any stale _STOP left by a previous generation.
-        self._stopping = threading.Event()
-        self._wake = threading.Event()
-        self._thread = threading.Thread(
-            target=self._run, args=(self._queue, self._stopping, self._wake),
-            name="PluginLink", daemon=True)
-        self._thread.start()
+        with self._lock:
+            t = self._thread
+            if t and t.is_alive() and not self._stopping.is_set():
+                return
+            # A stopped worker may still be connecting. Give its replacement
+            # a separate outbox so the old worker cannot consume new frames.
+            if self._stopping.is_set():
+                self._queue = queue.Queue(maxsize=OUTBOX_CAPACITY)
+            self._stopping = threading.Event()
+            self._wake = threading.Event()
+            self._connected = False
+            self._plugin_version = ""
+            self._reported = None
+            self._thread = threading.Thread(
+                target=self._run, args=(self._queue, self._stopping, self._wake),
+                name="PluginLink", daemon=True)
+            self._thread.start()
 
     def request_stop(self) -> None:
         """Signal the worker out and queue the sentinel, without joining.
         closeEvent requests both clients first and joins after, so their
         shutdown waits overlap instead of adding up."""
-        self._stopping.set()
-        self._wake.set()
+        with self._lock:
+            self._stopping.set()
+            self._wake.set()
+            q = self._queue
         try:
-            self._queue.put_nowait(_STOP)
+            q.put_nowait(_STOP)
         except queue.Full:
             # Drain one slot so the sentinel lands. The worker checks _stopping anyway.
             try:
-                self._queue.get_nowait()
-                self._queue.put_nowait(_STOP)
+                q.get_nowait()
+                q.put_nowait(_STOP)
             except (queue.Empty, queue.Full):
                 pass
 
     def join_stopped(self, timeout: float = 2.0) -> None:
         """Join the worker after request_stop."""
-        t = self._thread
+        with self._lock:
+            t = self._thread
         if t and t.is_alive():
             t.join(timeout=timeout)
             if t.is_alive():
@@ -370,7 +373,9 @@ class PluginLink(QObject):
                 # start sees the lingering worker and a repeated stop can
                 # join it again.
                 return
-        self._thread = None
+        with self._lock:
+            if self._thread is t:
+                self._thread = None
 
     def stop(self, join_timeout: float = 2.0) -> None:
         self.request_stop()
@@ -460,19 +465,25 @@ class PluginLink(QObject):
                 log_drop("plugin-drop", "outbox refill overflowed; frame dropped")
         return dropped
 
-    def _set_connected(self, connected: bool) -> None:
+    def _set_connected(self, connected: bool, stopping=None) -> None:
         with self._lock:
+            if stopping is not None and (self._stopping is not stopping
+                                        or connected and stopping.is_set()):
+                return
             self._connected = connected
 
-    def _report(self, connected: bool, msg: str) -> None:
+    def _report(self, connected: bool, msg: str, stopping=None) -> None:
         # Emit only on a transition so a reconnect loop doesn't spam the UI.
         state = (connected, msg)
         with self._lock:
+            if stopping is not None and (self._stopping is not stopping
+                                        or stopping.is_set() and msg != "Off"):
+                return
             if self._reported == state:
                 return
             self._reported = state
-        log_drop("plugin-link", f"{'connected' if connected else 'down'}: {msg}", 0)
-        self.status_changed.emit(connected, msg)
+            log_drop("plugin-link", f"{'connected' if connected else 'down'}: {msg}", 0)
+            self.status_changed.emit(connected, msg)
 
     def _connect(self):
         """Open the socket and validate the hello. Raises on any failure. The
@@ -597,11 +608,11 @@ class PluginLink(QObject):
                         # so a plain close is the whole teardown.
                         self._close_quietly(ws)
                         ws = None
-                        self._set_connected(False)
+                        self._set_connected(False, stopping)
                     # Off is reported even with no socket: a disable during
                     # backoff must replace the standing Waiting report.
                     # Deduped, so the idle loop stays quiet.
-                    self._report(False, "Off")
+                    self._report(False, "Off", stopping)
                     wake.wait(0.5)
                     wake.clear()
                     continue
@@ -622,11 +633,13 @@ class PluginLink(QObject):
                         # dependency, are user-actionable and shown as is.
                         # A plain refusal just means the game isn't up.
                         self._report(False, str(exc) if isinstance(exc, RuntimeError)
-                                     else "Waiting for the game plugin")
+                                     else "Waiting for the game plugin", stopping)
                         wake.wait(delay)
                         wake.clear()
                         delay = min(delay * 2, RECONNECT_MAX_S)
                         continue
+                    if stopping.is_set():
+                        break
                     delay = RECONNECT_BASE_S   # backoff resets after a good connect
                     idle = 0.0
                     # The hello wait can last seconds. Ticks and schedules
@@ -635,28 +648,30 @@ class PluginLink(QObject):
                     # re-queued instead.
                     self._discard_queued(q, keep_alerts=True)
                     with self._lock:
+                        if self._stopping is not stopping or stopping.is_set():
+                            break
                         self._plugin_version = plugin_version
-                    self._set_connected(True)
+                    self._set_connected(True, stopping)
                     self._report(True, f"Connected (plugin {plugin_version})"
-                                       if plugin_version else "Connected")
+                                       if plugin_version else "Connected", stopping)
 
                 if dialed != self._port:
                     # set_port moved the target after this socket connected.
                     # Re-dial rather than keep feeding the old plugin.
                     self._close_quietly(ws)
                     ws = None
-                    self._set_connected(False)
-                    self._report(False, "Waiting for the game plugin")
+                    self._set_connected(False, stopping)
+                    self._report(False, "Waiting for the game plugin", stopping)
                     continue
 
                 try:
                     msg = q.get(timeout=1.0)
                 except queue.Empty:
                     msg = None
+                if stopping.is_set():
+                    break
                 if msg is _STOP:
-                    if stopping.is_set():
-                        break
-                    continue                   # stale sentinel from a previous generation
+                    continue
 
                 try:
                     if msg is not None:
@@ -681,16 +696,16 @@ class PluginLink(QObject):
                                      "alert re-queue overflowed; callout dropped")
                     self._close_quietly(ws)
                     ws = None
-                    self._set_connected(False)
-                    self._report(False, "Waiting for the game plugin")
+                    self._set_connected(False, stopping)
+                    self._report(False, "Waiting for the game plugin", stopping)
         finally:
             if ws is not None:
                 self._close_quietly(ws)
             # A worker that outlived the join timeout in stop leaves the
             # shared status to the generation that replaced it.
             if self._stopping is stopping:
-                self._set_connected(False)
+                self._set_connected(False, stopping)
                 # Stop used to leave last_status stale at Connected. De-duped,
                 # so this is silent when the loop already reported Off on
                 # disable.
-                self._report(False, "Off")
+                self._report(False, "Off", stopping)

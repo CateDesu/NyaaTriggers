@@ -12,7 +12,7 @@ The HTTP layer is injectable, `http_post` takes url, headers, body and a
 timeout and hands back status plus bytes, so tests run without the
 network. Tokens are cached until a minute before expiry. The zone list
 is cached per process on the class, so repeated fetches across
-encounters cost one zone lookup per app run.
+encounters cost one zone lookup per program run.
 """
 
 from __future__ import annotations
@@ -66,6 +66,7 @@ class FflogsClient:
     """Minimal FFLogs v2 reader. Best parse for one character in one zone."""
 
     _zones_cache: "list[dict] | None" = None   # process-wide, per class
+    _zones_lock = threading.Lock()
 
     def __init__(self, client_id: str, client_secret: str, http_post=None) -> None:
         self._id = str(client_id or "")
@@ -73,6 +74,7 @@ class FflogsClient:
         self._http = http_post or self._urllib_post
         self._token = ""
         self._token_expiry = 0.0
+        self._fetch_lock = threading.Lock()
 
     @staticmethod
     def _urllib_post(url: str, headers: dict, body: bytes,
@@ -215,22 +217,21 @@ class FflogsClient:
         """The id and canonical name of the zone best matching `zone_name`.
         Exact case-insensitive match first, then substring, then a token
         superset for per-floor game names against tier level zones."""
-        if FflogsClient._zones_cache is None:
-            data = self._graphql(_ZONES_QUERY)
-            zones = (((data or {}).get("worldData") or {}).get("zones"))
-            if not isinstance(zones, list):
-                return None
-            zones = [
-                z for z in zones
-                if isinstance(z, dict) and isinstance(z.get("id"), int)
-                and isinstance(z.get("name"), str)]
-            # An empty or all-malformed list must not be cached, it would make
-            # every later lookup return None with no refetch. Leave the cache
-            # unset so the next encounter retries.
-            if not zones:
-                return None
-            FflogsClient._zones_cache = zones
-        zones = FflogsClient._zones_cache
+        with FflogsClient._zones_lock:
+            if FflogsClient._zones_cache is None:
+                data = self._graphql(_ZONES_QUERY)
+                zones = (((data or {}).get("worldData") or {}).get("zones"))
+                if not isinstance(zones, list):
+                    return None
+                zones = [
+                    z for z in zones
+                    if isinstance(z, dict) and isinstance(z.get("id"), int)
+                    and isinstance(z.get("name"), str)]
+                # Leave empty results uncached so the next encounter retries.
+                if not zones:
+                    return None
+                FflogsClient._zones_cache = zones
+            zones = FflogsClient._zones_cache
         wanted = (zone_name or "").strip().casefold()
         if not wanted:
             return None
@@ -269,6 +270,11 @@ class FflogsClient:
         {"percent": float|None, "amount": float|None, "zone": str}, or None
         on any failure, network, auth, unknown character or zone. Never
         raises. The caller is a fire-and-forget UI update."""
+        with self._fetch_lock:
+            return self._fetch_best(char_name, server_slug, region, zone_name)
+
+    def _fetch_best(self, char_name: str, server_slug: str, region: str,
+                    zone_name: str) -> "dict | None":
         try:
             if not (char_name and server_slug and region and zone_name):
                 return None

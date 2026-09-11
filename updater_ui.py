@@ -12,6 +12,8 @@ import threading
 import time
 import urllib.request
 
+from http_fetch import fetch_bytes
+
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QFrame, QProgressBar, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
@@ -663,8 +665,7 @@ class UpdaterUiMixin:
                     f"https://raw.githubusercontent.com/{updater.REPO}/{_REPO_TRIGGERS_BRANCH}/triggers.json",
                     headers={"User-Agent": "NyaaTriggers"},
                 )
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    raw = resp.read(_REPO_JSON_MAX_BYTES + 1)
+                raw = fetch_bytes(req, _REPO_JSON_MAX_BYTES)
                 if len(raw) > _REPO_JSON_MAX_BYTES:
                     raise ValueError("triggers.json response too large")
                 data = json.loads(raw)
@@ -684,8 +685,7 @@ class UpdaterUiMixin:
                         f"https://raw.githubusercontent.com/{updater.REPO}/{_REPO_TRIGGERS_BRANCH}/retired.json",
                         headers={"User-Agent": "NyaaTriggers"},
                     )
-                    with urllib.request.urlopen(rreq, timeout=15) as rresp:
-                        rraw = rresp.read(_REPO_JSON_MAX_BYTES + 1)
+                    rraw = fetch_bytes(rreq, _REPO_JSON_MAX_BYTES)
                     if len(rraw) > _REPO_JSON_MAX_BYTES:
                         raise ValueError("retired.json response too large")
                     rdata = json.loads(rraw)
