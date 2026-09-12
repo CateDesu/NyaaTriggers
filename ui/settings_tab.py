@@ -75,11 +75,13 @@ class SettingsTabMixin:
             if self._settings.get("update_channel") in ("master", "rust"):
                 self._settings["update_channel"] = "stable"
 
-    def _save_settings(self) -> None:
+    def _save_settings(self) -> bool:
         try:
             _atomic_write_json(ac._SETTINGS_FILE, self._settings, indent=2)
+            return True
         except OSError as exc:
             self._warn_save_failed(_("settings"), exc)
+            return False
 
     def _save_settings_debounced(self) -> None:
         """Coalesce rapid-fire settings writes, slider drags, into one save."""

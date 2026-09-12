@@ -767,6 +767,17 @@ def nav_icon(name: str, color: str, size: int = 18) -> "QIcon":
     elif name == "dps":              # bar chart
         for x, top in ((18, 10), (12, 4), (6, 14)):
             p.drawLine(QPointF(x, 20), QPointF(x, top))
+    elif name == "recap":
+        p.drawRoundedRect(QRectF(5, 3, 14, 18), 2, 2)
+        path = QPainterPath(QPointF(8, 12))
+        for x, y in [(10, 12), (11, 8), (13, 16), (14, 12), (16, 12)]:
+            path.lineTo(x, y)
+        p.drawPath(path)
+    elif name == "prog":
+        path = QPainterPath(QPointF(3, 19))
+        for x, y in [(3, 14), (9, 14), (9, 9), (15, 9), (15, 4), (21, 4)]:
+            path.lineTo(x, y)
+        p.drawPath(path)
     elif name == "automarkers":      # map pin, not a target
         path = QPainterPath(QPointF(21, 10))
         path.cubicTo(QPointF(21, 17), QPointF(12, 23), QPointF(12, 23))

@@ -261,13 +261,13 @@ class TriggersTabMixin:
             _("Your local triggers file could not be read. Edits are paused "
               "until the file is fixed or removed.") + where)
 
-    def _save_triggers(self) -> None:
+    def _save_triggers(self) -> bool:
         if getattr(self, "_local_corrupt", False):
             # The local file was unreadable at load. Writing now would atomically
             # replace the backed-up corrupt original with empty data and lose any
             # recoverable content. Skip. The user was warned at load, and a fixed
             # file hot-reloads and clears the flag.
-            return
+            return False
         # An external editor can corrupt the file between polls. Check again
         # before replacing it so the recoverable text survives an in-program edit.
         try:
@@ -276,7 +276,7 @@ class TriggersTabMixin:
             pass
         except (OSError, ValueError):
             self._handle_local_corrupt()
-            return
+            return False
         to_save = [t for t in self._triggers if t.id in self._local_ids]
         records: list[dict] = []
         for t in to_save:
@@ -315,6 +315,8 @@ class TriggersTabMixin:
             # A read-only install dir, say onedir under Program Files, must not
             # crash on every edit. Degrade to an in-memory-only change.
             self._warn_save_failed(_("triggers"), exc)
+            return False
+        return True
 
     @staticmethod
     def _tree_item_path(item) -> tuple:

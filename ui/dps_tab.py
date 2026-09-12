@@ -73,6 +73,9 @@ class DpsTabMixin:
 
     def _dps_tick(self) -> None:
         self._update_live_dps()
+        prog_tab = getattr(self, "_prog_tab", None)
+        if prog_tab is not None:
+            prog_tab.tick()
         # While a fight runs, push the meter to the in-game overlay once a
         # second. The encounter-end handler sends the hide frame.
         if self._plugin_link.is_connected():
@@ -422,8 +425,11 @@ class DpsTabMixin:
     def _finalize_live_encounter(self) -> None:
         """Finalize an in-progress meter encounter so quitting mid-fight
         still records it, when Record encounters is on."""
+        finish_activity = getattr(self, "_finish_activity", None)
+        if finish_activity is not None:
+            finish_activity()
         if self._dps_meter.current is not None:
-            self._dps_meter.finalize()
+            self._dps_meter.finalize("program-closed")
         # Every caller here is a quit path, closeEvent and the two restart
         # teardowns. The snapshot write rides a fire-and-forget daemon thread
         # that interpreter teardown would interrupt. Wait for all writers

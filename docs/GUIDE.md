@@ -10,6 +10,9 @@ The full reference for NyaaTriggers. Install steps are in the [README](../README
 - [Triggernometry engine](#triggernometry-engine)
 - [Current Instance tab](#current-instance-tab)
 - [DPS tab](#dps-tab)
+- [Death Recap tab](#death-recap-tab)
+- [Prog tab](#prog-tab)
+- [Profiles](#profiles)
 - [Automarkers tab](#automarkers-tab)
 - [Alert sound](#alert-sound)
 - [In-game display](#in-game-display)
@@ -146,6 +149,64 @@ A live damage meter parsed by the program itself straight from the combat log. P
 - With the companion overlay plugin connected the live meter is also drawn in the game, top 8 players plus party DPS, once a second while a fight runs. Needs a plugin build that understands the `dps` frame.
 
 ---
+
+## Death Recap tab
+
+A separate page for reviewing the 15 seconds before a player's death. Select a
+death on the left to see observed damage, healing, status gains and losses, and
+the statuses still observed at death. Self-heals and reflected damage follow
+their actual recipient. Instant-death effects have their own label.
+
+The program keeps the latest 80 deaths in memory until it closes. Zone changes
+and disconnects clear the live observation buffers, while completed recaps remain
+available. Wipe events keep the buffers until the next pull so deaths arriving
+just after the wipe can still be reviewed.
+
+This is a record of the feed, not a reconstruction of exact HP. Healing includes
+overheal, some damage and healing are reported as aggregate ticks, and statuses
+that were already active before connection may be missing. Ability events may
+precede their effects resolving. These limitations follow the
+[combat log format](https://github.com/OverlayPlugin/cactbot/blob/main/docs/LogGuide.md).
+
+## Prog tab
+
+**Start session** begins a named session for the current duty. It becomes
+available after connection, duty identification, and the first combat-state
+message. If combat is already running, collection waits for a new full pull.
+
+Each pull adds its start time, duration, ending, and recorded death count. The
+summary shows complete and interrupted attempts separately, the longest complete
+pull, total observed combat time, and session elapsed time. The duration chart
+selects a pull when clicked. Add a bookmark or a note below the table, and edit
+the session name above it.
+
+**End session** stops collection without resetting the live meter or callouts.
+Leaving the duty ends the session too. Wipes and breaks stay in the same session.
+A disconnect preserves the observed attempt as interrupted and waits for the
+next full pull after reconnecting. Interrupted attempts stay visible but do not
+count toward the longest complete pull. **Combat ended** does not mean a clear.
+
+Sessions save to `prog_sessions/` in the program's writable data directory,
+independently of the DPS recording switch. Notes save after a short typing pause
+and flush on shutdown. The session picker opens previous sessions after restart.
+An unfinished session from a crash is marked interrupted. Files that cannot be
+read are preserved and the page shows the error. Session history does not follow
+the DPS log rotation limits.
+
+## Profiles
+
+The controls above the Triggers list save and restore named setups for jobs,
+groups, or strategies. **Save new profile** captures the current local trigger
+toggles and spoken text, engine callout toggles, and editable Triggevent and
+Triggernometry wording. **Update saved profile** replaces the selected snapshot
+with the current setup.
+
+Select a profile and press **Apply profile** between pulls. Existing trigger
+definitions, folders, and newly added triggers are preserved. Applying a profile
+does not switch the Cactbot mode, voice, or automarkers. Deleted local triggers
+are not recreated. Changes made afterward use the normal trigger editor and are
+only copied back into the profile when you update it. Profiles are stored in
+`trigger_profiles/` alongside the program's other writable data.
 
 ## Automarkers tab
 

@@ -45,6 +45,12 @@ import theme
 from ui.ambient_fx import AmbientFxMixin
 import app_common as ac
 from ui.dps_tab import DpsTabMixin
+from death_recap import DeathRecap
+from prog_session import ProgSessions
+from ui.death_recap_tab import DeathRecapTabMixin
+from ui.prog_tab import ProgTab
+from ui.session_tracking import SessionTrackingMixin
+from ui.profiles import ProfilesMixin
 from ui.timeline_tab import TimelineTabMixin
 from ui.connection import ConnectionMixin
 from ui.settings_tab import SettingsTabMixin
@@ -242,7 +248,7 @@ class _BrandLabel(QLabel):
         p.fillPath(path, QBrush(self._color))
         p.end()
 
-class MainWindow(AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin, SettingsTabMixin, VoiceTabMixin, AutomarkersTabMixin, UpdaterUiMixin, InstanceTabMixin, EnginesMixin, TriggersTabMixin, QMainWindow):
+class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin, SettingsTabMixin, VoiceTabMixin, AutomarkersTabMixin, UpdaterUiMixin, InstanceTabMixin, EnginesMixin, TriggersTabMixin, QMainWindow):
     _trig_update_signal    = pyqtSignal(object, str)   # button that started the fetch, plus an ok or err payload
     _upd_available_signal  = pyqtSignal(object)    # updater.Release, or None if up to date
     _upd_checkmsg_signal   = pyqtSignal(bool, str) # run was manual, plus feedback text, "" means none
@@ -453,6 +459,11 @@ class MainWindow(AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin,
         self._load_cached_triggernometry_inventory()
 
         self._init_dps()
+        self._combat_known = False
+        self._death_recap = DeathRecap()
+        self._prog_sessions = ProgSessions(ac._DATA_DIR / "prog_sessions")
+        self._dps_meter.on_pull_start = self._prog_pull_started
+        self._dps_meter.on_pull_finish = self._prog_pull_finished
 
         # Sliders fire valueChanged per pixel of a drag. Their handlers apply
         # the value live but batch the settings write through this single shot
@@ -476,6 +487,7 @@ class MainWindow(AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin,
         self._init_update_flow()
 
         self._build_ui()
+        self._ws.status_changed.connect(self._track_activity_connection)
         self._load_triggers()
 
         # Re apply the saved Piper venv BEFORE any TTS work below. It rewrites
@@ -644,11 +656,11 @@ class MainWindow(AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin,
         # _refresh_nav_icons. Settings is created in order, it is the last
         # stack page, but pinned to the bottom of the sidebar, above the
         # footer.
-        self._nav_icon_names = ["triggers", "current", "dps", "automarkers", "settings"]
+        self._nav_icon_names = ["triggers", "current", "dps", "recap", "prog", "automarkers", "settings"]
         settings_btn = None
         for idx, (icon_name, label) in enumerate(zip(self._nav_icon_names, (
-            _("Triggers"), _("Current Instance"), _("DPS"),
-            _("Automarkers"), _("Settings"),
+            _("Triggers"), _("Current Instance"), _("DPS"), _("Death Recap"),
+            _("Prog"), _("Automarkers"), _("Settings"),
         ))):
             b = _NavButton(label)
             b.setObjectName("navItem")
@@ -1032,6 +1044,7 @@ class MainWindow(AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin,
         # Triggers tab is the trigger editor. The live Current Instance log is
         # its own top level tab, added once fight_tab is built below.
         self._stack.addWidget(triggers_tab)
+        self._build_profiles(triggers_layout)
 
         # No master Triggers button. Triggers run by default. Cactbot, in
         # Settings, is the only on/off switch and never stops the engine
@@ -1353,6 +1366,11 @@ class MainWindow(AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin,
         self._dps_timer.timeout.connect(self._dps_tick)
         self._dps_timer.start()
         self._stack.addWidget(dps_tab)
+
+        self._death_recap_tab = self._build_death_recap_tab()
+        self._stack.addWidget(self._death_recap_tab)
+        self._prog_tab = ProgTab(self, self._prog_sessions)
+        self._stack.addWidget(self._prog_tab)
 
         # ══════════════════════════════════════════════
         # Automarkers tab, Telesto marking

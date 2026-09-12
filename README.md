@@ -74,6 +74,9 @@ Everything is in the **[guide](docs/GUIDE.md)**:
 - [Voice](docs/GUIDE.md#voice) - System vs offline Piper, Japanese voices, adding voices
 - [Alert sound](docs/GUIDE.md#alert-sound) - built-in chimes, importing your own, and volume slider
 - [DPS tab](docs/GUIDE.md#dps-tab) - live meter parsed by the program, encounter recording
+- [Death Recap tab](docs/GUIDE.md#death-recap-tab) - recent damage, healing, and statuses before a death
+- [Prog tab](docs/GUIDE.md#prog-tab) - saved raid sessions, pull durations, bookmarks, and notes
+- [Profiles](docs/GUIDE.md#profiles) - saved trigger choices and callout wording
 - [Automarkers tab](docs/GUIDE.md#automarkers-tab) - party marks via the Telesto plugin, the UMAD preset
 - [In-game display](docs/GUIDE.md#in-game-display) - drawing bars and callouts in the game via the plugin
 - [Current Instance tab](docs/GUIDE.md#current-instance-tab) - live log, making triggers from it

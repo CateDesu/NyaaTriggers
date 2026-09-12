@@ -57,6 +57,7 @@ pull stays on screen until the next one begins.
 from __future__ import annotations
 
 import time
+from uuid import uuid4
 
 from drop_log import log_drop
 
@@ -217,7 +218,7 @@ class _Encounter:
     encounter-end write."""
 
     __slots__ = ("title", "zone", "start", "last", "last_damage", "combatants",
-                 "wall_start")
+                 "wall_start", "pull_id")
 
     def __init__(self, title: str, zone: str, start: float,
                  wall_start: "float | None" = None) -> None:
@@ -228,6 +229,7 @@ class _Encounter:
         self.last_damage: "float | None" = None
         self.combatants: "dict[int, _Combatant]" = {}
         self.wall_start = wall_start
+        self.pull_id = str(uuid4())
 
 
 class DpsMeter:
@@ -261,6 +263,9 @@ class DpsMeter:
         self._idle_timeout = DEFAULT_IDLE_TIMEOUT
         # Called with the final snapshot dict when a non-empty encounter ends.
         self.on_encounter_end = None
+        self.on_pull_start = None
+        self.on_pull_finish = None
+        self._last_end_time = 0.0
 
     def set_idle_timeout(self, secs) -> None:
         """How long the on-screen meter keeps ticking after the last damage
@@ -371,8 +376,17 @@ class DpsMeter:
         # resets on damage idle. The encounter always logs the whole pull.
         self._view = _Encounter(self._zone or "Encounter", self._zone,
                                 now, wall)
+        self._notify_pull(self.on_pull_start, self.full_snapshot())
 
-    def finalize(self) -> None:
+    @staticmethod
+    def _notify_pull(callback, snapshot):
+        if callback is not None:
+            try:
+                callback(snapshot)
+            except Exception as exc:
+                log_drop("pull-observer", f"{exc!r}")
+
+    def finalize(self, reason="combat-ended") -> None:
         """End the current encounter, if any, and emit on_encounter_end for
         non-empty ones. Safe to call with nothing in progress. Also the
         app-close hook so a quit mid-fight still records."""
@@ -383,9 +397,15 @@ class DpsMeter:
         self._view = None
         if not any(c.damage > 0 or c.damagetaken > 0
                    for c in enc.combatants.values()):
+            empty = self._snapshot(enc, self._clock(), active=False)
+            empty["Encounter"]["end_reason"] = "empty"
+            self._notify_pull(self.on_pull_finish, empty)
             return                      # empty pull, nothing worth keeping
         final = self._snapshot(enc, self._clock(), active=False)
+        final["Encounter"]["end_reason"] = reason
+        self._last_end_time = self._clock()
         self._last_final = final      # stays on screen until the next pull
+        self._notify_pull(self.on_pull_finish, final)
         cb = self.on_encounter_end
         if cb is not None:
             try:
@@ -422,7 +442,7 @@ class DpsMeter:
         The reconnect replay reports combat on, and with the flags still
         high from before the drop there is no rising edge to begin a fresh
         encounter, the next pull would merge into this one."""
-        self.finalize()
+        self.finalize("feed-lost")
         self._in_act = False
         self._in_game = False
         self._jobs.clear()
@@ -502,7 +522,13 @@ class DpsMeter:
                 self._on_death(fields)
             elif t == "33":
                 if len(fields) > 3 and fields[3].upper() == _WIPE_COMMAND:
-                    self.finalize()
+                    if self.current is not None:
+                        self.finalize("wipe")
+                    elif (self._last_final is not None
+                          and self._last_final["Encounter"].get("end_reason") == "combat-ended"
+                          and self._clock() - self._last_end_time <= 2):
+                        self._last_final["Encounter"]["end_reason"] = "wipe"
+                        self._notify_pull(self.on_pull_finish, self._last_final)
         except Exception:  # noqa: BLE001 - defensive: the GUI wraps this too
             log_drop("dps-meter", f"skipped malformed {t} line: {str(raw)[:140]}")
 
@@ -516,7 +542,7 @@ class DpsMeter:
         # re-entering the same instance for the next pull. Entity ids are
         # reassigned per entry, so actor knowledge must reset anyway, the
         # local player id too. The next 02 line pins it again.
-        self.finalize()
+        self.finalize("duty-left")
         self._zone = fields[3].strip()
         self._awaiting_zone_metadata = False
         self._jobs.clear()
@@ -754,7 +780,7 @@ class DpsMeter:
     # ------------------------------------------------------------------
     # reporting
     # ------------------------------------------------------------------
-    def _snapshot(self, enc: _Encounter, now: float, active: bool) -> dict:
+    def _snapshot(self, enc: _Encounter, now: float, active: bool, full=False) -> dict:
         # A finalized fight's clock stops at the last recorded combat action,
         # not at whenever the end signal arrived. The live one keeps ticking.
         # The idle clamp is a display-view thing. The live view pauses at the
@@ -763,7 +789,7 @@ class DpsMeter:
         # opens on a miss and never stamps last_damage, so the clamp falls
         # back to the encounter start or the live clock would run unbounded.
         span_end = now if active or enc.last is None else enc.last
-        if active:
+        if active and not full:
             idle_base = enc.last_damage if enc.last_damage is not None else enc.start
             span_end = min(span_end, idle_base + self._idle_timeout)
         dur = max(0.0, span_end - enc.start)
@@ -828,9 +854,15 @@ class DpsMeter:
                 "deaths": total_deaths,
                 "CurrentZoneName": enc.zone,
                 "wall_start": enc.wall_start,
+                "pull_id": enc.pull_id,
             },
             "Combatant": combatants,
         }
+
+    def full_snapshot(self):
+        if self.current is None:
+            return None
+        return self._snapshot(self.current, self._clock(), active=True, full=True)
 
     def snapshot(self) -> dict:
         """What the meter should show right now. The live display view while

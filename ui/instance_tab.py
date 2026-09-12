@@ -87,6 +87,9 @@ class InstanceTabMixin:
         if zone_name:
             self._apply_zone(zone_name, zone_id)
         else:
+            track_zone = getattr(self, "_track_activity_zone", None)
+            if track_zone is not None:
+                track_zone("", zone_id)
             self._current_zone_id = zone_id
             # Unchanged is a strict no-op inside, so a nameless replay of
             # the zone already loaded costs nothing. getattr, duck-typed
@@ -170,6 +173,9 @@ class InstanceTabMixin:
         delivers both, so a same-zone repeat is a no-op, otherwise the
         ability log would banner the zone twice and the timeline would
         reload needlessly."""
+        track_zone = getattr(self, "_track_activity_zone", None)
+        if track_zone is not None:
+            track_zone(zone, zone_id)
         if zone_id:
             prev_zone_id = self._current_zone_id
             self._current_zone_id = zone_id
@@ -236,6 +242,9 @@ class InstanceTabMixin:
         self._in_game_combat = game
         # The meter's encounter boundaries follow the combat flags, either
         # edge begins or ends one, see DpsMeter.set_in_combat.
+        track_combat = getattr(self, "_track_combat", None)
+        if track_combat is not None:
+            track_combat(act, game)
         try:
             self._dps_meter.set_in_combat(act, game)
         except Exception as exc:  # noqa: BLE001 - never break combat tracking
@@ -287,6 +296,13 @@ class InstanceTabMixin:
                 self._dps_meter.process(fields, raw)
             except Exception as exc:  # noqa: BLE001 - same guard as dispatch itself
                 ac.log_drop("dps-meter", f"{exc!r} on {raw[:140]!r}")
+
+        track_activity = getattr(self, "_track_activity_line", None)
+        if track_activity is not None:
+            try:
+                track_activity(fields)
+            except Exception as exc:
+                ac.log_drop("session-tracking", f"{exc!r}")
 
         # 03 = AddedCombatant, "03|ts|id|name|job|level|...", job is hex.
         # Remember each player's ClassJob so the UMAD chain engine can

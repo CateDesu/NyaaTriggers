@@ -6,6 +6,8 @@ nyaatriggers.log
 nyaatriggers_settings.json
 dps_logs/
 pull_logs/
+prog_sessions/
+trigger_profiles/
 triggevent_inventory.json
 callouts_ja.cache.json
 timelines/*.cactbot.cache.txt
