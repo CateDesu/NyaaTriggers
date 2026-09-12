@@ -1,12 +1,15 @@
 """Prog sessions and their saved pull summaries."""
 
 from copy import deepcopy
+from pathlib import Path
 import time
 from uuid import uuid4
 
+from recap_store import RecapStore
 from record_store import load_records, record_id, write_record
 
 COMPLETE_REASONS = {"combat-ended", "wipe"}
+LATE_DEATH_SECONDS = 2
 
 
 def validate_session(data):
@@ -34,6 +37,8 @@ def validate_session(data):
                 raise ValueError("Invalid pull time")
         if type(pull.get("deaths")) is not int or pull["deaths"] < 0:
             raise ValueError("Invalid death count")
+        if "recap_count" in pull and (type(pull["recap_count"]) is not int or pull["recap_count"] < 0):
+            raise ValueError("Invalid recap count")
         if type(pull.get("complete")) is not bool or type(pull.get("bookmark")) is not bool:
             raise ValueError("Invalid pull flags")
         if not isinstance(pull.get("note"), str) or not isinstance(pull.get("ending"), str):
@@ -53,6 +58,7 @@ def summary(session):
 class ProgSessions:
     def __init__(self, directory, clock=None, wall=None):
         self.directory = directory
+        self.recaps = RecapStore(Path(directory) / "recaps")
         self.clock = clock or time.monotonic
         self.wall = wall or time.time
         self.sessions, self.errors = load_records(directory, validate_session)
@@ -71,6 +77,9 @@ class ProgSessions:
         self.save_error = ""
         self.unsaved = {}
         self.save_errors = {}
+        self._recap_pull = None
+        self._recap_until = None
+        self._recap_ids = set()
 
     def start(self, name, zone_id, zone, in_combat):
         if self.current is not None:
@@ -87,6 +96,7 @@ class ProgSessions:
         self.started_at = self.clock()
         self.ready = not in_combat
         self.pending = None
+        self._recap_pull = None
         return session
 
     def elapsed(self, session):
@@ -111,22 +121,28 @@ class ProgSessions:
     def flush_pending(self):
         for session in list(self.unsaved.values()):
             self.save(session)
+        self.recaps.flush_pending()
 
     def combat(self, in_game):
         if not in_game:
             self.ready = True
 
     def pull_started(self, snapshot):
+        self._recap_pull = None
         if self.current is None or not self.ready:
             return
         encounter = snapshot["Encounter"]
         if self.pending is not None:
+            self._recap_pull = self.pending
             return
         pull = {"id": encounter["pull_id"], "started": encounter["wall_start"],
                 "duration": 0, "ending": "active", "complete": False,
-                "deaths": 0, "bookmark": False, "note": ""}
+                "deaths": 0, "bookmark": False, "note": "", "recap_count": 0}
         self.current["pulls"].append(pull)
         self.pending = pull["id"]
+        self._recap_pull = pull["id"]
+        self._recap_until = None
+        self._recap_ids.clear()
         self.save(self.current)
 
     def pull_finished(self, snapshot):
@@ -138,19 +154,42 @@ class ProgSessions:
         if pull is None:
             return
         reason = encounter["end_reason"]
-        if reason == "empty":
+        if reason == "empty" and not pull.get("recap_count"):
             self.current["pulls"].remove(pull)
         else:
-            pull.update(duration=encounter["DURATION"], deaths=encounter["deaths"],
+            pull.update(duration=encounter["DURATION"],
+                        deaths=max(encounter["deaths"], pull.get("recap_count", 0)),
                         ending=reason, complete=reason in COMPLETE_REASONS)
         if self.pending == ident:
             self.pending = None
+            if reason in COMPLETE_REASONS:
+                self._recap_until = self.clock() + LATE_DEATH_SECONDS
+            else:
+                self._recap_pull = None
         if reason == "feed-lost":
             self.ready = False
         self.save(self.current)
 
     def feed_lost(self):
         self.ready = False
+        self._recap_pull = None
+
+    def record_death(self, death):
+        if self.current is None or self._recap_pull is None:
+            return None
+        if self._recap_until is not None and self.clock() > self._recap_until:
+            return None
+        if death["id"] in self._recap_ids:
+            return None
+        pull = next((p for p in self.current["pulls"] if p["id"] == self._recap_pull), None)
+        if pull is None:
+            return None
+        data = self.recaps.record(self.current["id"], pull["id"], death)
+        self._recap_ids.add(death["id"])
+        pull["recap_count"] += 1
+        pull["deaths"] = max(pull["deaths"], pull["recap_count"])
+        self.save(self.current)
+        return data
 
     def update_active(self, snapshot):
         if self.current is None or self.pending is None or snapshot is None:
@@ -160,7 +199,8 @@ class ProgSessions:
             return
         for pull in self.current["pulls"]:
             if pull["id"] == self.pending:
-                pull.update(duration=encounter["DURATION"], deaths=encounter["deaths"])
+                pull.update(duration=encounter["DURATION"],
+                            deaths=max(encounter["deaths"], pull.get("recap_count", 0)))
                 return
 
     def end(self, snapshot=None, reason="session-ended"):
@@ -182,3 +222,4 @@ class ProgSessions:
         self.started_at = None
         self.pending = None
         self.ready = False
+        self._recap_pull = None

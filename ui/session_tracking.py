@@ -8,6 +8,7 @@ class SessionTrackingMixin:
         self._prog_tab.refresh()
 
     def _prog_pull_finished(self, snapshot):
+        self._death_recap.reset_on_pull = True
         self._prog_sessions.pull_finished(snapshot)
         self._prog_tab.refresh()
 

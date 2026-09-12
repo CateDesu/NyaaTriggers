@@ -108,7 +108,12 @@ class ProgTab(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table, 1)
         self.bookmark = QCheckBox(_("Bookmark this pull"))
-        layout.addWidget(self.bookmark)
+        pull_controls = QHBoxLayout()
+        pull_controls.addWidget(self.bookmark)
+        pull_controls.addStretch()
+        self.recap_button = QPushButton(_("View death recaps"))
+        pull_controls.addWidget(self.recap_button)
+        layout.addLayout(pull_controls)
         self.note = QPlainTextEdit()
         self.note.setPlaceholderText(_("Notes for the selected pull"))
         self.note.setMaximumHeight(85)
@@ -123,6 +128,7 @@ class ProgTab(QWidget):
         self.table.itemSelectionChanged.connect(self.select_pull)
         self.chart.selected.connect(self.table.selectRow)
         self.bookmark.toggled.connect(self.edit_pull)
+        self.recap_button.clicked.connect(self.open_recaps)
         self.note.textChanged.connect(self.edit_pull)
         self.name.editingFinished.connect(self.rename)
         self.name.textEdited.connect(self.edit_name)
@@ -173,10 +179,17 @@ class ProgTab(QWidget):
         self.note.blockSignals(True)
         self.bookmark.setEnabled(self.pull is not None)
         self.note.setEnabled(self.pull is not None)
+        self.recap_button.setEnabled(self.pull is not None)
         self.bookmark.setChecked(self.pull["bookmark"] if self.pull else False)
         self.note.setPlainText(self.pull["note"] if self.pull else "")
         self.bookmark.blockSignals(False)
         self.note.blockSignals(False)
+
+    def open_recaps(self):
+        self.flush()
+        if self.session is not None and self.pull is not None:
+            number = self.session["pulls"].index(self.pull) + 1
+            self.window._show_pull_recaps(self.session, self.pull, number)
 
     def edit_pull(self):
         if self.pull is None:
@@ -237,6 +250,11 @@ class ProgTab(QWidget):
                     self.table.setItem(row, 4, QTableWidgetItem(str(pull["deaths"])))
                     self.chart.update()
                     break
+        if self.session is not None:
+            for row, pull in enumerate(self.session["pulls"]):
+                item = self.table.item(row, 4)
+                if item is not None and item.text() != str(pull["deaths"]):
+                    item.setText(str(pull["deaths"]))
         self.start_button.setEnabled(active is None and self.window._connected
                                      and self.window._current_zone_id > 0
                                      and self.window._combat_known)
@@ -250,7 +268,11 @@ class ProgTab(QWidget):
             text = _("Collecting pulls for {zone}.").format(zone=active["zone"]) if self.sessions.ready else _("Waiting for combat to end before collecting a full pull.")
         else:
             text = _("Start a session in the current duty to collect pulls. Saved sessions remain available after restart.")
+        recap_warning = self.window._recap_save_warning()
+        if recap_warning:
+            text += "\n" + recap_warning
         self.status.setText(text)
+        self.window._update_recap_notice()
         if self.session:
             stats = summary(self.session)
             self.stats.setText(_("{pulls} complete pulls · {interrupted} interrupted · Longest {longest} · Combat {combat} · Session {elapsed}").format(

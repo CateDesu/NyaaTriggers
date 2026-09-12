@@ -157,10 +157,22 @@ death on the left to see observed damage, healing, status gains and losses, and
 the statuses still observed at death. Self-heals and reflected damage follow
 their actual recipient. Instant-death effects have their own label.
 
-The program keeps the latest 80 deaths in memory until it closes. Zone changes
+The recent view keeps the latest 80 deaths in memory until the program closes. Zone changes
 and disconnects clear the live observation buffers, while completed recaps remain
 available. Wipe events keep the buffers until the next pull so deaths arriving
 just after the wipe can still be reviewed.
+
+Pulls collected by a Prog session also save their death recaps locally. In Prog,
+select a pull and press **View death recaps** to open just that attempt's deaths,
+including after a restart. The heading identifies the session, pull number, and
+duty. **Back to Prog** returns to the selected pull and its notes. **Recent deaths**
+returns to the live history. New deaths from another pull do not change a saved
+pull being reviewed.
+
+Saved recaps are independent of the recent view's 80-death limit. Older pulls
+recorded before this feature have no saved recaps, and the page says so. A pull
+with no recaps shows an empty view. Unreadable or missing records and save errors
+are reported without replacing the files.
 
 This is a record of the feed, not a reconstruction of exact HP. Healing includes
 overheal, some damage and healing are reported as aggregate ticks, and statuses
@@ -180,6 +192,13 @@ pull, total observed combat time, and session elapsed time. The duration chart
 selects a pull when clicked. Add a bookmark or a note below the table, and edit
 the session name above it.
 
+**View death recaps** opens the selected pull's observed deaths in Death Recap.
+Recaps save as deaths arrive, so they remain available for an interrupted pull
+after a crash. Death messages received within two seconds after combat ends or
+a wipe can still attach to that pull. A new pull, disconnect, duty change, or
+session end closes that association. Starting a session during combat does not
+save recaps from the partial attempt being skipped.
+
 **End session** stops collection without resetting the live meter or callouts.
 Leaving the duty ends the session too. Wipes and breaks stay in the same session.
 A disconnect preserves the observed attempt as interrupted and waits for the
@@ -192,6 +211,14 @@ and flush on shutdown. The session picker opens previous sessions after restart.
 An unfinished session from a crash is marked interrupted. Files that cannot be
 read are preserved and the page shows the error. Session history does not follow
 the DPS log rotation limits.
+
+Each death recap has its own file under `prog_sessions/recaps/`, grouped by the
+session and pull IDs. Recaps do not enlarge the session summary file or follow
+DPS log rotation. Failed writes are retried when session changes are flushed.
+The retry queue retains the latest 256 unsaved recaps and reports any losses if
+storage remains unavailable beyond that limit. Storage must recover before those records can
+survive closing the program. A death without observed damage remains reviewable
+as an interrupted attempt if the meter reports an empty encounter.
 
 ## Profiles
 

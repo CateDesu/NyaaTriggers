@@ -140,7 +140,7 @@ class DeathRecap:
             events = [{**event, "time": round(event["time"] - now, 3)}
                       for event in buf["events"]]
             death = {"id": str(uuid4()), "actor": actor, "name": fields[3][:200],
-                     "zone": self.zone, "when": time.time(), "events": events,
+                     "zone": self.zone[:200], "when": time.time(), "events": events,
                      "statuses": deepcopy(list(buf["statuses"].values()))}
             self.deaths.appendleft(death)
             buf["events"].clear()

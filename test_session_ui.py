@@ -50,6 +50,7 @@ class SessionUiTests(unittest.TestCase):
         self.clock = Clock()
         self.window._dps_meter._clock = self.clock
         self.window._prog_sessions.clock = self.clock
+        self.window._death_recap.clock = self.clock
 
     def connect(self):
         window = self.window
@@ -175,6 +176,152 @@ class SessionUiTests(unittest.TestCase):
         tab.tick()
         self.assertEqual(tab.table.item(0, 2).text(), "00:00:20")
         self.assertEqual(tab.name.text(), "Static prog")
+
+    def test_saved_pull_navigation_survives_restart_and_live_updates(self):
+        self.connect()
+        window = self.window
+        tab = window._prog_tab
+        tab.start_button.click()
+        window._on_in_combat(True, True)
+        self.line(ability())
+        self.line(["25", "ts", PLAYER, "First player"])
+        window._on_in_combat(False, False)
+        tab.note.setPlainText("Review this death")
+        tab.recap_button.click()
+        self.assertIs(window._stack.currentWidget(), window._death_recap_tab)
+        self.assertIn("Pull 1", window._recap_scope.text())
+        self.assertEqual(window._recap_records[0]["name"], "First player")
+        window._recap_back.click()
+        self.assertIs(window._stack.currentWidget(), tab)
+        self.assertEqual(tab.note.toPlainText(), "Review this death")
+        window._on_in_combat(True, True)
+        self.line(ability())
+        self.clock.value += 2
+        self.line(["25", "ts", PLAYER, "Second player"])
+        self.assertEqual(len(window._recap_records), 1)
+        self.assertEqual(window._recap_records[0]["name"], "First player")
+        window._recap_recent.click()
+        self.assertEqual(window._recap_list.count(), 2)
+        tab.end_button.click()
+        window._death_recap.deaths.clear()
+        restarted = ProgSessions(self.temp / "prog_sessions")
+        window._prog_sessions = tab.sessions = restarted
+        tab.refresh()
+        tab.table.selectRow(0)
+        tab.recap_button.click()
+        self.assertEqual(window._recap_records[0]["name"], "First player")
+        self.assertGreater(window._recap_table.rowCount(), 0)
+        window.show()
+        self.app.processEvents()
+        window.grab().save("/tmp/nyaatriggers-saved-recap.png")
+
+    def test_empty_and_legacy_recaps_clear_previous_details(self):
+        self.connect()
+        window = self.window
+        tab = window._prog_tab
+        self.assertFalse(tab.recap_button.isEnabled())
+        tab.start_button.click()
+        self.pull()
+        self.line(["25", "ts", PLAYER, "Player"])
+        self.assertGreater(window._recap_table.rowCount(), 0)
+        self.pull()
+        tab.table.selectRow(1)
+        tab.recap_button.click()
+        self.assertEqual(window._recap_table.rowCount(), 0)
+        self.assertIn("No death recaps", window._recap_statuses.text())
+        del tab.pull["recap_count"]
+        tab.recap_button.click()
+        self.assertIn("before saved death recaps", window._recap_notice.text())
+        self.assertEqual(window._recap_list.count(), 0)
+
+    def test_active_saved_view_tracks_deaths_without_changing_selection(self):
+        self.connect()
+        window = self.window
+        tab = window._prog_tab
+        tab.start_button.click()
+        window._on_in_combat(True, True)
+        self.line(ability())
+        tab.recap_button.click()
+        self.line(["25", "ts", PLAYER, "First death"])
+        selected = window._recap_list.currentItem().data(Qt.ItemDataRole.UserRole)
+        self.clock.value += 2
+        self.line(ability())
+        self.line(["25", "ts", PLAYER, "Second death"])
+        self.assertEqual(window._recap_list.count(), 2)
+        self.assertEqual(window._recap_list.currentItem().data(Qt.ItemDataRole.UserRole), selected)
+        self.assertEqual(len(window._prog_sessions.recaps.load(tab.session["id"], tab.pull["id"])[0]), 2)
+
+    def test_recap_save_and_load_errors_are_visible_without_losing_history(self):
+        self.connect()
+        window = self.window
+        tab = window._prog_tab
+        tab.start_button.click()
+        window._on_in_combat(True, True)
+        self.line(ability())
+        with patch("recap_store.write_record", side_effect=OSError("Disk failed")):
+            self.line(["25", "ts", PLAYER, "Player"])
+            tab.recap_button.click()
+            tab.tick()
+            self.assertIn("Disk failed", tab.status.text())
+            self.assertIn("Disk failed", window._recap_notice.text())
+            self.assertEqual(window._recap_list.count(), 1)
+        tab.flush()
+        tab.tick()
+        self.assertNotIn("Disk failed", window._recap_notice.text())
+        path = next((self.temp / "prog_sessions").glob("recaps/*/*/*.json"))
+        path.write_text("bad json")
+        tab.recap_button.click()
+        self.assertIn("could not be read", window._recap_notice.text())
+        self.assertIn("Only 0 of 1", window._recap_notice.text())
+        self.assertEqual(window._recap_table.rowCount(), 0)
+        self.assertEqual(path.read_text(), "bad json")
+
+    def test_normal_pull_end_resets_observations_before_next_pull(self):
+        self.connect()
+        window = self.window
+        window._prog_tab.start_button.click()
+        self.pull()
+        window._on_in_combat(True, True)
+        self.line(["25", "ts", PLAYER, "Player"])
+        self.assertEqual(window._recap_records[0]["events"], [])
+
+    def test_crash_after_death_keeps_observed_pull_duration_and_death_count(self):
+        self.connect()
+        window = self.window
+        window._prog_tab.start_button.click()
+        window._on_in_combat(True, True)
+        self.line(ability())
+        self.clock.value += 12
+        self.line(["25", "ts", PLAYER, "Player"])
+        saved = ProgSessions(self.temp / "prog_sessions").sessions[0]["pulls"][0]
+        self.assertEqual(saved["deaths"], 1)
+        self.assertEqual(saved["duration"], 12)
+
+    def test_zone_and_disconnect_stop_late_deaths_reaching_old_pull(self):
+        self.connect()
+        window = self.window
+        window._prog_tab.start_button.click()
+        self.pull()
+        session = window._prog_sessions.current
+        pull = session["pulls"][0]
+        window._ws.status_changed.emit(False, "Lost feed")
+        self.line(["25", "ts", PLAYER, "After disconnect"])
+        self.assertEqual(window._prog_sessions.recaps.load(session["id"], pull["id"]), ([], []))
+        window._on_ws_zone_changed(2, "Other duty")
+        self.clock.value += 2
+        self.line(["25", "ts", PLAYER, "Other duty"])
+        self.assertIsNone(window._prog_sessions.current)
+        self.assertEqual(pull["recap_count"], 0)
+
+    def test_late_saved_death_updates_the_finished_pull_row(self):
+        self.connect()
+        window = self.window
+        tab = window._prog_tab
+        tab.start_button.click()
+        self.pull()
+        self.line(["25", "ts", PLAYER, "Player"])
+        tab.tick()
+        self.assertEqual(tab.table.item(0, 4).text(), "1")
 
 
 if __name__ == "__main__":

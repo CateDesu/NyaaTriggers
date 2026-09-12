@@ -8,7 +8,8 @@ The separate **Prog** tab reviews a raid session. The player starts a
 session, the program collects its pulls automatically, and the player ends it
 when finished. Store the history locally so it remains available after a restart.
 
-Death Recap has its own tab. Linking its records to saved prog pulls is a later addition.
+Death Recap has its own tab. **View death recaps** opens the selected prog pull's
+saved observations there and keeps that view separate from recent live deaths.
 
 The page contains:
 
@@ -80,8 +81,8 @@ for session elapsed time and wall-clock timestamps for dates and start times.
 
 Store one versioned JSON file per session in `prog_sessions/` under the writable
 program data directory. Use UUIDs for session and pull IDs, with no character
-names in filenames. The first version only needs aggregate pull data, bookmarks,
-and notes, not another copy of the raw combat log.
+names in filenames. The session summary only needs aggregate pull data, bookmarks,
+notes, and an observed recap count, not another copy of the raw combat log.
 
 Each session stores its name, duty ID and name, start and end timestamps, elapsed
 seconds, state, and pulls. Each pull stores its ID, number, start timestamp,
@@ -98,6 +99,23 @@ save cannot overwrite a newer note.
 Keep session files separate from DPS log rotation. Do not silently delete a
 player's bookmarked sessions when the DPS logs reach their retention limit.
 Show load or save failures in the Prog page and preserve unreadable files.
+
+Save each observed death as a separate versioned record under
+`prog_sessions/recaps/<session ID>/<pull ID>/<recap ID>.json`. Save on each death,
+then update the pull's recap count. Use the existing pull ID as the association
+so recap files remain discoverable if the later summary write fails. Read just
+the selected pull's recaps when opened and preserve unreadable files. Failed
+recap writes stay queued across pull and session changes until a flush succeeds.
+Keep the latest 256 pending records during persistent storage failure and report
+any dropped records. This bound does not limit recaps already saved on disk.
+Saved status observations contain names and sources, with no live clock expiry.
+
+The active collected pull accepts recaps until it ends. Combat end and wipe allow
+two seconds for late death messages. Repeated endings do not extend that period.
+A new pull or an interruption clears the association. Midcombat session starts
+skip the current attempt's recaps as well as its summary. An empty encounter
+that already has recaps stays visible as interrupted so its deaths remain
+reviewable. Old summaries without a recap count load unchanged.
 
 ## Code layout
 
@@ -116,7 +134,6 @@ never resets combat tracking when its own controls are used.
 - Fight-specific phase and mechanic milestones based on verified combat events.
 - Furthest confirmed milestone and the percentage of attempts reaching it.
 - Comparison with previous sessions for the same fight.
-- Links from a pull to Death Recap once recap recording exists.
 
 Phase progress needs its own event rules. Do not infer phases from elapsed time
 alone because downtime and checkpoints change the relationship. This tracking

@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Saved death recaps for prog pulls.** Select a pull in Prog and choose **View death recaps** to review its deaths after restarting the program. Each recap saves as it arrives, independently of the live history's 80-death limit and the DPS recording switch. Read and save failures appear on the session pages.
 - **Death Recap tab.** Review the last 15 seconds of observed damage, healing, and statuses before a player's death. Keeps the latest 80 recaps for the current program run.
 - **Prog sessions.** Start a session for the current duty and review pull durations, endings, bookmarks, and notes. Sessions save locally and keep interrupted attempts separate from complete pulls.
 - **Trigger profiles.** Save named trigger choices and callout wording, then apply a setup between pulls without replacing trigger definitions.
