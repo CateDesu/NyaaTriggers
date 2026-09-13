@@ -1,9 +1,35 @@
-"""Bounded HTTP reads for small program data files."""
+"""HTTP setup and bounded reads for small program data files."""
 
+import os
 import socket
+import sys
 import threading
 import time
 import urllib.request
+from pathlib import Path
+
+
+_LINUX_CA_BUNDLES = (
+    '/etc/ssl/certs/ca-certificates.crt',
+    '/etc/ssl/cert.pem',
+    '/etc/pki/tls/certs/ca-bundle.crt',
+    '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem',
+)
+
+
+def configure_ssl_trust() -> None:
+    """Use the host trust store when bundled OpenSSL points at a missing file."""
+    if not sys.platform.startswith('linux') or not getattr(sys, 'frozen', False):
+        return
+    if 'SSL_CERT_FILE' in os.environ or 'SSL_CERT_DIR' in os.environ:
+        return
+    import ssl
+    if ssl.get_default_verify_paths().cafile:
+        return
+    for candidate in _LINUX_CA_BUNDLES:
+        if Path(candidate).is_file():
+            os.environ['SSL_CERT_FILE'] = candidate
+            return
 
 
 def fetch_bytes(request, max_bytes: int, timeout: float = 15,

@@ -111,6 +111,10 @@ if "--apply-update" in sys.argv:
     _maybe_finish_windows_update()
     sys.exit(0)
 
+from nyaatriggers.http_fetch import configure_ssl_trust
+
+configure_ssl_trust()
+
 try:
     from PyQt6.QtCore import QThread, pyqtSignal
     from PyQt6.QtWidgets import (

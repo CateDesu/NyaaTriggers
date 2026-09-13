@@ -27,6 +27,7 @@ from nyaatriggers import app_common as ac
 from nyaatriggers.convert_event_trigger import parse_hex_ids
 from nyaatriggers.dps_meter import DpsMeter
 from nyaatriggers import fflogs
+from nyaatriggers import http_fetch
 from nyaatriggers import plugin_link
 from nyaatriggers.pull_capture import PullCapture
 from nyaatriggers.telesto_client import TelestoClient
@@ -61,6 +62,45 @@ def ability(flags, amount, source="10000001"):
 
 
 class DataSafetyTests(unittest.TestCase):
+    def test_frozen_linux_uses_host_certificate_bundle(self):
+        import ssl
+        certificates = ssl.create_default_context().get_ca_certs(binary_form=True)
+        self.assertTrue(certificates)
+        with tempfile.TemporaryDirectory() as folder:
+            bundle = Path(folder) / 'host-certificates.pem'
+            bundle.write_text(ssl.DER_cert_to_PEM_cert(certificates[0]))
+            with patch.dict(os.environ, {}, clear=True), \
+                    patch.object(sys, 'platform', 'linux'), \
+                    patch.object(sys, 'frozen', True, create=True), \
+                    patch.object(http_fetch, '_LINUX_CA_BUNDLES',
+                                 (str(bundle.parent / 'missing.pem'), str(bundle))):
+                with patch('ssl.get_default_verify_paths', return_value=SimpleNamespace(cafile=None)):
+                    http_fetch.configure_ssl_trust()
+                self.assertEqual(os.environ['SSL_CERT_FILE'], str(bundle))
+                context = ssl.create_default_context()
+                self.assertGreater(context.cert_store_stats()['x509_ca'], 0)
+                self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+                self.assertTrue(context.check_hostname)
+
+    def test_certificate_fallback_preserves_existing_configuration(self):
+        cases = (
+            ('linux', True, {}, '/existing/cert.pem'),
+            ('linux', True, {'SSL_CERT_FILE': '/custom/cert.pem'}, None),
+            ('linux', True, {'SSL_CERT_DIR': '/custom/certs'}, None),
+            ('linux', True, {'SSL_CERT_FILE': ''}, None),
+            ('linux', False, {}, None),
+            ('win32', True, {}, None),
+        )
+        for platform, frozen, environment, cafile in cases:
+            with self.subTest(platform=platform, frozen=frozen, environment=environment, cafile=cafile), \
+                    patch.dict(os.environ, environment, clear=True), \
+                    patch.object(sys, 'platform', platform), \
+                    patch.object(sys, 'frozen', frozen, create=True), \
+                    patch('ssl.get_default_verify_paths', return_value=SimpleNamespace(cafile=cafile)), \
+                    patch.object(http_fetch.Path, 'is_file', side_effect=AssertionError('fallback must not run')):
+                http_fetch.configure_ssl_trust()
+                self.assertEqual(dict(os.environ), environment)
+
     def test_bundled_data_loads_from_source_and_frozen_layouts(self):
         repo = Path(__file__).resolve().parents[1]
         bundled_names = ("TRIGGERS_FILE", "RETIRED_FILE", "ZONE_NAMES_FILE",
