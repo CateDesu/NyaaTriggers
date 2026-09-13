@@ -1044,13 +1044,12 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         # Triggers tab is the trigger editor. The live Current Instance log is
         # its own top level tab, added once fight_tab is built below.
         self._stack.addWidget(triggers_tab)
-        self._build_profiles(triggers_layout)
 
         # No master Triggers button. Triggers run by default. Cactbot, in
         # Settings, is the only on/off switch and never stops the engine
         # underneath.
         h_split = QSplitter(Qt.Orientation.Horizontal)
-        triggers_layout.addWidget(h_split)
+        triggers_layout.addWidget(h_split, 1)
 
         # ── Left, fight tree ──
         self._tree = QTreeWidget()
@@ -1189,7 +1188,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._cb_tv.toggled.connect(self._on_fight_tv_only_toggled)
         self._fight_bar.setVisible(False)
         trig_layout.addWidget(self._fight_bar)
-        trig_layout.addWidget(self._table)
+        trig_layout.addWidget(self._table, 1)
+        self._build_profiles(triggers_layout)
 
         # ══════════════════════════════════════════════
         # Current Instance, its own top-level tab

@@ -224,6 +224,49 @@ class SessionUiTests(unittest.TestCase):
         self.assertEqual(pull["ending"], "duty-left")
         self.assertFalse(pull["complete"])
 
+    def test_triggers_resize_keeps_profiles_collapsed_at_bottom(self):
+        window = self.window
+        window.show()
+        for width, height in ((900, 600), (1280, 720), (1280, 1000), (900, 600)):
+            with self.subTest(width=width, height=height):
+                window.resize(width, height)
+                self.app.processEvents()
+                page = window._stack.currentWidget()
+                self.assertEqual((window.width(), window.height()), (width, height))
+                self.assertFalse(window._profile_body.isVisible())
+                self.assertEqual(window._profile_panel.geometry().bottom(), page.height() - 1)
+                self.assertLess(window._profile_panel.height(), 2 * window._profile_toggle.height())
+                self.assertGreater(window._table.height(), page.height() * 0.6)
+
+    def test_profile_dropdown_handles_long_names_and_status(self):
+        window = self.window
+        window._refresh_table()
+        window._profiles = [capture_profile(window, "W" * 200)]
+        window._refresh_profiles()
+        window.resize(900, 600)
+        window.show()
+        self.app.processEvents()
+        closed_height = window._table.height()
+        window._profile_toggle.click()
+        self.app.processEvents()
+        self.assertTrue(window._profile_picker.isVisible())
+        self.assertEqual(window._profile_picker.toolTip(), "W" * 200)
+        for control in (window._profile_picker, window._profile_apply,
+                        window._profile_new, window._profile_update):
+            self.assertTrue(window._profile_controls.rect().contains(control.geometry()))
+        window._profile_apply.click()
+        self.app.processEvents()
+        self.assertTrue(window._profile_status.isVisible())
+        self.assertIn("Applied profile", window._profile_status.text())
+        self.assertEqual((window.width(), window.height()), (900, 600))
+        self.assertLess(window._profile_panel.height(), window._stack.height() * 0.3)
+        window._profile_toggle.click()
+        # Hiding the body posts another layout pass to its parent.
+        self.app.processEvents()
+        self.app.processEvents()
+        self.assertFalse(window._profile_body.isVisible())
+        self.assertEqual(window._table.height(), closed_height)
+
     def test_apply_profile_saves_choices_and_keeps_master_mode(self):
         window = self.window
         trigger = Trigger(id="local", enabled=True, tts_text="Stack")

@@ -232,13 +232,13 @@ as an interrupted attempt if the meter reports an empty encounter.
 
 ## Profiles
 
-The controls above the Triggers list save and restore named setups for jobs,
-groups, or strategies. **Save new profile** captures the current local trigger
+Open **Profiles** at the bottom of the Triggers tab to save and restore named
+setups for jobs, groups, or strategies. **Save new** captures the current local trigger
 toggles and spoken text, engine callout toggles, and editable Triggevent and
-Triggernometry wording. **Update saved profile** replaces the selected snapshot
+Triggernometry wording. **Update** replaces the selected snapshot
 with the current setup.
 
-Select a profile and press **Apply profile** between pulls. Existing trigger
+Select a profile and press **Apply** between pulls. Existing trigger
 definitions, folders, and newly added triggers are preserved. Applying a profile
 does not switch the Cactbot mode, voice, or automarkers. Deleted local triggers
 are not recreated. Changes made afterward use the normal trigger editor and are
