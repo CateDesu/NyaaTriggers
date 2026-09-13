@@ -16,9 +16,9 @@ All phases PASS under Mono+Xvfb, end to end from the PyQt6 app down to the real 
   resolve (`{"t":"callout","tts":"my x is 12.5 hp 50000"}`). `host/CombatantBridge.cs`.
 - Server mode: `--serve` reads `{"t":"log"|"combatants"|"zone"}` on stdin, emits callouts on stdout. Validated by
   piping JSON (combatant x=99.5 + a log line → `"my x is 99.5 hp 48000"`).
-- Python bridge: `../triggernometry_bridge.py` spawns the Mono sidecar and harvested a callout end-to-end
+- Python bridge: `../nyaatriggers/triggernometry_bridge.py` spawns the Mono sidecar and harvested a callout end-to-end
   (`"my x is 55.5 hp 42000"`, combatant data flowing through the live feed).
-- NyaaTriggers wiring: `../ws_client.py` (combatants signal + getCombatants poll + player-id) and `../main_window.py`
+- NyaaTriggers wiring: `../nyaatriggers/ws_client.py` (combatants signal + getCombatants poll + player-id) and `../nyaatriggers/main_window.py`
   (guarded bridge wiring, auto-start, closeEvent) - MainWindow constructs clean offscreen, data files unchanged.
 
 Remaining: live in-game IINACT test; verify `_map_combatants` field casing. (Release packaging: the prebuilt `bin/`

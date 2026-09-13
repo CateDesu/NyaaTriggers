@@ -5,7 +5,7 @@ ones - inside NyaaTriggers **1:1**, by hosting Triggernometry's **own engine**
 (`paissaheavyindustries/Triggernometry`, MIT) headlessly as a sidecar subprocess (native .NET on Windows, Mono on Linux).
 
 This directory is the C# half (the host + a `bin/` of the built sidecar). The Python half is
-`../triggernometry_bridge.py` plus small hooks in `../ws_client.py` and `../main_window.py`.
+`../nyaatriggers/triggernometry_bridge.py` plus small hooks in `../nyaatriggers/ws_client.py` and `../nyaatriggers/main_window.py`.
 
 > Status: **shipped in v1.1.0** (Master/testing channel), end-to-end: build → boot → log callout → ExecuteScript →
 > `${_me}`/combatant → stdin/stdout server → Python bridge. See `SPIKE-LOG.md` for the reproducible log and `DESIGN.md`

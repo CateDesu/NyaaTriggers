@@ -4,8 +4,8 @@ Run **all** of Triggevent's triggers (built-in Java + user Groovy) inside NyaaTr
 **without opening Triggevent**, by reusing Triggevent's own engine
 (`xpdota/event-trigger`, GPL-3.0) headlessly as a subprocess.
 
-This directory is the Java half. The Python half lives in `../triggevent_bridge.py`
-plus small hooks in `../ws_client.py` and `../main_window.py`.
+This directory is the Java half. The Python half lives in `../nyaatriggers/triggevent_bridge.py`
+plus small hooks in `../nyaatriggers/ws_client.py` and `../nyaatriggers/main_window.py`.
 
 ---
 

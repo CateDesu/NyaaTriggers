@@ -6,7 +6,7 @@ os.environ["NYAA_TRIGGERNOMETRY_PACKS"] = os.path.join(TEST_DIR, "packs")
 os.environ["NYAA_TRIGGERNOMETRY_EXE"] = os.path.join(CORE, "bin", "triggernometry-core.exe")
 sys.path.insert(0, NYAA)
 from PyQt6.QtCore import QCoreApplication, QTimer
-import triggernometry_bridge as tb
+from nyaatriggers import triggernometry_bridge as tb
 
 print("is_available:", tb.is_available(), "| exe:", bool(tb._find_exe()), "| mono:", tb._find_mono(), "| packs:", len(tb._find_packs()))
 app = QCoreApplication([])

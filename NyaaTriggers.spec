@@ -2,6 +2,7 @@ import glob
 import importlib.util
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 
@@ -207,6 +208,21 @@ a = Analysis(
     excludes=[],
     noarchive=False,
 )
+
+# Both keyboard libraries must come from the build environment. Mixing the
+# bundled core with a newer system X11 companion can crash when typing.
+if sys.platform.startswith('linux'):
+    required_x11 = {
+        'libxkbcommon.so.0', 'libxkbcommon-x11.so.0', 'libxcb-xkb.so.1',
+        'libxcb-icccm.so.4', 'libxcb-shape.so.0', 'libxcb-keysyms.so.1',
+        'libxcb-cursor.so.0',
+    }
+    collected = {Path(name).name for name, source, kind in a.binaries}
+    missing = sorted(required_x11 - collected)
+    if missing:
+        raise SystemExit(
+            '[spec] Missing Linux keyboard dependencies: ' + ', '.join(missing)
+            + '. Install the X11 dependencies listed in the Release workflow before building.')
 
 pyz = PYZ(a.pure)
 
