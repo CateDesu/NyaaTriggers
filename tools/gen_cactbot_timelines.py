@@ -10,7 +10,8 @@ ZoneId constants via resources/zone_id.ts and zoneRegex patterns against
 the English names in resources/zone_info.ts. Keyed on the numeric zone id
 so the runtime lookup works whatever language the client reports.
 
-Run:  python tools/gen_cactbot_timelines.py   (writes ../cactbot_timelines.json)
+Run:  python tools/gen_cactbot_timelines.py
+Writes assets/cactbot_timelines.json.
 """
 import concurrent.futures
 import json
@@ -27,7 +28,7 @@ API_TREE = ("https://api.github.com/repos/OverlayPlugin/cactbot/git/trees/"
             "main?recursive=1")
 RAW = "https://raw.githubusercontent.com/OverlayPlugin/cactbot/main/"
 DATA_PREFIX = "ui/raidboss/data/"
-OUT = Path(__file__).resolve().parent.parent / "cactbot_timelines.json"
+OUT = Path(__file__).resolve().parent.parent / "assets" / "cactbot_timelines.json"
 
 _UA = {"User-Agent": "NyaaTriggers"}
 

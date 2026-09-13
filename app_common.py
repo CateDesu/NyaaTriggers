@@ -26,33 +26,34 @@ from umad_chains import canon_status_key as _canon_status
 
 
 _BUNDLE_DIR = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
+_ASSETS_DIR = _BUNDLE_DIR / "assets"
 _DATA_DIR   = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
-TRIGGERS_FILE       = _BUNDLE_DIR / "triggers.json"
+TRIGGERS_FILE       = _ASSETS_DIR / "triggers.json"
 TRIGGERS_LOCAL_FILE = _DATA_DIR   / "triggers.local.json"
 # Ids withdrawn from triggers.json. Dropping a row from triggers.json only hides it
 # from clients that never touched it. The merge re-appends any local copy whose id is
 # no longer official, so a toggled trigger would outlive its own removal. Kept out of
 # triggers.json because that file must stay a bare list. An older client downloading
 # a dict from main would parse zero triggers.
-RETIRED_FILE        = _BUNDLE_DIR / "retired.json"
+RETIRED_FILE        = _ASSETS_DIR / "retired.json"
 # Zone id to English zone name, from tools/gen_zone_names.py, sourced from cactbot.
 # The feed reports the zone name in the client's language but every shipped
 # zone_regex is English, so on a non-English client no Local trigger can ever
 # match its zone. The sidecars key on the numeric zone id so they keep calling
 # out. This map lets the local engine match the English name too.
-ZONE_NAMES_FILE     = _BUNDLE_DIR / "zone_names.json"
+ZONE_NAMES_FILE     = _ASSETS_DIR / "zone_names.json"
 # Zone id to cactbot timeline, from tools/gen_cactbot_timelines.py, generated
 # from the cactbot source tree. Covers every fight cactbot ships a .txt
 # timeline for. Keyed on the numeric zone id like ZONE_NAMES_FILE, so a fight
 # with no local trigger file still gets its timeline bars whatever language
 # the client reports. This is the primary cactbot source. The small
 # FIGHT_TO_CACTBOT_TXT converter map below stays as fallback.
-CACTBOT_TIMELINES_FILE = _BUNDLE_DIR / "cactbot_timelines.json"
+CACTBOT_TIMELINES_FILE = _ASSETS_DIR / "cactbot_timelines.json"
 # Downloaded repo trigger set, behind the Settings Update Triggers and Restore
 # from Repo buttons. Distinct untracked names, mirroring the _CALLOUTS_JA_CACHE
-# pattern below. On a source checkout _DATA_DIR == _BUNDLE_DIR, so writing
-# triggers.json there clobbers the git tracked file and blocks git pull self
-# updates. The .version stamp records the _VERSION that fetched the download.
+# pattern below. Keep downloads outside the tracked assets directory so a
+# source checkout stays clean for git pull. The .version stamp records the
+# _VERSION that fetched the download.
 # A newer build's freshly bundled set wins over a stale download.
 _REPO_TRIGGERS_FILE    = _DATA_DIR / "triggers.repo.json"
 _REPO_RETIRED_FILE     = _DATA_DIR / "retired.repo.json"
@@ -68,7 +69,7 @@ def _watched_trigger_files() -> tuple:
     return (TRIGGERS_FILE, _REPO_TRIGGERS_FILE, TRIGGERS_LOCAL_FILE)
 # Shipped rewrites for sidecar callout text, keyed source then trigger id. Seeds the
 # same path as a user's own callout edit, so wording fixes ship without a jar rebuild.
-CALLOUT_DEFAULTS_FILE = _BUNDLE_DIR / "callout_defaults.json"
+CALLOUT_DEFAULTS_FILE = _ASSETS_DIR / "callout_defaults.json"
 TIMELINES_DIR       = _DATA_DIR   / "timelines"
 # Read-only bundled set: the shipped UMAD.txt and the committed cactbot
 # dungeon timelines. Frozen builds find them under _internal, a source
@@ -97,7 +98,7 @@ _USER_VOICES_DIR = _DATA_DIR / "voices"
 # copy ships bundled. The background refresh writes a SEPARATE writable cache under
 # a distinct filename so a source checkout's download can't clobber the committed
 # file, since _DATA_DIR == _BUNDLE_DIR there. Cache wins when present.
-_CALLOUTS_JA_BUNDLE = _BUNDLE_DIR / "callouts_ja.json"
+_CALLOUTS_JA_BUNDLE = _ASSETS_DIR / "callouts_ja.json"
 _CALLOUTS_JA_CACHE  = _DATA_DIR   / "callouts_ja.cache.json"
 _CALLOUTS_JA_MAX_BYTES = 4_000_000
 # Same idea for the other GitHub fetches. urlopen's timeout caps time, not

@@ -662,7 +662,7 @@ class UpdaterUiMixin:
         def _fetch() -> None:
             try:
                 req = urllib.request.Request(
-                    f"https://raw.githubusercontent.com/{updater.REPO}/{_REPO_TRIGGERS_BRANCH}/triggers.json",
+                    f"https://raw.githubusercontent.com/{updater.REPO}/{_REPO_TRIGGERS_BRANCH}/assets/triggers.json",
                     headers={"User-Agent": "NyaaTriggers"},
                 )
                 raw = fetch_bytes(req, _REPO_JSON_MAX_BYTES)
@@ -682,7 +682,7 @@ class UpdaterUiMixin:
                 # trigger update.
                 try:
                     rreq = urllib.request.Request(
-                        f"https://raw.githubusercontent.com/{updater.REPO}/{_REPO_TRIGGERS_BRANCH}/retired.json",
+                        f"https://raw.githubusercontent.com/{updater.REPO}/{_REPO_TRIGGERS_BRANCH}/assets/retired.json",
                         headers={"User-Agent": "NyaaTriggers"},
                     )
                     rraw = fetch_bytes(rreq, _REPO_JSON_MAX_BYTES)

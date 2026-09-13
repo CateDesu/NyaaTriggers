@@ -1353,7 +1353,7 @@ class TriggersTabMixin:
         on any failure. The bundled or cached copy stands in. Emits
         _callouts_ja_signal."""
         ref = "main"
-        url = f"https://raw.githubusercontent.com/{updater.REPO}/{ref}/callouts_ja.json"
+        url = f"https://raw.githubusercontent.com/{updater.REPO}/{ref}/assets/callouts_ja.json"
 
         def _fetch() -> None:
             changed = False

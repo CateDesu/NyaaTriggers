@@ -125,8 +125,8 @@ jobs:
 
   # Run the test suite on every push and tag. Every build/publish job below
   # depends on this, so a commit that breaks the rollback contract or DPS
-  # totals never ships to auto-updating users. Tests are standalone scripts
-  # (python3 test_*.py), so run each one and fail the job if any exits non-zero.
+  # totals never ships to auto-updating users. The test runner gives each
+  # standalone suite its own process and fails if any suite exits nonzero.
   test:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
@@ -145,14 +145,7 @@ jobs:
       - name: Run test suite
         env:
           QT_QPA_PLATFORM: offscreen
-        run: |
-          status=0
-          for f in test_*.py; do
-            echo "::group::$f"
-            python "$f" || { echo "::error::$f failed"; status=1; }
-            echo "::endgroup::"
-          done
-          exit $status
+        run: python -m tests
       # The Japanese catalog drifts silently as strings are added. Fail the
       # build when lang/ja.json is out of sync; tools/extract_strings.py
       # (optionally --prune) brings it back.
@@ -333,7 +326,7 @@ jobs:
           PY
 
       - name: Generate exe icon
-        run: python -c "from PIL import Image; Image.open('icon_nyaa.png').save('icon_nyaa.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
+        run: python -c "from PIL import Image; Image.open('assets/icon_nyaa.png').save('assets/icon_nyaa.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
 
       - name: Fetch voice model
         run: curl.exe -fL --retry 3 --retry-all-errors -o voices/en_US-arctic-medium.onnx "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/arctic/medium/en_US-arctic-medium.onnx"
@@ -397,6 +390,17 @@ jobs:
         env:
           VERSION: ${{ needs.meta.outputs.version }}
         run: python -c "import os; from pathlib import Path; assert Path('dist/NyaaTriggers/_internal/nyaatriggers.version').read_text(encoding='utf-8') == os.environ['VERSION']"
+
+      - name: Verify bundled assets shipped
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for source in Path('assets').iterdir():
+              if source.suffix in {'.json', '.png'}:
+                  bundled = Path('dist/NyaaTriggers/_internal/assets') / source.name
+                  assert bundled.read_bytes() == source.read_bytes(), f'Bundled asset missing or changed: {source.name}'
+          PY
 
       # Both engines ship with every build. Check the packaged files too.
       - name: Verify both engines shipped
@@ -536,6 +540,16 @@ jobs:
         env:
           VERSION: ${{ needs.meta.outputs.version }}
         run: python -c "import os; from pathlib import Path; assert Path('dist/NyaaTriggers/_internal/nyaatriggers.version').read_text(encoding='utf-8') == os.environ['VERSION']"
+
+      - name: Verify bundled assets shipped
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          for source in Path('assets').iterdir():
+              if source.suffix in {'.json', '.png'}:
+                  bundled = Path('dist/NyaaTriggers/_internal/assets') / source.name
+                  assert bundled.read_bytes() == source.read_bytes(), f'Bundled asset missing or changed: {source.name}'
+          PY
 
       # Both engines ship with every build. Check the packaged files too.
       - name: Verify both engines shipped

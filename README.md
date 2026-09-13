@@ -84,6 +84,8 @@ Everything is in the **[guide](docs/GUIDE.md)**:
 - [Settings](docs/GUIDE.md#settings) - language and connection
 - [Personal triggers](docs/GUIDE.md#personal-triggers) · [Updating](docs/GUIDE.md#updating) - your data, kept across updates
 - [Requirements](docs/GUIDE.md#requirements) - for running from source on Linux
+- [Tests](tests/README.md) - running the full suite or selected checks
+- [Planned work](docs/TODO.md) - completed features and next steps
 
 ---
 

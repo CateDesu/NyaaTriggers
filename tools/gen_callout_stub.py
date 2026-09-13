@@ -1,12 +1,12 @@
 """Generate a per-callout translation stub from the shipped triggers.
 
-Reads triggers.json (a flat list of triggers, each with a stable `id` and an
+Reads assets/triggers.json (a flat list of triggers, each with a stable `id` and an
 English `tts_text` template) and emits a callouts_<loc>.template.json overlay:
 
     { "schema": 1, "app_version": "<_VERSION>", "locale": "<loc>",
       "callouts": { "<trigger-id>": "<english tts_text>" } }
 
-Translators copy the template to callouts_<loc>.json and replace each value with
+Translators copy the template to assets/callouts_<loc>.json and replace each value with
 the localized template, keeping the {source}/{target}/{count} tokens intact. The
 map is keyed by trigger id (not English text) so wording changes never break it.
 Triggers with an empty tts_text are skipped (nothing to speak, nothing to
@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
-_TRIGGERS = _REPO / "triggers.json"
+_TRIGGERS = _REPO / "assets" / "triggers.json"
 _MAIN = _REPO / "app_common.py"
 
 
@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Generate a callout translation stub.")
     ap.add_argument("--locale", default="ja", help="locale code (default: ja)")
     ap.add_argument("--out", type=Path, default=None,
-                    help="output path (default: callouts_<locale>.template.json in repo root)")
+                    help="output path, defaults to assets/callouts_<locale>.template.json")
     args = ap.parse_args(argv)
 
     triggers = json.loads(_TRIGGERS.read_text(encoding="utf-8"))
@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         print("triggers.json is not a list", file=sys.stderr)
         return 1
     stub = build_stub(triggers, args.locale)
-    out = args.out or (_REPO / f"callouts_{args.locale}.template.json")
+    out = args.out or (_REPO / "assets" / f"callouts_{args.locale}.template.json")
     tmp = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",

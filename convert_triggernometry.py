@@ -2,7 +2,7 @@
 """
 Convert Triggernometry XML trigger files to NyaaTriggers JSON format.
 
-Merges every XML under SOURCE_DIRS into triggers.json, deduped on
+Merges every XML under SOURCE_DIRS into assets/triggers.json, deduped on
 log_type + ability_id. Both network-log regex dialects are handled.
   - pipe, OverlayPlugin / IINACT   ^20\\|f\\|f\\|f\\|HEXID\\|
   - colon, cactbot / ACT hex types \\A.{N}1[56]:src:name:HEXID:  15/16 map to ability 21/22
@@ -13,7 +13,7 @@ get converted. Complex, wildcard and Lua triggers are dropped. See
 extract_ids.
 
 Usage
-    python3 convert_triggernometry.py                  # merge into triggers.json in place
+    python3 convert_triggernometry.py                  # merge into assets/triggers.json in place
     python3 convert_triggernometry.py out.json         # write to separate file
 """
 
@@ -41,7 +41,7 @@ SOURCE_DIRS = [
     HOME / 'Downloads',                   # loose XMLs pulled from the Discord sharing channel
 ]
 
-EXISTING_JSON = Path(__file__).parent / 'triggers.json'
+EXISTING_JSON = Path(__file__).parent / 'assets' / 'triggers.json'
 
 # Fixed uuid5 namespace, shared by all three converters. Reruns emit the same
 # id for the same trigger key, so references to converted triggers survive a

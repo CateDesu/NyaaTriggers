@@ -263,7 +263,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
     def __init__(self):
         super().__init__()
         self.setWindowTitle("NyaaTriggers")
-        _icon = _BUNDLE_DIR / "icon_nyaa.png"
+        _icon = ac._ASSETS_DIR / "icon_nyaa.png"
         if _icon.exists():
             self.setWindowIcon(QIcon(str(_icon)))
         self.resize(1280, 720)

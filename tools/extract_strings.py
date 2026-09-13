@@ -27,7 +27,7 @@ _REPO = Path(__file__).resolve().parent.parent
 # _() is defined in locale_util itself and re-imported widely. Scan app modules,
 # skip tests, this tooling, vendored engine trees, and any virtualenv/build dir
 # (checked at every path level, so a repo-root .venv can't leak _() from deps).
-_SKIP_DIRS = {"tools", "triggevent-core", "triggernometry-core", ".git", "jre",
+_SKIP_DIRS = {"tools", "tests", "triggevent-core", "triggernometry-core", ".git", "jre",
               ".venv", "venv", "env", "site-packages", "node_modules",
               "__pycache__", "build", "dist"}
 

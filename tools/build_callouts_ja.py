@@ -1,7 +1,7 @@
-"""Build callouts_ja.json (id/text -> display, display -> kana reading) from the
+"""Build assets/callouts_ja.json (id/text -> display, display -> kana reading) from the
 phrase map.
 
-Reads triggers.json + tools/callout_phrases_ja.json. The phrase map is
+Reads assets/triggers.json + tools/callout_phrases_ja.json. The phrase map is
   "<english callout>": {"display": "<natural JP, kanji ok>", "reading": "<pure kana>"}
 (a plain string is accepted too and used as both display and reading). Emits:
   callouts : {trigger-id -> display}      NyaaTriggers' own triggers (precise)
@@ -27,10 +27,10 @@ import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
-_TRIGGERS = _REPO / "triggers.json"
+_TRIGGERS = _REPO / "assets" / "triggers.json"
 _PHRASES = _REPO / "tools" / "callout_phrases_ja.json"
 _NAMES = _REPO / "tools" / "trigger_names_ja.json"
-_OUT = _REPO / "callouts_ja.json"
+_OUT = _REPO / "assets" / "callouts_ja.json"
 _MAIN = _REPO / "app_common.py"
 
 # Only the tokens _fire() actually substitutes at runtime (.replace of

@@ -500,7 +500,7 @@ def parse_netregex_ids(block: str) -> list[str]:
     return []
 
 
-EXISTING_JSON = Path(__file__).parent / 'triggers.json'
+EXISTING_JSON = Path(__file__).parent / 'assets' / 'triggers.json'
 
 
 def _dedup_keys(log_type: str, ability_id: str) -> set[tuple[str, str]]:

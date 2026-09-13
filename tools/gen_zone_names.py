@@ -7,7 +7,8 @@ shipped pattern ever matches and every Local trigger goes silent (the sidecars
 are unaffected. They key on the numeric zone id). Shipping the id -> English
 name map lets the app match the English name whatever the client speaks.
 
-Run:  python tools/gen_zone_names.py        (writes ../zone_names.json)
+Run:  python tools/gen_zone_names.py
+Writes assets/zone_names.json.
 """
 import json
 import os
@@ -20,7 +21,7 @@ from http_fetch import fetch_bytes
 
 SRC = ("https://raw.githubusercontent.com/OverlayPlugin/cactbot/main/"
        "resources/zone_info.ts")
-OUT = Path(__file__).resolve().parent.parent / "zone_names.json"
+OUT = Path(__file__).resolve().parent.parent / "assets" / "zone_names.json"
 # Bounds a hostile or broken response. The real file is well under 1 MiB.
 _MAX_BYTES = 16 << 20
 

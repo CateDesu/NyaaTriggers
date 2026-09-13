@@ -307,11 +307,11 @@ Most features live in their own **Settings** sections.
 
 ## Personal triggers
 
-Your additions, edits, and deletions live in `triggers.local.json`, and the bundled `triggers.json` stays read-only. That file is gitignored, so updates never remove yours and your local set merges back automatically on startup.
+Your additions, edits, and deletions live in `triggers.local.json`, and the bundled `assets/triggers.json` stays read-only. Your local file is gitignored, so updates never remove yours and your local set merges back automatically on startup.
 
 Under **Settings - Data**:
 
-- **Update Triggers** - pull a fresh bundled `triggers.json` from GitHub for new fight coverage, no effect on your local set
+- **Update Triggers** - pull a fresh bundled `assets/triggers.json` from GitHub for new fight coverage, no effect on your local set
 - **Restore from Repo** - re-download the bundled set if it gets out of shape. Your custom and edited triggers are kept
 - **Save log…** - export the full captured combat feed to a text file for debugging
 - **Export** / **Import** - save your local triggers and folders to a file, or load them back. Import replaces your current local set

@@ -85,22 +85,22 @@ for f in sorted(glob.glob('voices/en_US-*.onnx') + glob.glob('voices/en_US-*.onn
     datas.append((f, 'voices'))
 
 datas += [
-    ('triggers.json', '.'),
+    ('assets/triggers.json', 'assets'),
     # Withdrawn trigger ids, and shipped rewrites for sidecar callout text. Both must
     # ship: without retired.json a removed trigger survives in triggers.local.json.
-    ('retired.json', '.'),
+    ('assets/retired.json', 'assets'),
     # Zone id -> English name: without it the local engine can only match the
     # zone name the client reports, so a non-English client gets no callouts.
-    ('zone_names.json', '.'),
+    ('assets/zone_names.json', 'assets'),
     # Zone id -> cactbot timeline index (every fight cactbot ships one for):
     # timeline bars for fights with no local trigger file.
-    ('cactbot_timelines.json', '.'),
-    ('callout_defaults.json', '.'),
+    ('assets/cactbot_timelines.json', 'assets'),
+    ('assets/callout_defaults.json', 'assets'),
     # Hand-written local timeline for the UMAD fight tag. Serves straight from
     # the bundle: the loader falls back to _internal/timelines when no writable
     # copy sits next to the exe. Sample Fight.txt stays a source checkout example.
     ('timelines/UMAD.txt', 'timelines'),
-    ('icon_nyaa.png', '.'),
+    ('assets/icon_nyaa.png', 'assets'),
 ]
 
 # Committed cactbot timeline caches, named <tag>.cactbot.txt. The bulk are the
@@ -131,8 +131,8 @@ if os.path.isfile('triggevent_inventory.seed.json'):
 
 # Committed Japanese callout overlay (id -> translated tts_text). Bundled as the
 # offline/first-run copy; the app refreshes a separate writable cache from GitHub.
-if os.path.isfile('callouts_ja.json'):
-    datas.append(('callouts_ja.json', '.'))
+if os.path.isfile('assets/callouts_ja.json'):
+    datas.append(('assets/callouts_ja.json', 'assets'))
 
 # Built-in alert chimes (sounds/*.wav). Resolved at runtime from
 # _BUNDLE_DIR/sounds; a custom path the user picks is read from disk instead.
@@ -193,7 +193,7 @@ tn_bin_tree = Tree(_tn_bin, prefix=_tn_bin) if _have_tn else None
 
 # App icon: Windows wants an .ico, falling back to the .png (PyInstaller converts
 # it when Pillow is available), else no custom icon. (Linux ignores the icon arg.)
-_icon_candidates = ('icon_nyaa.ico', 'icon_nyaa.png')
+_icon_candidates = ('assets/icon_nyaa.ico', 'assets/icon_nyaa.png')
 _icon = next((c for c in _icon_candidates if os.path.exists(c)), None)
 
 a = Analysis(
