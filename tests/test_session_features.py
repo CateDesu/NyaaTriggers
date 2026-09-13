@@ -9,9 +9,9 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
-from nyaatriggers.death_recap import DeathRecap, MAX_DEATHS, MAX_ACTORS
+from nyaatriggers.death_recap import DeathRecap, MAX_DEATHS, MAX_ACTORS, MAX_EVENTS, MAX_STATUSES
 from nyaatriggers.dps_meter import DpsMeter
-from nyaatriggers.prog_session import ProgSessions, summary
+from nyaatriggers.prog_session import CHECKPOINT_SECONDS, ProgSessions, summary
 from nyaatriggers.record_store import read_record, write_record
 from nyaatriggers.trigger_engine import Trigger
 from nyaatriggers.trigger_profiles import SOURCES, apply_choices, capture_profile, validate_profile
@@ -118,6 +118,49 @@ class RecapTests(unittest.TestCase):
         self.status()
         self.recap.process(["30", "ts", "0abc", "Vulnerability", "0", "040001234", "Boss", PLAYER, "Player"])
         self.assertEqual(self.death()["statuses"], [])
+
+    def test_preparation_keeps_original_times_expiry_and_status_removals(self):
+        self.status()
+        self.recap.end_pull()
+        self.status(duration="60")
+        self.status(duration="1", source="40002222")
+        self.status(duration="60", source="40003333")
+        self.status("30", source="40003333")
+        self.recap.process(ability(pairs=[("04", "1F40000")]))
+        self.clock.value += 2
+        self.recap.end_pull()
+        self.recap.begin_pull()
+        death = self.death()
+        self.assertEqual(len(death["statuses"]), 1)
+        self.assertEqual(death["statuses"][0]["expires"], self.clock() + 58)
+        self.assertEqual(death["events"][-1]["time"], -2)
+        self.assertEqual(death["events"][-1]["amount"], 500)
+
+    def test_late_death_keeps_old_damage_and_clears_preparation_for_that_actor(self):
+        self.recap.process(ability())
+        self.recap.end_pull()
+        self.status()
+        self.recap.process(ability(pairs=[("04", "1F40000")]))
+        self.assertEqual([e["kind"] for e in self.death()["events"]], ["damage", "gained", "heal"])
+        self.recap.begin_pull()
+        death = self.death()
+        self.assertEqual(death["events"], [])
+        self.assertEqual(death["statuses"], [])
+
+    def test_preparation_stays_bounded_and_resets_with_the_feed(self):
+        self.recap.end_pull()
+        for index in range(MAX_ACTORS + 10):
+            self.recap.process(ability(target=f"{0x10000000 + index:X}", pairs=[("04", "10000")]))
+        self.assertLessEqual(len(self.recap.preparation), MAX_ACTORS)
+        for index in range(MAX_EVENTS + 10):
+            self.recap.process(["26", "ts", f"{index + 1:X}", "Status", "60", BOSS, "Boss", PLAYER, "Player"])
+        buf = self.recap.preparation[int(PLAYER, 16)]
+        self.assertEqual(len(buf["events"]), MAX_EVENTS)
+        self.assertEqual(len(buf["statuses"]), MAX_STATUSES)
+        self.recap.reset()
+        self.recap.begin_pull()
+        self.assertEqual(self.death()["events"], [])
+        self.assertEqual(self.recap.preparation, {})
 
 
 class SessionTests(unittest.TestCase):
@@ -263,6 +306,31 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(self.sessions.save_error, "")
         loaded = ProgSessions(self.temp.name)
         self.assertEqual({s["name"] for s in loaded.sessions}, {"Unsaved first", "Unsaved second"})
+
+    def test_checkpoint_failure_is_retried_at_the_next_interval(self):
+        self.start()
+        self.combat(True)
+        self.meter.process(ability())
+        with patch("nyaatriggers.prog_session.write_record", side_effect=OSError("Disk unavailable")) as save:
+            for _ in range(CHECKPOINT_SECONDS * 2 - 1):
+                self.clock.value += 1
+                self.sessions.update_active(self.meter.full_snapshot())
+                self.sessions.checkpoint()
+            self.assertEqual(save.call_count, 1)
+        self.assertIn("Disk unavailable", self.sessions.save_error)
+        self.clock.value += 1
+        self.sessions.update_active(self.meter.full_snapshot())
+        self.sessions.checkpoint()
+        loaded = ProgSessions(self.temp.name).sessions[0]
+        self.assertEqual(loaded["pulls"][0]["duration"], CHECKPOINT_SECONDS * 2)
+        self.assertEqual(loaded["elapsed"], CHECKPOINT_SECONDS * 2)
+        self.assertEqual(self.sessions.save_error, "")
+        self.assertEqual(self.sessions.unsaved, {})
+        self.sessions.end(self.meter.full_snapshot())
+        self.clock.value += CHECKPOINT_SECONDS
+        with patch("nyaatriggers.prog_session.write_record") as save:
+            self.sessions.checkpoint()
+        save.assert_not_called()
 
 
 class ProfileTests(unittest.TestCase):

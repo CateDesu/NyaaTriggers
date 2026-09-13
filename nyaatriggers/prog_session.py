@@ -11,6 +11,7 @@ from nyaatriggers.prog_phases import DEFINITIONS, PhaseAttempt, definition_for, 
 
 COMPLETE_REASONS = {"combat-ended", "wipe"}
 LATE_DEATH_SECONDS = 2
+CHECKPOINT_SECONDS = 15
 
 
 def validate_session(data):
@@ -85,6 +86,8 @@ class ProgSessions:
         self._recap_pull = None
         self._recap_until = None
         self._recap_ids = set()
+        self._empty_pull = None
+        self._checkpoint_at = None
         self.definition = None
         self.attempt = None
         self.last_attempt = None
@@ -103,9 +106,11 @@ class ProgSessions:
         self.sessions.insert(0, session)
         self.current = session
         self.started_at = self.clock()
+        self._checkpoint_at = self.started_at
         self.ready = not in_combat
         self.pending = None
         self._recap_pull = None
+        self._empty_pull = None
         self.definition = definition_for(zone_id, self.definitions)
         if self.definition is not None:
             self.ready = False
@@ -120,6 +125,7 @@ class ProgSessions:
     def save(self, session):
         if session is self.current:
             session["elapsed"] = self.elapsed(session)
+            self._checkpoint_at = self.clock()
         try:
             validate_session(session)
             write_record(self.directory, session)
@@ -133,6 +139,10 @@ class ProgSessions:
         self.save_error = "\n".join(self.save_errors.values())
         return True
 
+    def checkpoint(self):
+        if self.current is not None and self.clock() - self._checkpoint_at >= CHECKPOINT_SECONDS:
+            self.save(self.current)
+
     def flush_pending(self):
         for session in list(self.unsaved.values()):
             self.save(session)
@@ -143,6 +153,7 @@ class ProgSessions:
             self.ready = True
 
     def pull_started(self, snapshot):
+        self._empty_pull = None
         if self.current is None or not self.ready:
             self._recap_pull = None
             if self.current is not None and self.definition is not None:
@@ -186,15 +197,18 @@ class ProgSessions:
         if pull is None or pull.get("phase_tracking") is not None:
             return
         reason = encounter["end_reason"]
+        late_deaths = reason in COMPLETE_REASONS or (
+            reason == "empty" and encounter.get("boundary_reason") in COMPLETE_REASONS)
+        pull.update(duration=encounter["DURATION"],
+                    deaths=max(encounter["deaths"], pull.get("recap_count", 0)),
+                    ending=reason, complete=reason in COMPLETE_REASONS)
         if reason == "empty" and not pull.get("recap_count"):
             self.current["pulls"].remove(pull)
-        else:
-            pull.update(duration=encounter["DURATION"],
-                        deaths=max(encounter["deaths"], pull.get("recap_count", 0)),
-                        ending=reason, complete=reason in COMPLETE_REASONS)
+            # A late death can restore this attempt without listing empty pulls.
+            self._empty_pull = pull if late_deaths else None
         if self.pending == ident:
             self.pending = None
-            if reason in COMPLETE_REASONS:
+            if late_deaths:
                 self._recap_until = self.clock() + LATE_DEATH_SECONDS
             else:
                 self._recap_pull = None
@@ -206,19 +220,26 @@ class ProgSessions:
         self._interrupt_attempt("feed-lost")
         self.ready = False
         self._recap_pull = None
+        self._empty_pull = None
         self._awaiting_snapshot = None
 
     def record_death(self, death):
         if self.current is None or self._recap_pull is None:
             return None
         if self._recap_until is not None and self.clock() > self._recap_until:
+            self._empty_pull = None
             return None
         if death["id"] in self._recap_ids:
             return None
         pull = next((p for p in self.current["pulls"] if p["id"] == self._recap_pull), None)
+        if pull is None and self._empty_pull is not None and self._empty_pull["id"] == self._recap_pull:
+            pull = self._empty_pull
         if pull is None:
             return None
         data = self.recaps.record(self.current["id"], pull["id"], death)
+        if pull is self._empty_pull:
+            self.current["pulls"].append(pull)
+            self._empty_pull = None
         self._recap_ids.add(death["id"])
         pull["recap_count"] += 1
         pull["deaths"] = max(pull["deaths"], pull["recap_count"])
@@ -262,6 +283,7 @@ class ProgSessions:
         self.pending = None
         self.ready = False
         self._recap_pull = None
+        self._empty_pull = None
         self.attempt = None
         self.last_attempt = None
         self._awaiting_snapshot = None
@@ -363,9 +385,9 @@ class ProgSessions:
                 attempt.waiting = True
                 self.save(self.current)
             return
-        self._close_attempt(attempt, reason)
+        self._close_attempt(attempt, reason, encounter.get("boundary_reason") in COMPLETE_REASONS)
 
-    def _close_attempt(self, attempt, reason):
+    def _close_attempt(self, attempt, reason, late_deaths=False):
         if attempt.closed:
             return
         marker_time = max((o["at"] for o in attempt.data["observations"]), default=0)
@@ -376,12 +398,14 @@ class ProgSessions:
         self.attempt = None
         self.last_attempt = attempt
         self.ready = reason == "wipe"
-        if reason in COMPLETE_REASONS:
+        late_deaths = reason in COMPLETE_REASONS or (reason == "empty" and late_deaths)
+        if late_deaths:
             self._recap_until = self.clock() + LATE_DEATH_SECONDS
         else:
             self._recap_pull = None
         if reason == "empty" and not attempt.pull["recap_count"] and not attempt.data["observations"]:
             self.current["pulls"].remove(attempt.pull)
+            self._empty_pull = attempt.pull if late_deaths else None
             self.last_attempt = None
         self.save(self.current)
 

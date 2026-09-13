@@ -72,6 +72,10 @@ class DeathRecapTabMixin:
     def _recap_added(self, death):
         self._prog_sessions.update_active(self._dps_meter.full_snapshot())
         saved = self._prog_sessions.record_death(death)
+        tab = self._prog_tab
+        if (saved is not None and tab.session is self._prog_sessions.current
+                and tab.table.rowCount() != len(tab.session["pulls"])):
+            tab.refresh()
         if self._recap_context is None:
             self._recap_records = list(self._death_recap.deaths)
             self._refresh_recap_list()

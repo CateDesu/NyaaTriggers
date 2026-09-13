@@ -6,7 +6,7 @@ import math
 import time
 from uuid import uuid4
 
-from nyaatriggers.dps_meter import _actor_int, _unpack_effect
+from nyaatriggers.dps_meter import DEATH_DUPLICATE_SECONDS, _actor_int, _unpack_effect
 
 WINDOW_SECONDS = 15
 MAX_DEATHS = 80
@@ -25,26 +25,35 @@ class DeathRecap:
         self.clock = clock or time.monotonic
         self.deaths = deque(maxlen=MAX_DEATHS)
         self.buffers = OrderedDict()
+        # Late deaths still need the old history while the next pull is prepared.
+        self.preparation = OrderedDict()
         self.zone = ""
         self.on_death = None
         self.reset_on_pull = False
 
     def reset(self):
         self.buffers.clear()
+        self.preparation.clear()
         self.reset_on_pull = False
+
+    def end_pull(self):
+        self.reset_on_pull = True
 
     def begin_pull(self):
         if self.reset_on_pull:
-            self.reset()
+            self.buffers = self.preparation
+            self.preparation = OrderedDict()
+            self.reset_on_pull = False
 
-    def _buffer(self, actor, now):
-        if actor not in self.buffers:
-            self.buffers[actor] = {"events": deque(maxlen=MAX_EVENTS),
-                                   "statuses": OrderedDict(), "death": -math.inf}
-        self.buffers.move_to_end(actor)
-        while len(self.buffers) > MAX_ACTORS:
-            self.buffers.popitem(last=False)
-        buf = self.buffers[actor]
+    def _buffer(self, actor, now, preparing=False):
+        buffers = self.preparation if preparing else self.buffers
+        if actor not in buffers:
+            buffers[actor] = {"events": deque(maxlen=MAX_EVENTS),
+                              "statuses": OrderedDict(), "death": -math.inf}
+        buffers.move_to_end(actor)
+        while len(buffers) > MAX_ACTORS:
+            buffers.popitem(last=False)
+        buf = buffers[actor]
         while buf["events"] and now - buf["events"][0]["time"] > WINDOW_SECONDS:
             buf["events"].popleft()
         for key, status in list(buf["statuses"].items()):
@@ -52,10 +61,15 @@ class DeathRecap:
                 del buf["statuses"][key]
         return buf
 
-    @staticmethod
-    def _event(buf, now, kind, source, name, amount=None):
-        buf["events"].append({"time": now, "kind": kind, "source": source[:200],
-                              "name": name[:200], "amount": amount})
+    def _observation_buffers(self, actor, now, prepare):
+        yield self._buffer(actor, now)
+        if prepare and self.reset_on_pull:
+            yield self._buffer(actor, now, preparing=True)
+
+    def _event(self, actor, now, kind, source, name, amount=None):
+        for buf in self._observation_buffers(actor, now, kind in ("heal", "hot", "gained", "lost")):
+            buf["events"].append({"time": now, "kind": kind, "source": source[:200],
+                                  "name": name[:200], "amount": amount})
 
     def process(self, fields):
         if not fields:
@@ -66,7 +80,7 @@ class DeathRecap:
             self.reset()
             self.zone = fields[3]
         elif kind == "33" and len(fields) > 3 and fields[3].upper() == "4000000F":
-            self.reset_on_pull = True
+            self.end_pull()
         elif kind in ("21", "22") and len(fields) >= 24:
             reflected = False
             for index in range(8, 24, 2):
@@ -84,10 +98,9 @@ class DeathRecap:
                 actor = player_id(fields[2] if on_source else fields[6])
                 if actor is None:
                     continue
-                buf = self._buffer(actor, now)
                 if effect in ("damage", "heal"):
                     source = fields[7] if reflected and effect == "damage" else fields[3]
-                    self._event(buf, now, "instant-death" if flags & 0xFF == 0x33 else effect,
+                    self._event(actor, now, "instant-death" if flags & 0xFF == 0x33 else effect,
                                 source, fields[5], None if flags & 0xFF == 0x33 else amount)
         elif kind == "24" and len(fields) >= 7:
             actor = player_id(fields[2])
@@ -99,14 +112,13 @@ class DeathRecap:
                 return
             if not 0 <= amount <= 0xFFFFFFFF:
                 return
-            self._event(self._buffer(actor, now), now,
+            self._event(actor, now,
                         "dot" if fields[4] == "DoT" else "hot",
                         fields[18] if len(fields) > 18 else "", fields[4], amount)
         elif kind in ("26", "30") and len(fields) > 8:
             actor = player_id(fields[7])
             if actor is None:
                 return
-            buf = self._buffer(actor, now)
             try:
                 effect_id = int(fields[2], 16)
             except ValueError:
@@ -121,20 +133,22 @@ class DeathRecap:
                     return
                 if not math.isfinite(duration) or duration < 0:
                     return
-                buf["statuses"][key] = {"name": fields[3][:200], "source": fields[6][:200],
-                                        "expires": now + duration if duration else None}
-                buf["statuses"].move_to_end(key)
-                while len(buf["statuses"]) > MAX_STATUSES:
-                    buf["statuses"].popitem(last=False)
-            else:
-                buf["statuses"].pop(key, None)
-            self._event(buf, now, "gained" if kind == "26" else "lost", fields[6], fields[3])
+            for buf in self._observation_buffers(actor, now, True):
+                if kind == "26":
+                    buf["statuses"][key] = {"name": fields[3][:200], "source": fields[6][:200],
+                                            "expires": now + duration if duration else None}
+                    buf["statuses"].move_to_end(key)
+                    while len(buf["statuses"]) > MAX_STATUSES:
+                        buf["statuses"].popitem(last=False)
+                else:
+                    buf["statuses"].pop(key, None)
+            self._event(actor, now, "gained" if kind == "26" else "lost", fields[6], fields[3])
         elif kind == "25" and len(fields) > 3:
             actor = player_id(fields[2])
             if actor is None:
                 return
             buf = self._buffer(actor, now)
-            if now - buf["death"] < 1:
+            if now - buf["death"] < DEATH_DUPLICATE_SECONDS:
                 return
             buf["death"] = now
             events = [{**event, "time": round(event["time"] - now, 3)}
@@ -145,5 +159,6 @@ class DeathRecap:
             self.deaths.appendleft(death)
             buf["events"].clear()
             buf["statuses"].clear()
+            self.preparation.pop(actor, None)
             if self.on_death is not None:
                 self.on_death(death)

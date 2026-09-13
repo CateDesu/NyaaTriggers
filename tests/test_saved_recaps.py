@@ -262,6 +262,56 @@ class SavedRecapTests(unittest.TestCase):
         self.assertEqual(len(self.load(pull)[0]), 1)
         self.assertFalse(pull["complete"])
 
+    def test_late_death_after_empty_wipe_is_saved(self):
+        self.combat(True)
+        self.line(ability(pairs=[("33", "0")]))
+        pull = self.session["pulls"][-1]
+        self.line(["33", "ts", "0", "4000000F"])
+        self.assertEqual(self.session["pulls"], [])
+        self.death()
+        self.assertEqual(self.session["pulls"], [pull])
+        self.assertFalse(pull["complete"])
+        self.assertEqual(pull["recap_count"], 1)
+        self.assertEqual(len(self.load(pull, ProgSessions(self.directory))[0]), 1)
+
+    def test_duplicate_empty_ending_does_not_extend_late_death_window(self):
+        self.combat(True)
+        pull = self.session["pulls"][-1]
+        snapshot = deepcopy(self.meter.full_snapshot())
+        snapshot["Encounter"].update(end_reason="empty", boundary_reason="combat-ended")
+        self.combat(False)
+        self.clock.value += 1.5
+        self.sessions.pull_finished(snapshot)
+        self.death()
+        self.assertEqual(self.session["pulls"], [])
+        self.assertEqual(self.load(pull), ([], []))
+
+    def test_new_pull_closes_the_empty_pull_grace_period(self):
+        self.combat(True)
+        first = self.session["pulls"][-1]
+        self.combat(False)
+        second = self.begin()
+        self.death()
+        self.assertEqual(self.session["pulls"], [second])
+        self.assertEqual(self.load(first), ([], []))
+        self.assertEqual(len(self.load(second)[0]), 1)
+
+    def test_interruptions_close_the_empty_pull_grace_period(self):
+        for reason in ("feed-lost", "duty-left", "session-ended"):
+            with self.subTest(reason=reason):
+                self.sessions.end()
+                self.session = self.sessions.start("Next session", 1, "Duty", False)
+                self.combat(True)
+                pull = self.session["pulls"][-1]
+                self.combat(False)
+                if reason == "feed-lost":
+                    self.sessions.feed_lost()
+                else:
+                    self.sessions.end(reason=reason)
+                self.death()
+                self.assertEqual(self.session["pulls"], [])
+                self.assertEqual(self.load(pull), ([], []))
+
     def test_old_sessions_load_without_a_recap_count(self):
         pull = self.begin()
         self.combat(False)

@@ -19,7 +19,7 @@ class SessionTrackingMixin:
             return
         self._prog_sessions.pull_finished(snapshot)
         if self._prog_sessions.attempt is None:
-            self._death_recap.reset_on_pull = True
+            self._death_recap.end_pull()
         self._prog_tab.refresh()
 
     def _begin_activity_event(self):
@@ -35,7 +35,7 @@ class SessionTrackingMixin:
         started, ended = self._prog_sessions.process_event(
             fields, events, self._prog_event_time, snapshot)
         if ended or (any(kind == "finish" for kind, _ in events) and not self._prog_sessions.pending):
-            self._death_recap.reset_on_pull = True
+            self._death_recap.end_pull()
         if started or (any(kind == "start" for kind, _ in events) and self._prog_sessions.attempt is None):
             self._death_recap.begin_pull()
         if started or ended or (any(kind == "finish" for kind, _ in events) and self._prog_sessions.attempt is None):

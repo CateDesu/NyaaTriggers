@@ -160,7 +160,8 @@ their actual recipient. Instant-death effects have their own label.
 The recent view keeps the latest 80 deaths in memory until the program closes. Zone changes
 and disconnects clear the live observation buffers, while completed recaps remain
 available. Wipe events keep the buffers until the next pull so deaths arriving
-just after the wipe can still be reviewed.
+just after the wipe can still be reviewed. Buffs and healing observed between
+pulls remain available for the next pull's recap.
 
 Pulls collected by a Prog session also save their death recaps locally. In Prog,
 select a pull and press **View death recaps** to open just that attempt's deaths,
@@ -217,7 +218,9 @@ count toward the longest complete pull. **Combat ended** does not mean a clear.
 
 Sessions save to `prog_sessions/` in the program's writable data directory,
 independently of the DPS recording switch. Notes save after a short typing pause
-and flush on shutdown. The session picker opens previous sessions after restart.
+and flush on shutdown. Active sessions also save elapsed time and observed pull
+progress every 15 seconds between other saves. Crash recovery retains progress
+through the last successful save. The session picker opens previous sessions after restart.
 An unfinished session from a crash is marked interrupted. Files that cannot be
 read are preserved and the page shows the error. Session history does not follow
 the DPS log rotation limits.
@@ -228,7 +231,8 @@ DPS log rotation. Failed writes are retried when session changes are flushed.
 The retry queue retains the latest 256 unsaved recaps and reports any losses if
 storage remains unavailable beyond that limit. Storage must recover before those records can
 survive closing the program. A death without observed damage remains reviewable
-as an interrupted attempt if the meter reports an empty encounter.
+as an interrupted attempt if the meter reports an empty encounter, including a
+death received within two seconds after combat ends or a wipe.
 
 ## Profiles
 

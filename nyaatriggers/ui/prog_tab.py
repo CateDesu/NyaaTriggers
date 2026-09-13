@@ -326,6 +326,7 @@ class ProgTab(QWidget):
         active = self.sessions.current
         self.sessions.update_active(self.window._dps_meter.full_snapshot())
         self.sessions.check_phase_timeout()
+        self.sessions.checkpoint()
         if active is not None and self.session is active and self.sessions.pending:
             for row, pull in enumerate(active["pulls"]):
                 if pull["id"] == self.sessions.pending and row < self.table.rowCount():

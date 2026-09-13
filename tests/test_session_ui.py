@@ -17,7 +17,8 @@ from PyQt6.QtWidgets import QApplication
 from nyaatriggers import app_common as ac
 from nyaatriggers import main_window as mw
 from nyaatriggers import theme
-from nyaatriggers.prog_session import ProgSessions
+from nyaatriggers.prog_session import CHECKPOINT_SECONDS, ProgSessions
+from nyaatriggers.record_store import write_record
 from tests.test_session_features import ability, PLAYER, Clock
 from nyaatriggers.trigger_engine import Trigger
 from nyaatriggers.trigger_profiles import capture_profile
@@ -446,6 +447,103 @@ class SessionUiTests(unittest.TestCase):
         saved = ProgSessions(self.temp / "prog_sessions").sessions[0]["pulls"][0]
         self.assertEqual(saved["deaths"], 1)
         self.assertEqual(saved["duration"], 12)
+
+    def test_next_pull_keeps_preparation_statuses_and_healing_in_saved_recaps(self):
+        self.connect()
+        window = self.window
+        tab = window._prog_tab
+        tab.start_button.click()
+        self.pull()
+        self.clock.value += 3
+        self.line(["26", "ts", "ABC", "Preparation buff", "30", PLAYER, "Player", PLAYER, "Player"])
+        self.line(ability(pairs=[("04", "1F40000")]))
+        self.line(["24", "ts", PLAYER, "Player", "HoT", "0", "A"])
+        window._on_in_combat(True, True)
+        self.clock.value += 1
+        self.line(ability())
+        self.line(["25", "ts", PLAYER, "Player"])
+        death = window._recap_records[0]
+        self.assertEqual([s["name"] for s in death["statuses"]], ["Preparation buff"])
+        self.assertEqual([e["kind"] for e in death["events"]], ["gained", "heal", "hot", "damage"])
+        self.assertEqual(death["events"][0]["time"], -1)
+        saved, errors = window._prog_sessions.recaps.load(tab.session["id"], tab.session["pulls"][-1]["id"])
+        self.assertEqual(errors, [])
+        self.assertEqual(saved[0]["events"], death["events"])
+        self.assertEqual(saved[0]["statuses"], [{"name": "Preparation buff", "source": "Player"}])
+
+    def test_live_duration_and_break_time_are_checkpointed_without_edits(self):
+        self.connect()
+        window = self.window
+        tab = window._prog_tab
+        tab.start_button.click()
+        window._on_in_combat(True, True)
+        self.line(ability())
+        with patch("nyaatriggers.prog_session.write_record", wraps=write_record) as save:
+            for _ in range(60):
+                self.clock.value += 1
+                tab.tick()
+        self.assertEqual(save.call_count, 60 // CHECKPOINT_SECONDS)
+        saved = ProgSessions(self.temp / "prog_sessions").sessions[0]
+        self.assertEqual(saved["pulls"][0]["duration"], 60)
+        self.assertEqual(saved["pulls"][0]["ending"], "program-closed")
+        self.assertEqual(saved["elapsed"], 60)
+        self.line(ability())
+        window._on_in_combat(False, False)
+        self.clock.value += CHECKPOINT_SECONDS
+        tab.tick()
+        saved = ProgSessions(self.temp / "prog_sessions").sessions[0]
+        self.assertEqual(saved["elapsed"], 60 + CHECKPOINT_SECONDS)
+        self.assertEqual(saved["pulls"][0]["duration"], 60)
+
+    def test_late_instant_death_restores_the_pull_row_and_saved_recap(self):
+        self.connect()
+        window = self.window
+        tab = window._prog_tab
+        tab.start_button.click()
+        window._on_in_combat(True, True)
+        self.line(ability(pairs=[("33", "0")]))
+        self.clock.value += 1
+        window._on_in_combat(False, False)
+        self.assertEqual(tab.table.rowCount(), 0)
+        self.clock.value += 0.2
+        self.line(["25", "ts", PLAYER, "Player"])
+        self.assertEqual(tab.table.rowCount(), 1)
+        self.assertEqual(tab.table.item(0, DEATHS_COLUMN).text(), "1")
+        self.assertTrue(tab.recap_button.isEnabled())
+        tab.recap_button.click()
+        self.assertEqual(window._recap_records[0]["events"][0]["kind"], "instant-death")
+        loaded = ProgSessions(self.temp / "prog_sessions")
+        pull = loaded.sessions[0]["pulls"][0]
+        self.assertFalse(pull["complete"])
+        self.assertEqual(pull["recap_count"], 1)
+        self.assertEqual(len(loaded.recaps.load(tab.session["id"], pull["id"])[0]), 1)
+
+    def test_duplicate_deaths_agree_between_prog_meter_and_recaps(self):
+        self.connect()
+        window = self.window
+        tab = window._prog_tab
+        tab.start_button.click()
+        window._on_in_combat(True, True)
+        self.line(ability())
+        death = ["25", "ts", PLAYER, "Player"]
+        self.line(death)
+        self.line(death)
+        tab.tick()
+        self.assertEqual(tab.table.item(0, DEATHS_COLUMN).text(), "1")
+        self.assertEqual(tab.pull["recap_count"], 1)
+        self.assertEqual(window._dps_meter.full_snapshot()["Encounter"]["deaths"], 1)
+        self.clock.value += 1.1
+        self.line(death)
+        window._on_in_combat(False, False)
+        self.assertEqual(tab.pull["deaths"], 2)
+        self.assertEqual(tab.pull["recap_count"], 2)
+        window._on_in_combat(True, True)
+        self.line(ability())
+        self.line(death)
+        tab.tick()
+        pull = tab.session["pulls"][-1]
+        self.assertEqual(pull["deaths"], 1)
+        self.assertEqual(pull["recap_count"], 1)
 
     def test_zone_and_disconnect_stop_late_deaths_reaching_old_pull(self):
         self.connect()

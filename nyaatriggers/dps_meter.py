@@ -91,6 +91,7 @@ _MISS_TYPES = frozenset((0x01, 0x02))
 # pauses. The next hit starts a fresh segment. Display only. The recorded
 # pull is never split.
 DEFAULT_IDLE_TIMEOUT = 120.0
+DEATH_DUPLICATE_SECONDS = 1
 
 
 def _actor_int(actor_id) -> "int | None":
@@ -266,6 +267,7 @@ class DpsMeter:
         self.on_pull_start = None
         self.on_pull_finish = None
         self._last_end_time = 0.0
+        self._death_times = {}
 
     def set_idle_timeout(self, secs) -> None:
         """How long the on-screen meter keeps ticking after the last damage
@@ -368,6 +370,7 @@ class DpsMeter:
             self.finalize()
         # A new pull pushes the preserved one off screen.
         self._last_final = None
+        self._death_times.clear()
         now = self._clock()
         wall = time.time()
         self.current = _Encounter(self._zone or "Encounter", self._zone,
@@ -771,6 +774,10 @@ class DpsMeter:
             # otherwise start a phantom one with a running clock.
             return
         now = self._clock()
+        previous = self._death_times.get(tid)
+        if previous is not None and now - previous < DEATH_DUPLICATE_SECONDS:
+            return
+        self._note(self._death_times, tid, now)
         for enc in (self.current, self._view):
             if enc is None:
                 continue
