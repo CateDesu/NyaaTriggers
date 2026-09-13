@@ -15,9 +15,9 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import app_common
-import main_window
-from locale_util import set_locale
+from nyaatriggers import app_common
+from nyaatriggers import main_window
+from nyaatriggers.locale_util import set_locale
 
 MW = main_window.MainWindow
 FAILS = []

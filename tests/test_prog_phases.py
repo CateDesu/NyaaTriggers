@@ -6,12 +6,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from death_recap import DeathRecap
-from dps_meter import DpsMeter
-from prog_phases import (DEFINITIONS, UMAD_PHASES, UMAD_ZONE, PhaseDefinition,
+from nyaatriggers.death_recap import DeathRecap
+from nyaatriggers.dps_meter import DpsMeter
+from nyaatriggers.prog_phases import (DEFINITIONS, UMAD_PHASES, UMAD_ZONE, PhaseDefinition,
                          PhaseRule, TransitionRule, definition_for, read_tracking)
-from prog_session import ProgSessions
-from record_store import read_record, write_record
+from nyaatriggers.prog_session import ProgSessions
+from nyaatriggers.record_store import read_record, write_record
 from tests.test_session_features import Clock, PLAYER, BOSS, ability
 
 
@@ -240,7 +240,7 @@ class PhaseTests(unittest.TestCase):
         path = self.directory / (self.session["id"] + ".json")
         before = path.read_bytes()
         self.clock.value += 5
-        with patch("record_store.os.replace", side_effect=OSError("Disk full")):
+        with patch("nyaatriggers.record_store.os.replace", side_effect=OSError("Disk full")):
             self.line(marker(1))
         self.assertEqual(path.read_bytes(), before)
         self.assertTrue(self.sessions.save_error)

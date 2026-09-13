@@ -20,7 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 
-import fight_catalog as fc
+from nyaatriggers import fight_catalog as fc
 
 FAILS = []
 

@@ -15,8 +15,8 @@ import types
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import main_window as mw
-from umad_chains import (
+from nyaatriggers import main_window as mw
+from nyaatriggers.umad_chains import (
     AWAY1, AWAY2, LOOK1, LOOK2, CURSED_SHRIEK, DEFAULT_GAZE_MARKERS,
     CursedShriekPairs, StatusPairs,
 )

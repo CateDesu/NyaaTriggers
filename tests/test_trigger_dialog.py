@@ -18,8 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PyQt6.QtWidgets import QApplication, QDialog
 
-import trigger_dialog
-from trigger_dialog import TriggerDialog
+from nyaatriggers import trigger_dialog
+from nyaatriggers.trigger_dialog import TriggerDialog
 
 FAILS = []
 
@@ -122,7 +122,7 @@ finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
 # ── a step row keeps both ability_id and ability_regex on round trip ──────
-from trigger_engine import Trigger
+from nyaatriggers.trigger_engine import Trigger
 
 row = trigger_dialog._StepRow(data={"log_type": "21", "ability_id": "A55B",
                                     "ability_regex": "Exaflare"})

@@ -27,12 +27,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PyQt6.QtCore import QObject
 from PyQt6.QtWidgets import QApplication
 
-import app_common as ac
-from status_timer import StatusTimerRunner
-from sequential import SequentialRunner
-from ui.triggers_tab import TriggersTabMixin
-from ui.instance_tab import InstanceTabMixin
-from ui.timeline_tab import TimelineTabMixin
+from nyaatriggers import app_common as ac
+from nyaatriggers.status_timer import StatusTimerRunner
+from nyaatriggers.sequential import SequentialRunner
+from nyaatriggers.ui.triggers_tab import TriggersTabMixin
+from nyaatriggers.ui.instance_tab import InstanceTabMixin
+from nyaatriggers.ui.timeline_tab import TimelineTabMixin
 
 FAILS = []
 

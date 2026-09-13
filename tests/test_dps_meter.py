@@ -16,8 +16,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dps_meter import DpsMeter, _actor_int, _unpack_effect
-import plugin_link as pl
+from nyaatriggers.dps_meter import DpsMeter, _actor_int, _unpack_effect
+from nyaatriggers import plugin_link as pl
 
 FAILS = []
 

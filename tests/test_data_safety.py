@@ -23,25 +23,25 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtCore import QObject
 from PyQt6.QtWidgets import QApplication
 
-import app_common as ac
-from convert_event_trigger import parse_hex_ids
-from dps_meter import DpsMeter
-import fflogs
-import plugin_link
-from pull_capture import PullCapture
-from telesto_client import TelestoClient
-from timeline_engine import TimelineEngine
-from timeline_parser import parse
+from nyaatriggers import app_common as ac
+from nyaatriggers.convert_event_trigger import parse_hex_ids
+from nyaatriggers.dps_meter import DpsMeter
+from nyaatriggers import fflogs
+from nyaatriggers import plugin_link
+from nyaatriggers.pull_capture import PullCapture
+from nyaatriggers.telesto_client import TelestoClient
+from nyaatriggers.timeline_engine import TimelineEngine
+from nyaatriggers.timeline_parser import parse
 from tools import extract_strings
 from tools import gen_callout_stub
-from triggernometry_bridge import _ByteQueue as TriggernometryQueue
-from triggevent_bridge import _ByteQueue as TriggeventQueue
-import tts
-from ui.dps_tab import DpsTabMixin
-from ui.settings_tab import SettingsTabMixin
-from ui.triggers_tab import TriggersTabMixin
-import updater
-from updater_ui import UpdaterUiMixin
+from nyaatriggers.triggernometry_bridge import _ByteQueue as TriggernometryQueue
+from nyaatriggers.triggevent_bridge import _ByteQueue as TriggeventQueue
+from nyaatriggers import tts
+from nyaatriggers.ui.dps_tab import DpsTabMixin
+from nyaatriggers.ui.settings_tab import SettingsTabMixin
+from nyaatriggers.ui.triggers_tab import TriggersTabMixin
+from nyaatriggers import updater
+from nyaatriggers.updater_ui import UpdaterUiMixin
 
 _app = QApplication.instance() or QApplication([])
 
@@ -79,7 +79,7 @@ class DataSafetyTests(unittest.TestCase):
                     stack.enter_context(patch.object(sys, "_MEIPASS", str(bundle), create=True))
                     stack.enter_context(patch.object(sys, "frozen", True, create=True))
                     stack.enter_context(patch.object(sys, "executable", str(root / "NyaaTriggers.exe")))
-                values = runpy.run_path(str(repo / "app_common.py"))
+                values = runpy.run_path(str(repo / "nyaatriggers/app_common.py"))
                 for name in bundled_names:
                     self.assertEqual(values[name].parent, bundle / "assets")
                     self.assertTrue(json.loads(values[name].read_text(encoding="utf-8")))
@@ -99,7 +99,7 @@ class DataSafetyTests(unittest.TestCase):
                 self.assertTrue(host._official_ids)
                 self.assertTrue(host._retired_ids)
                 self.assertTrue(host._load_callout_defaults())
-                with patch("ui.triggers_tab.set_readings"):
+                with patch("nyaatriggers.ui.triggers_tab.set_readings"):
                     host._load_cached_callouts_ja()
                 self.assertTrue(host._callouts_ja)
 
@@ -150,7 +150,7 @@ class DataSafetyTests(unittest.TestCase):
             path.write_text(content)
             host = SimpleNamespace(_settings={})
             with patch.object(ac, '_SETTINGS_FILE', path), \
-                 patch('ui.settings_tab._MAX_SETTINGS_BYTES', 32):
+                 patch('nyaatriggers.ui.settings_tab._MAX_SETTINGS_BYTES', 32):
                 SettingsTabMixin._load_settings(host)
             self.assertEqual(host._settings, {})
             self.assertEqual(path.read_text(), content)

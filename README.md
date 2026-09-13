@@ -87,6 +87,12 @@ Everything is in the **[guide](docs/GUIDE.md)**:
 - [Tests](tests/README.md) - running the full suite or selected checks
 - [Planned work](docs/TODO.md) - completed features and next steps
 
+Program modules live in `nyaatriggers/`, with the interface code in
+`nyaatriggers/ui/`. Run the program with `python3 main.py` from the repository
+root. Bundled resources live in `assets/` and the other resource folders.
+Settings, logs, and saved sessions keep their existing locations beside `main.py`
+for source runs or beside the executable for packaged builds.
+
 ---
 
 ## License

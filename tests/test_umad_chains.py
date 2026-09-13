@@ -10,7 +10,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from umad_chains import ACC, ACCRETION, BURST_GAP_S, CRUST, DPS, SUPPORT, \
+from nyaatriggers.umad_chains import ACC, ACCRETION, BURST_GAP_S, CRUST, DPS, SUPPORT, \
     STALE_S, BlackHoleChains, StatusPairs, canon_status_key, parse_compound, \
     role_for_job
 

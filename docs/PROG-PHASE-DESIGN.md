@@ -312,13 +312,13 @@ that one group transitioned faster without evidence for that conclusion.
 
 ## Implementation boundaries
 
-- `prog_phases.py`: built-in definitions and a passive detector with no Qt or
+- `nyaatriggers/prog_phases.py`: built-in definitions and a passive detector with no Qt or
   callout dependencies. It emits phase and transition evidence.
-- `prog_session.py`: logical pull associations, coverage, saved observations,
+- `nyaatriggers/prog_session.py`: logical pull associations, coverage, saved observations,
   and pure summary and comparison calculations.
-- `ui/session_tracking.py`: ordered feed integration and lifecycle routing.
-- `ui/prog_tab.py`: the new column, details, progress summary, and comparison.
-- `dps_meter.py`: additive timing metadata if required by the shared origin.
+- `nyaatriggers/ui/session_tracking.py`: ordered feed integration and lifecycle routing.
+- `nyaatriggers/ui/prog_tab.py`: the new column, details, progress summary, and comparison.
+- `nyaatriggers/dps_meter.py`: additive timing metadata if required by the shared origin.
 
 Phase tracking must work with callouts disabled and without DPS log recording.
 It does not load cactbot timelines. The existing Cactbot switch remains the

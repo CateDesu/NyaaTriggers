@@ -67,7 +67,7 @@ for f, p in split.items():
     print(f"        {f}: {p}")
 
 # ── a localized client still fires Local triggers ──────────────────────────
-import main_window as mw
+from nyaatriggers import main_window as mw
 
 check("canonical_zone_name resolves a known id",
       mw.canonical_zone_name(1226) == "AAC Light-heavyweight M1 (Savage)")
@@ -107,7 +107,7 @@ check("no id: falls back to the reported name",
 z._set_zone_aliases("", 0)
 check("empty zone matches nothing", not z._zone_matches(re.compile(".")))
 
-from dps_meter import DpsMeter
+from nyaatriggers.dps_meter import DpsMeter
 from types import SimpleNamespace
 
 meter = DpsMeter()

@@ -23,7 +23,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import plugin_link as pl
+from nyaatriggers import plugin_link as pl
 from websockets.sync.server import serve
 
 FAILS = []

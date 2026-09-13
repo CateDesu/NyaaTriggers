@@ -16,9 +16,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pull_capture import PullCapture
-import drop_log
-import pull_capture
+from nyaatriggers.pull_capture import PullCapture
+from nyaatriggers import drop_log
+from nyaatriggers import pull_capture
 
 FAILS = []
 

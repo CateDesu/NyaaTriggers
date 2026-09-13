@@ -31,7 +31,7 @@ _TRIGGERS = _REPO / "assets" / "triggers.json"
 _PHRASES = _REPO / "tools" / "callout_phrases_ja.json"
 _NAMES = _REPO / "tools" / "trigger_names_ja.json"
 _OUT = _REPO / "assets" / "callouts_ja.json"
-_MAIN = _REPO / "app_common.py"
+_MAIN = _REPO / "nyaatriggers/app_common.py"
 
 # Only the tokens _fire() actually substitutes at runtime (.replace of
 # {source}/{target}/{count}) must survive the translation. Other braces (simple

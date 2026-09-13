@@ -9,12 +9,12 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
-from death_recap import DeathRecap, MAX_DEATHS, MAX_ACTORS
-from dps_meter import DpsMeter
-from prog_session import ProgSessions, summary
-from record_store import read_record, write_record
-from trigger_engine import Trigger
-from trigger_profiles import SOURCES, apply_choices, capture_profile, validate_profile
+from nyaatriggers.death_recap import DeathRecap, MAX_DEATHS, MAX_ACTORS
+from nyaatriggers.dps_meter import DpsMeter
+from nyaatriggers.prog_session import ProgSessions, summary
+from nyaatriggers.record_store import read_record, write_record
+from nyaatriggers.trigger_engine import Trigger
+from nyaatriggers.trigger_profiles import SOURCES, apply_choices, capture_profile, validate_profile
 
 PLAYER = "10FF0001"
 BOSS = "40001234"
@@ -212,7 +212,7 @@ class SessionTests(unittest.TestCase):
         path = Path(self.temp.name) / (session["id"] + ".json")
         before = path.read_bytes()
         session["name"] = "New name"
-        with patch("record_store.os.replace", side_effect=OSError("Disk failed")):
+        with patch("nyaatriggers.record_store.os.replace", side_effect=OSError("Disk failed")):
             self.assertFalse(self.sessions.save(session))
         self.assertEqual(path.read_bytes(), before)
         self.assertIn("Disk failed", self.sessions.save_error)
@@ -252,7 +252,7 @@ class SessionTests(unittest.TestCase):
         second = self.start()
         first["name"] = "Unsaved first"
         second["name"] = "Unsaved second"
-        with patch("prog_session.write_record", side_effect=OSError("Disk unavailable")):
+        with patch("nyaatriggers.prog_session.write_record", side_effect=OSError("Disk unavailable")):
             self.sessions.save(first)
             self.sessions.save(second)
         self.assertEqual(len(self.sessions.unsaved), 2)

@@ -22,9 +22,10 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-import drop_log
+from nyaatriggers import drop_log
+from nyaatriggers.paths import bundle_root, data_root
 
-_LOG_FILE = (Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent) / "nyaatriggers.log"
+_LOG_FILE = data_root() / "nyaatriggers.log"
 
 
 def _owner_only(path, flags):
@@ -72,7 +73,7 @@ def _maybe_finish_windows_update() -> bool:
     # and the installed app stays put.
     dest = None
     try:
-        import updater
+        from nyaatriggers import updater
         argv = sys.argv
 
         def _opt(flag: str):
@@ -122,12 +123,10 @@ except ImportError:
     sys.exit(1)
 
 import install
-from theme import STYLESHEET
+from nyaatriggers.theme import STYLESHEET
 
 _FFXIV_VENV = Path.home() / ".venv" / "ffxiv"
-# Bundled data lives in _MEIPASS when frozen, else alongside this file.
-# __file__ does not point at the bundled data dir in a frozen onedir app.
-_BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+_BUNDLE_DIR = bundle_root()
 _VOICES_DIR = _BUNDLE_DIR / "voices"
 _VOICE_STEM  = "en_US-arctic-medium"
 _VOICE_FILE  = _VOICES_DIR / f"{_VOICE_STEM}.onnx"
@@ -453,7 +452,7 @@ def main() -> None:
     # Bundled display font for the sidebar, brand block plus nav pills. Best-effort.
     # A missing file just falls back to the system UI font.
     from PyQt6.QtGui import QFontDatabase
-    _bundle = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    _bundle = bundle_root()
     _font = _bundle / "fonts" / "KosugiMaru-Regular.ttf"
     if _font.is_file():
         QFontDatabase.addApplicationFont(str(_font))
@@ -465,10 +464,10 @@ def main() -> None:
             sys.exit(0)
 
     # Lazy import so tts.py's venv injection runs after setup completes.
-    from main_window import MainWindow
+    from nyaatriggers.main_window import MainWindow
     window = MainWindow()
     # Signal a good boot only after setup and the main window both succeed.
-    import updater
+    from nyaatriggers import updater
     updater.mark_boot_ok()
     # Sweep update leftovers only now. During window construction the Windows
     # boot verify rollback may still need the *.nyaa-old backups, so a sweep

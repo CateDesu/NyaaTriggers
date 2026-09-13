@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import convert_cactbot
-from convert_cactbot import (
+from nyaatriggers import convert_cactbot
+from nyaatriggers.convert_cactbot import (
     OUTPUTS, RESPONSES, _array_at, _unescape_js, convert_file,
     extract_top_blocks, find_sub_block, parse_netregex_ids, resolve_output_key,
     strip_js_comments,
@@ -341,7 +341,7 @@ with tempfile.TemporaryDirectory() as td:
     _old_json = convert_cactbot.EXISTING_JSON
     convert_cactbot.EXISTING_JSON = bad
     _argv = sys.argv
-    sys.argv = ["convert_cactbot.py", td]
+    sys.argv = ["nyaatriggers/convert_cactbot.py", td]
     try:
         for scalar in ("5", "null"):
             bad.write_text(scalar, encoding="utf-8")

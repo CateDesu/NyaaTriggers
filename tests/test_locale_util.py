@@ -9,8 +9,8 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import locale_util
-from locale_util import _, effective_locale, has_japanese, set_locale
+from nyaatriggers import locale_util
+from nyaatriggers.locale_util import _, effective_locale, has_japanese, set_locale
 
 FAILS = []
 

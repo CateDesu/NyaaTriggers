@@ -2,7 +2,7 @@ name: Release
 
 # Two ways this runs:
 #   * push a v* TAG -> a full Stable release. The version comes from the tag,
-#     so _VERSION in app_common.py must already match it.
+#     so _VERSION in nyaatriggers/app_common.py must already match it.
 #   * push to MAIN -> a ROLLING Stable release, built automatically on every
 #     commit with NO manual tagging. The version is <source _VERSION>.<run_number>
 #     (e.g. 1.2.1.47): that sorts ABOVE the matching base version and increases
@@ -64,7 +64,7 @@ jobs:
             # Tag builds skip the rolling version stamp, so the source version
             # must already equal the tag. Fail here: a mismatch ships a build
             # that reports the old version and offers this update forever.
-            BASE=$(grep -oP '^_VERSION\s*=\s*"\K[^"]+' app_common.py)
+            BASE=$(grep -oP '^_VERSION\s*=\s*"\K[^"]+' nyaatriggers/app_common.py)
             if [ "$BASE" != "$VER" ]; then
               echo "::error::_VERSION $BASE does not match tag $TAG"; exit 1
             fi
@@ -74,8 +74,8 @@ jobs:
             SUFFIX=""
             ROLL=false
           else
-            BASE=$(grep -oP '^_VERSION\s*=\s*"\K[^"]+' app_common.py)
-            if [ -z "$BASE" ]; then echo "::error::could not read _VERSION from app_common.py"; exit 1; fi
+            BASE=$(grep -oP '^_VERSION\s*=\s*"\K[^"]+' nyaatriggers/app_common.py)
+            if [ -z "$BASE" ]; then echo "::error::could not read _VERSION from nyaatriggers/app_common.py"; exit 1; fi
             VER="${BASE}.${{ github.run_number }}"
             # Only main has a release channel. An unexpected ref (e.g. a manual
             # workflow_dispatch from another branch) must never publish over
@@ -117,7 +117,7 @@ jobs:
           if [ -z "$LATEST" ]; then
             echo "No published rolling release yet; $TAG is the first"
           elif [ "$TAG" = "$LATEST" ] || [ "$(printf '%s\n%s\n' "${TAG#v}" "${LATEST#v}" | sort -V | tail -1)" != "${TAG#v}" ]; then
-            echo "::error::$TAG is not newer than the current latest rolling release $LATEST; refusing to regress the channel (re-run of an old run or renamed workflow file? bump _VERSION in app_common.py if the rename was intended)"
+            echo "::error::$TAG is not newer than the current latest rolling release $LATEST; refusing to regress the channel (re-run of an old run or renamed workflow file? bump _VERSION in nyaatriggers/app_common.py if the rename was intended)"
             exit 1
           else
             echo "$TAG sorts above current latest $LATEST"
@@ -317,7 +317,7 @@ jobs:
           python - <<'PY'
           import os, re, pathlib
           ver = os.environ["VER"]
-          p = pathlib.Path("app_common.py")
+          p = pathlib.Path("nyaatriggers/app_common.py")
           s = p.read_text(encoding="utf-8")
           s, n = re.subn(r'(?m)^(_VERSION\s*=\s*")[^"]+(")', r'\g<1>' + ver + r'\g<2>', s, count=1)
           assert n == 1, "did not patch _VERSION"
@@ -473,7 +473,7 @@ jobs:
           python - <<'PY'
           import os, re, pathlib
           ver = os.environ["VER"]
-          p = pathlib.Path("app_common.py")
+          p = pathlib.Path("nyaatriggers/app_common.py")
           s = p.read_text(encoding="utf-8")
           s, n = re.subn(r'(?m)^(_VERSION\s*=\s*")[^"]+(")', r'\g<1>' + ver + r'\g<2>', s, count=1)
           assert n == 1, "did not patch _VERSION"

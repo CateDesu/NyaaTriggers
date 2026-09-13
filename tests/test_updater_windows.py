@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import updater
+from nyaatriggers import updater
 
 # Keep a handle on the real pid-wait before the swap tests stub it out below.
 _real_wait_for_pid_exit = updater._wait_for_pid_exit
@@ -216,35 +216,39 @@ with tempfile.TemporaryDirectory() as base:
 # Swap succeeds on disk but the new build fails to come up (e.g. AV quarantined
 # a DLL). Updater must restore and relaunch the previous version.
 print("Test 7: swapped build fails to boot -> rollback + relaunch OLD")
-with tempfile.TemporaryDirectory() as base:
-    inst, new_root = build(base)
-    # Frozen staging carries the selected version without Python source.
-    (new_root / '_internal' / 'nyaatriggers.version').write_text('9.9.9')
-    LAUNCHED.clear()
-    updater._relaunch_and_verify = lambda exe_dst, dest_dir, grace=25.0: (
-        LAUNCHED.append(Path(exe_dst)) or False)   # new build does NOT boot
-    try:
-        updater.finish_windows_update(inst, new_root, old_pid=1, exe_name=EXE)
-    finally:
+for version_path, version_text in (
+        ("_internal/nyaatriggers.version", "9.9.9"),
+        ("nyaatriggers/app_common.py", '_VERSION = "9.9.9"\n'),
+        ("app_common.py", '_VERSION = "9.9.9"\n')):
+    with tempfile.TemporaryDirectory() as base:
+        inst, new_root = build(base)
+        version_file = new_root / version_path
+        version_file.parent.mkdir(parents=True, exist_ok=True)
+        version_file.write_text(version_text)
+        LAUNCHED.clear()
         updater._relaunch_and_verify = lambda exe_dst, dest_dir, grace=25.0: (
-            LAUNCHED.append(Path(exe_dst)) or True)
-    internal = snap_internal(inst)
-    check("exe rolled back to OLD", (inst / EXE).read_text() == "OLD-EXE")
-    check("_internal rolled back to OLD (consistent)", internal == OLD_INTERNAL)
-    check("user data untouched", (inst / "settings.json").read_text() == "USERDATA")
-    check("tried the new build, then relaunched the rolled-back OLD",
-          LAUNCHED == [inst / EXE, inst / EXE])
-    check("install looks intact after rollback",
-          updater._install_looks_intact(inst, inst / EXE))
-    sentinel = inst / updater._REJECTED_NAME
-    check("sentinel names the rejected version",
-          sentinel.is_file() and "9.9.9" in sentinel.read_text())
-    check("log records the boot-verify rollback",
-          "rejected 9.9.9" in (inst / updater._UPDATE_LOG_NAME).read_text())
-    updater.cleanup_old_backups(inst)
-    check("no .new/.nyaa-old leftovers after cleanup",
-          not [n for n in leftovers(inst) if ".new" in n or n.endswith(".nyaa-old")])
-
+            LAUNCHED.append(Path(exe_dst)) or False)   # new build does NOT boot
+        try:
+            updater.finish_windows_update(inst, new_root, old_pid=1, exe_name=EXE)
+        finally:
+            updater._relaunch_and_verify = lambda exe_dst, dest_dir, grace=25.0: (
+                LAUNCHED.append(Path(exe_dst)) or True)
+        internal = snap_internal(inst)
+        check("exe rolled back to OLD", (inst / EXE).read_text() == "OLD-EXE")
+        check("_internal rolled back to OLD (consistent)", internal == OLD_INTERNAL)
+        check("user data untouched", (inst / "settings.json").read_text() == "USERDATA")
+        check("tried the new build, then relaunched the rolled-back OLD",
+              LAUNCHED == [inst / EXE, inst / EXE])
+        check("install looks intact after rollback",
+              updater._install_looks_intact(inst, inst / EXE))
+        sentinel = inst / updater._REJECTED_NAME
+        check("sentinel names the rejected version",
+              sentinel.is_file() and "9.9.9" in sentinel.read_text())
+        check("log records the boot-verify rollback",
+              "rejected 9.9.9" in (inst / updater._UPDATE_LOG_NAME).read_text())
+        updater.cleanup_old_backups(inst)
+        check("no .new/.nyaa-old leftovers after cleanup",
+              not [n for n in leftovers(inst) if ".new" in n or n.endswith(".nyaa-old")])
 
 # === Test 8: removals hit a sharing violation -> still never raises ==========
 # _force_remove's file branch used to catch only FileNotFoundError, so a locked

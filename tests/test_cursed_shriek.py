@@ -12,7 +12,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from umad_chains import (
+from nyaatriggers.umad_chains import (
     AWAY1, AWAY2, LOOK1, LOOK2, BURST_GAP_S, CURSED_SHRIEK, DEFAULT_GAZE_MARKERS,
     FAKE_FOLLOWUP_IDS, GAZE_IDS, REAL_FOLLOWUP_IDS, STALE_S,
     CursedShriekPairs,

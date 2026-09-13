@@ -38,27 +38,27 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import drop_log
-import fflogs
+from nyaatriggers import drop_log
+from nyaatriggers import fflogs
 import install
-import locale_util
+from nyaatriggers import locale_util
 import main
-import app_common
-import main_window as mw
-import triggevent_bridge
-import trigger_engine as te
-import tts
-import updater
-from convert_cactbot import strip_js_comments
-from convert_triggernometry import extract_ids, expand_id_expr
-from timeline_parser import _strip_comment, parse
-from trigger_engine import (
+from nyaatriggers import app_common
+from nyaatriggers import main_window as mw
+from nyaatriggers import triggevent_bridge
+from nyaatriggers import trigger_engine as te
+from nyaatriggers import tts
+from nyaatriggers import updater
+from nyaatriggers.convert_cactbot import strip_js_comments
+from nyaatriggers.convert_triggernometry import extract_ids, expand_id_expr
+from nyaatriggers.timeline_parser import _strip_comment, parse
+from nyaatriggers.trigger_engine import (
     Trigger, _HAVE_REGEX, _as_bool, _id_set, _looks_catastrophic,
     _safe_search, _safe_sub, compile_user_regex,
 )
-from triggernometry_bridge import TriggernometryBridge
-from triggevent_bridge import TriggeventBridge
-from umad_chains import ACCRETION, CRUST, ORDER_IDS, STALE_S, BlackHoleChains
+from nyaatriggers.triggernometry_bridge import TriggernometryBridge
+from nyaatriggers.triggevent_bridge import TriggeventBridge
+from nyaatriggers.umad_chains import ACCRETION, CRUST, ORDER_IDS, STALE_S, BlackHoleChains
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 FAILS = []
@@ -74,10 +74,11 @@ class _CheckFailed(Exception):
 def _program_sources():
     """main_window.py plus the modules the MainWindow split moved code into,
     one combined source for the source level checks below."""
-    parts = [REPO_DIR / "main_window.py", REPO_DIR / "app_common.py",
-             REPO_DIR / "updater_ui.py"]
-    parts += sorted((REPO_DIR / "ui").glob("*.py"))
-    return "\n".join(p.read_text(encoding="utf-8") for p in parts if p.exists())
+    parts = [REPO_DIR / "nyaatriggers/main_window.py", REPO_DIR / "nyaatriggers/app_common.py",
+             REPO_DIR / "nyaatriggers/updater_ui.py"]
+    parts += sorted((REPO_DIR / "nyaatriggers" / "ui").glob("*.py"))
+    assert (REPO_DIR / "nyaatriggers" / "ui" / "__init__.py").is_file()
+    return "\n".join(p.read_text(encoding="utf-8") for p in parts)
 
 
 def check(name, cond):
@@ -476,7 +477,7 @@ def test_r2_timeline_nonfinite_dropped():
     check("overflowing jump target drops the entry",
           parse(f'1.0 "x" jump {huge}') == [])
     # timeline_frame mirrors the guard, a non-finite t must never reach the wire
-    import plugin_link
+    from nyaatriggers import plugin_link
     check("timeline_frame drops non-finite times",
           plugin_link.timeline_frame([(float("inf"), "x"), (float("nan"), "y"),
                                       (1.0, "z")])
@@ -541,7 +542,7 @@ def test_r2_triggernometry_disabled_replay():
     check("start-path replay carries the cached ids",
           replayed == {"t": "set_disabled", "ids": ["guid#0", "guid#1"]})
     br._active = False
-    src_start = Path("triggernometry_bridge.py").read_text(encoding="utf-8")
+    src_start = Path("nyaatriggers/triggernometry_bridge.py").read_text(encoding="utf-8")
     check("start() itself contains the replay",
           'self._send_command({"t": "set_disabled", "ids": sorted(self._disabled)})'
           in src_start.split("def start", 1)[1].split("def stop", 1)[0])
@@ -1369,14 +1370,14 @@ def test_tts_enqueue_drops_oldest():
 
 # ── N1: sidecar stderr goes through the bounded reader ───────────────────────
 def test_read_lines_bounded_skips_giant_line():
-    from triggernometry_bridge import _read_lines_bounded
+    from nyaatriggers.triggernometry_bridge import _read_lines_bounded
     big = "x" * (2 << 20)
     lines = list(_read_lines_bounded(io.StringIO(big + "\nok\n")))
     check("oversized line skipped, next line kept", lines == ["ok\n"])
 
 
 def test_err_loops_use_bounded_reader():
-    for fname in ("triggernometry_bridge.py", "triggevent_bridge.py"):
+    for fname in ("nyaatriggers/triggernometry_bridge.py", "nyaatriggers/triggevent_bridge.py"):
         src = Path(fname).read_text(encoding="utf-8")
         check(f"{fname} stderr bounded", "_read_lines_bounded(proc.stderr)" in src)
 
@@ -1501,7 +1502,7 @@ def test_ws_client_caps_incoming_message_size():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     _ = app
-    from ws_client import WSClient, _MAX_WS_MESSAGE
+    from nyaatriggers.ws_client import WSClient, _MAX_WS_MESSAGE
     c = WSClient()
     check("ws cap constant is 4 MiB", _MAX_WS_MESSAGE == 4 << 20)
     check("ws socket cap applied",
@@ -1602,7 +1603,7 @@ def test_timeline_duplicate_sync_keeps_companions_fired():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     _ = app
-    from timeline_engine import TimelineEngine
+    from nyaatriggers.timeline_engine import TimelineEngine
 
     eng = TimelineEngine()
     eng.load(parse(
@@ -1640,7 +1641,7 @@ def test_timeline_duplicate_sync_keeps_companions_fired():
 
 # ── unsorted sharing-channel folders default to Savage like the rest ──────
 def test_convert_tn_unsorted_fight_tag_defaults_savage():
-    from convert_triggernometry import path_to_fight
+    from nyaatriggers.convert_triggernometry import path_to_fight
     check("unsorted bare phase folder defaults to Savage",
           path_to_fight("Sharing Channel/Unsorted/P4/some trigger") == "P4S")
     check("unsorted explicit Normal keeps its suffix",
@@ -1652,7 +1653,7 @@ def test_ws_replay_state_includes_incombat():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     _ = app
-    from ws_client import WSClient
+    from nyaatriggers.ws_client import WSClient
 
     c = WSClient()
     got = []
@@ -1802,7 +1803,7 @@ def test_ws_stalled_handshake_aborts_and_reopens():
     app = QApplication.instance() or QApplication([])
     _ = app
     from PyQt6.QtNetwork import QAbstractSocket
-    from ws_client import WSClient
+    from nyaatriggers.ws_client import WSClient
 
     class _FakeSocket:
         def __init__(self, state):
@@ -1839,10 +1840,10 @@ def test_ws_stalled_handshake_aborts_and_reopens():
 
 # ── sidecar stdin queues cap queued bytes, not just item count ─────────────
 def test_bridge_stdin_queue_byte_budget():
-    from triggevent_bridge import _ByteQueue as _TEVQueue
-    from triggevent_bridge import _MAX_QUEUE_BYTES as _TEV_CAP
-    from triggernometry_bridge import _ByteQueue as _TNQueue
-    from triggernometry_bridge import _MAX_QUEUE_BYTES as _TN_CAP
+    from nyaatriggers.triggevent_bridge import _ByteQueue as _TEVQueue
+    from nyaatriggers.triggevent_bridge import _MAX_QUEUE_BYTES as _TEV_CAP
+    from nyaatriggers.triggernometry_bridge import _ByteQueue as _TNQueue
+    from nyaatriggers.triggernometry_bridge import _MAX_QUEUE_BYTES as _TN_CAP
     check("both bridges budget 64 MiB of queued stdin",
           _TEV_CAP == _TN_CAP == 64 << 20)
     for cls in (_TEVQueue, _TNQueue):
@@ -1878,7 +1879,7 @@ def test_ws_combatdata_still_teed_raw():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     _ = app
-    from ws_client import WSClient, _SUBSCRIBE
+    from nyaatriggers.ws_client import WSClient, _SUBSCRIBE
 
     check("CombatData stays in the subscribe list for the sidecar tee",
           "CombatData" in _SUBSCRIBE)
@@ -2536,7 +2537,7 @@ def test_is_duplicate_pipe_overlap():
 # ─────────────────────────────────────────────────────────────────────────────
 def test_engine_chain_badge_caps_and_escapes():
     from PyQt6.QtWidgets import QApplication, QLabel
-    from ui.engines import EnginesMixin
+    from nyaatriggers.ui.engines import EnginesMixin
     app = QApplication.instance() or QApplication([])
 
     class _Host:
@@ -2580,7 +2581,7 @@ def test_engine_chain_badge_caps_and_escapes():
 def test_feed_loss_cancels_pending_local_warnings():
     import types
     from PyQt6.QtWidgets import QApplication
-    from ui.instance_tab import InstanceTabMixin
+    from nyaatriggers.ui.instance_tab import InstanceTabMixin
     app = QApplication.instance() or QApplication([])
 
     class _Lbl:

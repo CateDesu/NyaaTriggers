@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PyQt6.QtCore import QCoreApplication
 
-from cactbot_reader import CactbotReader
+from nyaatriggers.cactbot_reader import CactbotReader
 
 FAILS = []
 
@@ -49,7 +49,7 @@ check("null text is dropped", callouts == [("Tank buster", "alert")])
 # ── non subscribe status dicts go to the drop log, not stderr ────────────
 # The injected JS reports bridge ready, hook results and observer state as
 # status events. Printing each one spammed stderr on every page load.
-import cactbot_reader
+from nyaatriggers import cactbot_reader
 
 drops = []
 _real_drop = cactbot_reader.log_drop

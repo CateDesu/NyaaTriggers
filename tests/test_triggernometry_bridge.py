@@ -20,7 +20,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import triggernometry_bridge as tb
+from nyaatriggers import triggernometry_bridge as tb
 
 FAILS = []
 
@@ -97,8 +97,8 @@ check("the live generation's exit status is emitted with its generation",
 # A stale emit that slipped out before the restart must be dropped when queued
 # delivery lands after it. Drives the real slots unbound on duck windows, the
 # test_umad_chain_wiring.py idiom.
-from ui.engines import EnginesMixin
-import ui.voice_tab as vt
+from nyaatriggers.ui.engines import EnginesMixin
+import nyaatriggers.ui.voice_tab as vt
 
 
 class _CalloutHost:

@@ -119,13 +119,13 @@ reviewable. Old summaries without a recap count load unchanged.
 
 ## Code layout
 
-- `prog_session.py`: session and pull records, boundary handling, and summary calculations.
-- `record_store.py`: bounded JSON reads and atomic writes for sessions and profiles.
-- `ui/prog_tab.py`: session controls, pull table, notes, and duration chart.
-- `dps_meter.py`: additive encounter lifecycle metadata while preserving the live meter's behavior.
-- `ui/session_tracking.py`: route lifecycle events to the session tracker and handle feed and duty changes.
+- `nyaatriggers/prog_session.py`: session and pull records, boundary handling, and summary calculations.
+- `nyaatriggers/record_store.py`: bounded JSON reads and atomic writes for sessions and profiles.
+- `nyaatriggers/ui/prog_tab.py`: session controls, pull table, notes, and duration chart.
+- `nyaatriggers/dps_meter.py`: additive encounter lifecycle metadata while preserving the live meter's behavior.
+- `nyaatriggers/ui/session_tracking.py`: route lifecycle events to the session tracker and handle feed and duty changes.
 
-Keep the session state out of `ui/dps_tab.py`. Both pages can consume the same
+Keep the session state out of `nyaatriggers/ui/dps_tab.py`. Both pages can consume the same
 encounter events without making either page own the other. The session tracker
 never resets combat tracking when its own controls are used.
 

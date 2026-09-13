@@ -14,15 +14,15 @@ from unittest.mock import patch
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
-import app_common as ac
-import main_window as mw
-import theme
-from prog_session import ProgSessions
+from nyaatriggers import app_common as ac
+from nyaatriggers import main_window as mw
+from nyaatriggers import theme
+from nyaatriggers.prog_session import ProgSessions
 from tests.test_session_features import ability, PLAYER, Clock
-from trigger_engine import Trigger
-from trigger_profiles import capture_profile
-from ui.prog_tab import DEATHS_COLUMN
-from ui.prog_tab import PHASE_COLUMN
+from nyaatriggers.trigger_engine import Trigger
+from nyaatriggers.trigger_profiles import capture_profile
+from nyaatriggers.ui.prog_tab import DEATHS_COLUMN
+from nyaatriggers.ui.prog_tab import PHASE_COLUMN
 from tests.test_prog_phases import fixture_definition, marker
 
 
@@ -365,7 +365,7 @@ class SessionUiTests(unittest.TestCase):
         tab.start_button.click()
         window._on_in_combat(True, True)
         self.line(ability())
-        with patch("recap_store.write_record", side_effect=OSError("Disk failed")):
+        with patch("nyaatriggers.recap_store.write_record", side_effect=OSError("Disk failed")):
             self.line(["25", "ts", PLAYER, "Player"])
             tab.recap_button.click()
             tab.tick()

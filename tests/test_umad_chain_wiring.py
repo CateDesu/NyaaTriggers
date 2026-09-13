@@ -15,8 +15,8 @@ import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import main_window as mw
-from umad_chains import ACCRETION, CRUST, BlackHoleChains, role_for_job
+from nyaatriggers import main_window as mw
+from nyaatriggers.umad_chains import ACCRETION, CRUST, BlackHoleChains, role_for_job
 
 FAILS = []
 

@@ -15,8 +15,8 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from trigger_engine import Trigger
-from sequential import SequentialRunner
+from nyaatriggers.trigger_engine import Trigger
+from nyaatriggers.sequential import SequentialRunner
 
 FAILS = []
 

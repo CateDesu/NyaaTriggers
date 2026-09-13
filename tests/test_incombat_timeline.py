@@ -13,11 +13,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PyQt6.QtWidgets import QApplication
 
-import timeline_parser
-from dps_meter import DpsMeter
-from main_window import MainWindow
-from timeline_engine import TimelineEngine
-from umad_chains import BlackHoleChains, CursedShriekPairs, StatusPairs
+from nyaatriggers import timeline_parser
+from nyaatriggers.dps_meter import DpsMeter
+from nyaatriggers.main_window import MainWindow
+from nyaatriggers.timeline_engine import TimelineEngine
+from nyaatriggers.umad_chains import BlackHoleChains, CursedShriekPairs, StatusPairs
 
 _app = QApplication.instance() or QApplication(sys.argv)
 
@@ -151,7 +151,7 @@ check("window: leave without marker sends no clear", w2._plugin_link.clears == 0
 
 import json
 
-from ws_client import WSClient
+from nyaatriggers.ws_client import WSClient
 
 wc = WSClient()
 w3 = make_window()
@@ -476,7 +476,7 @@ UNMAPPED = """hideall "--sync--"
 100.0 "--sync--" SystemLogMessage { id: "7DC", param2: "5" } window 10000,0
 """
 
-import timeline_engine
+from nyaatriggers import timeline_engine
 drops = []
 _real_log_drop = timeline_engine.log_drop
 timeline_engine.log_drop = lambda tag, msg: drops.append((tag, msg))

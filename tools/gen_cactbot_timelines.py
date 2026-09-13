@@ -22,7 +22,7 @@ import urllib.request
 from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from http_fetch import fetch_bytes
+from nyaatriggers.http_fetch import fetch_bytes
 
 API_TREE = ("https://api.github.com/repos/OverlayPlugin/cactbot/git/trees/"
             "main?recursive=1")

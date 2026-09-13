@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from convert_triggernometry import (
+from nyaatriggers.convert_triggernometry import (
     convert_xml, expand_id_expr, extract_ids, load_zone_map, path_to_fight,
 )
 

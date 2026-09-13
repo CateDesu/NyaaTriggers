@@ -38,7 +38,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import triggevent_bridge as tb
+from nyaatriggers import triggevent_bridge as tb
 
 FAILS = []
 
@@ -135,7 +135,7 @@ try:
 finally:
     tb.log_drop = _o_drop
 
-src = Path("triggevent_bridge.py").read_text(encoding="utf-8")
+src = Path("nyaatriggers/triggevent_bridge.py").read_text(encoding="utf-8")
 import ast
 _attrs = {n.attr for n in ast.walk(ast.parse(src))
           if isinstance(n, ast.Attribute) and n.attr == "_last_callout_seq"}
@@ -292,7 +292,7 @@ check("the live generation's exit status is emitted with its generation",
 
 # the slot half, a stale emit that slipped out before the restart must be
 # dropped when queued delivery lands after it
-from ui.engines import EnginesMixin
+from nyaatriggers.ui.engines import EnginesMixin
 
 
 class _CalloutHost:

@@ -19,8 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import convert_event_trigger
-from convert_event_trigger import REPO_TO_FIGHT, convert_file
+from nyaatriggers import convert_event_trigger
+from nyaatriggers.convert_event_trigger import REPO_TO_FIGHT, convert_file
 
 FAILS = []
 
@@ -164,7 +164,7 @@ with tempfile.TemporaryDirectory() as td:
     _out = Path(td) / "out.json"
     _err = io.StringIO()
     _argv = sys.argv
-    sys.argv = ["convert_event_trigger.py", td, str(_out)]
+    sys.argv = ["nyaatriggers/convert_event_trigger.py", td, str(_out)]
     try:
         with contextlib.redirect_stderr(_err):
             convert_event_trigger.main()
@@ -180,7 +180,7 @@ with tempfile.TemporaryDirectory() as td:
     _old_json = convert_event_trigger.EXISTING_JSON
     convert_event_trigger.EXISTING_JSON = _bad
     _argv = sys.argv
-    sys.argv = ["convert_event_trigger.py", td]
+    sys.argv = ["nyaatriggers/convert_event_trigger.py", td]
     try:
         for _scalar in ("5", "null"):
             _bad.write_text(_scalar, encoding="utf-8")

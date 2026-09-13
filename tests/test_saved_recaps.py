@@ -8,11 +8,11 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
-from death_recap import DeathRecap, MAX_DEATHS
-from dps_meter import DpsMeter
-from prog_session import ProgSessions
-from recap_store import MAX_PENDING_RECAPS, validate_recap
-from record_store import write_record
+from nyaatriggers.death_recap import DeathRecap, MAX_DEATHS
+from nyaatriggers.dps_meter import DpsMeter
+from nyaatriggers.prog_session import ProgSessions
+from nyaatriggers.recap_store import MAX_PENDING_RECAPS, validate_recap
+from nyaatriggers.record_store import write_record
 from tests.test_session_features import Clock, PLAYER, ability
 
 
@@ -140,7 +140,7 @@ class SavedRecapTests(unittest.TestCase):
         self.death()
         existing = next(self.directory.glob("recaps/*/*/*.json"))
         before = existing.read_bytes()
-        with patch("recap_store.write_record", side_effect=OSError("Disk unavailable")):
+        with patch("nyaatriggers.recap_store.write_record", side_effect=OSError("Disk unavailable")):
             self.death()
             self.combat(False)
             second = self.begin()
@@ -158,7 +158,7 @@ class SavedRecapTests(unittest.TestCase):
 
     def test_failed_session_write_does_not_hide_durable_recap(self):
         pull = self.begin()
-        with patch("prog_session.write_record", side_effect=OSError("Session write failed")):
+        with patch("nyaatriggers.prog_session.write_record", side_effect=OSError("Session write failed")):
             self.death()
         restarted = ProgSessions(self.directory)
         self.assertEqual(len(self.load(pull, restarted)[0]), 1)
@@ -217,7 +217,7 @@ class SavedRecapTests(unittest.TestCase):
 
     def test_persistent_disk_failure_bounds_retry_memory_and_reports_loss(self):
         pull = self.begin()
-        with patch("recap_store.write_record", side_effect=OSError("Disk full")):
+        with patch("nyaatriggers.recap_store.write_record", side_effect=OSError("Disk full")):
             for _ in range(MAX_PENDING_RECAPS + 3):
                 self.death()
         self.assertEqual(len(self.sessions.recaps.unsaved), MAX_PENDING_RECAPS)
@@ -237,7 +237,7 @@ class SavedRecapTests(unittest.TestCase):
                 raise OSError("Rename failed")
             return original(source, destination)
 
-        with patch("record_store.os.replace", side_effect=fail_recap):
+        with patch("nyaatriggers.record_store.os.replace", side_effect=fail_recap):
             self.death()
         self.assertEqual(list(self.directory.glob("recaps/*/*/*.json")), [])
         self.assertEqual(list(self.directory.glob("recaps/*/*/*.tmp")), [])
@@ -248,7 +248,7 @@ class SavedRecapTests(unittest.TestCase):
     def test_unreadable_recap_directory_reports_an_error(self):
         pull = self.begin()
         self.death()
-        with patch("recap_store.Path.iterdir", side_effect=PermissionError("Access denied")):
+        with patch("nyaatriggers.recap_store.Path.iterdir", side_effect=PermissionError("Access denied")):
             recaps, errors = self.load(pull)
         self.assertEqual(recaps, [])
         self.assertEqual(errors, ["Access denied"])
@@ -274,7 +274,7 @@ class SavedRecapTests(unittest.TestCase):
     def test_pending_recaps_follow_their_original_session_after_a_switch(self):
         first_session = self.session
         first = self.begin()
-        with patch("recap_store.write_record", side_effect=OSError("Disk unavailable")):
+        with patch("nyaatriggers.recap_store.write_record", side_effect=OSError("Disk unavailable")):
             first_death = self.death()
             self.combat(False)
             self.sessions.end()

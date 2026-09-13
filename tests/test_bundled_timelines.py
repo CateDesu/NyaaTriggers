@@ -64,7 +64,7 @@ for name in empty:
 # checkouts, untracked, and the next pull that tracks that name deadlocks.
 # Pre-bundle checkouts stranded exactly this way once already. The word
 # boundary keeps _BUNDLE_TIMELINES_DIR reads out of the match.
-tl_src = (ROOT / "ui" / "timeline_tab.py").read_text(encoding="utf-8")
+tl_src = (ROOT / "nyaatriggers" / "ui" / "timeline_tab.py").read_text(encoding="utf-8")
 bare_writes = [
     ln.strip() for ln in tl_src.splitlines()
     if not ln.strip().startswith("#")
@@ -83,8 +83,8 @@ for ln in bare_writes:
 # Either way an unindexed field is a bug, so fail when a shipped file starts
 # using one.
 sys.path.insert(0, str(ROOT))
-import timeline_parser
-from timeline_engine import _SYNC_TYPES
+from nyaatriggers import timeline_parser
+from nyaatriggers.timeline_engine import _SYNC_TYPES
 
 unmapped = {}
 unsupported = {}

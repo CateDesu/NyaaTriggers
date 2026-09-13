@@ -26,7 +26,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
 _TRIGGERS = _REPO / "assets" / "triggers.json"
-_MAIN = _REPO / "app_common.py"
+_MAIN = _REPO / "nyaatriggers/app_common.py"
 
 
 def _app_version() -> str:

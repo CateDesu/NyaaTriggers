@@ -1,7 +1,7 @@
 # UMAD (Dancing Mad Ultimate) player debuffs
 
 Reference for the automarker "Load UMAD preset" button (`_UMAD_AUTOMARK_PRESET` in
-`app_common.py`). UMAD = Dancing Mad (Ultimate) / DMU - Party slots: `<1>`..`<8>`.
+`nyaatriggers/app_common.py`). UMAD = Dancing Mad (Ultimate) / DMU - Party slots: `<1>`..`<8>`.
 
 Status IDs are the ACT/log hex form (what you type in the Debuff field). They were
 cross-checked across cactbot `ui/raidboss/data/07-dt/ultimate/dancing_mad.ts` (authoritative
@@ -114,7 +114,7 @@ Accretion `644` (tanks never do), and Crust is cleansed in In-Line order by teth
 These are NOT seeded as plain automark rules (a static "mark whoever gains First in
 Line" would thrash across the three players who share it). Instead the **UMAD
 black-hole chains** toggle in the Automarkers tab runs a dedicated sequencer
-(`umad_chains.py`): one roaming sign per cleanse queue - DPS without Accretion
+(`nyaatriggers/umad_chains.py`): one roaming sign per cleanse queue - DPS without Accretion
 (default attack1), supports without Accretion (attack2), the Accretion pair (attack3).
 The sign sits on the queue's earliest in-Line player who still has Crust, hops to the
 next when a Crust is cleansed (30 line), and is cleared off the queue's last player.
@@ -152,7 +152,7 @@ the wave resolves its fire or water element as Inferno (`BB1E`/`BB20`) or
 Tsunami (`BB1F`/`BB21`), and on the labeled pull (2026-08-25 23:05, set 1 fake
 plus set 2 real, read off the icon letters) Inferno rode the fake set and
 Tsunami the real one. The **UMAD Cursed Shriek gaze pairs** toggle runs a
-dedicated engine (`umad_chains.py`, `CursedShriekPairs`) that arms the wave's
+dedicated engine (`nyaatriggers/umad_chains.py`, `CursedShriekPairs`) that arms the wave's
 kind from that cast and marks the pair the moment its two gains land. The
 fake pair gets the look-at signs (default bind1/bind2, the chain icon), the
 real pair the look-away signs (default ignore1/ignore2). Each pair is
@@ -174,7 +174,7 @@ is worse than an unmarked one:
 - Marks that can't be sent yet (party slot unknown) are retried on the next
   party refresh instead of being dropped.
 - The Inferno-fake / Tsunami-real mapping rests on one labeled pull so far.
-  The constants `FAKE_FOLLOWUP_IDS` / `REAL_FOLLOWUP_IDS` in `umad_chains.py`
+  The constants `FAKE_FOLLOWUP_IDS` / `REAL_FOLLOWUP_IDS` in `nyaatriggers/umad_chains.py`
   swap in one line if a future labeled pull reads the other way. When unsure,
   leave the toggle off, it never guesses.
 

@@ -14,7 +14,7 @@ hiddenimports = []
 
 # The staged updater can read this before importing any GUI modules.
 _source_version = re.search(r'^_VERSION\s*=\s*"([^"]+)"',
-                            Path('app_common.py').read_text(encoding='utf-8'), re.M)
+                            Path('nyaatriggers/app_common.py').read_text(encoding='utf-8'), re.M)
 if _source_version is None:
     raise SystemExit('[spec] Could not read the release version')
 _version_root = tempfile.TemporaryDirectory(prefix='nyaa-build-version-')
@@ -36,7 +36,7 @@ for pkg in ('piper', 'piper_phonemize', 'onnxruntime',
 # Pure-stdlib converter behind the "Import Triggernometry" button. main_window
 # imports it at module scope (so PyInstaller follows it), but pin it explicitly so
 # the frozen build can never drop it.
-hiddenimports += ['convert_triggernometry']
+hiddenimports += ['nyaatriggers.convert_triggernometry']
 
 # Cactbot reader: cactbot_reader.py imports WebEngine lazily inside start() so a
 # source run survives without it. That also hides it from PyInstaller's

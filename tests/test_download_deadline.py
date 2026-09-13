@@ -32,12 +32,12 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import fflogs
-import fight_catalog as fc
+from nyaatriggers import fflogs
+from nyaatriggers import fight_catalog as fc
 import install
-import tts
-import updater
-from http_fetch import fetch_bytes
+from nyaatriggers import tts
+from nyaatriggers import updater
+from nyaatriggers.http_fetch import fetch_bytes
 
 # Stall window used by the cutoff tests. Small enough to keep the suite at
 # a few seconds, large enough that scheduling jitter cannot trip it on a
