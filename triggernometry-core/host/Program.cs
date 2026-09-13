@@ -53,7 +53,7 @@ static class Program
         for (int i = 1; i < args.Length; i++)
         {
             if (args[i] == "--serve") continue;
-            if (args[i].EndsWith(".xml")) packPaths.Add(args[i]);
+            if (args[i].EndsWith(".xml", StringComparison.OrdinalIgnoreCase)) packPaths.Add(args[i]);
             else testLine = args[i];
         }
         Directory.CreateDirectory(cfgDir);

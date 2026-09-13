@@ -207,7 +207,7 @@ class DataSafetyTests(unittest.TestCase):
         original_put = queue.Queue.put_nowait
         for cls in (TriggeventQueue, TriggernometryQueue):
             with self.subTest(queue=cls.__module__):
-                q = cls(maxsize=10, maxbytes=3)
+                q = cls(maxsize=10, maxbytes=sys.getsizeof('ab'))
                 barrier = threading.Barrier(2)
                 outcomes = []
 

@@ -53,6 +53,17 @@ def _owner_only(path, flags):
     return os.open(path, flags, 0o600)
 
 
+def open_private_log(path: Path):
+    """Open a private log and tighten any existing retained generation."""
+    log = open(path, "a", encoding="utf-8", errors="replace", opener=_owner_only)
+    for existing in (path, path.with_name(path.name + ".1")):
+        try:
+            os.chmod(existing, 0o600)
+        except OSError:
+            pass
+    return log
+
+
 # os.open's mode only applies at creation, so a pre-existing 0644 log gets one
 # best-effort chmod after the first write, when the file is known to exist.
 _perms_tightened = False

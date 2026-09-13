@@ -161,6 +161,8 @@ class TimelineTabMixin:
                 self._timeline.clear()
                 self._timeline_reset_on_combat_end = False
                 from_cactbot = False
+                if cb:
+                    fight = ""
         except Exception as exc:  # noqa: BLE001
             # Corrupt or unreadable file, a parser blowup, anything. Every
             # other failure path around here leaves a trace, and the retry

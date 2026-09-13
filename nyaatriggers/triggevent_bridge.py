@@ -31,7 +31,7 @@ from nyaatriggers.paths import bundle_root, source_root
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from nyaatriggers import proc_env
-from nyaatriggers.drop_log import log_drop, rotate_one_generation
+from nyaatriggers.drop_log import log_drop, open_private_log, rotate_one_generation
 from nyaatriggers.trigger_engine import _safe_sub, compile_user_regex
 
 # PyInstaller puts the a.datas jar under sys._MEIPASS, but the Tree-added JRE
@@ -74,7 +74,7 @@ class _ByteQueue(queue.Queue):
     """queue.Queue with a byte budget on top of the item count.
 
     Items are sidecar stdin lines. put_nowait raises Full once the queued
-    payload bytes pass the budget, so the drop oldest policy at the call
+    string memory passes the budget, so the drop oldest policy at the call
     sites covers byte pressure unchanged. The _STOP sentinel is not a str
     and always fits the byte budget. The item count cap still applies.
     """
@@ -85,7 +85,7 @@ class _ByteQueue(queue.Queue):
         self._nbytes = 0
 
     def _put(self, item) -> None:
-        n = len(item) if isinstance(item, str) else 0
+        n = sys.getsizeof(item) if isinstance(item, str) else 0
         if self._nbytes + n > self._maxbytes:
             raise queue.Full
         super()._put(item)
@@ -94,7 +94,7 @@ class _ByteQueue(queue.Queue):
     def _get(self):
         item = super()._get()
         if isinstance(item, str):
-            self._nbytes -= len(item)
+            self._nbytes -= sys.getsizeof(item)
         return item
 
 
@@ -177,7 +177,7 @@ def _log(msg: str) -> None:
                     rotate_one_generation(p)
             except OSError:
                 pass
-            with open(p, "a", encoding="utf-8", errors="replace") as fh:
+            with open_private_log(p) as fh:
                 fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {msg}\n")
     except Exception:  # noqa: BLE001
         pass
@@ -236,7 +236,7 @@ def _jar_built_from() -> "str | None":
     stamp is missing or unreadable, which callers treat as needs rebuild."""
     try:
         return _JAR_STAMP.read_text(encoding="ascii").strip() or None
-    except OSError:
+    except (OSError, ValueError):
         return None
 
 
@@ -866,6 +866,14 @@ class TriggeventBridge(QObject):
         blocks. The writer thread drains the queue. On overflow the oldest
         messages get dropped."""
         if not self._active or not raw_msg:
+            return
+        try:
+            data = json.loads(raw_msg)
+        except (ValueError, TypeError, RecursionError):
+            log_drop("engine-feed", "discarded invalid feed JSON")
+            return
+        if not isinstance(data, dict) or "nyaa_cmd" in data:
+            log_drop("engine-feed", "discarded feed frame outside the event protocol")
             return
         # Protocol is one JSON object per line.
         line = raw_msg.replace("\r", " ").replace("\n", " ")

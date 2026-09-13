@@ -384,6 +384,14 @@ class UpdaterUiMixin:
                 _("NyaaTriggers v{version} installed - restart to finish.").format(version=rel.version))
             self._upd_install_btn.setText(_("Restart now"))
             self._upd_notes_btn.setVisible(False)
+        elif (updater.install_kind() == "frozen-windows"
+              and updater.is_rejected_update(rel.version)):
+            self._update_action = "openpage"
+            self._upd_msg.setText(
+                _("NyaaTriggers v{version} failed to start and was rolled back. "
+                  "Download it manually.").format(version=rel.version))
+            self._upd_install_btn.setText(_("Download"))
+            self._upd_notes_btn.setVisible(True)
         elif updater.can_self_apply():
             self._update_action = "install"
             self._upd_msg.setText(_("NyaaTriggers v{version} is available.").format(version=rel.version))
@@ -412,8 +420,8 @@ class UpdaterUiMixin:
         it. Only for git and source installs, not frozen. Their _VERSION
         never carries the rolling stamp, so the tag still compares newer
         even after a git pull already installed it. Frozen builds stamp
-        the full version on update, compare equal afterwards, and never
-        re-offer."""
+        the full version on update and compare equal afterwards. A rolled
+        back version gets the manual download banner."""
         rel = self._pending_release
         if rel is not None and rel.tag and not updater.is_frozen():
             self._settings["update_snoozed"] = rel.tag

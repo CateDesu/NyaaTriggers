@@ -98,6 +98,24 @@ check("the unarmed set is discarded, not held",
 m = marks(wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0))
 check("the next armed wave still marks", m == {C: IGN1, D: IGN2})
 
+for sweep in (False, True):
+    e = eng()
+    e.on_followup(INFERNO, 1.0)
+    if sweep:
+        e.flush(STALE_S + 2)
+    check("an old tell without any gains cannot mark a later pair",
+          wave(e, [A, B], SET1, STALE_S * 2) == [])
+
+e = eng()
+e.on_followup(INFERNO, 1.0)
+for t in (30.0, 60.0, 90.0):
+    e.flush(t)
+check("intervening flushes cannot keep an old tell usable",
+      wave(e, [A, B], SET1, 120.0) == [])
+check("a fresh tell after expiry still marks the correct kind",
+      marks(wave(e, [C, D], SET2, 130.0, followup=TSUNAMI, t_fu=126.0))
+      == {C: IGN1, D: IGN2})
+
 # ── party-slot ordering wins over actor id ──
 # Slots reversed vs id order: B is slot 1, A slot 2, so B must get the 1 sign.
 slots = {A: 2, B: 1, C: 4, D: 3}

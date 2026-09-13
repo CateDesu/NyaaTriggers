@@ -476,6 +476,7 @@ class VoiceTabMixin:
 
     def _start_install(self, rel, kind: str) -> None:
         def _work() -> None:
+            download_dir = None
             try:
                 # Sweep .part leftovers from crashed earlier update downloads.
                 _sweep_stale_update_parts(Path(tempfile.gettempdir()))
@@ -487,7 +488,8 @@ class VoiceTabMixin:
                     if not url:
                         ok, msg = False, _("No Linux build found in the latest release.")
                     else:
-                        dest = Path(tempfile.gettempdir()) / updater.LINUX_ASSET
+                        download_dir = tempfile.TemporaryDirectory(prefix="nyaatriggers-download-")
+                        dest = Path(download_dir.name) / updater.LINUX_ASSET
 
                         def _prog(done: int, total: int) -> None:
                             pct = int(done * 100 / total) if total else -1
@@ -500,16 +502,13 @@ class VoiceTabMixin:
                         if ok:
                             self._upd_progress_signal.emit(-1, _("Installing..."))
                             ok, msg = updater.apply_frozen_linux(dest)
-                        try:
-                            dest.unlink()
-                        except OSError:
-                            pass
                 elif kind == "frozen-windows":
                     url = updater.asset_for_platform(rel)
                     if not url:
                         ok, msg = False, _("No Windows build found in the latest release.")
                     else:
-                        dest = Path(tempfile.gettempdir()) / updater.WINDOWS_ASSET
+                        download_dir = tempfile.TemporaryDirectory(prefix="nyaatriggers-download-")
+                        dest = Path(download_dir.name) / updater.WINDOWS_ASSET
 
                         def _prog(done: int, total: int) -> None:
                             pct = int(done * 100 / total) if total else -1
@@ -525,14 +524,16 @@ class VoiceTabMixin:
                             # new build and hand off to it.
                             self._upd_progress_signal.emit(-1, _("Preparing update..."))
                             ok, msg = updater.apply_frozen_windows(dest, version=rel.version)
-                        try:
-                            dest.unlink()
-                        except OSError:
-                            pass
                 else:
                     ok, msg = False, _("This install type cannot update itself.")
             except Exception as exc:  # noqa: BLE001
                 ok, msg = False, str(exc)
+            finally:
+                if download_dir is not None:
+                    try:
+                        download_dir.cleanup()
+                    except OSError:
+                        pass
             self._upd_done_signal.emit(ok, msg)
         try:
             threading.Thread(target=_work, daemon=True).start()

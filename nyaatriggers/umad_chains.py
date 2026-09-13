@@ -508,6 +508,8 @@ class CursedShriekPairs:
             return []
         actor_id = str(actor_id).strip().upper()
         actions: "list[tuple]" = []
+        if self._polarity is not None and now - self._polarity_t > STALE_S:
+            self._polarity = None
         if self._live() and now - self._last_event > STALE_S:
             # Signs a dead phase still has up come down first, the state
             # reset alone would leave them on the players for the rest of
@@ -612,7 +614,7 @@ class CursedShriekPairs:
         return sorted(self._assigned, key=_id_int)
 
     def _live(self) -> bool:
-        return bool(self._set or self._assigned or self._sets_done)
+        return bool(self._polarity is not None or self._set or self._assigned or self._sets_done)
 
     # -- internals ------------------------------------------------------------
     def _ordered(self, actors: "list[str]") -> "list[str]":

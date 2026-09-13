@@ -249,6 +249,21 @@ def install_dir() -> Path:
     return source_dir()
 
 
+def is_rejected_update(version: str, dest_dir: Path | None = None) -> bool:
+    """Whether this exact release failed to boot and was rolled back here."""
+    if not version:
+        return False
+    try:
+        with ((dest_dir or install_dir()) / _REJECTED_NAME).open(encoding="utf-8") as marker:
+            text = marker.read(512)
+    except (OSError, ValueError):
+        return False
+    match = re.fullmatch(
+        r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}  rejected "
+        r"([A-Za-z0-9][A-Za-z0-9._+-]{0,127})\n?", text)
+    return bool(match and _strip_v(match.group(1)) == _strip_v(version))
+
+
 def mark_boot_ok() -> None:
     """Drop a marker signalling this build booted. Called after QApplication is
     up, so _internal + the Qt platform plugin loaded. The Windows self-update

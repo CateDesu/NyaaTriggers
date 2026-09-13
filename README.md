@@ -6,6 +6,8 @@ Everything starts off, so you check the callouts you want. Triggevent and Trigge
 
 There is also a live DPS meter parsed by the program itself, which includes DPS logs, party automarkers via the Telesto plugin, and a Japanese UI. If you'd like other languages, feel free to create an issue.
 
+![NyaaTriggers showing the Triggers tab and collapsed Profiles section](docs/images/triggers-tab.png)
+
 **Platform:** Linux · Windows  ·  **[Full guide](docs/GUIDE.md)**  ·  [Discord](https://discord.com/invite/TQJrbZcgKF)
 
 ---

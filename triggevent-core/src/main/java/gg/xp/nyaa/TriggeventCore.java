@@ -139,13 +139,13 @@ public final class TriggeventCore {
                 if (line.isEmpty()) {
                     continue;
                 }
-                // NyaaTriggers control commands are multiplexed onto the same stdin as
-                // the teed WS feed; they carry a "nyaa_cmd" key (WS messages never do).
-                if (line.contains("\"nyaa_cmd\"")) {
-                    handleCommand(line);
-                    continue;
-                }
                 try {
+                    // Python rejects reserved command keys from the WebSocket feed.
+                    final JsonNode frame = MAPPER.readTree(line);
+                    if (frame != null && frame.isObject() && frame.has("nyaa_cmd")) {
+                        handleCommand(frame);
+                        continue;
+                    }
                     master.pushEvent(new ActWsRawMsg(line));
                 } catch (Throwable t) {            // never let one bad line kill the feed
                     diag("feed error: " + t);
@@ -355,9 +355,8 @@ public final class TriggeventCore {
      * so a read-only persistence backend cannot abort the others (the in-memory value
      * is updated before the optional file write, so the live engine always sees it).
      */
-    private static void handleCommand(String line) {
+    private static void handleCommand(JsonNode n) {
         try {
-            final JsonNode n = MAPPER.readTree(line);
             final String cmd = n.path("nyaa_cmd").asText("");
             // Automark control is not keyed by a callout id, so dispatch it first.
             if ("set_automark".equals(cmd)) {

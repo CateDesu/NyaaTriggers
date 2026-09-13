@@ -270,6 +270,7 @@
   "Not supported": "",
   "Notes for the selected pull": "",
   "Notification sound": "通知音",
+  "NyaaTriggers v{version} failed to start and was rolled back. Download it manually.": "",
   "NyaaTriggers v{version} installed - restart to finish.": "NyaaTriggers v{version} をインストール済み - 完了するには再起動してください。",
   "NyaaTriggers v{version} is available.": "NyaaTriggers v{version} が利用可能です。",
   "Observation": "",

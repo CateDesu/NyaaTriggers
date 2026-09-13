@@ -262,8 +262,18 @@ iw2._load_timeline_for_zone("Zone With No Local Triggers")
 check("missing cache kicks the index fetch",
       iw2.fetches == [("cb_nocache", "06-ew/raid/p10s.txt")])
 check("missing cache clears meanwhile", iw2._timeline.entries is None)
-check("missing cache still records the index tag",
-      iw2._timeline_fight == "cb_nocache")
+check("missing cache leaves the fight unstamped", iw2._timeline_fight == "")
+iw2._match_zone = "Zone With No Local Triggers"
+iw2._redetect_zone_fight()
+check("redetect retries the missing timeline", len(iw2.fetches) == 2)
+(app_common.TIMELINES_DIR / "cb_nocache.cactbot.cache.txt").write_text(
+    '8.0 "Recovered"\n', encoding="utf-8")
+mw.MainWindow._on_cactbot_timeline_ready(iw2, "cb_nocache")
+check("a successful fetch loads and stamps the recovered timeline",
+      bool(iw2._timeline.entries) and iw2._timeline_fight == "cb_nocache")
+pushes = iw2._plugin_link.pushes
+iw2._redetect_zone_fight()
+check("redetect stays quiet after recovery", iw2._plugin_link.pushes == pushes)
 
 # Cache missing but a local custom <Fight>.txt exists (UMAD pre-upstream):
 # the local file serves while the download runs.

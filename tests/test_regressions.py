@@ -1847,7 +1847,7 @@ def test_bridge_stdin_queue_byte_budget():
     check("both bridges budget 64 MiB of queued stdin",
           _TEV_CAP == _TN_CAP == 64 << 20)
     for cls in (_TEVQueue, _TNQueue):
-        q = cls(maxsize=100, maxbytes=10)
+        q = cls(maxsize=100, maxbytes=sys.getsizeof("123456"))
         q.put_nowait("abcd")
         try:
             q.put_nowait("1234567")
@@ -1860,8 +1860,8 @@ def test_bridge_stdin_queue_byte_budget():
         check("bytes come off the budget on get",
               got == "abcd" and q._nbytes == 0)
         q.put_nowait("123456")
-        check("a freed queue takes new payload again", q._nbytes == 6)
-        small = cls(maxsize=1, maxbytes=10)
+        check("a freed queue takes new payload again", q._nbytes == sys.getsizeof("123456"))
+        small = cls(maxsize=1, maxbytes=1024)
         small.put_nowait("x")
         try:
             small.put_nowait("y")

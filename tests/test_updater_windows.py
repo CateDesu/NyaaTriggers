@@ -84,6 +84,7 @@ check.failed = 0
 print("Test 1: happy path (full swap)")
 with tempfile.TemporaryDirectory() as base:
     inst, new_root = build(base)
+    (inst / updater._REJECTED_NAME).write_text("2026-09-13 12:00:00  rejected 9.9.9\n")
     LAUNCHED.clear()
     updater.finish_windows_update(inst, new_root, old_pid=1, exe_name=EXE)
     internal = snap_internal(inst)
@@ -94,6 +95,7 @@ with tempfile.TemporaryDirectory() as base:
     check("relaunched the installed exe", LAUNCHED == [inst / EXE])
     check("log records the successful boot",
           "keeping the new build" in (inst / updater._UPDATE_LOG_NAME).read_text())
+    check("successful boot clears the rejected version", not (inst / updater._REJECTED_NAME).exists())
     baks = [n for n in leftovers(inst) if n.endswith(updater._BACKUP_SUFFIX)]
     check("backups carry _BACKUP_SUFFIX (sweepable)",
           all(b.endswith(".nyaa-old") for b in baks))
@@ -249,6 +251,8 @@ for version_path, version_text in (
         updater.cleanup_old_backups(inst)
         check("no .new/.nyaa-old leftovers after cleanup",
               not [n for n in leftovers(inst) if ".new" in n or n.endswith(".nyaa-old")])
+        check("the rolled back version remains rejected after startup cleanup",
+              updater.is_rejected_update("9.9.9", inst))
 
 # === Test 8: removals hit a sharing violation -> still never raises ==========
 # _force_remove's file branch used to catch only FileNotFoundError, so a locked
