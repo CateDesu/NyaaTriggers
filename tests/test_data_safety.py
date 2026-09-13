@@ -64,7 +64,12 @@ def ability(flags, amount, source="10000001"):
 class DataSafetyTests(unittest.TestCase):
     def test_frozen_linux_uses_host_certificate_bundle(self):
         import ssl
-        certificates = ssl.create_default_context().get_ca_certs(binary_form=True)
+        trust = ssl.create_default_context()
+        for candidate in http_fetch._LINUX_CA_BUNDLES:
+            if Path(candidate).is_file():
+                trust.load_verify_locations(cafile=candidate)
+                break
+        certificates = trust.get_ca_certs(binary_form=True)
         self.assertTrue(certificates)
         with tempfile.TemporaryDirectory() as folder:
             bundle = Path(folder) / 'host-certificates.pem'
