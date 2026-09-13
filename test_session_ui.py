@@ -21,6 +21,9 @@ from prog_session import ProgSessions
 from test_session_features import ability, PLAYER, Clock
 from trigger_engine import Trigger
 from trigger_profiles import capture_profile
+from ui.prog_tab import DEATHS_COLUMN
+from ui.prog_tab import PHASE_COLUMN
+from test_prog_phases import fixture_definition, marker
 
 
 class SessionUiTests(unittest.TestCase):
@@ -69,6 +72,107 @@ class SessionUiTests(unittest.TestCase):
         self.clock.value += 12
         self.line(ability())
         self.window._on_in_combat(False, False)
+
+    def phase_pull(self):
+        self.connect()
+        self.window._on_ws_zone_changed(1363, "UMAD")
+        self.window._on_ws_primary_player(int(PLAYER, 16), "Player")
+        self.window._prog_sessions.definitions = (fixture_definition(),)
+        self.window._prog_tab.start_button.click()
+        self.window._on_in_combat(True, True)
+        self.line(marker(0))
+        self.line(ability())
+        return self.window._prog_sessions.current["pulls"][0]
+
+    def test_umad_without_verified_rules_is_explicitly_unavailable(self):
+        self.connect()
+        self.window._on_ws_zone_changed(1363, "UMAD")
+        self.window._on_ws_primary_player(int(PLAYER, 16), "Player")
+        tab = self.window._prog_tab
+        tab.start_button.click()
+        self.pull()
+        self.assertEqual(tab.table.item(0, PHASE_COLUMN).text(), "Not recorded")
+        self.assertIn("awaiting verified combat recordings", tab.phase_notice.text())
+        self.assertEqual(tab.phase_table.rowCount(), 0)
+
+    def test_live_phase_details_preserve_note_cursor_and_bookmark(self):
+        pull = self.phase_pull()
+        tab = self.window._prog_tab
+        tab.note.setPlainText("Keep this edit")
+        tab.bookmark.setChecked(True)
+        cursor = tab.note.textCursor()
+        cursor.setPosition(4)
+        tab.note.setTextCursor(cursor)
+        self.clock.value += 10
+        self.line(marker(2))
+        tab.tick()
+        self.assertEqual(tab.table.item(0, PHASE_COLUMN).text(), "P3")
+        self.assertEqual(tab.phase_table.rowCount(), 5)
+        self.assertEqual(tab.phase_table.item(1, 1).text(), "—")
+        self.assertEqual(tab.phase_table.item(2, 1).text(), "00:00:10")
+        self.assertEqual(tab.note.textCursor().position(), 4)
+        self.assertEqual(tab.note.toPlainText(), "Keep this edit")
+        self.assertTrue(pull["bookmark"])
+        self.window._nav_buttons[4].click()
+        self.window.resize(900, 600)
+        self.window.show()
+        self.app.processEvents()
+        self.window.grab().save("/tmp/nyaatriggers-phase-details.png")
+
+    def test_transition_preserves_recap_buffer_and_logical_pull(self):
+        pull = self.phase_pull()
+        tab = self.window._prog_tab
+        self.line(marker(0, transition=True))
+        self.window._on_in_combat(False, False)
+        self.clock.value += 5
+        self.window._on_in_combat(True, True)
+        self.line(marker(1))
+        self.line(["25", "ts", PLAYER, "Player"])
+        tab.tick()
+        self.assertEqual(tab.table.rowCount(), 1)
+        self.assertEqual(tab.table.item(0, PHASE_COLUMN).text(), "P2")
+        recaps, errors = self.window._prog_sessions.recaps.load(self.window._prog_sessions.current["id"], pull["id"])
+        self.assertEqual(errors, [])
+        self.assertEqual(len(recaps), 1)
+        self.assertTrue(any(e["kind"] == "damage" for e in recaps[0]["events"]))
+        tab.recap_button.click()
+        self.assertEqual(len(self.window._recap_records), 1)
+
+    def test_corrupt_and_legacy_phase_views_clear_old_details(self):
+        pull = self.phase_pull()
+        tab = self.window._prog_tab
+        tab.tick()
+        self.assertEqual(tab.phase_table.rowCount(), 5)
+        pull["phase_tracking"] = {"version": 999}
+        tab.tick()
+        self.assertEqual(tab.table.item(0, PHASE_COLUMN).text(), "Unavailable")
+        self.assertIn("could not be read", tab.phase_notice.text())
+        self.assertEqual(tab.phase_table.rowCount(), 0)
+        self.assertTrue(tab.note.isEnabled())
+        self.assertTrue(tab.recap_button.isEnabled())
+        del pull["phase_tracking"]
+        tab.tick()
+        self.assertEqual(tab.table.item(0, PHASE_COLUMN).text(), "Not recorded")
+        self.assertIn("was not recorded", tab.phase_notice.text())
+
+    def test_timeout_updates_visible_ending_without_changing_notes(self):
+        pull = self.phase_pull()
+        tab = self.window._prog_tab
+        tab.note.setPlainText("Review this transition")
+        self.line(marker(0, transition=True))
+        self.window._on_in_combat(False, False)
+        self.clock.value += 31
+        tab.tick()
+        self.assertEqual(pull["ending"], "boundary-uncertain")
+        self.assertIn("boundary could not be confirmed", tab.phase_notice.text())
+        self.assertEqual(tab.note.toPlainText(), "Review this transition")
+
+    def test_unrelated_damage_does_not_build_extra_meter_snapshots(self):
+        self.phase_pull()
+        with patch.object(self.window._dps_meter, "full_snapshot") as snapshot:
+            self.line(ability())
+        snapshot.assert_not_called()
+        self.assertEqual(self.window._prog_sessions.current["pulls"][0]["ending"], "active")
 
     def test_navigation_recap_and_prog_end_to_end(self):
         window = self.window
@@ -321,7 +425,7 @@ class SessionUiTests(unittest.TestCase):
         self.pull()
         self.line(["25", "ts", PLAYER, "Player"])
         tab.tick()
-        self.assertEqual(tab.table.item(0, 4).text(), "1")
+        self.assertEqual(tab.table.item(0, DEATHS_COLUMN).text(), "1")
 
 
 if __name__ == "__main__":

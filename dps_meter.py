@@ -399,6 +399,7 @@ class DpsMeter:
                    for c in enc.combatants.values()):
             empty = self._snapshot(enc, self._clock(), active=False)
             empty["Encounter"]["end_reason"] = "empty"
+            empty["Encounter"]["boundary_reason"] = reason
             self._notify_pull(self.on_pull_finish, empty)
             return                      # empty pull, nothing worth keeping
         final = self._snapshot(enc, self._clock(), active=False)
@@ -854,6 +855,8 @@ class DpsMeter:
                 "deaths": total_deaths,
                 "CurrentZoneName": enc.zone,
                 "wall_start": enc.wall_start,
+                "monotonic_start": enc.start,
+                "last_activity": enc.last if enc.last is not None else enc.start,
                 "pull_id": enc.pull_id,
             },
             "Combatant": combatants,

@@ -192,6 +192,16 @@ pull, total observed combat time, and session elapsed time. The duration chart
 selects a pull when clicked. Add a bookmark or a note below the table, and edit
 the session name above it.
 
+**Furthest phase** and **Phase confirmations** show saved phase observations
+when available. Confirmation times measure the first observed confirming event
+after pull start. An earlier phase established by a later observation has no
+invented confirmation time. Interrupted recordings retain their observations.
+
+Automatic UMAD phase tracking is awaiting verified combat recordings. New UMAD
+pulls currently show **Not recorded** with that explanation. Older pulls also
+show **Not recorded**, and duties without phase support show **Not supported**.
+If phase data cannot be read, notes and death recaps remain available.
+
 **View death recaps** opens the selected pull's observed deaths in Death Recap.
 Recaps save as deaths arrive, so they remain available for an interrupted pull
 after a crash. Death messages received within two seconds after combat ends or

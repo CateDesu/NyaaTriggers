@@ -10,7 +10,13 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QHBoxLayou
 
 from locale_util import _
 from prog_session import summary
+from prog_phases import UMAD_ZONE, read_tracking
 import theme
+
+PHASE_COLUMN = 3
+ENDING_COLUMN = 4
+DEATHS_COLUMN = 5
+BOOKMARK_COLUMN = 6
 
 
 def duration(value):
@@ -25,12 +31,45 @@ def ending_label(value):
             "session-ended": _("Session ended")}.get(value, _("Interrupted"))
 
 
+def phase_details(pull, zone_id, definitions):
+    if pull is None:
+        return "", "", []
+    data, definition, error = read_tracking(pull, zone_id, definitions)
+    if error:
+        return _("Unavailable"), _("Phase data could not be read. Notes and recaps remain available."), []
+    if data is None:
+        if "phase_tracking" not in pull:
+            return _("Not recorded"), _("Phase tracking was not recorded for this pull."), []
+        if zone_id == UMAD_ZONE:
+            return _("Not recorded"), _("UMAD phase tracking is awaiting verified combat recordings."), []
+        return _("Not supported"), _("Phase tracking is not supported for this duty."), []
+    observations = {o["phase"]: o for o in data["observations"]}
+    furthest = max((definition.phases.index(p) for p in observations), default=-1)
+    label = _("P{number}").format(number=furthest + 1) if furthest >= 0 else _("No confirmation")
+    state = {"recording": _("Recording"), "complete": _("Recording complete"),
+             "interrupted": _("Recording interrupted"), "uncertain": _("Pull boundary could not be confirmed.")}[data["coverage"]]
+    if data["transition"] is not None:
+        state = _("Phase transition")
+    elif data["coverage"] == "interrupted":
+        state += " · " + ending_label(data["reason"])
+    notice = state + "\n" + _("Times show the first observed confirmation after pull start, not the exact phase transition.")
+    rows = []
+    for index, phase in enumerate(definition.phases):
+        observation = observations.get(phase)
+        reached = _("Established by a later phase. Confirmation time unavailable.") if index < furthest else _("No confirmation")
+        rows.append([_("P{number}").format(number=index + 1), duration(observation["at"]) if observation else "—",
+                     _("Confirmed") if observation else reached])
+    return label, notice, rows
+
+
 class PullChart(QWidget):
     selected = pyqtSignal(int)
 
     def __init__(self):
         super().__init__()
         self.pulls = []
+        self.tooltips = []
+        self.setMouseTracking(True)
         self.setMinimumHeight(90)
 
     def set_pulls(self, pulls):
@@ -60,6 +99,11 @@ class PullChart(QWidget):
         if self.pulls and event.button() == Qt.MouseButton.LeftButton:
             index = min(len(self.pulls) - 1, int(event.position().x() * len(self.pulls) / self.width()))
             self.selected.emit(max(0, index))
+
+    def mouseMoveEvent(self, event):
+        if self.tooltips:
+            index = max(0, min(len(self.tooltips) - 1, int(event.position().x() * len(self.tooltips) / self.width())))
+            self.setToolTip(self.tooltips[index])
 
 
 class ProgTab(QWidget):
@@ -98,15 +142,32 @@ class ProgTab(QWidget):
         scroll.setFixedHeight(125)
         scroll.setWidget(self.chart)
         layout.addWidget(scroll)
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels([_("Pull"), _("Started"), _("Duration"),
-                                              _("Ending"), _("Deaths"), _("Bookmark")])
+                                              _("Furthest phase"), _("Ending"), _("Deaths"), _("Bookmark")])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(ENDING_COLUMN, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setMinimumSectionSize(60)
         layout.addWidget(self.table, 1)
+        self.phase_heading = QLabel(_("Phase confirmations"))
+        layout.addWidget(self.phase_heading)
+        self.phase_notice = QLabel()
+        self.phase_notice.setWordWrap(True)
+        self.phase_notice.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.phase_notice)
+        self.phase_table = QTableWidget(0, 3)
+        self.phase_table.setHorizontalHeaderLabels([_("Phase"), _("Confirmed at"), _("Observation")])
+        self.phase_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.phase_table.verticalHeader().hide()
+        self.phase_table.verticalHeader().setDefaultSectionSize(23)
+        self.phase_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.phase_table.setMaximumHeight(145)
+        layout.addWidget(self.phase_table)
+        self._phase_view = None
         self.bookmark = QCheckBox(_("Bookmark this pull"))
         pull_controls = QHBoxLayout()
         pull_controls.addWidget(self.bookmark)
@@ -158,7 +219,7 @@ class ProgTab(QWidget):
         self.table.setRowCount(len(pulls))
         for index, pull in enumerate(pulls):
             values = [str(index + 1), f"{datetime.fromtimestamp(pull['started']):%H:%M:%S}",
-                      duration(pull["duration"]), ending_label(pull["ending"]), str(pull["deaths"]),
+                      duration(pull["duration"]), self.phase_values(pull)[0], ending_label(pull["ending"]), str(pull["deaths"]),
                       "★" if pull["bookmark"] else ""]
             for column, value in enumerate(values):
                 self.table.setItem(index, column, QTableWidgetItem(value))
@@ -184,6 +245,27 @@ class ProgTab(QWidget):
         self.note.setPlainText(self.pull["note"] if self.pull else "")
         self.bookmark.blockSignals(False)
         self.note.blockSignals(False)
+        self.refresh_phase_details()
+
+    def phase_values(self, pull):
+        return phase_details(pull, self.session["zone_id"] if self.session else 0, self.sessions.definitions)
+
+    def refresh_phase_details(self):
+        view = self.phase_values(self.pull)
+        if view == self._phase_view:
+            return
+        self._phase_view = view
+        _, notice, rows = view
+        self.phase_heading.setVisible(self.pull is not None)
+        self.phase_notice.setText(notice)
+        self.phase_notice.setVisible(bool(notice))
+        self.phase_table.setVisible(bool(rows))
+        self.phase_table.setRowCount(len(rows))
+        for row, values in enumerate(rows):
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                self.phase_table.setItem(row, column, item)
 
     def open_recaps(self):
         self.flush()
@@ -204,7 +286,7 @@ class ProgTab(QWidget):
         self.save_timer.start()
         row = self.table.currentRow()
         if row >= 0:
-            self.table.setItem(row, 5, QTableWidgetItem("★" if self.pull["bookmark"] else ""))
+            self.table.setItem(row, BOOKMARK_COLUMN, QTableWidgetItem("★" if self.pull["bookmark"] else ""))
 
     def edit_name(self, text):
         if self.session is not None:
@@ -243,18 +325,30 @@ class ProgTab(QWidget):
     def tick(self):
         active = self.sessions.current
         self.sessions.update_active(self.window._dps_meter.full_snapshot())
+        self.sessions.check_phase_timeout()
         if active is not None and self.session is active and self.sessions.pending:
             for row, pull in enumerate(active["pulls"]):
                 if pull["id"] == self.sessions.pending and row < self.table.rowCount():
                     self.table.setItem(row, 2, QTableWidgetItem(duration(pull["duration"])))
-                    self.table.setItem(row, 4, QTableWidgetItem(str(pull["deaths"])))
+                    self.table.setItem(row, DEATHS_COLUMN, QTableWidgetItem(str(pull["deaths"])))
                     self.chart.update()
                     break
         if self.session is not None:
+            tooltips = []
             for row, pull in enumerate(self.session["pulls"]):
-                item = self.table.item(row, 4)
-                if item is not None and item.text() != str(pull["deaths"]):
-                    item.setText(str(pull["deaths"]))
+                phase, notice, _rows = self.phase_values(pull)
+                for column, value in ((DEATHS_COLUMN, str(pull["deaths"])),
+                                      (PHASE_COLUMN, phase), (ENDING_COLUMN, ending_label(pull["ending"])),
+                                      (2, duration(pull["duration"]))):
+                    item = self.table.item(row, column)
+                    if item is not None and item.text() != value:
+                        item.setText(value)
+                item = self.table.item(row, PHASE_COLUMN)
+                if item is not None:
+                    item.setToolTip(notice)
+                tooltips.append(f"{row + 1} · {duration(pull['duration'])} · {phase} · {ending_label(pull['ending'])}")
+            self.chart.tooltips = tooltips
+        self.refresh_phase_details()
         self.start_button.setEnabled(active is None and self.window._connected
                                      and self.window._current_zone_id > 0
                                      and self.window._combat_known)
@@ -266,6 +360,8 @@ class ProgTab(QWidget):
                 error="\n".join(self.sessions.errors[:3]))
         elif active:
             text = _("Collecting pulls for {zone}.").format(zone=active["zone"]) if self.sessions.ready else _("Waiting for combat to end before collecting a full pull.")
+            if not self.sessions.ready and self.sessions.definition is not None:
+                text = _("Waiting for a verified fresh pull.")
         else:
             text = _("Start a session in the current duty to collect pulls. Saved sessions remain available after restart.")
         recap_warning = self.window._recap_save_warning()

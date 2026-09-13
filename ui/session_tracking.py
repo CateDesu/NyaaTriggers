@@ -3,22 +3,53 @@
 
 class SessionTrackingMixin:
     def _prog_pull_started(self, snapshot):
-        self._death_recap.begin_pull()
-        self._prog_sessions.pull_started(snapshot)
+        events = getattr(self, "_prog_events", None)
+        if events is not None:
+            events.append(("start", snapshot))
+            return
+        started = self._prog_sessions.pull_started(snapshot)
+        if started or self._prog_sessions.attempt is None:
+            self._death_recap.begin_pull()
         self._prog_tab.refresh()
 
     def _prog_pull_finished(self, snapshot):
-        self._death_recap.reset_on_pull = True
+        events = getattr(self, "_prog_events", None)
+        if events is not None:
+            events.append(("finish", snapshot))
+            return
         self._prog_sessions.pull_finished(snapshot)
+        if self._prog_sessions.attempt is None:
+            self._death_recap.reset_on_pull = True
         self._prog_tab.refresh()
 
+    def _begin_activity_event(self):
+        self._prog_events = []
+        self._prog_event_time = self._prog_sessions.clock()
+
+    def _finish_activity_event(self, fields=()):
+        events = getattr(self, "_prog_events", None)
+        if events is None:
+            return
+        self._prog_events = None
+        snapshot = self._dps_meter.full_snapshot() if self._prog_sessions.needs_phase_snapshot(fields) else None
+        started, ended = self._prog_sessions.process_event(
+            fields, events, self._prog_event_time, snapshot)
+        if ended or (any(kind == "finish" for kind, _ in events) and not self._prog_sessions.pending):
+            self._death_recap.reset_on_pull = True
+        if started or (any(kind == "start" for kind, _ in events) and self._prog_sessions.attempt is None):
+            self._death_recap.begin_pull()
+        if started or ended or (any(kind == "finish" for kind, _ in events) and self._prog_sessions.attempt is None):
+            self._prog_tab.refresh()
+
     def _track_activity_line(self, fields):
+        self._finish_activity_event(fields)
         self._death_recap.process(fields)
         if fields[0] == "01" and len(fields) > 3:
             self._prog_sessions.end(self._dps_meter.full_snapshot(), "duty-left")
             self._prog_tab.refresh()
 
     def _track_combat(self, act, game):
+        self._begin_activity_event()
         self._combat_known = True
         self._prog_sessions.combat(game)
 

@@ -131,6 +131,12 @@ never resets combat tracking when its own controls are used.
 
 ## Later additions
 
+The next phase is specified in [Prog phase tracking and session
+comparisons](PROG-PHASE-DESIGN.md). That proposal covers UMAD first, including
+logical pull boundaries across verified transitions and comparison eligibility.
+Phase details and the storage and boundary infrastructure are implemented.
+UMAD detection remains inactive while its combat evidence is unverified.
+
 - Fight-specific phase and mechanic milestones based on verified combat events.
 - Furthest confirmed milestone and the percentage of attempts reaching it.
 - Comparison with previous sessions for the same fight.

@@ -249,6 +249,12 @@ class InstanceTabMixin:
             self._dps_meter.set_in_combat(act, game)
         except Exception as exc:  # noqa: BLE001 - never break combat tracking
             ac.log_drop("dps-meter", f"in-combat {exc!r}")
+        finish_activity = getattr(self, "_finish_activity_event", None)
+        if finish_activity is not None:
+            try:
+                finish_activity()
+            except Exception as exc:
+                ac.log_drop("session-tracking", f"{exc!r}")
         # Feed the timeline the synthetic 260 line, idx 2 = ACT, 3 = game,
         # so InCombat syncs match and a game-combat flip starts the clock.
         # The only start a non-casting target, striking dummy, can produce.
@@ -288,6 +294,9 @@ class InstanceTabMixin:
 
     def _dispatch_log_line(self, fields: list[str], raw: str) -> None:
         log_type = fields[0]
+        begin_activity = getattr(self, "_begin_activity_event", None)
+        if begin_activity is not None:
+            begin_activity()
 
         # DPS meter tap. Additive, and a parse bug must never break
         # triggers.

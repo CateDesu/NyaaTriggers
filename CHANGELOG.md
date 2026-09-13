@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Prog phase details.** The pull table has a Furthest phase column and a confirmation table with recording status and observed times. The storage and transition handling are in place, but automatic UMAD detection remains inactive until combat recordings verify its rules.
 - **Saved death recaps for prog pulls.** Select a pull in Prog and choose **View death recaps** to review its deaths after restarting the program. Each recap saves as it arrives, independently of the live history's 80-death limit and the DPS recording switch. Read and save failures appear on the session pages.
 - **Death Recap tab.** Review the last 15 seconds of observed damage, healing, and statuses before a player's death. Keeps the latest 80 recaps for the current program run.
 - **Prog sessions.** Start a session for the current duty and review pull durations, endings, bookmarks, and notes. Sessions save locally and keep interrupted attempts separate from complete pulls.
