@@ -876,55 +876,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._voice_combo = QComboBox()
         self._voice_combo.setMaximumWidth(360)
         self._populate_voice_combo()
-        if self._settings.get("jp_neural_enabled", False):
-            # A saved voice that is no longer offered, older builds listed
-            # more, coerces to the default female voice instead of silently
-            # going English. Persisted on the next settings save, same as the
-            # settings migrations.
-            if not any(self._settings.get("jp_neural_voice") == vid
-                       for vid, _lbl in _JP_NEURAL_VOICES):
-                self._settings["jp_neural_voice"] = "jf_alpha"
-                set_jp_neural(True, "jf_alpha")
-            _vi = self._voice_combo.findData("kokoro:" + self._settings.get("jp_neural_voice", "jf_alpha"))
-        else:
-            # Match the saved model by display name or raw file stem. Pre rename
-            # settings stored the stem, e.g. "en_US-arctic-medium".
-            _saved = self._settings.get("voice_model", "")
-            def _is_saved(i: int) -> bool:
-                if self._voice_combo.itemText(i) == _saved:
-                    return True
-                data = self._voice_combo.itemData(i)
-                return (isinstance(data, str) and not data.startswith("kokoro:")
-                        and Path(data).stem == _saved)
-            _vi = next((i for i in range(self._voice_combo.count()) if _is_saved(i)), -1)
-        if _vi < 0 and self._voice_combo.count():
-            _vi = 0
-        if _vi >= 0:
-            self._voice_combo.setCurrentIndex(_vi)   # before connect
-        # setCurrentIndex above does not fire _on_voice_changed, it is connected
-        # below, so push the restored English Piper model into the TTS engine
-        # here. Otherwise the dropdown shows the saved voice while every
-        # English callout still speaks with the built in default model.
-        # English always routes through Piper even when a Kokoro JP voice is
-        # the active selection, so prefer the saved voice_model, independent of
-        # the combo selection. If it matches nothing, fresh install or the
-        # saved voice was deleted, fall back to the selected item when that is
-        # itself a Piper voice. Otherwise the index 0 fallback voice shows in
-        # the dropdown while TTS keeps the built in default, the mismatch this
-        # fixes.
-        def _is_piper(i: int) -> "Path | None":
-            d = self._voice_combo.itemData(i)
-            return Path(d) if isinstance(d, str) and d and not d.startswith("kokoro:") else None
-        _saved_model = self._settings.get("voice_model", "")
-        _model_path = next(
-            (p for i in range(self._voice_combo.count())
-             if (p := _is_piper(i)) is not None
-             and (self._voice_combo.itemText(i) == _saved_model or p.stem == _saved_model)),
-            None)
-        if _model_path is None and _vi >= 0:
-            _model_path = _is_piper(_vi)     # selected item, if it is a Piper voice
-        if _model_path is not None:
-            set_model(_model_path)
+        self._restore_voice_model()
         self._voice_combo.currentIndexChanged.connect(self._on_voice_changed)
         voice_row.addWidget(self._voice_combo)
         test_tts_btn = QPushButton(_("Test TTS"))

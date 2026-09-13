@@ -20,11 +20,13 @@ signal.
 from __future__ import annotations
 
 import http.client
+import ipaddress
 import json
 import queue
 import random
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from nyaatriggers.drop_log import log_drop
@@ -65,6 +67,20 @@ GAME_CMD_ID = 1_000_000
 PARTY_UPDATE_ID = 1_000_001
 
 DEFAULT_URI = "http://localhost:45678/"
+
+
+def _is_loopback_uri(uri: str) -> bool:
+    host = (urllib.parse.urlsplit(uri).hostname or "").rstrip(".").lower()
+    if host == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        return address.is_loopback
+    except ValueError:
+        return False
+
 
 # Shutdown sentinel for the worker queue.
 _STOP = object()
@@ -192,6 +208,7 @@ class TelestoClient(QObject):
         # actor id as int -> 1-based party slot <N>, rebuilt per GetPartyMembers
         # response. Empty until the first list, mark_actor fails closed.
         self._slot_by_actor: "dict[int, int]" = {}
+        self._direct_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     # -- configuration ------------------------------------------------------
     def configure(self, uri: "str | None" = None, enabled: "bool | None" = None,
@@ -417,7 +434,9 @@ class TelestoClient(QObject):
             headers={"Content-Type": "application/json",
                      "User-Agent": "NyaaTriggers"})
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            # Local plugin requests must stay local even with a desktop proxy.
+            open_url = self._direct_opener.open if _is_loopback_uri(uri) else urllib.request.urlopen
+            with open_url(req, timeout=timeout) as resp:
                 code = resp.getcode()
                 # Cap the body. A buggy/hostile loopback peer must not be able to
                 # OOM the app. 1 MiB dwarfs any real GetPartyMembers response.

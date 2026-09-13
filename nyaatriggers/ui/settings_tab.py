@@ -32,7 +32,7 @@ class SettingsTabMixin:
                 if len(data) > _MAX_SETTINGS_BYTES:
                     raise ValueError("settings file exceeds 4 MiB")
                 self._settings = json.loads(data.decode("utf-8"))
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, RecursionError) as exc:
                 self._settings = {}
                 bad = str(exc)
             if not isinstance(self._settings, dict):

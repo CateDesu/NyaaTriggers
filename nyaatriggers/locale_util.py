@@ -125,7 +125,7 @@ def _load_catalog(loc: str) -> dict[str, str]:
             if isinstance(raw, dict):
                 catalog = {k: v for k, v in raw.items()
                            if isinstance(k, str) and isinstance(v, str)}
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             catalog = {}
     _catalogs[loc] = catalog
     return catalog

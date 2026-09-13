@@ -3,6 +3,7 @@ alert sounds, and the volume and mute controls. tts.py owns the speaking,
 this owns the config UI. Mixin for MainWindow, all state rides on self.
 """
 
+from collections import Counter
 from pathlib import Path
 import json
 import math
@@ -393,7 +394,7 @@ class VoiceTabMixin:
             return
         if data:
             set_model(Path(data))
-            self._settings["voice_model"] = self._voice_combo.itemText(index)
+            self._settings["voice_model"] = Path(data).stem
         self._settings["jp_neural_enabled"] = False
         self._save_settings()
         set_jp_neural(False)                    # Japanese falls back to espeak
@@ -451,14 +452,51 @@ class VoiceTabMixin:
         """Fill the Model dropdown. Piper voices first, friendly names with
         the path as item data, then the neural Japanese voices, whose item
         data is the "kokoro:" prefix plus the voice id."""
-        for stem, path in self._scan_voices():
-            self._voice_combo.addItem(_voice_display(stem), userData=str(path))
+        voices = self._scan_voices()
+        labels = Counter(_voice_display(stem) for stem, _path in voices)
+        for stem, path in voices:
+            label = _voice_display(stem)
+            if labels[label] > 1:
+                label = f"{label} · {stem}"
+            self._voice_combo.addItem(label, userData=str(path))
         # The neural Japanese voices ship inside the app now, kokoro-onnx
         # and the espeak-ng phonemizer are bundled in the frozen build too,
         # so list them on every platform. Their model downloads on first
         # pick.
         for vid, label in _JP_NEURAL_VOICES:
             self._voice_combo.addItem(label, userData="kokoro:" + vid)
+
+    def _restore_voice_model(self) -> None:
+        combo = self._voice_combo
+        piper = {}
+        for i in range(combo.count()):
+            data = combo.itemData(i)
+            if isinstance(data, str) and data and not data.startswith("kokoro:"):
+                piper[i] = Path(data)
+        saved = self._settings.get("voice_model", "")
+        # Full stems win before the compatibility match for older friendly labels.
+        model_index = next((i for i, path in piper.items() if path.stem == saved), -1)
+        if model_index < 0:
+            model_index = next((i for i, path in piper.items()
+                                if _voice_display(path.stem) == saved), -1)
+        if model_index < 0:
+            model_index = next(iter(piper), -1)
+        if self._settings.get("jp_neural_enabled", False):
+            voice = self._settings.get("jp_neural_voice", "jf_alpha")
+            if not any(voice == vid for vid, _label in _JP_NEURAL_VOICES):
+                voice = "jf_alpha"
+                self._settings["jp_neural_voice"] = voice
+                set_jp_neural(True, voice)
+            index = combo.findData("kokoro:" + voice)
+        else:
+            index = model_index
+        # Startup restores selection before connecting the change handler.
+        combo.setCurrentIndex(index)
+        # Keep the English model even when the selected voice is Japanese.
+        if model_index >= 0:
+            path = piper[model_index]
+            set_model(path)
+            self._settings["voice_model"] = path.stem
 
     def _refresh_voice_combo(self) -> None:
         saved_data = self._voice_combo.currentData()

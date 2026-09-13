@@ -9,6 +9,7 @@ from the log lines via dps_meter, not from CombatData.
 
 import json
 import math
+import os
 
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
 from PyQt6.QtNetwork import QAbstractSocket
@@ -27,6 +28,8 @@ _SUBSCRIBE = json.dumps({"call": "subscribe", "events": [
 # peer can't make the GUI thread parse and hold a giant message. Real ACT
 # frames are kilobytes.
 _MAX_WS_MESSAGE = 4 << 20
+_PING_INTERVAL_MS = 15000
+_PONG_TIMEOUT_MS = 10000
 
 
 class WSClient(QObject):
@@ -64,6 +67,12 @@ class WSClient(QObject):
         self._ws.disconnected.connect(self._on_disconnected)
         self._ws.textMessageReceived.connect(self._on_message)
         self._ws.errorOccurred.connect(self._on_error)
+        self._ws.pong.connect(self._on_pong)
+
+        self._pending_ping = None
+        self._heartbeat_timer = QTimer(self)
+        self._heartbeat_timer.setSingleShot(True)
+        self._heartbeat_timer.timeout.connect(self._heartbeat_tick)
 
         self._reconnect_timer = QTimer(self)
         self._reconnect_timer.setSingleShot(True)
@@ -101,6 +110,7 @@ class WSClient(QObject):
             # later re-opened over the fresh connection and aborted it.
             # Reopen from the disconnected handler instead.
             self._reopen_on_disconnect = True
+            self._stop_heartbeat()
             self._ws.close()
             return
         self._open()
@@ -109,6 +119,7 @@ class WSClient(QObject):
         self._auto_reconnect = False
         self._reopen_on_disconnect = False
         self._reconnect_timer.stop()
+        self._stop_heartbeat()
         self._ws.close()
 
     # ------------------------------------------------------------------
@@ -138,6 +149,8 @@ class WSClient(QObject):
         self._reconnect_timer.stop()   # a pending reconnect must not fire now
         self._reconnect_delay = 5000   # backoff resets after a good connect
         self._error_reported = False
+        self._pending_ping = None
+        self._heartbeat_timer.start(_PING_INTERVAL_MS)
         self.status_changed.emit(True, "Connected")
         self._ws.sendTextMessage(_SUBSCRIBE)
         if self._poll_enabled:
@@ -145,6 +158,7 @@ class WSClient(QObject):
 
     def _on_disconnected(self) -> None:
         self._poll_timer.stop()
+        self._stop_heartbeat()
         # Player/party identity may change while we're down. Both are relearned
         # from the ChangePrimaryPlayer/PartyChanged burst IINACT sends on the
         # resubscribe, so drop the stale mapping rather than carry it over.
@@ -163,6 +177,34 @@ class WSClient(QObject):
         # Always arm the retry timer too. If the immediate reopen above bailed
         # or its attempt fails, the timer retries. _on_connected stops it.
         self._schedule_reconnect()
+
+    def _stop_heartbeat(self) -> None:
+        self._heartbeat_timer.stop()
+        self._pending_ping = None
+
+    def _heartbeat_tick(self) -> None:
+        if self._ws.state() != QAbstractSocket.SocketState.ConnectedState:
+            self._stop_heartbeat()
+            return
+        if self._pending_ping is not None:
+            self._stop_heartbeat()
+            self._error_reported = True
+            self.status_changed.emit(False, "Connection timed out")
+            self._ws.abort()
+            self._schedule_reconnect()
+            return
+        # Match a fresh payload so a delayed pong cannot revive a later probe.
+        self._pending_ping = os.urandom(8)
+        self._heartbeat_timer.start(_PONG_TIMEOUT_MS)
+        self._ws.ping(self._pending_ping)
+
+    def _on_pong(self, _elapsed: int, payload) -> None:
+        if self._pending_ping is None or bytes(payload) != self._pending_ping:
+            return
+        if self._ws.state() != QAbstractSocket.SocketState.ConnectedState:
+            return
+        self._pending_ping = None
+        self._heartbeat_timer.start(_PING_INTERVAL_MS)
 
     # ------------------------------------------------------------------
     def set_combatant_polling(self, enabled: bool) -> None:

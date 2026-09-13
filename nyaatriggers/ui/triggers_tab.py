@@ -58,7 +58,7 @@ class TriggersTabMixin:
             return set()
         try:
             raw = json.loads(src.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return set()
         rows = raw.get("retired", []) if isinstance(raw, dict) else raw
         if not isinstance(rows, list):
@@ -110,7 +110,7 @@ class TriggersTabMixin:
                 if not isinstance(data, list):
                     raise ValueError("not a trigger list")
                 official = [Trigger.from_dict(d) for d in data if isinstance(d, dict)]
-            except (OSError, ValueError, KeyError, TypeError) as exc:
+            except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
                 ac.log_drop("triggers", f"{_src.name} unreadable: {exc!r}")
                 continue
             break
@@ -138,7 +138,7 @@ class TriggersTabMixin:
         if ac.TRIGGERS_LOCAL_FILE.exists():
             try:
                 raw = json.loads(ac.TRIGGERS_LOCAL_FILE.read_text(encoding="utf-8"))
-            except (OSError, ValueError, KeyError, TypeError):
+            except (OSError, ValueError, KeyError, TypeError, RecursionError):
                 self._handle_local_corrupt()
         # A file that's valid JSON but not a dict, say a bare list, would
         # make raw.get raise AttributeError out of __init__.
@@ -274,7 +274,7 @@ class TriggersTabMixin:
             json.loads(ac.TRIGGERS_LOCAL_FILE.read_text(encoding="utf-8"))
         except FileNotFoundError:
             pass
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             self._handle_local_corrupt()
             return False
         to_save = [t for t in self._triggers if t.id in self._local_ids]
@@ -1271,7 +1271,7 @@ class TriggersTabMixin:
             return {}
         try:
             raw = json.loads(ac.CALLOUT_DEFAULTS_FILE.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return {}
         if not isinstance(raw, dict):
             return {}
@@ -1322,7 +1322,7 @@ class TriggersTabMixin:
         for src in (ac._CALLOUTS_JA_CACHE, ac._CALLOUTS_JA_BUNDLE):
             try:
                 cand = json.loads(src.read_text(encoding="utf-8"))
-            except (OSError, ValueError):   # ValueError covers JSON + UnicodeDecode
+            except (OSError, ValueError, RecursionError):
                 continue
             if not (isinstance(cand, dict) and isinstance(cand.get("callouts"), dict)):
                 continue
@@ -1723,7 +1723,7 @@ class TriggersTabMixin:
             try:
                 if p.exists():
                     json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+            except (OSError, ValueError, RecursionError):
                 return
         self._load_triggers()   # re-baselines _triggers_mtime itself
 

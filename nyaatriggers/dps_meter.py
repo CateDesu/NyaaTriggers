@@ -91,6 +91,8 @@ _MISS_TYPES = frozenset((0x01, 0x02))
 # pauses. The next hit starts a fresh segment. Display only. The recorded
 # pull is never split.
 DEFAULT_IDLE_TIMEOUT = 120.0
+# Recover stale encounters at the next combat start regardless of display settings.
+_STALE_ENCOUNTER_S = 120.0
 DEATH_DUPLICATE_SECONDS = 1
 
 
@@ -361,11 +363,11 @@ class DpsMeter:
     def _begin(self) -> None:
         if self.current is not None:
             # A stray late tick can reopen an encounter nobody finalizes.
-            # Past the idle timeout it is dead weight. Close it out before
+            # Past the recovery window it is dead weight. Close it out before
             # the fresh pull starts, or the two merge into one phantom.
             enc = self.current
             last = enc.last if enc.last is not None else enc.start
-            if self._clock() - last <= self._idle_timeout:
+            if self._clock() - last <= _STALE_ENCOUNTER_S:
                 return
             self.finalize()
         # A new pull pushes the preserved one off screen.
