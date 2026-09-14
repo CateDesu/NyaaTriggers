@@ -1,10 +1,8 @@
 # NyaaTriggers
 
-An FFXIV trigger manager. It connects to [IINACT](https://github.com/marzent/IINACT) or any ACT fork over WebSocket and speaks callouts when configured abilities appear in the combat log, with an optional alert sound alongside each one.
+An FFXIV trigger manager. It connects to [IINACT](https://github.com/marzent/IINACT) and speaks callouts when configured abilities appear in the combat log.
 
-Everything starts off, so you check the callouts you want. Triggevent and Triggernometry rows are editable. Bottom right checkboxes function as a per-fight toggle. I.e. DMU/UMAD -> local checked -> you get the local triggers for only that fight specifically.
-
-There is also a live DPS meter parsed by the program itself, which includes DPS logs, party automarkers via the Telesto plugin, and a Japanese UI. If you'd like other languages, feel free to create an issue.
+There is a live DPS meter parsed by the program itself, which includes DPS logs, party automarkers via the Telesto plugin, death recap and prog log. If you'd like other languages, feel free to create an issue. Currently only ENG and JP are supported.
 
 ![NyaaTriggers showing the Triggers tab and collapsed Profiles section](docs/images/triggers-tab.png)
 
