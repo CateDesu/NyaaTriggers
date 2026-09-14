@@ -7,7 +7,7 @@ The full reference for NyaaTriggers. Install steps are in the [README](../README
 - [Triggers tab](#triggers-tab)
 - [Engine triggers](#engine-triggers)
 - [Triggevent Engine](#triggevent-engine)
-- [Triggernometry engine](#triggernometry-engine)
+- [Triggernometry engine](#triggernometry-engine-wip)
 - [Current Instance tab](#current-instance-tab)
 - [DPS tab](#dps-tab)
 - [Death Recap tab](#death-recap-tab)
@@ -25,7 +25,7 @@ The full reference for NyaaTriggers. Install steps are in the [README](../README
 
 ## Requirements
 
-The Windows and Linux release builds bundle everything below. This table applies only when running from source on Linux.
+Windows and Linux release builds bundle the Python dependencies and English Piper voice. IINACT is installed separately, and Linux engines also use the [system dependencies listed in the README](../README.md#linux-engine-dependencies). This table covers the base requirements for running from source on Linux.
 
 | Requirement | Notes |
 |---|---|
@@ -43,7 +43,7 @@ The Windows and Linux release builds bundle everything below. This table applies
 Pick the backend in **Settings - Voice - Engine**:
 
 - **System** - your OS voice, Windows SAPI or Linux `spd-say` / `espeak`. No download or extra dependency. **Default on Windows.**
-- **Piper** - fully offline neural TTS via [Piper](https://github.com/OHF-Voice/piper1-gpl). **Default on Linux.** The `en_US-arctic-medium` model downloads automatically on first launch into `voices/`.
+- **Piper** - fully offline neural TTS via [Piper](https://github.com/OHF-Voice/piper1-gpl). **Default on Linux.** Release builds include the `en_US-arctic-medium` model. Source runs download it automatically on first launch into `voices/`.
 
 **Adding Piper voices:** browse the [voice samples](https://rhasspy.github.io/piper-samples/), download a `.onnx` model and its matching `.onnx.json` config, and drop both in the `voices/` folder. **Settings - Voice - Open voices folder** opens it. Pick the voice under **Model**, and hit **Refresh list** or restart if you added it while open. Medium voices are ~65 MB, low ~30 MB.
 
@@ -57,9 +57,9 @@ Pick the backend in **Settings - Voice - Engine**:
 
 The trigger editor and your trigger set, bundled plus custom. The live combat log is a separate **Current Instance** tab.
 
-**Master switch.** **Triggers: ON/OFF** runs your editable triggers: **Local**, the **Triggevent** Engine, and the **Triggernometry** engine once you've imported a pack. **Cactbot** is separate and **mutually exclusive** - enabling it (in **Settings - Cactbot**) turns this switch off and vice versa, since cactbot isn't editable and would just double up. That one Cactbot switch is also all there is to timelines: on, and the current fight's timeline bars come from cactbot's own `.txt` files (dungeon timelines ship with the program, the rest are downloaded and cached on demand) alongside its callouts; off, and your Local triggers and timelines stand alone.
+**Callout modes.** With **Cactbot** off, the program runs your editable **Local**, **Triggevent**, and imported **Triggernometry** callouts according to their row checkboxes. Enabling **Settings - Cactbot** switches those callouts off and runs cactbot instead. Turning Cactbot off restores editable callout mode. The same Cactbot switch controls its timelines: on, and the current fight uses cactbot's `.txt` files alongside its callouts. Dungeon timelines ship with the program, and the others download and cache on demand. With Cactbot off, local timelines are used.
 
-**Everything ships off.** Bundled Local triggers and engine callouts all start disabled, including each new patch's additions, so a fresh install stays silent until you opt in. Local triggers are zone-locked. A trigger tagged M4S only fires inside that zone.
+**Callout choices.** Engine callouts are enabled unless you mute them, including newly discovered callouts. Local rows keep their own saved on/off choices. Local triggers use their zone restrictions to decide where they can fire. Check the row and per-fight controls when choosing your setup.
 
 **Sidebar tree**, grouped by content type, then expansion, then fight:
 
@@ -90,7 +90,7 @@ Engine triggers appear right in the **Triggers** list under their fight, tinted 
 
 - **Uncheck a row** to silence that callout, and check it again to bring it back. New triggers fire the first time they're seen, nothing is muted just for being new. Cactbot suppresses disabled callouts at source via `DisabledTriggers`. Triggevent and Triggernometry drop the disabled ids. All apply live with no restart.
 - **Double-click** a Triggevent callout to change its wording, or right-click and pick **Edit spoken text**. Tokens like `{event.target}` still substitute, and **Reset to default** restores it. Edits persist and re-apply each time the engine starts.
-- **Triggernometry** callouts list as editable rows too. Edit the spoken text or toggle them per trigger, the same as Triggevent. See [Triggernometry engine](#triggernometry-engine).
+- **Triggernometry** callouts list as editable rows too. Edit the spoken text or toggle them per trigger, the same as Triggevent. See [Triggernometry engine](#triggernometry-engine-wip).
 - **Test TTS** from the right-click menu or the ▶ button in the edit dialog speaks a callout with sample token values.
 - **Cactbot** callouts can't be edited at the engine. Uncheck the row to silence one, and check it again to bring it back. Cactbot's on/off, per-trigger overrides, and the page **URL** live in **Settings - Cactbot**. The URL defaults to the hosted raidboss build, so point it at a local build only if you bundle one. Cactbot needs PyQt6-WebEngine. The packaged release builds bundle it, and source installs need the package from the Requirements table.
 
@@ -100,7 +100,7 @@ Simple cast-based engine triggers are bundled as editable Local triggers instead
 
 ## Triggevent Engine
 
-Triggevent runs headless against the same IINACT feed and speaks **every** callout it produces: built-in, EasyTriggers, and your Groovy scripts in `~/.triggevent`, including the code-based ones that can't become Local triggers. There's no separate on/off. It follows the master **Triggers** switch.
+Triggevent runs against the same IINACT feed and speaks its enabled callouts: built-in, EasyTriggers, and your Groovy scripts in `~/.triggevent`, including the code-based ones that cannot become Local triggers. Its callouts run with Cactbot off and follow the row, per-fight, and global Triggevent controls.
 
 It runs Triggevent's engine ([`xpdota/event-trigger`](https://github.com/xpdota/event-trigger), GPL-3.0) as a side process. **Release builds bundle the engine and a Java 17 runtime.** A source checkout builds the sidecar once with **JDK 17 + Maven**:
 
@@ -120,19 +120,19 @@ Some engine components build a Swing overlay as they load, so the sidecar runs t
 
 > **Note.** Triggernometry support is still being validated in-game.
 
-Triggernometry runs its **real engine** to preserve conditions, shared variables, delayed actions, trigger chains and C# `ExecuteScript` actions. These need the original XML pack because the simple converter cannot represent their logic. There's no separate on/off. An imported pack follows the master **Triggers** switch, and the engine only starts once you've actually imported a pack.
+Triggernometry runs its **real engine** to preserve conditions, shared variables, delayed actions, trigger chains and C# `ExecuteScript` actions. These need the original XML pack because the simple converter cannot represent their logic. The engine starts once a pack has been imported and Cactbot is off. Turning Cactbot on stops it.
 
 **Importing a pack.** Point **Settings - Data - Import Triggernometry** at a Triggernometry `.xml` export. The whole pack runs through the engine and lists under its own **Triggernometry** section as editable rows. Edit the spoken text or toggle them per trigger, just like Triggevent. On a build without the engine the simple triggers, a literal ability ID plus a plain text-to-speech line, fall back to editable **Local** rows instead.
 
 **Pack compatibility.** Network triggers receive raw FFXIV logs and ACT log triggers receive the corresponding formatted logs. Replay tests cover TOP's player markers and wipe reset, Zelenia's Bloom callout sequence from the [Paissa sharing-channel pack](https://github.com/paissaheavyindustries/Triggernometry-Triggers/tree/main/Repositories), and a C# calculation used by a delayed callout. This does not validate every trigger in those packs. Legacy Triggernometry auras and scripts that read game memory directly are still unsupported.
 
-**Telesto callbacks and drawings.** With [Telesto](https://github.com/paissaheavyindustries/Telesto) running in the game, imported packs can subscribe to memory changes and draw lines, circles, beams and other Telesto doodles. The program uses **Telesto URL** in the Automarkers tab and sets up the callback address automatically. These features follow the master **Triggers** switch. The Automarkers switch separately gates pack actions that send game commands or macros. No extra listener settings or administrator setup are needed for a local Telesto connection.
+**Telesto callbacks and drawings.** With [Telesto](https://github.com/paissaheavyindustries/Telesto) running in the game, imported packs can subscribe to memory changes and draw lines, circles, beams and other Telesto doodles. The program uses **Telesto URL** in the Automarkers tab and sets up the callback address automatically. These features run with Triggernometry in editable callout mode. The Automarkers switch separately gates pack actions that send game commands or macros. No extra listener settings or administrator setup are needed for a local Telesto connection.
 
 TOP's Party Synergy weapon calls and Pantokrator circles and beams are covered by replays through this integration. Subscriptions and drawings belong to one engine run and are cleaned up when it stops. Late notifications from retired subscriptions or replaced drawings are ignored. Telesto performs the memory reads and renders the drawings inside the game. Pack memory offsets still need to match the game version.
 
 **How it runs.** A headless .NET sidecar (`triggernometry-core`) hosts the real engine and routes its callouts to NyaaTriggers' voice and the optional companion overlay plugin. It's cross-platform .NET Framework 4.6.2. **Windows runs it natively**, and **Linux runs it under Mono** with `sudo pacman -S mono`. Release builds bundle the prebuilt sidecar, so there's nothing to build to use it.
 
-**Building from source.** The sidecar's prebuilt binaries are vendored in `triggernometry-core/bin/` and used as-is, so a normal source run needs nothing extra. To rebuild it, only needed if you change the host or bump the pinned engine, run `triggernometry-core/build-all.sh` with **Mono 6.12+** installed. It clones the engine at a pinned commit, applies the shims, and rebuilds `bin/`. See `triggernometry-core/README.md` for the design.
+**Building from source.** The sidecar's prebuilt binaries are vendored in `triggernometry-core/bin/` and used as-is, so a normal source run needs no build step. Linux still needs the [engine dependencies](../README.md#linux-engine-dependencies). To rebuild it, only needed if you change the host or bump the pinned engine, run `triggernometry-core/build-all.sh` with **Mono 6.12+** installed. It clones the engine at a pinned commit, applies the shims, and rebuilds `bin/`. See `triggernometry-core/README.md` for the design.
 
 ---
 
@@ -152,7 +152,7 @@ A live damage meter parsed by the program itself straight from the combat log. P
 - A finished pull stays frozen on screen until the next one starts.
 - **Recent pulls** lists this session's pulls newest first. Click one to review its numbers. The feed goes back to live on its own when the next pull starts, or hit **<- Back to live**.
 - **Record encounters**, off by default, appends each finished pull to a JSONL log in `dps_logs/`, one line per pull, fights mixed like ACT's log files. A log rolls over at 25 pulls of one fight or 5 distinct fights, and once 5 full logs sit in the folder the oldest are culled.
-- With the companion overlay plugin connected the live meter is also drawn in the game, top 8 players plus party DPS, once a second while a fight runs. Needs a plugin build that understands the `dps` frame.
+- With the companion overlay plugin connected the live meter is also drawn in the game, up to 24 players plus party DPS, once a second while a fight runs. The plugin controls its appearance and whether the last encounter stays visible after combat ends.
 
 ---
 
@@ -275,6 +275,8 @@ Places FFXIV head-sign markers like attack, bind, ignore, and shapes through the
 - **UMAD** - two dedicated toggles that run their own sequencers rather than plain rules. The **black-hole chains** give one roaming sign per cleanse queue in P3, DPS, supports, and the Accretion pair, each with its own marker picker. The **Cursed Shriek gaze pairs** split P4's look-away and look-at signs by debuff timer. Both suspend the overlapping plain rules while on so two systems never fight over one sign. Debuff IDs and the reasoning behind each rule: [UMAD-DEBUFFS.md](UMAD-DEBUFFS.md).
 
 ---
+
+## Alert sound
 
 Under **Settings - Alert Sound**, play a sound when an alert fires. Three built-in sounds; Ding, Alert, and Coin, or **Import SFX** to add your own `.wav` as a named reusable sound. Imported files copy into a user sounds folder, so they work on frozen installs and survive updates. You can also point at any `.wav` directly. Each has its own **Volume**, a choice of every alert vs urgent only, and a **Test** button. The Volume slider is perceptual, so 100% is full, 50% is about -20 dB, 0% is silent, default 50%, then scaled by the master volume. It plays on its own channel alongside the spoken callout.
 
