@@ -172,9 +172,9 @@ def convert_file(java_path: Path) -> list[dict]:
         # Line anchored. A commented out annotation must not mint a live
         # trigger, the vendored tree carries a few of those.
         r'(?m)^[ \t]*@NpcCastCallout\(([^)]+)\)'
-        # Single whitespace chars, not \s+, so a long run has exactly one
-        # partition and the gap scan stays linear.
-        r'(?:\s|//[^\n]*|@(?!NpcCastCallout)\w+(?:\([^()]*\))?)*'
+        # Consume each comment whole so slash runs cannot split into
+        # overlapping comments when the field declaration does not match.
+        r'(?:\s|//[^\n]*+|@(?!NpcCastCallout)\w+(?:\([^()]*\))?)*'
         r'(?:(?:private|public|protected|static|final)\s+)*'
         r'ModifiableCallout<(?:[^<>]|<[^<>]*>)+>\s+\w+\s*=\s*'
         r'(?:ModifiableCallout\.(?:<[^>]+>)?\w+|new\s+ModifiableCallout<[^>]*>)'

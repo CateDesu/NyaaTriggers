@@ -4,9 +4,9 @@ A git checkout updates with `git pull --ff-only --tags`, which brings new code b
 never the new or re-pinned dependencies that code needs (the plugin link's
 websockets only entered requirements.txt after many checkouts existed, and
 those envs reported the overlay link broken through every later update).
-After any pull that moves HEAD, apply_git runs
-`pip install -r requirements.txt` with the running interpreter. A pip failure
-never fails the update itself - the message asks for a manual install.
+After any successful pull, apply_git installs requirements with the running
+interpreter. A pip failure leaves the update incomplete and a retry installs
+dependencies even if the code is already current.
 
 A pull blocked by untracked cactbot timeline downloads left over from before
 the repo tracked those files self heals instead: the stale files are deleted
@@ -20,6 +20,8 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nyaatriggers import updater
@@ -40,25 +42,20 @@ class _R:
 
 def run_case(pull_rc=0, head_moves=True, pip_rc=0, pip_err="", with_req=True):
     """Run apply_git against a temp checkout with updater.subprocess.run
-    stubbed: rev-parse answers old->new (or old->old), pull and pip return
-    the scripted results. Returns (ok, msg, calls, tmpdir_handle)."""
+    stubbed so pull and pip return the scripted results.
+    Returns ok, msg, pip calls and the temporary directory handle."""
     tmp = tempfile.TemporaryDirectory()
     repo = Path(tmp.name)
     if with_req:
         (repo / "requirements.txt").write_text("websockets==16.1.1\n",
                                                encoding="utf-8")
     calls = []
-    rev_count = [0]
-
     def fake_run(argv, **kw):
         calls.append(list(argv))
-        if "rev-parse" in argv:
-            rev_count[0] += 1
-            head = "old" if rev_count[0] == 1 else ("new" if head_moves else "old")
-            return _R(0, head + "\n")
         if "pull" in argv:
             return _R(pull_rc,
-                      "Updating old..new\nFast-forward\n" if pull_rc == 0 else "",
+                      ("Updating old..new\nFast-forward\n" if head_moves else
+                       "Already up to date.\n") if pull_rc == 0 else "",
                       "rejected: non-fast-forward" if pull_rc else "")
         if argv[0] == sys.executable and "pip" in argv:
             return _R(pip_rc, "", pip_err)
@@ -87,10 +84,10 @@ check("successful deps install is reported in the message",
 check("pull output survives in the message", "Fast-forward" in msg)
 tmp.cleanup()
 
-# An up-to-date pull never touches pip.
+# Retrying an update repairs dependencies even when the code is current.
 ok, msg, pip_calls, tmp = run_case(head_moves=False)
-check("unchanged HEAD skips pip", ok and pip_calls == [])
-check("unchanged HEAD message stays the plain pull output", "dependencies" not in msg)
+check("unchanged HEAD still installs requirements", ok and len(pip_calls) == 1)
+check("unchanged HEAD reports the dependency result", "dependencies are up to date" in msg)
 tmp.cleanup()
 
 # A failed pull never touches pip either.
@@ -99,13 +96,59 @@ check("failed pull reports failure", not ok and "git pull failed" in msg)
 check("failed pull skips pip", pip_calls == [])
 tmp.cleanup()
 
-# A pip failure does not fail the update; the message asks for a manual run.
+# A dependency failure must reach the UI before it offers a restart.
 ok, msg, pip_calls, tmp = run_case(pip_rc=1, pip_err="ERROR: No matching distribution")
-check("pip failure keeps the update ok", ok)
+check("pip failure leaves the update incomplete", not ok)
 check("pip failure shows pip's error", "No matching distribution" in msg)
 check("pip failure points at the manual command",
       "pip install -r requirements.txt" in msg)
+
+from nyaatriggers.updater_ui import UpdaterUiMixin
+from nyaatriggers import app_common
+
+
+class _Widget:
+    def setVisible(self, value):
+        pass
+
+    def setText(self, value):
+        pass
+
+
+offers = []
+release = updater.Release("v9.0.0", "9.0.0", "")
+host = SimpleNamespace(
+    _install_in_flight=True, _pending_release=release,
+    _update_applied_version="", _upd_progress=_Widget(), _upd_msg=_Widget(),
+    _on_update_available=lambda rel: offers.append(rel),
+)
+with patch.object(updater, "install_kind", return_value="git"), \
+        patch.object(app_common.QMessageBox, "warning") as warning, \
+        patch.object(app_common.QMessageBox, "question") as question:
+    UpdaterUiMixin._handle_update_done(host, ok, msg)
+    check("dependency failure opens a warning with the repair command",
+          warning.call_count == 1 and warning.call_args.args[2] == msg)
+    check("dependency failure never offers restart", not question.called)
+check("dependency failure leaves Install available to retry",
+      offers == [release] and host._update_applied_version == ""
+      and not host._install_in_flight)
 tmp.cleanup()
+
+with tempfile.TemporaryDirectory() as td:
+    repo = Path(td)
+    attempts = []
+    results = iter(((False, "offline"), (True, "")))
+
+    def install_retry(path):
+        attempts.append(path)
+        return next(results)
+
+    with patch.object(updater, "_git_pull", return_value=_R(0, "Already up to date.")), \
+            patch.object(updater, "_install_requirements", install_retry):
+        first_ok, _ = updater.apply_git(repo)
+        second_ok, _ = updater.apply_git(repo)
+    check("the same checkout retries dependencies after a failed install",
+          not first_ok and second_ok and attempts == [repo, repo])
 
 # A checkout without requirements.txt (shouldn't happen, but stay silent).
 ok, msg, pip_calls, tmp = run_case(with_req=False)

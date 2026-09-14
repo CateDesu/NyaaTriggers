@@ -278,13 +278,15 @@ old_proc = _OldProc(_CALLOUT_LINE)
 tv4._active = True
 tv4._proc = _OldProc("")        # the replacement generation's proc
 tv4._gen = 3                    # stop bumped 1 -> 2, start bumped 2 -> 3
-tv4._read_loop(old_proc, queue.Queue(), {"last": None}, 1)
+with mock.patch.object(tv4, "_reap"):
+    tv4._read_loop(old_proc, queue.Queue(), {"last": None}, 1)
 check("a buffered callout from the old generation is not emitted", fired == [])
 
 # the live generation's reader fires, stamped with its generation
 live_proc = _OldProc(_CALLOUT_LINE)
 tv4._proc = live_proc
-tv4._read_loop(live_proc, queue.Queue(), {"last": None}, 3)
+with mock.patch.object(tv4, "_reap"):
+    tv4._read_loop(live_proc, queue.Queue(), {"last": None}, 3)
 check("the live generation's callout is emitted with its generation",
       ("callout", "old gen", 3) in fired and ("tts", "old gen", 3) in fired)
 check("the live generation's exit status is emitted with its generation",

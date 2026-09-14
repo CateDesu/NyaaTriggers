@@ -13,6 +13,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -77,6 +78,28 @@ res, _ = convert(_HEADER + '''
 ''' + _FOOTER)
 check("trailing comment after the annotation converts",
       len(res) == 1 and res[0]["tts_text"] == "Knockback")
+
+res, _ = convert(_HEADER + '''
+    @NpcCastCallout(0x8C05)
+    ////////////////////////////////////////
+    private final ModifiableCallout<Object> e = new ModifiableCallout<>("Label", "Move");
+''' + _FOOTER)
+check("slash comments still allow the following callout", len(res) == 1)
+
+with tempfile.TemporaryDirectory() as td:
+    java = Path(td) / "slashes.java"
+    java.write_text(_HEADER + '@NpcCastCallout(0x1234)\n'
+                    + '/' * 10000 + '\nnot_a_callout;\n' + _FOOTER)
+    code = ('from pathlib import Path; import sys; '
+            'from nyaatriggers.convert_event_trigger import convert_file; '
+            'assert convert_file(Path(sys.argv[1])) == []')
+    try:
+        result = subprocess.run([sys.executable, "-c", code, str(java)],
+                                cwd=Path(__file__).resolve().parents[1],
+                                capture_output=True, text=True, timeout=3)
+        check("slash comments with no field finish within the deadline", result.returncode == 0)
+    except subprocess.TimeoutExpired:
+        check("slash comments with no field finish within the deadline", False)
 
 # ── one level of nested generics, used to drop silently ───────────────────
 res, _ = convert(_HEADER + '''

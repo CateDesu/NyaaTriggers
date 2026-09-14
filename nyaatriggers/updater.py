@@ -4,8 +4,8 @@ Pure logic, no Qt. The GUI runs the network/IO on a worker thread.
 
 Install kinds, auto-detected.
   - "git"            - source checkout -> `git pull --ff-only --tags`, then
-                       `pip install -r requirements.txt` when the pull moved
-                       HEAD, since new code can need new or changed pinned deps.
+                       `pip install -r requirements.txt` after a successful pull
+                       so missing dependencies can be repaired on a retry.
   - "frozen-linux"   - PyInstaller ONEDIR -> download NyaaTriggers-linux.tar.gz,
                        swap exe + _internal/ in place, keep user-data siblings.
   - "frozen-windows" - ONEDIR. The running exe + DLLs are locked, so a staged
@@ -560,19 +560,6 @@ def _git_env() -> dict[str, str]:
             "SSH_ASKPASS": "", "GCM_INTERACTIVE": "Never"}
 
 
-def _git_head(repo_dir: Path) -> str | None:
-    """Current HEAD commit hash, or None when unreadable."""
-    try:
-        r = subprocess.run(
-            ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=15,
-            encoding="utf-8", errors="replace",
-        )
-    except Exception:  # noqa: BLE001
-        return None
-    return r.stdout.strip() if r.returncode == 0 else None
-
-
 def git_covers_upstream(repo_dir: Path | None = None, timeout: int = 10) -> bool:
     """True when this checkout's HEAD already contains the upstream branch
     tip, so a rolling release built from that tip has nothing new to offer.
@@ -616,8 +603,8 @@ def _install_requirements(repo_dir: Path) -> tuple[bool, str] | None:
     A pull brings new code but never the pinned packages that code needs. The
     plugin link's websockets was one such case. Envs that predated its
     requirements.txt entry stayed broken through every update. Runs after any
-    pull that moved HEAD, not just ones touching requirements.txt, so an env
-    that already missed a dep heals on the next update. Already-satisfied pins
+    successful pull so a retry can repair a failed dependency install even
+    when the code is already current. Already-satisfied pins
     download nothing, so this is cheap. Returns None when there is no
     requirements.txt to install from, else ok and detail."""
     req = repo_dir / "requirements.txt"
@@ -687,16 +674,15 @@ def _remove_untracked(repo_dir: Path, rel_paths: list[str]) -> int:
 
 def apply_git(repo_dir: Path | None = None) -> tuple[bool, str]:
     """`git pull --ff-only --tags` in the source checkout, then refresh the
-    pip requirements when the pull moved HEAD. Tags ride along so the git
+    pip requirements after a successful pull. Tags ride along so the git
     describe version label catches up to the rolling tags each push to main
     is cut from: plain tag following only fetches tags for commits the pull
     downloads, and a maintainer downloads none of their own. A pull blocked
     by untracked stale cactbot timeline downloads self heals: the repo ships
-    those files now, so they are deleted and the pull retried once. A pip
-    failure never fails the update itself. The message asks for a manual
-    install instead. Returns ok and a message."""
+    those files now, so they are deleted and the pull retried once. A failed
+    dependency install leaves the update incomplete and reports how to retry.
+    Returns ok and a message."""
     repo_dir = repo_dir or source_dir()
-    head_before = _git_head(repo_dir)
     try:
         r = _git_pull(repo_dir)
     except FileNotFoundError:
@@ -721,17 +707,16 @@ def apply_git(repo_dir: Path | None = None) -> tuple[bool, str]:
             plural = "s" if cleared != 1 else ""
             msg = (f"Removed {cleared} stale cactbot timeline download{plural} "
                    "that blocked the pull.\n\n" + msg)
-        if _git_head(repo_dir) != head_before:
-            deps = _install_requirements(repo_dir)
-            if deps is not None:
-                deps_ok, detail = deps
-                if deps_ok:
-                    msg += "\n\nPython dependencies are up to date."
-                else:
-                    msg += ("\n\nThe update applied, but installing the Python "
-                            f"dependencies failed:\n{detail}\n"
-                            "Run `pip install -r requirements.txt` yourself, then "
-                            "restart the app.")
+        deps = _install_requirements(repo_dir)
+        if deps is not None:
+            deps_ok, detail = deps
+            if not deps_ok:
+                return False, (
+                    msg + "\n\nThe code was updated, but installing the Python "
+                    f"dependencies failed:\n{detail}\n"
+                    "Try Install again, or run `pip install -r requirements.txt` "
+                    "yourself before restarting the program.")
+            msg += "\n\nPython dependencies are up to date."
         return True, msg
     detail = (r.stderr.strip() or r.stdout.strip() or "unknown error")
     return False, (

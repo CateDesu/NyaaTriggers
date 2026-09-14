@@ -834,7 +834,9 @@ class TriggeventBridge(QObject):
         try:
             if os.name == "posix":
                 import signal
-                os.killpg(os.getpgid(proc.pid),
+                # start_new_session makes the child PID its group ID.
+                # The group can survive after the wrapper has been reaped.
+                os.killpg(proc.pid,
                           signal.SIGTERM if graceful else signal.SIGKILL)
             else:
                 proc.terminate() if graceful else proc.kill()
@@ -846,17 +848,38 @@ class TriggeventBridge(QObject):
 
     @classmethod
     def _reap(cls, proc: subprocess.Popen) -> None:
-        """Wait for the already-SIGTERM'd sidecar to exit. SIGKILL its group if
-        it doesn't. The initial term is sent synchronously by stop so it lands
-        even when closeEvent / re-exec tears this process down right after."""
-        try:
-            proc.wait(timeout=4)
-        except subprocess.TimeoutExpired:
-            cls._signal_group(proc, graceful=False)
+        """Allow the sidecar to exit, then kill any surviving group members."""
+        # The reader and stop can both reach cleanup for the same process.
+        lock = proc.__dict__.setdefault("_nyaa_reap_lock", threading.Lock())
+        with lock:
+            if getattr(proc, "_nyaa_reaped", False):
+                return
             try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                pass
+                deadline = time.monotonic() + 4
+                try:
+                    proc.wait(timeout=4)
+                except subprocess.TimeoutExpired:
+                    pass
+                else:
+                    if os.name != "posix":
+                        return
+                    # Waiting for xvfb-run alone says nothing about its children.
+                    while time.monotonic() < deadline:
+                        try:
+                            os.killpg(proc.pid, 0)
+                        except ProcessLookupError:
+                            return
+                        except OSError:
+                            break
+                        time.sleep(0.05)
+                cls._signal_group(proc, graceful=False)
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+            finally:
+                proc._nyaa_reaped = True
+
 
     # ------------------------------------------------------------------
     def feed(self, raw_msg: str) -> None:
@@ -907,53 +930,49 @@ class TriggeventBridge(QObject):
             pass
 
     def _read_loop(self, proc: subprocess.Popen, wq: queue.Queue, seq_state: dict, gen: int) -> None:
-        if proc.stdout is None:
-            return
-        for line in _read_lines_bounded(proc.stdout):
-            line = line.strip()
-            if not line:
-                continue
-            if not line.startswith("{"):
-                # a non-JSON diagnostic line from the sidecar.
-                _log(f"[sidecar] {line}")
-                continue
-            try:
-                msg = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                # Was a silent continue: a corrupted callout line used to vanish
-                # with no trace, which is exactly the loss we are hunting.
-                log_drop("engine-parse", f"unparsed sidecar line {line[:160]!r}", 0)
-                continue
-            try:
-                self._dispatch(msg, seq_state, gen)
-            except Exception as exc:  # noqa: BLE001 - a bad message must never kill the reader
-                _log(f"dispatch error: {exc!r}")
-        # stdout closed means the process ended. Only touch shared state if we're
-        # still the current generation, a restart may have swapped procs. Check
-        # and clear under the lock, or a concurrent stop+start between our check
-        # and our writes would get its NEW generation's _proc/_active clobbered.
-        with self._state_lock:
-            was_current = proc is self._proc and self._active
-            if was_current:
-                self._active = False
-                self._proc = None
-        if was_current:
-            _log(f"sidecar exited (returncode={proc.poll()})")
-            self.status.emit(False, "Sidecar exited", gen)
-        # Always release this generation's writer thread and reap the child.
-        # A spontaneous sidecar exit otherwise leaks the writer, blocked in
-        # wq.get forever, pinning the Popen and its stdin pipe FD, and leaves
-        # a zombie. A later stop early-returns once _active/_proc are cleared,
-        # so nothing else can ever clean it up.
         try:
-            wq.put_nowait(_STOP)
-        except queue.Full:
+            if proc.stdout is None:
+                return
+            for line in _read_lines_bounded(proc.stdout):
+                line = line.strip()
+                if not line:
+                    continue
+                if not line.startswith("{"):
+                    _log(f"[sidecar] {line}")
+                    continue
+                try:
+                    msg = json.loads(line)
+                except (ValueError, RecursionError):
+                    log_drop("engine-parse", f"unparsed sidecar line {line[:160]!r}", 0)
+                    continue
+                try:
+                    self._dispatch(msg, seq_state, gen)
+                except Exception as exc:
+                    _log(f"dispatch error: {exc!r}")
+        except Exception as exc:
+            _log(f"reader error: {exc!r}")
+        finally:
+            # Retire only this generation, including when stdout fails.
+            with self._state_lock:
+                was_current = proc is self._proc and self._active
+                if was_current:
+                    self._active = False
+                    self._proc = None
             try:
-                wq.get_nowait()
-                wq.put_nowait(_STOP)
-            except (queue.Empty, queue.Full):
-                pass
-        self._reap(proc)
+                if was_current:
+                    _log(f"sidecar exited (returncode={proc.poll()})")
+                    self.status.emit(False, "Sidecar exited", gen)
+            finally:
+                # Release the writer even if reporting the exit fails.
+                try:
+                    wq.put_nowait(_STOP)
+                except queue.Full:
+                    try:
+                        wq.get_nowait()
+                        wq.put_nowait(_STOP)
+                    except (queue.Empty, queue.Full):
+                        pass
+                self._reap(proc)
 
     def _err_loop(self, proc: subprocess.Popen, gen: int) -> None:
         if proc.stderr is None:

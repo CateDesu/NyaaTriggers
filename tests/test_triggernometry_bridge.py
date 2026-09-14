@@ -16,6 +16,7 @@ import os
 import queue
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -76,13 +77,15 @@ old_proc = _OldProc(_BUF)
 br2._active = True
 br2._proc = _OldProc("")       # the replacement generation's proc
 br2._gen = 3                   # stop bumped 1 -> 2, start bumped 2 -> 3
-br2._read_loop(old_proc, queue.Queue(), 1)
+with patch.object(br2, "_reap"):
+    br2._read_loop(old_proc, queue.Queue(), 1)
 check("a buffered callout from the old generation is not emitted", fired == [])
 
 # the live generation's reader fires every frame, stamped with its generation
 live_proc = _OldProc(_BUF)
 br2._proc = live_proc
-br2._read_loop(live_proc, queue.Queue(), 3)
+with patch.object(br2, "_reap"):
+    br2._read_loop(live_proc, queue.Queue(), 3)
 check("the live generation's callout is emitted with its generation",
       ("callout", "old gen", 3) in fired and ("tts", "old gen", 3) in fired)
 check("the live generation's sound is emitted with its generation",

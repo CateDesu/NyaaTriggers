@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from nyaatriggers.paths import source_root
@@ -537,7 +538,9 @@ class TriggernometryBridge(QObject):
         try:
             if os.name == "posix":
                 import signal
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM if graceful else signal.SIGKILL)
+                # start_new_session makes the child PID its group ID.
+                # The group can survive after the wrapper has been reaped.
+                os.killpg(proc.pid, signal.SIGTERM if graceful else signal.SIGKILL)
             else:
                 proc.terminate() if graceful else proc.kill()
         except (OSError, ProcessLookupError):
@@ -548,16 +551,38 @@ class TriggernometryBridge(QObject):
 
     @classmethod
     def _reap(cls, proc: subprocess.Popen) -> None:
-        """Wait for the already-SIGTERM'd sidecar to exit. SIGKILL its group if
-        it doesn't. The initial term is sent synchronously by stop."""
-        try:
-            proc.wait(timeout=4)
-        except subprocess.TimeoutExpired:
-            cls._signal_group(proc, graceful=False)
+        """Allow the sidecar to exit, then kill any surviving group members."""
+        # The reader and stop can both reach cleanup for the same process.
+        lock = proc.__dict__.setdefault("_nyaa_reap_lock", threading.Lock())
+        with lock:
+            if getattr(proc, "_nyaa_reaped", False):
+                return
             try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                pass
+                deadline = time.monotonic() + 4
+                try:
+                    proc.wait(timeout=4)
+                except subprocess.TimeoutExpired:
+                    pass
+                else:
+                    if os.name != "posix":
+                        return
+                    # Waiting for xvfb-run alone says nothing about its children.
+                    while time.monotonic() < deadline:
+                        try:
+                            os.killpg(proc.pid, 0)
+                        except ProcessLookupError:
+                            return
+                        except OSError:
+                            break
+                        time.sleep(0.05)
+                cls._signal_group(proc, graceful=False)
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+            finally:
+                proc._nyaa_reaped = True
+
 
     # ------------------------------------------------------------------
     def _enqueue(self, obj: dict) -> None:
@@ -620,52 +645,53 @@ class TriggernometryBridge(QObject):
             pass
 
     def _read_loop(self, proc: subprocess.Popen, wq: queue.Queue, gen: int) -> None:
-        if proc.stdout is None:
-            return
-        for line in _read_lines_bounded(proc.stdout):
-            line = line.strip()
-            if not line:
-                continue
-            if not line.startswith("{"):
-                _log(f"[sidecar] {line}")
-                continue
-            try:
-                msg = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                log_drop("engine-parse", f"unparsed trig sidecar line {line[:160]!r}", 0)
-                continue
-            try:
-                self._dispatch(msg, gen)
-            except Exception as exc:  # noqa: BLE001 - a bad message must never kill the reader
-                _log(f"dispatch error: {exc!r}")
-        # Check-and-clear under the lock, or a concurrent stop+start between
-        # our check and our writes would get its NEW generation's state clobbered.
-        with self._state_lock:
-            was_current = proc is self._proc and self._active
-            relay = None
-            if was_current:
-                self._active = False
-                self._proc = None
-                relay, self._telesto = self._telesto, None
-        if relay:
-            self._close_telesto(relay)
-        if was_current:
-            _log(f"sidecar exited (returncode={proc.poll()})")
-            self.status.emit(False, "Sidecar exited", gen)
-        # Always release this generation's writer thread and reap the child.
-        # A spontaneous sidecar exit otherwise leaks the writer, blocked in
-        # wq.get forever, pinning the Popen and its stdin pipe FD, and leaves
-        # a zombie. A later stop early-returns once _active/_proc are cleared,
-        # so nothing else can ever clean it up.
         try:
-            wq.put_nowait(_STOP)
-        except queue.Full:
+            if proc.stdout is None:
+                return
+            for line in _read_lines_bounded(proc.stdout):
+                line = line.strip()
+                if not line:
+                    continue
+                if not line.startswith("{"):
+                    _log(f"[sidecar] {line}")
+                    continue
+                try:
+                    msg = json.loads(line)
+                except (ValueError, RecursionError):
+                    log_drop("engine-parse", f"unparsed trig sidecar line {line[:160]!r}", 0)
+                    continue
+                try:
+                    self._dispatch(msg, gen)
+                except Exception as exc:
+                    _log(f"dispatch error: {exc!r}")
+        except Exception as exc:
+            _log(f"reader error: {exc!r}")
+        finally:
+            # Retire only this generation, including when stdout fails.
+            with self._state_lock:
+                was_current = proc is self._proc and self._active
+                relay = None
+                if was_current:
+                    self._active = False
+                    self._proc = None
+                    relay, self._telesto = self._telesto, None
             try:
-                wq.get_nowait()
-                wq.put_nowait(_STOP)
-            except (queue.Empty, queue.Full):
-                pass
-        self._reap(proc)
+                if relay:
+                    self._close_telesto(relay)
+                if was_current:
+                    _log(f"sidecar exited (returncode={proc.poll()})")
+                    self.status.emit(False, "Sidecar exited", gen)
+            finally:
+                # Release the writer even if reporting the exit fails.
+                try:
+                    wq.put_nowait(_STOP)
+                except queue.Full:
+                    try:
+                        wq.get_nowait()
+                        wq.put_nowait(_STOP)
+                    except (queue.Empty, queue.Full):
+                        pass
+                self._reap(proc)
 
     def _err_loop(self, proc: subprocess.Popen) -> None:
         if proc.stderr is None:
