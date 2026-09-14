@@ -25,5 +25,10 @@ QT_QPA_PLATFORM=offscreen python3 -m tests.test_prog_phases -v
 Use the program's Python dependencies. The plugin link, download deadline, and
 Telesto resilience suites also need permission to open local sockets.
 
+The Triggernometry host suite needs Mono and Xvfb on Linux. The NumPy checks
+in the TTS suite need NumPy. CI installs these dependencies and fails if they
+are missing. Local runs report skips when they are unavailable. The runner's
+completion count includes suites with skips, so check their output for coverage.
+
 Pytest collects only the suites listed in `conftest.py`. Use `python3 -m tests`
 for a complete run because many scripts perform their checks during import.

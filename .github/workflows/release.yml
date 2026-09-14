@@ -135,15 +135,15 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - name: Install system deps for PyQt6 runtime
+      - name: Install system deps for tests
         run: |
           sudo apt-get update
           sudo apt-get install -y libegl1 libxkbcommon0 libxkbcommon-x11-0 \
             libxcb-cursor0 libxcb-xkb1 libxcb-icccm4 libxcb-shape0 libxcb-keysyms1 \
-            libgl1 libnss3 libasound2
+            libgl1 libnss3 libasound2 mono-devel xvfb
       - name: Install Python dependencies
         run: |
-          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 websockets==16.1.1 regex==2026.7.19
+          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 websockets==16.1.1 regex==2026.7.19 numpy==2.3.5
       - name: Run test suite
         env:
           QT_QPA_PLATFORM: offscreen

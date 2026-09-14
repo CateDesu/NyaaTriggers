@@ -39,6 +39,7 @@ class SessionUiTests(unittest.TestCase):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         self.temp = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
+        self.stack.enter_context(patch("nyaatriggers.drop_log._LOG_FILE", self.temp / "nyaatriggers.log"))
         for key, value in {"_DATA_DIR": self.temp, "_SETTINGS_FILE": self.temp / "settings.json",
                            "TRIGGERS_LOCAL_FILE": self.temp / "triggers.local.json"}.items():
             self.stack.enter_context(patch.object(ac, key, value))
@@ -89,6 +90,24 @@ class SessionUiTests(unittest.TestCase):
 
     def test_window_icon_loads_from_bundled_assets(self):
         self.assertFalse(self.window.windowIcon().isNull())
+
+    def test_oversized_saved_volumes_allow_startup_and_unmute(self):
+        settings = deepcopy(self.window._settings)
+        for value, master, alert in ((10**400, 100, 50), (1e308, 200, 100), (-1e308, 0, 0)):
+            with self.subTest(value=value):
+                ac._SETTINGS_FILE.write_text(json.dumps(settings | {
+                    "master_volume": value, "overlay_sound_volume": value}))
+                with patch.object(mw.MainWindow, "_load_settings", SettingsTabMixin._load_settings):
+                    window = mw.MainWindow()
+                try:
+                    self.assertEqual(window._vol_slider.value(), master)
+                    self.assertEqual(window._alert_sound_vol_slider.value(), alert)
+                    window._on_mute_toggled(True)
+                    window._on_mute_toggled(False)
+                    self.assertGreaterEqual(window._alert_sound_amp(), 0.0)
+                    self.assertLessEqual(window._alert_sound_amp(), 1.0)
+                finally:
+                    window.close()
 
     def test_umad_without_verified_rules_is_explicitly_unavailable(self):
         self.connect()
@@ -461,6 +480,56 @@ class SessionUiTests(unittest.TestCase):
         self.assertEqual(window._triggers[0].tts_text, "Normal setup")
         saved = read_record(window._profiles_dir / (DEFAULT_PROFILE_ID + ".json"))
         self.assertEqual(saved["local"]["local"]["text"], "Normal setup")
+
+    def test_missing_active_and_default_keep_current_choices_and_allow_switching(self):
+        trigger, profile = self.saved_profile()
+        self.window._refresh_profiles(profile["id"])
+        self.window._profile_apply.click()
+        for ident in (profile["id"], DEFAULT_PROFILE_ID):
+            (self.window._profiles_dir / (ident + ".json")).unlink()
+        self.window = self.restart_profile_window()
+        self.assertEqual(self.window._active_profile_id, DEFAULT_PROFILE_ID)
+        self.assertEqual(self.window._triggers[0].tts_text, "Tank setup")
+        self.assertEqual(json.loads(ac._SETTINGS_FILE.read_text())["active_trigger_profile"], DEFAULT_PROFILE_ID)
+        with patch.object(QInputDialog, "getText", return_value=("Raid", True)):
+            self.window._profile_new.click()
+        raid = self.window._profile_picker.currentData()
+        self.window._triggers[0].tts_text = "Recovered default"
+        self.window._profile_apply.click()
+        self.assertEqual(self.window._active_profile_id, raid)
+        self.assertEqual(self.window._triggers[0].tts_text, "Tank setup")
+        self.window = self.restart_profile_window()
+        self.window._refresh_profiles(DEFAULT_PROFILE_ID)
+        self.window._profile_apply.click()
+        self.assertEqual(self.window._active_profile_id, DEFAULT_PROFILE_ID)
+        self.assertEqual(self.window._triggers[0].tts_text, "Recovered default")
+
+    def test_missing_active_does_not_overwrite_an_unreadable_default(self):
+        trigger, profile = self.saved_profile()
+        self.window._refresh_profiles(profile["id"])
+        self.window._profile_apply.click()
+        (self.window._profiles_dir / (profile["id"] + ".json")).unlink()
+        default = self.window._profiles_dir / (DEFAULT_PROFILE_ID + ".json")
+        default.write_text("broken default")
+        window = self.restart_profile_window()
+        self.assertEqual(window._active_profile_id, profile["id"])
+        self.assertEqual(window._triggers[0].tts_text, "Tank setup")
+        self.assertEqual(default.read_text(), "broken default")
+        self.assertIn("Default could not be loaded", window._profile_status.text())
+
+    def test_missing_profile_recovery_waits_for_a_successful_save(self):
+        trigger, profile = self.saved_profile()
+        self.window._refresh_profiles(profile["id"])
+        self.window._profile_apply.click()
+        for ident in (profile["id"], DEFAULT_PROFILE_ID):
+            (self.window._profiles_dir / (ident + ".json")).unlink()
+        with patch.object(mw.MainWindow, "_save_settings", return_value=False):
+            window = self.restart_profile_window()
+        self.assertEqual(window._active_profile_id, profile["id"])
+        self.assertEqual(window._triggers[0].tts_text, "Tank setup")
+        self.assertEqual(json.loads(ac._SETTINGS_FILE.read_text())["active_trigger_profile"], profile["id"])
+        window._restore_missing_profile()
+        self.assertEqual(window._active_profile_id, DEFAULT_PROFILE_ID)
 
     def test_nameless_duty_transition_ends_session(self):
         self.connect()

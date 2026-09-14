@@ -6,6 +6,7 @@ selected only when auto-route is on AND the text is Japanese, per platform.
 
 Run directly:  python -m tests.test_tts_jp   (exit 0 = all pass)
 """
+import atexit
 import contextlib
 import io
 import os
@@ -18,9 +19,18 @@ import time
 import types
 import wave
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nyaatriggers import tts
+
+# Keep timeout and playback checks out of the program's diagnostic log.
+_log_stack = contextlib.ExitStack()
+atexit.register(_log_stack.close)
+_log_dir = _log_stack.enter_context(tempfile.TemporaryDirectory(prefix="nyaa-tts-tests-"))
+_log_stack.enter_context(patch("nyaatriggers.drop_log._LOG_FILE", Path(_log_dir) / "nyaatriggers.log"))
+if os.environ.get("GITHUB_ACTIONS") == "true" and tts._np is None:
+    raise RuntimeError("The TTS suite requires NumPy in CI")
 
 FAILS = []
 CAP = {}
@@ -932,7 +942,6 @@ else:
         _restore_kokoro()
 
 # A failed backend leaves a diagnostic while Japanese still avoids Piper.
-from unittest.mock import patch
 with patch.object(tts, "log_drop") as drops:
     check("failed speech process reports failure",
           not tts._run_speak_proc([_PY, "-c", "import sys; sys.exit(7)"], "", stdin_text=False))

@@ -134,7 +134,11 @@ class ProfilesMixin:
     def _restore_missing_profile(self):
         if (self._active_profile_id != DEFAULT_PROFILE_ID
                 and not any(p["id"] == self._active_profile_id for p in self._profiles)):
-            self._activate_profile(self._default_profile)
+            default = self._default_profile
+            if default is None and not self._default_unreadable:
+                # Both records are gone. Keep the current choices as Default.
+                default = capture_profile(self, _("Default"), DEFAULT_PROFILE_ID)
+            self._activate_profile(default)
 
     def _save_new_profile(self):
         name, accepted = QInputDialog.getText(self, _("Save new profile"), _("Profile name:"))

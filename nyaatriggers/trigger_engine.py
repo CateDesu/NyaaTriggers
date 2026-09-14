@@ -259,7 +259,7 @@ def _as_float(value, default: float) -> float:
     try:
         parsed = float(value)
         return parsed if math.isfinite(parsed) else default
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 

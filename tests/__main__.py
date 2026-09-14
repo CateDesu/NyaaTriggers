@@ -35,7 +35,7 @@ def main():
         if github:
             print("::endgroup::", flush=True)
 
-    print(f"{len(selected) - len(failed)}/{len(selected)} suites passed", flush=True)
+    print(f"{len(selected) - len(failed)}/{len(selected)} suites completed without failures", flush=True)
     if failed:
         print("Failed suites: " + ", ".join(failed), flush=True)
     return int(bool(failed))

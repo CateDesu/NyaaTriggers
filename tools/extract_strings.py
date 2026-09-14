@@ -1,8 +1,8 @@
 """Keep lang/<loc>.json in sync with the _() call sites in the source.
 
-Parses every tracked .py file (via ast, so it ignores _() calls inside comments
-or strings and only picks up real calls with a string-literal first argument),
-collects the English keys, and merges them into lang/<loc>.json:
+Parses program Python files outside the excluded directories. Uses ast to
+ignore comments and strings and collect literal translation calls, then
+merges the English keys into lang/<loc>.json:
 
   * new keys are added with an empty "" stub for a translator to fill,
   * existing translations are preserved untouched,
@@ -29,7 +29,7 @@ _REPO = Path(__file__).resolve().parent.parent
 # (checked at every path level, so a repo-root .venv can't leak _() from deps).
 _SKIP_DIRS = {"tools", "tests", "triggevent-core", "triggernometry-core", ".git", "jre",
               ".venv", "venv", "env", "site-packages", "node_modules",
-              "__pycache__", "build", "dist"}
+              "__pycache__", "build", "dist", "local"}
 
 
 def _iter_py_files() -> list[Path]:

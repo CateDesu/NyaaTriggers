@@ -120,7 +120,7 @@ class _StepRow(QWidget):
             self._regex.setText(_str_or(data.get("ability_regex"), ""))
             try:
                 timeout = float(data.get("timeout_s", 10.0))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 timeout = 10.0
             # float() accepts nan and inf literals from hand-edited JSON. The
             # spinbox just clamps them, so load the 10s default instead.
@@ -531,10 +531,9 @@ class TriggerDialog(QDialog):
             self._fight.setText(chosen)
 
     def _load_spin(self, spin, value, label: str) -> None:
-        # Qt silently clamps an out of range persisted value into the spinbox
-        # range. Remember it so accept can warn before the clamped value
-        # overwrites the original on save.
-        spin.setValue(value)
+        # Clamp before Qt converts the value to a C++ number.
+        # Keep the original so saving still warns about the adjustment.
+        spin.setValue(max(spin.minimum(), min(spin.maximum(), value)))
         if spin.value() != value:
             self._clamped.append((spin, label, value))
             # Connected after the load, so only a later user edit drops the

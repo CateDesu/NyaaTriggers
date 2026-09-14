@@ -514,7 +514,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         # Same coercion guard the volume slider applies to the same setting.
         try:
             vol = float(self._settings.get("master_volume", 1.0))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             vol = 1.0
         # json parses NaN and Infinity fine. Comparisons against NaN are all
         # false, so the clamp in set_master_volume would pin volume to 2.0.
@@ -1373,12 +1373,12 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._vol_slider.setRange(0, 200)
         try:
             cur_vol = float(self._settings.get("master_volume", 1.0))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             cur_vol = 1.0
         # json parses NaN and Infinity fine, and int() raises on both.
         if not math.isfinite(cur_vol):
             cur_vol = 1.0
-        self._vol_slider.setValue(int(cur_vol * 100))
+        self._vol_slider.setValue(int(max(0.0, min(2.0, cur_vol)) * 100))
         self._vol_slider.setMinimumWidth(60)
         self._vol_label = QLabel(f"{self._vol_slider.value()}%")
         self._vol_label.setMinimumWidth(36)

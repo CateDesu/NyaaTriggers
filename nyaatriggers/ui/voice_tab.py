@@ -67,7 +67,7 @@ class VoiceTabMixin:
             # min(). Same coercion guard the slider's startup read applies.
             try:
                 vol = float(self._settings.get("master_volume", 1.0))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 vol = 1.0
             # json parses NaN and Infinity fine. Comparisons against NaN are
             # all false, so the clamp in set_master_volume would pin it to 2.0
@@ -139,7 +139,7 @@ class VoiceTabMixin:
         # NaN or Infinity must not raise out of the alert path.
         try:
             v = float(self._settings.get("overlay_sound_volume", 0.5))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             v = 0.5
         if not math.isfinite(v):
             v = 0.5
@@ -275,11 +275,11 @@ class VoiceTabMixin:
         # string, NaN or Infinity must not raise out of _build_ui.
         try:
             alert_vol = float(self._settings.get("overlay_sound_volume", 0.5))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             alert_vol = 0.5
         if not math.isfinite(alert_vol):
             alert_vol = 0.5
-        cur_v = int(round(alert_vol * 100))
+        cur_v = int(round(max(0.0, min(1.0, alert_vol)) * 100))
         self._alert_sound_vol_slider.setValue(max(0, min(100, cur_v)))
         self._alert_sound_vol_slider.valueChanged.connect(self._on_alert_sound_volume_changed)
         vol_row.addWidget(self._alert_sound_vol_slider)

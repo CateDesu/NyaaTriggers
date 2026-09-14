@@ -71,6 +71,31 @@ class PersistenceRecoveryTests(unittest.TestCase):
         host._load_triggers()
         self.assertEqual(host._official_ids, set())
 
+    def test_oversized_trigger_numbers_load_from_official_and_imported_files(self):
+        self.patch_paths()
+        huge = json.loads("9" * 400)
+        row = {"id": "oversized", "log_type": "26", "ability_id": "ABC",
+               "cooldown_s": huge, "duration_min": huge, "duration_max": huge,
+               "speed": huge, "expiry_warn_s": huge}
+        ac._REPO_TRIGGERS_FILE.write_text(json.dumps([row]))
+        host = TriggerHost()
+        host._load_triggers()
+        trigger = host._triggers[0]
+        self.assertEqual((trigger.cooldown_s, trigger.speed), (5.0, 1.0))
+        self.assertEqual((trigger.duration_min, trigger.duration_max, trigger.expiry_warn_s), (0.0, 0.0, 0.0))
+        pack = self.root / "import.json"
+        pack.write_text(json.dumps({"triggers": [row | {"id": "imported"}]}))
+        with patch.object(ac.QFileDialog, "getOpenFileName", return_value=(str(pack), "")), \
+                patch.object(ac.QMessageBox, "question", return_value=ac.QMessageBox.StandardButton.Yes), \
+                patch.object(ac.QMessageBox, "information"):
+            host._import_triggers()
+        self.assertEqual(ac.TRIGGERS_LOCAL_FILE.read_bytes(), pack.read_bytes())
+        restarted = TriggerHost()
+        restarted._load_triggers()
+        self.assertFalse(restarted._local_corrupt)
+        self.assertEqual({t.id for t in restarted._triggers}, {"oversized", "imported"})
+        self.assertTrue(all(t.cooldown_s == 5.0 for t in restarted._triggers))
+
     def test_deep_local_file_blocks_saves_and_repaired_file_reloads(self):
         self.patch_paths()
         ac.TRIGGERS_LOCAL_FILE.write_text(self.deep)

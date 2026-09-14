@@ -239,6 +239,32 @@ row = trigger_dialog._StepRow(data={"log_type": "21", "timeout_s": "inf"})
 check("infinite step timeout loads as 10s",
       row._timeout.value() == 10.0 and row._timeout_clamped is None)
 
+row = trigger_dialog._StepRow(data={"log_type": "21", "timeout_s": 10**400})
+check("oversized integer step timeout uses the runtime fallback",
+      row._timeout.value() == 10.0 and row._timeout_clamped is None)
+
+trigger_dialog.QMessageBox = _ClampBox
+try:
+    for value in (2147483647, 2147483648, 5000000000, 10**400, -2147483649):
+        t = Trigger.from_dict({"log_type": "26", "ability_id": "ABC", "count_max": value})
+        dlg = TriggerDialog(trigger=t)
+        expected = dlg._count_max.minimum() if value < 0 else dlg._count_max.maximum()
+        check(f"oversized stacks {value} open with an advisory",
+              dlg._pending_clamps() == [("Stacks max", value, expected)])
+        _ClampBox.calls.clear()
+        _ClampBox.answer = _ClampBox.StandardButton.Cancel
+        dlg.accept()
+        check("cancel keeps the original oversized stack value",
+              dlg.result() != QDialog.DialogCode.Accepted and t.count_max == value
+              and len(_ClampBox.calls) == 1 and str(value) in _ClampBox.calls[0][2])
+        _ClampBox.answer = _ClampBox.StandardButton.Ok
+        dlg.accept()
+        check("accept saves stacks inside the editor range",
+              dlg.result() == QDialog.DialogCode.Accepted
+              and dlg.get_trigger("x").count_max == expected)
+finally:
+    trigger_dialog.QMessageBox = _real_qmessagebox
+
 # ── accept() refuses a step ability regex the engine can't compile ────────
 trigger_dialog.QMessageBox = _WarnBox
 try:

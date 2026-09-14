@@ -94,9 +94,15 @@ def replay(pack, relay=None):
             proc.stdout.close()
 
 
-@unittest.skipUnless(os.name == "posix" and shutil.which("mono") and shutil.which("xvfb-run"),
-                     "Requires Mono and Xvfb")
 class TriggernometryHostTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        if os.name != "posix" or not shutil.which("mono") or not shutil.which("xvfb-run"):
+            message = "Requires Mono and Xvfb"
+            if os.environ.get("GITHUB_ACTIONS") == "true":
+                raise RuntimeError(message)
+            raise unittest.SkipTest(message)
+
     def test_top_party_synergy_reads_telesto_callbacks(self):
         from nyaatriggers.triggernometry_telesto import TriggernometryTelesto
         from tests.test_triggernometry_telesto import FakeTelesto, post

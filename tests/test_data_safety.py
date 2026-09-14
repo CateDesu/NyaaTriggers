@@ -381,6 +381,25 @@ class DataSafetyTests(unittest.TestCase):
                 self.assertEqual(extract_strings.main(['--prune']), 0)
                 self.assertEqual(json.loads(path.read_text()), {"Hello": "こんにちは"})
 
+    def test_scratch_files_do_not_enter_the_translation_catalog(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "lang").mkdir()
+            (root / "program.py").write_text('_("Hello")\n')
+            scratch = root / "local" / "verification" / "script.py"
+            scratch.parent.mkdir(parents=True)
+            scratch.write_text('_("Scratch string")\n')
+            catalog = root / "lang" / "ja.json"
+            catalog.write_text('{"Hello": "こんにちは"}')
+            with patch.object(extract_strings, "_REPO", root), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(extract_strings.main(["--prune"]), 0)
+                self.assertEqual(json.loads(catalog.read_text()), {"Hello": "こんにちは"})
+                scratch.write_text("invalid python (")
+                self.assertEqual(extract_strings.main(["--check"]), 0)
+                scratch.unlink()
+                self.assertEqual(extract_strings.main(["--check"]), 0)
+
     def test_blank_venv_uses_home_default(self):
         with tempfile.TemporaryDirectory() as folder, contextlib.ExitStack() as stack:
             root = Path(folder)
