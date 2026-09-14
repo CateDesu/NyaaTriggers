@@ -199,7 +199,12 @@ class WSClient(QObject):
         self._ws.ping(self._pending_ping)
 
     def _on_pong(self, _elapsed: int, payload) -> None:
-        if self._pending_ping is None or bytes(payload) != self._pending_ping:
+        pending = self._pending_ping
+        if pending is None:
+            return
+        # IINACT adds two zero bytes before the echoed payload. Accept that
+        # reply too while still requiring the token from the current probe.
+        if bytes(payload) not in (pending, b"\x00\x00" + pending):
             return
         if self._ws.state() != QAbstractSocket.SocketState.ConnectedState:
             return

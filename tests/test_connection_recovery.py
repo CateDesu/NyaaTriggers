@@ -33,8 +33,9 @@ def wait_for(predicate, timeout=4):
 
 
 class FeedPeer:
-    def __init__(self, reply=True):
+    def __init__(self, reply=True, pong_prefix=b""):
         self.reply = reply
+        self.pong_prefix = pong_prefix
         self.messages = []
         self.pings = []
         self.connections = 0
@@ -105,7 +106,8 @@ class FeedPeer:
             if opcode == 9:
                 self.pings.append(payload)
                 if self.reply:
-                    conn.sendall(bytes((0x8a, len(payload))) + payload)
+                    pong = self.pong_prefix + payload
+                    conn.sendall(bytes((0x8a, len(pong))) + pong)
             elif opcode == 1:
                 self.messages.append(json.loads(payload))
 
@@ -161,8 +163,8 @@ class ConnectionRecoveryTests(unittest.TestCase):
         for host in ("localhost.example.com", "127.0.0.1.example.com", "192.168.1.5"):
             self.assertFalse(_is_loopback_uri(f"http://{host}:45678/"), host)
 
-    def make_feed(self, reply):
-        peer = FeedPeer(reply)
+    def make_feed(self, reply, pong_prefix=b""):
+        peer = FeedPeer(reply, pong_prefix)
         self.addCleanup(peer.close)
         client = ws_client.WSClient()
         self.addCleanup(client.disconnect_from)
@@ -209,6 +211,40 @@ class ConnectionRecoveryTests(unittest.TestCase):
                 self.assertEqual(peer.errors, [])
                 client.disconnect_from()
                 peer.close()
+
+    def test_iinact_pong_keeps_umad_state_between_probes(self):
+        with patch.object(ws_client, "_PING_INTERVAL_MS", 80), \
+             patch.object(ws_client, "_PONG_TIMEOUT_MS", 250):
+            # IINACT replies with two zero bytes before the echoed ping payload.
+            peer, client, status = self.make_feed(True, b"\x00\x00")
+            zone = json.dumps({"type": "ChangeZone", "zoneID": 0x553,
+                               "zoneName": "Dancing Mad (Ultimate)"})
+            client._on_message(zone)
+            self.assertTrue(wait_for(lambda: len(peer.pings) >= 4))
+            self.assertEqual(peer.connections, 1)
+            self.assertEqual(status, [(True, "Connected")])
+            self.assertEqual(client._state_cache["changezone"], zone)
+            self.assertFalse(client._reconnect_timer.isActive())
+            self.assertEqual(peer.errors, [])
+
+    def test_iinact_pong_still_requires_the_current_probe(self):
+        with patch.object(ws_client, "_PING_INTERVAL_MS", 80), \
+             patch.object(ws_client, "_PONG_TIMEOUT_MS", 1000):
+            peer, client, _ = self.make_feed(False)
+            self.assertTrue(wait_for(lambda: bool(peer.pings)))
+            first = peer.pings[-1]
+            client._on_pong(1, first)
+            self.assertTrue(wait_for(lambda: len(peer.pings) == 2))
+            current = peer.pings[-1]
+            for payload in (first, b"\x00\x00" + first, b"\x00\x00",
+                            b"bad" + current, current + b"\x00\x00"):
+                client._on_pong(1, payload)
+                self.assertEqual(client._pending_ping, current)
+            client._on_pong(1, b"\x00\x00" + current)
+            self.assertIsNone(client._pending_ping)
+            client.disconnect_from()
+            client._on_pong(1, b"\x00\x00" + current)
+            self.assertFalse(client._heartbeat_timer.isActive())
 
     def test_user_disconnect_cancels_pending_probe(self):
         with patch.object(ws_client, "_PING_INTERVAL_MS", 80), \
