@@ -2,10 +2,10 @@
 <TriggernometryExport PluginVersion="2.0.0.6">
 <ExportedFolder Id="33333333-3333-3333-3333-333333333333" Enabled="true" Name="SpikeScript">
 <Triggers>
-<Trigger Enabled="true" Id="44444444-4444-4444-4444-444444444444" Name="spike-script" RegularExpression="SPIKESCRIPT">
+<Trigger Enabled="true" Sequential="True" Id="44444444-4444-4444-4444-444444444444" Name="spike-script" RegularExpression="SPIKESCRIPT">
 <Actions>
-<Action OrderNumber="1" ActionType="ExecuteScript" ExecScriptExpression="Triggernometry.Interpreter.StaticHelpers.SetScalarVariable(false, &quot;spikevar&quot;, (40+2).ToString());" />
-<Action OrderNumber="2" ActionType="UseTTS" UseTTSTextExpression="script computed ${spikevar}" ExecutionDelayExpression="2500" />
+<Action OrderNumber="1" ActionType="ExecuteScript" Asynchronous="False" ExecScriptExpression="Triggernometry.Interpreter.StaticHelpers.SetScalarVariable(false, &quot;spikevar&quot;, (40+2).ToString());" />
+<Action OrderNumber="2" ActionType="UseTTS" UseTTSTextExpression="script computed ${var:spikevar}" ExecutionDelayExpression="2500" />
 </Actions>
 </Trigger>
 </Triggers>

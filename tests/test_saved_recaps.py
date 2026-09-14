@@ -13,7 +13,7 @@ from nyaatriggers.dps_meter import DpsMeter
 from nyaatriggers.prog_session import ProgSessions
 from nyaatriggers.recap_store import MAX_PENDING_RECAPS, validate_recap
 from nyaatriggers.record_store import write_record
-from tests.test_session_features import Clock, PLAYER, ability
+from tests.test_session_features import Clock, PLAYER, ability, area_ability
 
 
 class SavedRecapTests(unittest.TestCase):
@@ -285,6 +285,139 @@ class SavedRecapTests(unittest.TestCase):
         self.death()
         self.assertEqual(self.session["pulls"], [])
         self.assertEqual(self.load(pull), ([], []))
+
+    def test_restored_empty_pull_keeps_durable_recap_when_summary_save_fails(self):
+        self.combat(True)
+        self.line(ability(pairs=[("33", "0")]))
+        pull = self.session["pulls"][-1]
+        pull.update(note="Review the instant death", bookmark=True)
+        self.combat(False)
+        with patch("nyaatriggers.prog_session.write_record", side_effect=OSError("Summary unavailable")):
+            death = self.death()
+        loaded = ProgSessions(self.directory)
+        self.assertEqual(len(loaded.sessions[0]["pulls"]), 1)
+        restored = loaded.sessions[0]["pulls"][0]
+        self.assertEqual(restored["id"], pull["id"])
+        self.assertEqual(restored["note"], "Review the instant death")
+        self.assertTrue(restored["bookmark"])
+        self.assertFalse(restored["complete"])
+        self.assertEqual(restored["recap_count"], 1)
+        self.assertEqual(restored["deaths"], 1)
+        self.assertEqual([d["id"] for d in self.load(restored, loaded)[0]], [death["id"]])
+        self.sessions.flush_pending()
+        self.sessions.flush_pending()
+        self.assertEqual(len(ProgSessions(self.directory).sessions[0]["pulls"]), 1)
+        self.assertEqual([d["id"] for d in self.load(pull)[0]], [death["id"]])
+
+    def test_empty_pull_without_late_death_stays_absent_after_restart(self):
+        self.combat(True)
+        self.combat(False)
+        self.assertEqual(ProgSessions(self.directory).sessions[0]["pulls"], [])
+        self.clock.value += 3
+        self.assertEqual(ProgSessions(self.directory).sessions[0]["pulls"], [])
+
+    def check_combined_save_recovery(self, empty):
+        for recovered_first in ("recap", "session"):
+            with self.subTest(recovered_first=recovered_first):
+                self.combat(True)
+                pull = self.session["pulls"][-1]
+                pull.update(note="Keep this pull", bookmark=True)
+                if empty:
+                    self.line(ability(pairs=[("33", "0")]))
+                    self.combat(False)
+                else:
+                    self.line(ability())
+                    self.sessions.save(self.session)
+                unavailable = {"recap", "session"}
+
+                def save_recap(directory, data):
+                    if "recap" in unavailable:
+                        raise OSError("Recap storage unavailable")
+                    return write_record(directory, data)
+
+                def save_session(directory, data):
+                    if "session" in unavailable:
+                        raise OSError("Session storage unavailable")
+                    return write_record(directory, data)
+
+                with patch("nyaatriggers.recap_store.write_record", side_effect=save_recap), \
+                        patch("nyaatriggers.prog_session.write_record", side_effect=save_session):
+                    death = self.death()
+                    self.assertEqual(len(self.sessions.recaps.unsaved), 1)
+                    self.assertEqual(len(self.sessions.unsaved), 1)
+                    self.assertIn("Recap storage unavailable", self.sessions.recaps.save_error)
+                    self.assertIn("Session storage unavailable", self.sessions.save_error)
+                    self.assertEqual([d["id"] for d in self.load(pull)[0]], [death["id"]])
+                    unavailable.remove(recovered_first)
+                    self.sessions.flush_pending()
+                    self.sessions.flush_pending()
+                    self.assertEqual(bool(self.sessions.recaps.unsaved), recovered_first != "recap")
+                    self.assertEqual(bool(self.sessions.unsaved), recovered_first != "session")
+                    restarted = ProgSessions(self.directory)
+                    saved_session = next(s for s in restarted.sessions if s["id"] == self.session["id"])
+                    restored = next(p for p in saved_session["pulls"] if p["id"] == pull["id"])
+                    saved, errors = self.load(restored, restarted)
+                    self.assertEqual(errors, [])
+                    self.assertEqual([d["id"] for d in saved], [death["id"]] if recovered_first == "recap" else [])
+                    unavailable.clear()
+                    self.sessions.flush_pending()
+                    self.sessions.flush_pending()
+                restarted = ProgSessions(self.directory)
+                saved_session = next(s for s in restarted.sessions if s["id"] == self.session["id"])
+                restored = next(p for p in saved_session["pulls"] if p["id"] == pull["id"])
+                self.assertEqual(restored["deaths"], 1)
+                self.assertEqual(restored["recap_count"], 1)
+                self.assertEqual(restored["note"], "Keep this pull")
+                self.assertTrue(restored["bookmark"])
+                self.assertEqual(sum(p["id"] == pull["id"] for p in saved_session["pulls"]), 1)
+                self.assertEqual([d["id"] for d in self.load(restored, restarted)[0]], [death["id"]])
+                self.assertEqual(self.sessions.recaps.unsaved, {})
+                self.assertEqual(self.sessions.unsaved, {})
+                self.assertEqual(self.sessions.recaps.save_error, "")
+                self.assertEqual(self.sessions.save_error, "")
+                self.combat(False)
+                self.sessions.end()
+                self.recap.reset()
+                self.session = self.sessions.start("Next session", 1, "Duty", False)
+
+    def test_both_writes_fail_and_recover_in_either_order(self):
+        self.check_combined_save_recovery(empty=False)
+
+    def test_both_writes_fail_for_a_late_empty_pull_and_recover_in_either_order(self):
+        self.check_combined_save_recovery(empty=True)
+
+    def test_area_ability_recaps_keep_each_target_after_restart(self):
+        self.combat(True)
+        pull = self.session["pulls"][-1]
+        players = [PLAYER, "10FF0002", "10FF0003"]
+        for index in (2, 0, 1):
+            self.line(area_ability(target=players[index], index=index, count=3,
+                                   pairs=[("03", f"{(index + 1) * 100 << 16:X}")]))
+        for actor in players:
+            self.line(["25", "ts", actor, actor])
+        self.combat(False)
+        self.sessions.end()
+        restarted = ProgSessions(self.directory)
+        saved, errors = self.load(pull, restarted)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(saved), 3)
+        self.assertEqual(restarted.sessions[0]["pulls"][0]["recap_count"], 3)
+        self.assertEqual({d["actor"]: [(e["kind"], e["amount"]) for e in d["events"]] for d in saved},
+                         {int(actor, 16): [("damage", (index + 1) * 100)] for index, actor in enumerate(players)})
+
+    def test_unreadable_late_recap_keeps_the_recoverable_pull_and_reports_error(self):
+        self.combat(True)
+        pull = self.session["pulls"][-1]
+        self.combat(False)
+        with patch("nyaatriggers.prog_session.write_record", side_effect=OSError("Summary unavailable")):
+            death = self.death()
+        path = self.directory / "recaps" / self.session["id"] / pull["id"] / (death["id"] + ".json")
+        path.write_text("broken recap")
+        loaded = ProgSessions(self.directory)
+        self.assertEqual(len(loaded.sessions[0]["pulls"]), 1)
+        self.assertEqual(loaded.sessions[0]["pulls"][0]["id"], pull["id"])
+        self.assertTrue(loaded.errors)
+        self.assertEqual(path.read_text(), "broken recap")
 
     def test_new_pull_closes_the_empty_pull_grace_period(self):
         self.combat(True)

@@ -450,6 +450,8 @@ class EnginesMixin:
                 return
             try:
                 br = self._ensure_triggernometry_bridge()
+                br.configure_telesto(self._settings.get("telesto_uri"),
+                                     self._settings.get("telesto_enabled", False))
                 br.start()
                 # The sidecar boots with no zone, and feed_zone only fires
                 # on a ChangeZone the bridge existed for. Replay the cached

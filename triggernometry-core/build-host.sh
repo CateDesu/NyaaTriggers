@@ -16,7 +16,7 @@ mcs -target:exe -out:triggernometry-core.exe \
   -r:System.Windows.Forms.dll -r:System.Drawing.dll \
   -r:System.Xml.dll -r:System.dll -r:System.Core.dll \
   -r:System.Text.Json.dll -r:System.Memory.dll \
-  "$HERE/host/Program.cs" "$HERE/host/CombatantBridge.cs"
+  "$HERE/host/Program.cs" "$HERE/host/CombatantBridge.cs" "$HERE/host/ActLogLine.cs"
 
 echo "built: $ENGINE_BIN/triggernometry-core.exe ($(stat -c %s triggernometry-core.exe) bytes)"
 

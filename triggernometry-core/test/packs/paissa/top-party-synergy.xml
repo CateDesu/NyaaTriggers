@@ -1,0 +1,81 @@
+<?xml version='1.0' encoding='utf-8'?>
+<TriggernometryExport Version="1">
+  <ExportedFolder Id="9b69e707-ee23-4c4d-8bf8-9b9c61b43cb9" Name="Party Synergy" Enabled="true">
+    <Folders />
+    <Triggers>
+      <Trigger Enabled="true" Source="FFXIVNetwork" Name="Party Synergy (read memory)" Id="1cc04834-0032-4419-a118-48e4378a51e3" RegularExpression="^20\|[^|]*\|[^|]*\|[^|]*\|7B3F\|">
+        <Actions>
+          <Action OrderNumber="1" VariableName="partysynergy_M" VariableExpression="0" ActionType="Variable">
+            <Condition Enabled="false" Grouping="Or" />
+          </Action>
+          <Action OrderNumber="2" VariableName="partysynergy_F" VariableExpression="0" ActionType="Variable">
+            <Condition Enabled="false" Grouping="Or" />
+          </Action>
+          <Action OrderNumber="3" VariableOp="SetNumeric" VariableName="partysynergy_M_weapon" VariableExpression="0" ActionType="Variable">
+            <Condition Enabled="false" Grouping="Or" />
+          </Action>
+          <Action OrderNumber="4" VariableOp="SetNumeric" VariableName="partysynergy_F_weapon" VariableExpression="0" ActionType="Variable">
+            <Condition Enabled="false" Grouping="Or" />
+          </Action>
+          <Action OrderNumber="5" JsonEndpointExpression="http://${_const[TelestoEndpoint]}:${_const[TelestoPort]}" JsonPayloadExpression="{ &quot;version&quot;: 1, &quot;id&quot;: 123456, &quot;type&quot;: &quot;Subscribe&quot;, &quot;payload&quot;: { &quot;id&quot;: &quot;partysynergy&quot;, &quot;type&quot;: &quot;memory&quot;, &quot;endpoint&quot;: &quot;${_const[TriggernometryEndpoint]}&quot;, &quot;start&quot;: &quot;¤{_addr[GameObject]}+6922&quot;, &quot;length&quot;: &quot;1&quot; } }" VariableOp="SetString" ActionType="GenericJson">
+            <Condition Enabled="false" Grouping="Or" />
+          </Action>
+          <Action OrderNumber="6" JsonEndpointExpression="http://${_const[TelestoEndpoint]}:${_const[TelestoPort]}" JsonPayloadExpression="{ &quot;version&quot;: 1, &quot;id&quot;: 123456, &quot;type&quot;: &quot;Unsubscribe&quot;, &quot;payload&quot;: { &quot;id&quot;: &quot;partysynergy&quot; } }" VariableOp="SetString" ActionType="GenericJson" ExecutionDelayExpression="9000">
+            <Condition Enabled="false" Grouping="Or" />
+          </Action>
+          <Action OrderNumber="7" TriggerId="127e1ebd-1709-426f-a8b6-b080e9fb76b9" TriggerForce="regexp" ActionType="Trigger">
+            <Condition Enabled="false" Grouping="Or" />
+          </Action>
+        </Actions>
+        <Condition Enabled="false" Grouping="Or" />
+      </Trigger>
+      <Trigger Enabled="true" Source="Endpoint" Name="Party Synergy (update weapons)" Id="e11558b2-2752-4fa3-958b-a17c4247b693" RegularExpression="&quot;notificationid&quot;:&quot;partysynergy&quot;.*&quot;name&quot;:&quot;Omega-(?&lt;gender&gt;M|F)&quot;.*&quot;newvalue&quot;:&quot;4&quot;" MutexToCapture="partysynergy">
+        <Actions>
+          <Action OrderNumber="1" VariableOp="SetNumeric" VariableName="partysynergy_${gender}_weapon" VariableExpression="4" ActionType="Variable">
+            <Condition Enabled="false" Grouping="Or" />
+          </Action>
+        </Actions>
+        <Condition Enabled="false" Grouping="Or" />
+      </Trigger>
+      <Trigger Enabled="true" Source="Endpoint" Name="Party Synergy (determine IDs)" Id="fca45a05-b01f-4592-ba3e-b9fcc39ab673" RegularExpression="&quot;notificationid&quot;:&quot;partysynergy&quot;.*&quot;objectid&quot;:&quot;(?&lt;objid&gt;[0-9A-F]{8})&quot;.*&quot;name&quot;:&quot;Omega-(?&lt;gender&gt;M|F)&quot;.*&quot;oldvalue&quot;:&quot;&quot;.*&quot;newvalue&quot;:&quot;0&quot;" MutexToCapture="partysynergy">
+        <Actions>
+          <Action OrderNumber="1" VariableOp="SetString" VariableName="partysynergy_${gender}" VariableExpression="${objid}" ActionType="Variable" Asynchronous="False">
+            <Condition Enabled="true" Grouping="Or">
+              <ConditionSingle Enabled="true" ExpressionL="${evar:partysynergy_${gender}}" ExpressionTypeL="Numeric" ExpressionR="0" ExpressionTypeR="Numeric" ConditionType="NumericEqual" />
+              <ConditionSingle Enabled="true" ExpressionL="hex2dec(${var:partysynergy_${gender}})" ExpressionTypeL="Numeric" ExpressionR="hex2dec(${objid})" ExpressionTypeR="Numeric" ConditionType="NumericGreater" />
+            </Condition>
+          </Action>
+        </Actions>
+        <Condition Enabled="false" Grouping="Or" />
+      </Trigger>
+      <Trigger Enabled="true" Source="None" Sequential="True" Name="Party Synergy (callout)" Id="127e1ebd-1709-426f-a8b6-b080e9fb76b9" RegularExpression="">
+        <Actions>
+          <Action OrderNumber="1" VariableOp="SetString" VariableName="partysynergy_callout" VariableExpression="shield, " ActionType="Variable">
+            <Condition Enabled="true" Grouping="Or">
+              <ConditionSingle Enabled="true" ExpressionL="${var:partysynergy_M_weapon}" ExpressionTypeL="Numeric" ExpressionR="4" ExpressionTypeR="Numeric" ConditionType="NumericEqual" />
+            </Condition>
+          </Action>
+          <Action OrderNumber="2" VariableOp="SetString" VariableName="partysynergy_callout" VariableExpression="sword, " ActionType="Variable">
+            <Condition Enabled="true" Grouping="Or">
+              <ConditionSingle Enabled="true" ExpressionL="${var:partysynergy_M_weapon}" ExpressionTypeL="Numeric" ExpressionR="4" ExpressionTypeR="Numeric" ConditionType="NumericNotEqual" />
+            </Condition>
+          </Action>
+          <Action OrderNumber="3" VariableOp="SetString" VariableName="partysynergy_callout" VariableExpression="${var:partysynergy_callout}legs" ActionType="Variable">
+            <Condition Enabled="true" Grouping="Or">
+              <ConditionSingle Enabled="true" ExpressionL="${var:partysynergy_F_weapon}" ExpressionTypeL="Numeric" ExpressionR="4" ExpressionTypeR="Numeric" ConditionType="NumericEqual" />
+            </Condition>
+          </Action>
+          <Action OrderNumber="4" VariableOp="SetString" VariableName="partysynergy_callout" VariableExpression="${var:partysynergy_callout}staff" ActionType="Variable">
+            <Condition Enabled="true" Grouping="Or">
+              <ConditionSingle Enabled="true" ExpressionL="${var:partysynergy_F_weapon}" ExpressionTypeL="Numeric" ExpressionR="4" ExpressionTypeR="Numeric" ConditionType="NumericNotEqual" />
+            </Condition>
+          </Action>
+          <Action OrderNumber="5" UseTTSTextExpression="${var:partysynergy_callout}" ActionType="UseTTS">
+            <Condition Enabled="false" Grouping="Or" />
+          </Action>
+        </Actions>
+        <Condition Enabled="false" Grouping="Or" />
+      </Trigger>
+    </Triggers>
+  </ExportedFolder>
+</TriggernometryExport>

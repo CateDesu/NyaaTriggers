@@ -1,7 +1,7 @@
 # triggernometry-core - headless Triggernometry engine sidecar for NyaaTriggers
 
-Run **all** of Triggernometry's triggers - including the complex runtime-compiled **C# `ExecuteScript`**
-ones - inside NyaaTriggers **1:1**, by hosting Triggernometry's **own engine**
+Run Triggernometry conditions, variables, delayed actions, trigger chains and runtime-compiled **C# `ExecuteScript`**
+inside NyaaTriggers by hosting Triggernometry's **own engine**
 (`paissaheavyindustries/Triggernometry`, MIT) headlessly as a sidecar subprocess (native .NET on Windows, Mono on Linux).
 
 This directory is the C# half (the host + a `bin/` of the built sidecar). The Python half is
@@ -49,6 +49,7 @@ FFXIV ─► IINACT/OverlayPlugin (ws://localhost:10501/ws)
 {"t":"log","line":"21|..."}                          // a raw pipe-delimited FFXIV log line
 {"t":"zone","id":<n>,"name":"<zone>"}                // explicit zone change (also derived from 01| lines)
 {"t":"combatants","me":<id>,"list":[{...}, ...]}     // a fresh combatant snapshot (id,name,job,hp,x,y,z,h,party,...)
+{"t":"endpoint","body":"<Telesto notification JSON>"} // delivered to the engine's Endpoint source
 ```
 ### Wire protocol - sidecar ► NyaaTriggers (stdout), one JSON object per line
 ```json
@@ -114,7 +115,10 @@ False (feature stays off) if Mono or the exe is missing.
   crash), `TtsMethod/SoundMethod=ACT` (route audio through our hooks), `UpdateNotifications/DefaultRepository=No`
   (skip first-run toasts → a `CornerShowHook` NPE).
 - **Triggers** load by grafting each `TriggernometryExport` pack into `cfg.Root` before `InitPlugin`, so the real UI
-  tree-walk registers them. Log lines feed `OnLogLineRead`; callouts are captured via `TtsPlaybackHook`.
+  tree-walk registers them. `BeforeLogLineRead` receives the original network line. `OnLogLineRead` receives
+  the ACT timestamp, message name, hexadecimal type and colon-separated fields from `host/ActLogLine.cs`.
+  The final wire checksum is omitted from the ACT line. Callouts are captured via `TtsPlaybackHook`.
+  Engine warnings and errors are drained to stderr so the Python bridge records them in `triggernometry.log`.
 - **ExecuteScript** (Roslyn) runs under Mono. Workaround (no engine patch) for an engine bug: actions with no
   `ExecScriptAssembliesExpression` default it to `""`, which makes `Evaluate` call `AddReferences("")` → throws. The
   host rewrites empty ones to a valid loaded assembly (`FixupExecuteScriptAssemblies`).
@@ -124,8 +128,38 @@ False (feature stays off) if Mono or the exe is missing.
 
 ## Open / TODO
 
+- **External pack dependencies.** Legacy Triggernometry auras and scripts that read game memory directly are unavailable.
+  Telesto memory subscriptions and doodles use the managed relay described below.
+  ACT combat state and encounter duration hooks still return their initial values.
 - **Live in-game test** over a real IINACT feed (only synthetic/replayed lines exercised so far). Top item.
 - **`_map_combatants` field casing** in `../ws_client.py` is a best guess for IINACT's `getCombatants` - verify live.
 - **First-script latency**: the first Roslyn compile under Mono takes >2.5s (cold). Consider a representative warm-up.
 - **Packaging for release**: bundle a Mono (Linux) / use native .NET (Windows) runtime in the release zips, like the
   Temurin JRE is bundled for Triggevent.
+
+## Replay checks
+
+Run `python3 -m tests.test_triggernometry_host` from the program's root with Mono and Xvfb installed.
+The suite exercises the vendored executable, using isolated temporary configuration directories.
+Fixtures in `test/packs/paissa` preserve the original TOP marker and Zelenia Bloom actions.
+The checks cover marker offsets, player filtering, wipe resets, ACT and network source separation,
+shared variables, generated log messages, delayed follow-ups and C# script results.
+These are replay checks, not live fight validation.
+
+## Telesto integration
+
+`nyaatriggers/triggernometry_telesto.py` owns a loopback HTTP relay for each engine run.
+The Python bridge passes its URL through `NYAA_TRIGGERNOMETRY_TELESTO_RELAY` and its callback address through
+`NYAA_TRIGGERNOMETRY_CALLBACK_URI`. The host sets the Telesto and Triggernometry endpoint constants and routes
+Telesto `GenericJson` actions to the relay. Telesto's configured destination comes from the program's existing
+Automarkers settings. The callback listener binds an available local port and needs no Windows HTTP URL reservation.
+
+The relay forwards bundles, drawing geometry and memory expressions to Telesto. It assigns private resource names,
+restores the pack's notification IDs before feeding the Endpoint source, and removes its own resources on shutdown.
+Repeated subscriptions retire the previous callback identity. Drawing replacements get a new expiry callback address
+while keeping references between drawings valid. Failed unsubscribe requests remain recorded for shutdown cleanup.
+Game commands and macros obey the Automarkers switch. Memory subscriptions and doodles follow the Triggers switch.
+
+`python3 -m tests.test_triggernometry_telesto` checks resource ownership, callbacks and failure cleanup.
+The host suite also replays the original TOP Party Synergy and Pantokrator XML through an isolated Telesto protocol peer.
+Telesto supplies the actual game memory reads and rendering. Memory offsets remain the responsibility of the pack.

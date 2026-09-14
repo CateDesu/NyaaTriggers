@@ -1,0 +1,56 @@
+<?xml version='1.0' encoding='utf-8'?>
+<TriggernometryExport Version="1">
+  <ExportedFolder Id="34e484ce-d61a-4f1d-9919-8470cc21542b" Name="PlayStation TOP" Enabled="true">
+    <Folders />
+    <Triggers>
+      <Trigger Enabled="true" Source="FFXIVNetwork" Name="HeadCounterReset" Id="788d0f3b-cdcb-4a26-bca2-4da0343fb5b5" RegularExpression="^33\|[^|]*\|[A-F0-9]{8}\|4000000[3F]\|">
+        <Actions>
+          <Action OrderNumber="1" ListVariableName="HeadCounterName" VariableName="PS1HM" ActionType="Variable">
+            <Condition Enabled="false" Grouping="Or" />
+          </Action>
+          <Action OrderNumber="2" VariableName="PS1HMoffset" ActionType="Variable">
+            <Condition Enabled="false" Grouping="Or" />
+          </Action>
+        </Actions>
+        <Condition Enabled="false" Grouping="Or" />
+      </Trigger>
+      <Trigger Enabled="true" Source="FFXIVNetwork" Sequential="True" Name="HeadMarker" Id="f2c75372-c5f2-49f7-89fb-8a74170f3a6c" RegularExpression="^27\|[^|]*\|[^|]*\|(?&lt;name&gt;[^|]*)\|[^|]*\|[^|]*\|(?&lt;ID&gt;[0-9A-F]{4})\|" MutexToCapture="TOPHeadMarker">
+        <Actions>
+          <Action OrderNumber="1" VariableOp="SetNumeric" VariableName="PS1HMoffset" VariableExpression="hex2dec(${ID})-23" ActionType="Variable" Asynchronous="False">
+            <Condition Enabled="true" Grouping="Or">
+              <ConditionSingle Enabled="true" ExpressionL="${evar:PS1HMoffset}" ExpressionTypeL="Numeric" ExpressionR="0" ExpressionTypeR="Numeric" ConditionType="NumericEqual" />
+            </Condition>
+          </Action>
+          <Action OrderNumber="2" VariableOp="SetString" VariableName="PS1HM" VariableExpression="${func:dec2hex:${numeric:(hex2dec(${ID})-${var:PS1HMoffset})}}" ActionType="Variable" Asynchronous="False">
+            <Condition Enabled="false" Grouping="Or" />
+          </Action>
+          <Action OrderNumber="3" UseTTSTextExpression="Circle" ActionType="UseTTS" Asynchronous="False">
+            <Condition Enabled="true" Grouping="And">
+              <ConditionSingle Enabled="true" ExpressionL="1A0" ExpressionTypeL="String" ExpressionR="${var:PS1HM}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+              <ConditionSingle Enabled="true" ExpressionL="${name}" ExpressionTypeL="String" ExpressionR="${_ffxivplayer}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+            </Condition>
+          </Action>
+          <Action OrderNumber="4" UseTTSTextExpression="Triangle" ActionType="UseTTS" Asynchronous="False">
+            <Condition Enabled="true" Grouping="And">
+              <ConditionSingle Enabled="true" ExpressionL="1A1" ExpressionTypeL="String" ExpressionR="${var:PS1HM}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+              <ConditionSingle Enabled="true" ExpressionL="${name}" ExpressionTypeL="String" ExpressionR="${_ffxivplayer}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+            </Condition>
+          </Action>
+          <Action OrderNumber="5" UseTTSTextExpression="Square" ActionType="UseTTS" Asynchronous="False">
+            <Condition Enabled="true" Grouping="And">
+              <ConditionSingle Enabled="true" ExpressionL="1A2" ExpressionTypeL="String" ExpressionR="${var:PS1HM}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+              <ConditionSingle Enabled="true" ExpressionL="${name}" ExpressionTypeL="String" ExpressionR="${_ffxivplayer}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+            </Condition>
+          </Action>
+          <Action OrderNumber="6" UseTTSTextExpression="X" ActionType="UseTTS" Asynchronous="False">
+            <Condition Enabled="true" Grouping="And">
+              <ConditionSingle Enabled="true" ExpressionL="1A3" ExpressionTypeL="String" ExpressionR="${var:PS1HM}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+              <ConditionSingle Enabled="true" ExpressionL="${name}" ExpressionTypeL="String" ExpressionR="${_ffxivplayer}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+            </Condition>
+          </Action>
+        </Actions>
+        <Condition Enabled="false" Grouping="Or" />
+      </Trigger>
+    </Triggers>
+  </ExportedFolder>
+</TriggernometryExport>

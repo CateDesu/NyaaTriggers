@@ -160,6 +160,33 @@ try:
 finally:
     vt.play_sound = _o_play
 
+br4 = tb.TriggernometryBridge()
+br4._active = True
+br4._gen = 9
+br4._feed_endpoint('{"notificationid":"partysynergy"}', 8)
+check("a retired Telesto callback cannot enter the new engine", br4._wq.empty())
+br4._feed_endpoint('{"notificationid":"partysynergy"}', 9)
+check("a current Telesto callback reaches the endpoint source",
+      '"t": "endpoint"' in br4._wq.get_nowait())
+
+
+class _Relay:
+    def __init__(self):
+        self.closed = []
+
+    def close(self, wait=False):
+        self.closed.append(wait)
+
+    def is_finished(self):
+        return False
+
+
+retired = _Relay()
+br4._telesto = retired
+br4.stop()
+br4.stop(wait=True)
+check("shutdown waits for cleanup from an earlier stop", retired.closed == [False, True])
+
 print()
 if FAILS:
     print(f"{len(FAILS)} FAILED: {', '.join(FAILS)}")

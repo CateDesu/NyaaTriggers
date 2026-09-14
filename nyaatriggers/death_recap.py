@@ -71,10 +71,14 @@ class DeathRecap:
             buf["events"].append({"time": now, "kind": kind, "source": source[:200],
                                   "name": name[:200], "amount": amount})
 
-    def process(self, fields):
+    def is_duplicate_death(self, actor, now):
+        buf = self.buffers.get(actor)
+        return buf is not None and now - buf["death"] < DEATH_DUPLICATE_SECONDS
+
+    def process(self, fields, *, now=None):
         if not fields:
             return
-        now = self.clock()
+        now = self.clock() if now is None else now
         kind = fields[0]
         if kind == "01" and len(fields) > 3:
             self.reset()
@@ -148,7 +152,7 @@ class DeathRecap:
             if actor is None:
                 return
             buf = self._buffer(actor, now)
-            if now - buf["death"] < DEATH_DUPLICATE_SECONDS:
+            if self.is_duplicate_death(actor, now):
                 return
             buf["death"] = now
             events = [{**event, "time": round(event["time"] - now, 3)}

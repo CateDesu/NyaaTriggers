@@ -270,6 +270,7 @@ class DpsMeter:
         self.on_pull_finish = None
         self._last_end_time = 0.0
         self._death_times = {}
+        self.is_duplicate_death = None
 
     def set_idle_timeout(self, secs) -> None:
         """How long the on-screen meter keeps ticking after the last damage
@@ -506,10 +507,11 @@ class DpsMeter:
         self._in_act = act
         self._in_game = game
 
-    def process(self, fields: "list[str]", raw: str = "") -> None:
+    def process(self, fields: "list[str]", raw: str = "", *, now=None) -> None:
         """One log line pre-split on '|'. Only METER_LOG_TYPES carry meter
         data. Anything else returns right away. Never raises on malformed
-        input. A bad line is skipped, not fatal."""
+        input. A bad line is skipped, not fatal. A supplied now keeps death
+        checks aligned with the recap."""
         if not fields:
             return
         t = fields[0]
@@ -525,7 +527,7 @@ class DpsMeter:
             elif t == "24":
                 self._on_dot_hot(fields)
             elif t == "25":
-                self._on_death(fields)
+                self._on_death(fields, now)
             elif t == "33":
                 if len(fields) > 3 and fields[3].upper() == _WIPE_COMMAND:
                     if self.current is not None:
@@ -760,7 +762,7 @@ class DpsMeter:
                 c.healed += amount
                 c.touch(now)
 
-    def _on_death(self, fields: "list[str]") -> None:
+    def _on_death(self, fields: "list[str]", now=None) -> None:
         if len(fields) <= 3:
             return
         tid = _actor_int(fields[2])
@@ -775,9 +777,11 @@ class DpsMeter:
             # an open encounter already exists. An out-of-combat death would
             # otherwise start a phantom one with a running clock.
             return
-        now = self._clock()
+        now = self._clock() if now is None else now
         previous = self._death_times.get(tid)
-        if previous is not None and now - previous < DEATH_DUPLICATE_SECONDS:
+        duplicate = (self.is_duplicate_death(tid, now) if self.is_duplicate_death is not None
+                     else previous is not None and now - previous < DEATH_DUPLICATE_SECONDS)
+        if duplicate:
             return
         self._note(self._death_times, tid, now)
         for enc in (self.current, self._view):

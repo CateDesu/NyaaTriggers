@@ -4,6 +4,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 SOURCES = ("cactbot", "triggevent", "triggernometry")
+DEFAULT_PROFILE_ID = "00000000-0000-0000-0000-000000000000"
 
 
 def validate_profile(data):
@@ -42,6 +43,21 @@ def capture_profile(window, name, ident=None):
                                             "text": edits.get(ident)} for ident in ids}
     validate_profile(data)
     return deepcopy(data)
+
+
+def preserve_default(window, previous, target):
+    current = capture_profile(window, "Default", DEFAULT_PROFILE_ID)
+    default = deepcopy(previous) if previous is not None else current
+    # Remember choices introduced by another profile before it changes them.
+    for ident in target["local"]:
+        if ident in current["local"]:
+            default["local"].setdefault(ident, current["local"][ident])
+    for source, choices in target["engines"].items():
+        saved = default["engines"].setdefault(source, {})
+        for ident in choices:
+            saved.setdefault(ident, current["engines"][source].get(ident, {"enabled": True, "text": None}))
+    validate_profile(default)
+    return default
 
 
 def apply_choices(window, profile):

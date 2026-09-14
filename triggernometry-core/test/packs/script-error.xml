@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<TriggernometryExport Version="1">
+  <ExportedFolder Id="9061a802-0de1-43dc-b986-b10d9a3cbdc8" Name="Script errors" Enabled="true">
+    <Triggers>
+      <Trigger Id="d84d99e7-6450-40c7-93db-8f0bdf3d9d2f" Name="Error reporting" Enabled="true" RegularExpression="^TN_SCRIPT_ERROR$">
+        <Actions>
+          <Action OrderNumber="1" ActionType="ExecuteScript" ExecScriptExpression="throw new System.InvalidOperationException(&quot;expected replay failure&quot;);" />
+        </Actions>
+      </Trigger>
+    </Triggers>
+  </ExportedFolder>
+</TriggernometryExport>

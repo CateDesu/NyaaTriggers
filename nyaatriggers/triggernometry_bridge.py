@@ -41,6 +41,8 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from nyaatriggers import proc_env
 from nyaatriggers.drop_log import log_drop, open_private_log, rotate_one_generation
 from nyaatriggers.trigger_engine import _safe_sub, compile_user_regex
+from nyaatriggers.triggernometry_telesto import TriggernometryTelesto
+from nyaatriggers.telesto_client import DEFAULT_URI as DEFAULT_TELESTO_URI
 
 _STOP = object()
 
@@ -282,6 +284,10 @@ class TriggernometryBridge(QObject):
         self._reader: "threading.Thread | None" = None
         self._errpump: "threading.Thread | None" = None
         self._writer: "threading.Thread | None" = None
+        self._telesto = None
+        self._retired_telesto = []
+        self._telesto_uri = DEFAULT_TELESTO_URI
+        self._telesto_commands = False
         self._wq: queue.Queue = _ByteQueue(maxsize=20000)
         self._active = False
         # The live sidecar generation, bumped by every start and stop. The
@@ -316,6 +322,20 @@ class TriggernometryBridge(QObject):
     def set_replacements(self, rules: list) -> None:
         """Set callout find->replace overrides, applied before speaking/showing."""
         self._replacements = list(rules or [])
+
+    def configure_telesto(self, uri=DEFAULT_TELESTO_URI, commands_enabled=False) -> bool:
+        uri = uri if isinstance(uri, str) and uri else DEFAULT_TELESTO_URI
+        changed = uri != self._telesto_uri
+        self._telesto_uri = uri
+        self._telesto_commands = bool(commands_enabled)
+        if self._telesto:
+            self._telesto.configure(self._telesto_commands)
+        return changed
+
+    def _feed_endpoint(self, body: str, gen: int) -> None:
+        with self._state_lock:
+            if self._gen_live(gen):
+                self._enqueue({"t": "endpoint", "body": body})
 
     def set_disabled(self, ids) -> None:
         """Set callout ids to suppress. The sidecar blanks those triggers' spoken
@@ -415,9 +435,23 @@ class TriggernometryBridge(QObject):
         # app's bundled ones, else a system shell dies on a libreadline symbol.
         popen_kwargs["env"] = proc_env.child_env()
 
+        gen = self._gen + 1
+        relay = TriggernometryTelesto(
+            lambda body: self._feed_endpoint(body, gen), _log,
+            self._telesto_uri, self._telesto_commands)
+        try:
+            relay.start()
+        except OSError as exc:
+            _log(f"Telesto callback listener failed: {exc}")
+            self.status.emit(False, f"Telesto callback listener failed: {exc}", self._gen)
+            return
+        popen_kwargs["env"]["NYAA_TRIGGERNOMETRY_TELESTO_RELAY"] = relay.url
+        popen_kwargs["env"]["NYAA_TRIGGERNOMETRY_CALLBACK_URI"] = relay.callback_url
+
         try:
             proc = subprocess.Popen(cmd, **popen_kwargs)
         except OSError as e:
+            relay.close()
             _log(f"launch failed: {e!r}")
             self.status.emit(False, f"Failed to launch sidecar: {e}", self._gen)
             self._proc = None
@@ -427,6 +461,7 @@ class TriggernometryBridge(QObject):
         wq: queue.Queue = _ByteQueue(maxsize=20000)
         with self._state_lock:
             self._proc = proc
+            self._telesto = relay
             self._wq = wq
             self._active = True
             self._gen += 1
@@ -447,6 +482,8 @@ class TriggernometryBridge(QObject):
 
     def stop(self, wait: bool = False) -> None:
         if not self._active and self._proc is None:
+            if wait:
+                self._close_telesto(None, wait=True)
             return
         with self._state_lock:
             self._active = False
@@ -456,7 +493,9 @@ class TriggernometryBridge(QObject):
             self._gen += 1
             gen = self._gen
             proc, self._proc = self._proc, None
+            relay, self._telesto = self._telesto, None
             wq = self._wq   # capture this generation's queue under the lock
+        self._close_telesto(relay, wait=wait)
         # A full queue must not swallow the sentinel or the writer can stay
         # parked in wq.get. Drop one old line and retry, same as the readers.
         try:
@@ -478,6 +517,18 @@ class TriggernometryBridge(QObject):
             else:
                 threading.Thread(target=self._reap, args=(proc,), daemon=True, name="tn-reap").start()
         self.status.emit(False, "Off", gen)
+
+    def _close_telesto(self, relay, wait=False):
+        with self._state_lock:
+            self._retired_telesto = [old for old in self._retired_telesto if not old.is_finished()]
+            if relay is not None:
+                self._retired_telesto.append(relay)
+            retired = list(self._retired_telesto)
+        if relay is not None:
+            relay.close()
+        if wait:
+            for old in retired:
+                old.close(wait=True)
 
     @staticmethod
     def _signal_group(proc: subprocess.Popen, graceful: bool) -> None:
@@ -591,9 +642,13 @@ class TriggernometryBridge(QObject):
         # our check and our writes would get its NEW generation's state clobbered.
         with self._state_lock:
             was_current = proc is self._proc and self._active
+            relay = None
             if was_current:
                 self._active = False
                 self._proc = None
+                relay, self._telesto = self._telesto, None
+        if relay:
+            self._close_telesto(relay)
         if was_current:
             _log(f"sidecar exited (returncode={proc.poll()})")
             self.status.emit(False, "Sidecar exited", gen)

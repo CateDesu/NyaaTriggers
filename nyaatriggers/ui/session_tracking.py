@@ -24,7 +24,9 @@ class SessionTrackingMixin:
 
     def _begin_activity_event(self):
         self._prog_events = []
+        # Use one arrival time for the meter and recap duplicate checks.
         self._prog_event_time = self._prog_sessions.clock()
+        return self._prog_event_time
 
     def _finish_activity_event(self, fields=()):
         events = getattr(self, "_prog_events", None)
@@ -43,7 +45,7 @@ class SessionTrackingMixin:
 
     def _track_activity_line(self, fields):
         self._finish_activity_event(fields)
-        self._death_recap.process(fields)
+        self._death_recap.process(fields, now=self._prog_event_time)
         if fields[0] == "01" and len(fields) > 3:
             self._prog_sessions.end(self._dps_meter.full_snapshot(), "duty-left")
             self._prog_tab.refresh()

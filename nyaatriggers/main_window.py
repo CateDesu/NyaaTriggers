@@ -461,6 +461,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._init_dps()
         self._combat_known = False
         self._death_recap = DeathRecap()
+        # Recap death history follows the full attempt across meter segments.
+        self._dps_meter.is_duplicate_death = self._death_recap.is_duplicate_death
         self._prog_sessions = ProgSessions(ac._DATA_DIR / "prog_sessions")
         self._dps_meter.on_pull_start = self._prog_pull_started
         self._dps_meter.on_pull_finish = self._prog_pull_finished
@@ -489,6 +491,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._build_ui()
         self._ws.status_changed.connect(self._track_activity_connection)
         self._load_triggers()
+        self._restore_missing_profile()
 
         # Re apply the saved Piper venv BEFORE any TTS work below. It rewrites
         # sys.path, and the Kokoro installer's venv selector, so the preload
@@ -1578,7 +1581,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             # call, which would lose the main window's position on exit.
             step("cactbot reader stop", lambda: self._stop_cactbot_reader())
             step("triggevent stop", lambda: self._stop_sidecar("_triggevent"))
-            step("triggernometry stop", lambda: self._stop_sidecar("_triggernometry"))
+            step("triggernometry stop", lambda: self._stop_sidecar("_triggernometry", wait=True))
             # Signal both long-join clients first, then join them, so the two
             # waits overlap instead of running back to back.
             step("telesto stop request", lambda: self._request_sidecar_stop("_telesto_client"))

@@ -987,6 +987,12 @@ class AutomarkersTabMixin:
             self._automark_active.clear()
         tc.configure(uri=self._settings.get("telesto_uri", DEFAULT_TELESTO_URI),
                      enabled=enabled)
+        bridge = getattr(self, "_triggernometry", None)
+        if bridge is not None:
+            changed = bridge.configure_telesto(self._settings.get("telesto_uri"), enabled)
+            if changed and getattr(self, "_triggernometry_mode", False):
+                self._set_triggernometry_enabled(False)
+                self._set_triggernometry_enabled(True)
         if enabled:
             tc.request_party_members()
         else:

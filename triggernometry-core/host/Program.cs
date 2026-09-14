@@ -1,7 +1,7 @@
 // triggernometry-core - Strategy-A Mono stub host for NyaaTriggers.
 //
-// Boots the REAL Triggernometry engine headless under Mono+Xvfb (no engine source patch), runs ALL triggers
-// (including Roslyn ExecuteScript) against a fed log stream, and streams resolved callouts back as JSON.
+// Hosts Triggernometry under Mono and Xvfb and streams resolved callouts as JSON.
+// The engine handles conditions, variables, delayed actions and C# scripts.
 //
 // SERVER mode (the real sidecar):   xvfb-run -a mono triggernometry-core.exe <cfgDir> --serve [packPath...]
 //   stdin : one JSON object per line  {"t":"log","line":"21|..."} | {"t":"zone","id":N,"name":".."}
@@ -108,6 +108,10 @@ static class Program
         catch (Exception ex) { initEx = ex; Err("[host] InitPlugin THREW: " + ex); }
         bool initOk = ReadIsInitialized(plug) && initEx == null;
         Err("[host] isInitialized=" + initOk + "  status='" + statusLabel.Text + "'  registeredTriggers=" + ReadTriggerCount(plug));
+        var logTimer = new System.Windows.Forms.Timer { Interval = 500 };
+        logTimer.Tick += (s, e) => FlushEngineErrors();
+        logTimer.Start();
+        FlushEngineErrors();
 
         if (!initOk)
         {
@@ -142,6 +146,7 @@ static class Program
                 // The engine's worker threads are FOREGROUND (RealPlugin.cs:2353-2361), so Main returning
                 // would NOT end the process -> mono+Xvfb orphan. Force exit on stdin EOF. This also covers
                 // the EOF-before-Application.Run startup race.
+                FlushEngineErrors();
                 EmitStatus(false, "stopped");
                 try { Application.Exit(); } catch { }
                 Environment.Exit(0);
@@ -177,11 +182,7 @@ static class Program
                                 CombatantBridge.RaiseZoneChanged(zoneId, currentZone);   // drives ${_ffxivzoneid} + name filters
                             }
                         }
-                        // ACT fires BeforeLogLineRead first, plugins may rewrite the
-                        // line there, then OnLogLineRead. Keep ACT's order so
-                        // same-line side effects behave like the real thing.
-                        plug.BeforeLogLineRead(false, raw, currentZone);
-                        plug.OnLogLineRead(false, raw, currentZone);
+                        FeedLog(raw, currentZone);
                     }
                     break;
                 case "zone":
@@ -194,6 +195,10 @@ static class Program
                     if (root.TryGetProperty("list", out el) && el.ValueKind == JsonValueKind.Array)
                         foreach (var c in el.EnumerateArray()) list.Add(ParseCombatant(c));
                     CombatantBridge.SetSnapshot(me, list.ToArray());
+                    break;
+                case "endpoint":
+                    if (root.TryGetProperty("body", out el) && el.ValueKind == JsonValueKind.String)
+                        plug.EndpointReceive(el.GetString());
                     break;
                 case "set_callout":   // edit one callout's spoken text live (id, text); text=null reverts to default
                     {
@@ -220,6 +225,14 @@ static class Program
                 default: break;
             }
         }
+    }
+
+    static void FeedLog(string raw, string zone)
+    {
+        // Network triggers receive the original line. Log triggers receive
+        // the formatted line that ACT would deliver after parsing it.
+        plug.BeforeLogLineRead(false, raw, zone);
+        plug.OnLogLineRead(false, ActLogLine.Format(raw), zone);
     }
 
     static uint JU(JsonElement c, string k) { JsonElement v; uint n; return (c.TryGetProperty(k, out v) && v.ValueKind == JsonValueKind.Number && v.TryGetUInt32(out n)) ? n : 0u; }
@@ -304,7 +317,7 @@ static class Program
             {
                 Thread.Sleep(1500);
                 Err("[host] feeding: " + testLine);
-                try { plug.BeforeLogLineRead(false, testLine, "SpikeZone"); plug.OnLogLineRead(false, testLine, "SpikeZone"); }
+                try { FeedLog(testLine, "SpikeZone"); }
                 catch (Exception ex) { Err("[host] feed ex: " + ex); }
             }) { IsBackground = true };
             feeder.Start();
@@ -321,6 +334,24 @@ static class Program
     }
 
     // ---------------- helpers ----------------
+    static void FlushEngineErrors()
+    {
+        try
+        {
+            var field = typeof(RealPlugin).GetField("log", BindingFlags.NonPublic | BindingFlags.Instance);
+            var logs = field.GetValue(plug) as Dictionary<RealPlugin.DebugLevelEnum, Queue<InternalLog>>;
+            foreach (var level in new[] { RealPlugin.DebugLevelEnum.Error, RealPlugin.DebugLevelEnum.Warning })
+            {
+                var messages = new List<InternalLog>();
+                var queue = logs[level];
+                lock (queue)
+                    while (queue.Count > 0) messages.Add(queue.Dequeue());
+                foreach (var message in messages) Err("[engine] " + message);
+            }
+        }
+        catch (Exception ex) { Err("[host] could not read engine errors: " + ex.Message); }
+    }
+
     static bool ReadIsInitialized(RealPlugin p)
     {
         var pi = typeof(RealPlugin).GetProperty("isInitialized", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -343,6 +374,15 @@ static class Program
             UpdateNotifications = Configuration.UpdateNotificationsEnum.No, DefaultRepository = Configuration.UpdateNotificationsEnum.No,
             DebugLevel = RealPlugin.DebugLevelEnum.Info,
         };
+        string relay = Environment.GetEnvironmentVariable("NYAA_TRIGGERNOMETRY_TELESTO_RELAY");
+        string callback = Environment.GetEnvironmentVariable("NYAA_TRIGGERNOMETRY_CALLBACK_URI");
+        Uri relayUri;
+        if (Uri.TryCreate(relay, UriKind.Absolute, out relayUri))
+        {
+            c.Constants["TelestoEndpoint"].Value = relayUri.Host;
+            c.Constants["TelestoPort"].Value = relayUri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        if (!string.IsNullOrEmpty(callback)) c.Constants["TriggernometryEndpoint"].Value = callback;
         foreach (var packPath in packPaths)
         {
             try
@@ -352,6 +392,7 @@ static class Program
                 if (c.Root.Folders == null) c.Root.Folders = new List<Folder>();
                 c.Root.Folders.Add(tex.ExportedFolder);
                 int n = FixupExecuteScriptAssemblies(tex.ExportedFolder);
+                if (relayUri != null) RouteTelestoRequests(tex.ExportedFolder, relay);
                 Err("[host] grafted '" + tex.ExportedFolder.Name + "' (" + (tex.ExportedFolder.Triggers != null ? tex.ExportedFolder.Triggers.Count : 0) + " triggers)" + (n > 0 ? " [fixed " + n + " empty-asm script(s)]" : ""));
             }
             catch (Exception ex) { Err("[host] pack load error " + packPath + ": " + ex.Message); }
@@ -360,6 +401,25 @@ static class Program
         var settings = new System.Xml.XmlWriterSettings { Encoding = new System.Text.UTF8Encoding(false), Indent = true };
         using (var fs = new FileStream(file, FileMode.Create, FileAccess.Write))
         using (var xw = System.Xml.XmlWriter.Create(fs, settings)) xs.Serialize(xw, c);
+    }
+
+    static void RouteTelestoRequests(Folder folder, string relay)
+    {
+        if (folder.Triggers != null)
+            foreach (var trigger in folder.Triggers)
+                if (trigger.Actions != null)
+                    foreach (var action in trigger.Actions)
+                    {
+                        if (action.ActionType != "GenericJson") continue;
+                        Uri endpoint;
+                        string expression = action.JsonEndpointExpression ?? "";
+                        if (expression.Contains("TelestoEndpoint")
+                            || (Uri.TryCreate(expression, UriKind.Absolute, out endpoint)
+                                && endpoint.IsLoopback && endpoint.Port == 45678))
+                            action.JsonEndpointExpression = relay;
+                    }
+        if (folder.Folders != null)
+            foreach (var child in folder.Folders) RouteTelestoRequests(child, relay);
     }
 
     // ExecuteScript actions default _ExecScriptAssembliesExpression="" -> Interpreter.Evaluate does AddReferences("")

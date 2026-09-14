@@ -66,6 +66,16 @@ class ProgSessions:
         self.definitions = DEFINITIONS if definitions is None else tuple(definitions)
         self.sessions, self.errors = load_records(directory, validate_session)
         for session in self.sessions:
+            for pull in list(session["pulls"]):
+                if pull["ending"] != "empty" or pull.get("recap_count") != 0:
+                    continue
+                recaps, errors = self.recaps.load(session["id"], pull["id"])
+                if recaps:
+                    pull["recap_count"] = len(recaps)
+                    pull["deaths"] = max(pull["deaths"], len(recaps))
+                elif not errors:
+                    session["pulls"].remove(pull)
+                self.errors.extend(f"{session['id']}/{pull['id']}: {error}" for error in errors)
             if session["state"] == "active":
                 session["state"] = "interrupted"
                 for pull in session["pulls"]:
@@ -123,12 +133,16 @@ class ProgSessions:
         return max(0, self.clock() - self.started_at) if session is self.current else session["elapsed"]
 
     def save(self, session):
+        record = session
         if session is self.current:
             session["elapsed"] = self.elapsed(session)
             self._checkpoint_at = self.clock()
+            if self._empty_pull is not None:
+                # Keep the pull reachable if its late recap saves before the summary.
+                record = {**session, "pulls": [*session["pulls"], self._empty_pull]}
         try:
-            validate_session(session)
-            write_record(self.directory, session)
+            validate_session(record)
+            write_record(self.directory, record)
         except (OSError, ValueError) as exc:
             self.unsaved[session["id"]] = session
             self.save_errors[session["id"]] = str(exc)

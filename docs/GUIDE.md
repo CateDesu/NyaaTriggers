@@ -120,9 +120,15 @@ Some engine components build a Swing overlay as they load, so the sidecar runs t
 
 > **Note.** Triggernometry support is still being validated in-game.
 
-Triggernometry runs its **real engine** headless so its complex *scripted* triggers fire 1:1, the imperative C# and `ExecuteScript` ones that can't reduce to Local triggers, the way the [Triggevent Engine](#triggevent-engine) does for Groovy. There's no separate on/off. An imported pack follows the master **Triggers** switch, and the engine only starts once you've actually imported a pack.
+Triggernometry runs its **real engine** to preserve conditions, shared variables, delayed actions, trigger chains and C# `ExecuteScript` actions. These need the original XML pack because the simple converter cannot represent their logic. There's no separate on/off. An imported pack follows the master **Triggers** switch, and the engine only starts once you've actually imported a pack.
 
 **Importing a pack.** Point **Settings - Data - Import Triggernometry** at a Triggernometry `.xml` export. The whole pack runs through the engine and lists under its own **Triggernometry** section as editable rows. Edit the spoken text or toggle them per trigger, just like Triggevent. On a build without the engine the simple triggers, a literal ability ID plus a plain text-to-speech line, fall back to editable **Local** rows instead.
+
+**Pack compatibility.** Network triggers receive raw FFXIV logs and ACT log triggers receive the corresponding formatted logs. Replay tests cover TOP's player markers and wipe reset, Zelenia's Bloom callout sequence from the [Paissa sharing-channel pack](https://github.com/paissaheavyindustries/Triggernometry-Triggers/tree/main/Repositories), and a C# calculation used by a delayed callout. This does not validate every trigger in those packs. Legacy Triggernometry auras and scripts that read game memory directly are still unsupported.
+
+**Telesto callbacks and drawings.** With [Telesto](https://github.com/paissaheavyindustries/Telesto) running in the game, imported packs can subscribe to memory changes and draw lines, circles, beams and other Telesto doodles. The program uses **Telesto URL** in the Automarkers tab and sets up the callback address automatically. These features follow the master **Triggers** switch. The Automarkers switch separately gates pack actions that send game commands or macros. No extra listener settings or administrator setup are needed for a local Telesto connection.
+
+TOP's Party Synergy weapon calls and Pantokrator circles and beams are covered by replays through this integration. Subscriptions and drawings belong to one engine run and are cleaned up when it stops. Late notifications from retired subscriptions or replaced drawings are ignored. Telesto performs the memory reads and renders the drawings inside the game. Pack memory offsets still need to match the game version.
 
 **How it runs.** A headless .NET sidecar (`triggernometry-core`) hosts the real engine and routes its callouts to NyaaTriggers' voice and the optional companion overlay plugin. It's cross-platform .NET Framework 4.6.2. **Windows runs it natively**, and **Linux runs it under Mono** with `sudo pacman -S mono`. Release builds bundle the prebuilt sidecar, so there's nothing to build to use it.
 
@@ -237,10 +243,21 @@ death received within two seconds after combat ends or a wipe.
 ## Profiles
 
 Open **Profiles** at the bottom of the Triggers tab to save and restore named
-setups for jobs, groups, or strategies. **Save new** captures the current local trigger
+setups for jobs, groups, or strategies. **Default** starts selected and represents
+your normal saved setup. Edits made while Default is active are kept through the
+normal trigger editor. Apply a named profile to use a different setup, then
+select **Default** and press **Apply** to return to your normal choices.
+
+**Save new** captures the current local trigger
 toggles and spoken text, engine callout toggles, and editable Triggevent and
 Triggernometry wording. **Update** replaces the selected snapshot
 with the current setup.
+
+**Delete** removes the selected named profile after confirmation. Deleting the
+active profile returns to Default, so it must wait until combat ends. Default
+cannot be deleted or overwritten with **Update**. The last applied profile and
+your separate Default setup survive restarting the program. Selecting a name
+or saving a new profile does not change the active setup until you press **Apply**.
 
 Select a profile and press **Apply** between pulls. Existing trigger
 definitions, folders, and newly added triggers are preserved. Applying a profile

@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<TriggernometryExport Version="1">
+  <ExportedFolder Id="52968c83-0022-47cd-afbd-6c068ff44ac7" Name="Log sources" Enabled="true">
+    <Triggers>
+      <Trigger Id="e74a5b16-1361-4197-9114-dd6f18c9aed0" Name="Network" Enabled="true" Source="FFXIVNetwork" RegularExpression="^\d+\|">
+        <Actions>
+          <Action OrderNumber="1" ActionType="UseTTS" UseTTSTextExpression="network ${_event}" />
+        </Actions>
+      </Trigger>
+      <Trigger Id="803d5685-7830-4325-8f1c-52ed3315f022" Name="ACT" Enabled="true" RegularExpression="^\[">
+        <Actions>
+          <Action OrderNumber="1" ActionType="UseTTS" UseTTSTextExpression="act ${_event}" />
+        </Actions>
+      </Trigger>
+    </Triggers>
+  </ExportedFolder>
+</TriggernometryExport>

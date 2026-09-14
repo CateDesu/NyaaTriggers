@@ -295,14 +295,16 @@ class InstanceTabMixin:
     def _dispatch_log_line(self, fields: list[str], raw: str) -> None:
         log_type = fields[0]
         begin_activity = getattr(self, "_begin_activity_event", None)
-        if begin_activity is not None:
-            begin_activity()
+        event_time = begin_activity() if begin_activity is not None else None
 
         # DPS meter tap. Additive, and a parse bug must never break
         # triggers.
         if log_type in METER_LOG_TYPES:
             try:
-                self._dps_meter.process(fields, raw)
+                if event_time is None:
+                    self._dps_meter.process(fields, raw)
+                else:
+                    self._dps_meter.process(fields, raw, now=event_time)
             except Exception as exc:  # noqa: BLE001 - same guard as dispatch itself
                 ac.log_drop("dps-meter", f"{exc!r} on {raw[:140]!r}")
 

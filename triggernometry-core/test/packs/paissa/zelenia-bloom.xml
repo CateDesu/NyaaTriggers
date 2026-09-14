@@ -1,0 +1,42 @@
+<?xml version='1.0' encoding='utf-8'?>
+<TriggernometryExport Version="1">
+  <ExportedFolder Id="a1458d1e-2ba6-4245-9fc0-6f125b4149c8" Name="D. Bloom 2" Enabled="true" RawEnvironmentVariables="phase = 2">
+    <Folders />
+    <Triggers>
+      <Trigger Enabled="true" Name="0. Init" Id="3d8e6035-df7a-4829-b9b6-615b3fd95706" RegularExpression="^.{15}\S+ 14:4.{7}:[^:]*:AA14:">
+        <Actions>
+          <Action OrderNumber="1" VariableOp="SetString" VariableName="Ex7d_phase" VariableExpression="${env:phase}" ActionType="Variable" />
+          <Action OrderNumber="2" VariableOp="UnsetRegexUniversal" VariableName="^Ex7d_2" ActionType="Variable" />
+        </Actions>
+      </Trigger>
+      <Trigger Enabled="true" Name="1. MapEffect" Id="f14e92ff-ed49-4fdb-b218-158000927e9b" RegularExpression="^.{15}\S+ 101:[^:]*:01000040:(?&lt;loc&gt;05|0A)">
+        <Actions>
+          <Action OrderNumber="1" VariableOp="SetNumeric" VariableName="Ex7d_2_isTopLeftSafe" VariableExpression="0x${loc} = 5" ActionType="Variable" />
+        </Actions>
+        <Condition Enabled="true" Grouping="Or">
+          <ConditionSingle Enabled="true" ExpressionL="${v:Ex7d_phase}" ExpressionTypeL="String" ExpressionR="${env:phase}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+        </Condition>
+      </Trigger>
+      <Trigger Enabled="true" Name="2. In/Out =&gt; O1" Id="be866112-9a00-4d79-90b7-1c96338045b4" RegularExpression="^.{15}\S+ 14:4.{7}:[^:]+:(?&lt;aid&gt;A9B[89]):">
+        <Actions>
+          <Action OrderNumber="1" VariableOp="SetNumeric" VariableName="Ex7d_2_isOutFirst" VariableExpression="0x${aid} = 0xA9B8" ActionType="Variable" Asynchronous="False" />
+          <Action OrderNumber="2" LogMessageText="Ex7d_2:isOutFirst:${v:Ex7d_2_isOutFirst}:isTopLeftSafe:${v:Ex7d_2_isTopLeftSafe}" LogProcess="True" LogProcessACT="True" ActionType="LogMessage" Asynchronous="False" />
+        </Actions>
+        <Condition Enabled="true" Grouping="Or">
+          <ConditionSingle Enabled="true" ExpressionL="${v:Ex7d_phase}" ExpressionTypeL="String" ExpressionR="${env:phase}" ExpressionTypeR="String" ConditionType="StringEqualNocase" />
+        </Condition>
+      </Trigger>
+      <Trigger Enabled="true" Name="O1. Output" Id="b2faca9d-36e0-4fd3-893d-aaca688356ed" RegularExpression="^Ex7d_2:isOutFirst:(?&lt;isOutFirst&gt;0|1):isTopLeftSafe:(?&lt;isTopLeftSafe&gt;0|1)">
+        <Actions>
+          <Action OrderNumber="1" UseTTSTextExpression="${?d: &#13;&#10;  00 = southwest，In, &#13;&#10;  01 = southeast，In, &#13;&#10;  10 = southeast，Out, &#13;&#10;  11 = southwest，Out &#13;&#10;  [${isOutFirst}${isTopLeftSafe}]&#13;&#10;}" ActionType="UseTTS" />
+          <Action OrderNumber="2" ActionType="Placeholder" ExecutionDelayExpression="6800" />
+          <Action OrderNumber="3" UseTTSTextExpression="${f:pick(${n: ${isOutFirst} = ${isTopLeftSafe} }): straight, diagonal } move" ActionType="UseTTS" />
+          <Action OrderNumber="4" />
+          <Action OrderNumber="5" ActionType="Placeholder" ExecutionDelayExpression="${isOutFirst} = ${isTopLeftSafe} ? 3000 : 2000" />
+          <Action OrderNumber="6" UseTTSTextExpression="move, tether" ActionType="UseTTS" />
+          <Action OrderNumber="7" />
+        </Actions>
+      </Trigger>
+    </Triggers>
+  </ExportedFolder>
+</TriggernometryExport>

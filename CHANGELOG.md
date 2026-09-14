@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Triggernometry Telesto callbacks and drawings.** Imported packs can receive memory notifications and send doodles through the configured Telesto connection. TOP Party Synergy weapon calls and Pantokrator drawings now have replay coverage. Engine shutdown cleans up its subscriptions and drawings, and late callbacks cannot enter a new run.
 - **Prog phase details.** The pull table has a Furthest phase column and a confirmation table with recording status and observed times. The storage and transition handling are in place, but automatic UMAD detection remains inactive until combat recordings verify its rules.
 - **Saved death recaps for prog pulls.** Select a pull in Prog and choose **View death recaps** to review its deaths after restarting the program. Each recap saves as it arrives, independently of the live history's 80-death limit and the DPS recording switch. Read and save failures appear on the session pages.
 - **Death Recap tab.** Review the last 15 seconds of observed damage, healing, and statuses before a player's death. Keeps the latest 80 recaps for the current program run.
@@ -10,6 +11,7 @@
 - **Trigger profiles.** Save named trigger choices and callout wording, then apply a setup between pulls without replacing trigger definitions.
 
 ### Fixed
+- **Complex Triggernometry callouts using ACT logs.** Imported XML packs now receive formatted ACT logs on their Log source and raw logs on their FFXIVNetwork source. Replay checks cover Zelenia's Bloom sequence, TOP marker offsets and wipe resets, and C# results used in delayed speech. Engine warnings and script errors now reach the Triggernometry diagnostic log.
 - **UMAD callouts survive the connection watchdog.** IINACT adds two zero bytes to its ping replies. The watchdog rejected them and reconnected every 30 seconds, clearing Triggevent's buff state and interrupting ongoing mechanics. Both reply formats now keep the connection alive, while stale replies and unresponsive feeds still trigger recovery.
 - **The overlay meter's hold-last now survives a wipe.** The wipe handler's clear landed after the meter's end frame and wiped the ended state the plugin's **Keep the last encounter on screen** option keys on, so the final numbers vanished on every wipe while a kill kept them up. The wipe path now re-sends the end frame right after its clear, so the held pull stays up after a wipe too, until the next pull or a zone change like before.
 - **Git self-updates heal themselves when old cactbot timeline downloads block the pull.** Checkouts from before the dungeon timelines shipped in the repo can hold runtime downloads sitting untracked under the same `timelines/*.cactbot.txt` names, and git refuses a pull that would overwrite untracked files, so Install Updates failed until those files were deleted by hand. The updater now spots that exact conflict, deletes the stale downloads, and retries the pull once - the merge restores them as tracked copies. Any other conflicting file still gets the plain failure message.

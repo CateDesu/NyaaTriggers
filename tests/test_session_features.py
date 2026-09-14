@@ -14,7 +14,7 @@ from nyaatriggers.dps_meter import DpsMeter
 from nyaatriggers.prog_session import CHECKPOINT_SECONDS, ProgSessions, summary
 from nyaatriggers.record_store import read_record, write_record
 from nyaatriggers.trigger_engine import Trigger
-from nyaatriggers.trigger_profiles import SOURCES, apply_choices, capture_profile, validate_profile
+from nyaatriggers.trigger_profiles import SOURCES, apply_choices, capture_profile, preserve_default, validate_profile
 
 PLAYER = "10FF0001"
 BOSS = "40001234"
@@ -25,6 +25,14 @@ def ability(source=BOSS, target=PLAYER, pairs=None):
     for flags, value in pairs or [("03", "3E80000")]:
         fields.extend((flags, value))
     return fields + ["0"] * (24 - len(fields))
+
+
+def area_ability(source=BOSS, target=PLAYER, pairs=None, index=0, count=3):
+    fields = ability(source, target, pairs)
+    fields[0] = "22"
+    fields.extend(["0"] * (45 - len(fields)))
+    fields.extend([str(index), str(count), "00", ""])
+    return fields
 
 
 class Clock:
@@ -79,6 +87,40 @@ class RecapTests(unittest.TestCase):
         events = self.death()["events"]
         self.assertEqual([(e["kind"], e["amount"]) for e in events],
                          [("heal", 2726), ("damage", 5), ("instant-death", None)])
+
+    def test_area_effects_keep_damage_and_healing_with_each_player(self):
+        players = [PLAYER, "10FF0002", "10FF0003"]
+        for index in (2, 0, 1):
+            self.recap.process(area_ability(target=players[index].lower(), index=index,
+                                            pairs=[("03", f"{(index + 1) * 100 << 16:X}")]))
+            self.recap.process(area_ability(source=players[1], target=players[index], index=index,
+                                            pairs=[("04", f"{(index + 1) * 50 << 16:X}")]))
+        self.recap.process(area_ability(target=BOSS))
+        for actor in reversed(players):
+            self.recap.process(["25", "ts", actor, actor])
+        self.assertEqual(len(self.recap.deaths), 3)
+        for index, death in enumerate(self.recap.deaths):
+            self.assertEqual(death["actor"], int(players[index], 16))
+            self.assertEqual([(e["kind"], e["amount"]) for e in death["events"]],
+                             [("damage", (index + 1) * 100), ("heal", (index + 1) * 50)])
+
+    def test_area_reflection_and_self_healing_do_not_leak_between_targets(self):
+        other = "10FF0002"
+        first = area_ability(source=PLAYER, target=other, index=0, count=2,
+                             pairs=[("03", "640000"), ("104", "140000"), ("1D", "0"), ("03", "50000")])
+        first[3], first[7] = "Caster", "Reflector"
+        second = area_ability(source=PLAYER, target=BOSS, index=1, count=2,
+                              pairs=[("03", "C80000"), ("104", "1E0000")])
+        second[3] = "Caster"
+        self.recap.process(first)
+        self.recap.process(second)
+        self.recap.process(["25", "ts", PLAYER, "Caster"])
+        self.recap.process(["25", "ts", other, "Reflector"])
+        deaths = {d["actor"]: d for d in self.recap.deaths}
+        self.assertEqual([(e["kind"], e["amount"], e["source"]) for e in deaths[int(PLAYER, 16)]["events"]],
+                         [("heal", 20, "Caster"), ("damage", 5, "Reflector"), ("heal", 30, "Caster")])
+        self.assertEqual([(e["kind"], e["amount"], e["source"]) for e in deaths[int(other, 16)]["events"]],
+                         [("damage", 100, "Caster")])
 
     def test_ticks_and_reset_do_not_mix_actor_lifetimes(self):
         self.recap.process(["24", "ts", PLAYER, "Player", "DoT", "0", "A"])
@@ -367,6 +409,22 @@ class ProfileTests(unittest.TestCase):
         profile["local"]["a"]["enabled"] = "false"
         with self.assertRaises(ValueError):
             validate_profile(profile)
+
+    def test_default_covers_choices_introduced_by_other_profiles(self):
+        window = self.window()
+        first = capture_profile(window, "First")
+        first["local"]["a"]["text"] = "First callout"
+        first["engines"]["triggevent"]["unknown"] = {"enabled": False, "text": "First engine callout"}
+        default = preserve_default(window, None, first)
+        apply_choices(window, first)
+        second = capture_profile(window, "Second")
+        second["engines"]["triggevent"]["another"] = {"enabled": False, "text": "Second engine callout"}
+        default = preserve_default(window, default, second)
+        apply_choices(window, second)
+        apply_choices(window, default)
+        self.assertEqual(window._triggers[0].tts_text, "Stack")
+        self.assertEqual(window._triggevent_callout_edits, {"one": "Left"})
+        self.assertEqual(window._engine_disabled["triggevent"], set())
 
 
 if __name__ == "__main__":
