@@ -25,7 +25,7 @@ The full reference for NyaaTriggers. Install steps are in the [README](../README
 
 ## Requirements
 
-Windows and Linux release builds bundle the Python dependencies and English Piper voice. IINACT is installed separately, and Linux engines also use the [system dependencies listed in the README](../README.md#linux-engine-dependencies). This table covers the base requirements for running from source on Linux.
+Windows and Linux release builds bundle the Python dependencies and English Piper voice. IINACT is installed separately, and Linux audio and engines also use the [system dependencies listed in the README](../README.md#linux-system-dependencies). This table covers the base requirements for running from source on Linux.
 
 | Requirement | Notes |
 |---|---|
@@ -42,7 +42,7 @@ Windows and Linux release builds bundle the Python dependencies and English Pipe
 
 Pick the backend in **Settings - Voice - Engine**:
 
-- **System** - your OS voice, Windows SAPI or Linux `spd-say` / `espeak`. No download or extra dependency. **Default on Windows.**
+- **System** - Windows SAPI, or `spd-say` / `espeak` when installed on Linux. **Default on Windows.** English falls back to Piper if no system voice backend is available on Linux.
 - **Piper** - fully offline neural TTS via [Piper](https://github.com/OHF-Voice/piper1-gpl). **Default on Linux.** Release builds include the `en_US-arctic-medium` model. Source runs download it automatically on first launch into `voices/`.
 
 **Adding Piper voices:** browse the [voice samples](https://rhasspy.github.io/piper-samples/), download a `.onnx` model and its matching `.onnx.json` config, and drop both in the `voices/` folder. **Settings - Voice - Open voices folder** opens it. Pick the voice under **Model**, and hit **Refresh list** or restart if you added it while open. Medium voices are ~65 MB, low ~30 MB.
@@ -50,6 +50,8 @@ Pick the backend in **Settings - Voice - Engine**:
 **Japanese voices:** the **Model** dropdown also lists the neural Japanese voices Alpha and Kumo next to the English one. Pick one and callouts are spoken in Japanese. The program downloads the voice and sets it up on first pick, about 330 MB, and it reads kanji. Until it is ready Japanese falls back to espeak.
 
 **Test TTS** speaks a sample with the current voice. On Linux source installs, **Piper venv** sets the path to the venv holding piper-tts, default `~/.venv/ffxiv`.
+
+**Master volume and mute.** The sidebar slider controls program audio from 0% to 200%. Click the speaker button to mute or unmute. Right-click it for **Mute for 5 minutes**, **Mute for 15 minutes**, **Mute until next zone**, or **Unmute**. These mute audio while the combat feed, recordings, and visual callouts continue.
 
 ---
 
@@ -124,6 +126,8 @@ Triggernometry runs its **real engine** to preserve conditions, shared variables
 
 **Importing a pack.** Point **Settings - Data - Import Triggernometry** at a Triggernometry `.xml` export. The whole pack runs through the engine and lists under its own **Triggernometry** section as editable rows. Edit the spoken text or toggle them per trigger, just like Triggevent. On a build without the engine the simple triggers, a literal ability ID plus a plain text-to-speech line, fall back to editable **Local** rows instead.
 
+**Updating or removing a pack.** Importing another file with the same name keeps a separate copy. To replace an earlier version, close the program and replace its XML in the imported pack folder. To remove a pack, move its XML out of that folder, then restart. See [saved data locations](../README.md#updating-and-saved-data).
+
 **Pack compatibility.** Network triggers receive raw FFXIV logs and ACT log triggers receive the corresponding formatted logs. Replay tests cover TOP's player markers and wipe reset, Zelenia's Bloom callout sequence from the [Paissa sharing-channel pack](https://github.com/paissaheavyindustries/Triggernometry-Triggers/tree/main/Repositories), and a C# calculation used by a delayed callout. This does not validate every trigger in those packs. Legacy Triggernometry auras and scripts that read game memory directly are still unsupported.
 
 **Telesto callbacks and drawings.** With [Telesto](https://github.com/paissaheavyindustries/Telesto) running in the game, imported packs can subscribe to memory changes and draw lines, circles, beams and other Telesto doodles. The program uses **Telesto URL** in the Automarkers tab and sets up the callback address automatically. These features run with Triggernometry in editable callout mode. The Automarkers switch separately gates pack actions that send game commands or macros. No extra listener settings or administrator setup are needed for a local Telesto connection.
@@ -132,7 +136,7 @@ TOP's Party Synergy weapon calls and Pantokrator circles and beams are covered b
 
 **How it runs.** A headless .NET sidecar (`triggernometry-core`) hosts the real engine and routes its callouts to NyaaTriggers' voice and the optional companion overlay plugin. It's cross-platform .NET Framework 4.6.2. **Windows runs it natively**, and **Linux runs it under Mono** with `sudo pacman -S mono`. Release builds bundle the prebuilt sidecar, so there's nothing to build to use it.
 
-**Building from source.** The sidecar's prebuilt binaries are vendored in `triggernometry-core/bin/` and used as-is, so a normal source run needs no build step. Linux still needs the [engine dependencies](../README.md#linux-engine-dependencies). To rebuild it, only needed if you change the host or bump the pinned engine, run `triggernometry-core/build-all.sh` with **Mono 6.12+** installed. It clones the engine at a pinned commit, applies the shims, and rebuilds `bin/`. See `triggernometry-core/README.md` for the design.
+**Building from source.** The sidecar's prebuilt binaries are vendored in `triggernometry-core/bin/` and used as-is, so a normal source run needs no build step. Linux still needs the [system dependencies](../README.md#linux-system-dependencies). To rebuild it, only needed if you change the host or bump the pinned engine, run `triggernometry-core/build-all.sh` with **Mono 6.12+** installed. It clones the engine at a pinned commit, applies the shims, and rebuilds `bin/`. See `triggernometry-core/README.md` for the design.
 
 ---
 

@@ -8,7 +8,7 @@ There is a live DPS meter parsed by the program itself, which includes DPS logs,
 
 **Platform:** Linux · Windows  ·  **[Full guide](docs/GUIDE.md)**  ·  [Changelog](CHANGELOG.md)  ·  [Discord](https://discord.com/invite/TQJrbZcgKF)
 
-[Installation](#installation) · [Connection](#connecting-to-iinact) · [Callouts](#choosing-callouts) · [Triggernometry](#triggernometry-packs) · [DPS and prog](#dps-death-recaps-and-prog) · [Profiles](#profiles) · [Updating](#updating-and-saved-data)
+[Installation](#installation) · [Connection](#connecting-to-iinact) · [Callouts](#choosing-callouts) · [Triggernometry](#triggernometry-packs) · [DPS and prog](#dps-death-recaps-and-prog) · [Profiles](#profiles) · [Updating](#updating-and-saved-data) · [Troubleshooting](#troubleshooting-callouts)
 
 ---
 
@@ -32,27 +32,29 @@ cd NyaaTriggers
 
 Use `NyaaTriggers.sh` for shortcuts too. The launcher can recover a missing runtime folder after an interrupted update. Python, the English Piper voice, cactbot's browser runtime, and Triggevent's Java runtime are bundled.
 
-### Linux engine dependencies
+### Linux system dependencies
+
+Neural voices and alert sounds need `aplay` from `alsa-utils`, including in the packaged build. Install it in the same environment where you launch NyaaTriggers. The commands below include it alongside the engine dependencies.
 
 Triggernometry needs a system Mono installation, including Windows Forms, for both packaged and source runs. Xvfb lets both engines run their hidden interfaces on a virtual display. Without Xvfb they use your session's X display.
 
 Arch / CachyOS, using the distribution's [Mono package](https://archlinux.org/packages/extra/x86_64/mono/):
 
 ```bash
-sudo pacman -S --needed mono xorg-server-xvfb xorg-xauth
+sudo pacman -S --needed alsa-utils mono xorg-server-xvfb xorg-xauth
 ```
 
 Debian / Ubuntu, using [Mono development packages](https://packages.ubuntu.com/noble/mono-devel):
 
 ```bash
 sudo apt update
-sudo apt install mono-devel libmono-system-windows-forms4.0-cil libgdiplus xvfb xauth
+sudo apt install alsa-utils mono-devel libmono-system-windows-forms4.0-cil libgdiplus xvfb xauth
 ```
 
-Fedora, using [mono-complete](https://packages.fedoraproject.org/pkgs/mono/mono-complete/) to include Windows Forms:
+Fedora, using [alsa-utils](https://packages.fedoraproject.org/pkgs/alsa-utils/alsa-utils/) for audio and [mono-complete](https://packages.fedoraproject.org/pkgs/mono/mono-complete/) to include Windows Forms:
 
 ```bash
-sudo dnf install mono-complete xorg-x11-server-Xvfb xorg-x11-xauth
+sudo dnf install alsa-utils mono-complete xorg-x11-server-Xvfb xorg-x11-xauth
 ```
 
 On Bazzite, install those Fedora packages inside a `distrobox` or `toolbox` and launch NyaaTriggers there, or layer them with `rpm-ostree install` and reboot.
@@ -75,7 +77,7 @@ Optional engines need their own dependencies:
 | Engine | Source setup |
 |---|---|
 | Triggevent | Install Java 17, then use **Settings - Program - Update Triggevent Engine** to download the prebuilt engine on a fresh checkout. Building it yourself needs JDK 17 and Maven. See the [engine instructions](triggevent-core/README.md#build-from-source-developers-only). |
-| Triggernometry | Install the [Linux engine dependencies](#linux-engine-dependencies). The prebuilt engine is already included in the checkout. |
+| Triggernometry | Install the [Linux system dependencies](#linux-system-dependencies). The prebuilt engine is already included in the checkout. |
 | Cactbot | Install PyQt6-WebEngine and restart. On Arch / CachyOS: `sudo pacman -S python-pyqt6-webengine`. For a pip environment: `python3 -m pip install -r requirements.txt`. |
 
 The normal source setup does not require cloning or rebuilding either engine's repository. Program code lives in `nyaatriggers/`, interface code in `nyaatriggers/ui/`, and `main.py` remains the entry point.
@@ -100,15 +102,19 @@ The **Triggers** tab groups fights by content type and expansion. Search spans a
 | Triggernometry | Imported XML packs, including conditions and scripts | Toggle individual triggers and edit their spoken wording. See [pack support](#triggernometry-packs). |
 | Cactbot | The raidboss engine's callouts and timelines | Enable under **Settings - Cactbot**. Individual callouts can be muted, but their engine logic is not editable here. |
 
-Engine callouts are enabled unless you mute them, including newly discovered callouts. Local rows keep their own saved on/off choices. **Global - Local On/Off** and **Global - Triggevent On/Off** affect that source across all fights. The **Local** and **Triggevent** checkboxes above the table affect only the selected fight. Enabling overlapping sources can produce duplicate calls.
+Engine callouts are enabled unless you mute them, including newly discovered callouts. Local rows keep their own saved on/off choices. **Global - Local On/Off** and **Global - Triggevent On/Off** affect that source across all fights. Global Local also controls local timeline playback. The **Local** and **Triggevent** checkboxes above the table affect only the selected fight's trigger rows. Enabling overlapping sources can produce duplicate calls.
 
 Cactbot is an alternative to Local, Triggevent, and Triggernometry callouts. Turning it on switches those off; turning it off restores editable callout mode. Its one switch also selects cactbot timelines. Dungeon timelines ship with the program, while other cactbot timelines download and cache as needed. With Cactbot off, local timelines are used.
 
-Right-click a line in **Current Instance** to create a trigger from its ability ID and zone. **Test Fire** previews a selected row. The toolbar's **Reset to Default** clears trigger checkmarks while keeping definitions and edited wording.
+In **Current Instance**, filter the log by text, players or enemies, and casts, abilities, cancels, or statuses. Right-click a line to create a trigger from its ability ID and zone. Use the fight tree's right-click menu to create folders for custom triggers. **Test Fire** previews a selected row.
+
+The toolbar's **Reset to Default** clears trigger checkmarks while keeping definitions and edited wording. A modified bundled row's right-click **Reset to Default** restores that individual trigger's bundled values. These are separate from the **Default** profile.
 
 ## Triggernometry packs
 
 Download a Triggernometry XML export, such as a pack from the [Paissa repositories](https://github.com/paissaheavyindustries/Triggernometry-Triggers/tree/main/Repositories), then choose **Settings - Data - Import Triggernometry**. The program copies the XML into its pack folder and loads it with the real Triggernometry engine. Imported triggers appear under **Triggernometry** in the fight list.
+
+Importing another file with the same name keeps an additional copy. It does not replace the earlier pack. To update a pack, close NyaaTriggers, replace its XML in the [imported pack folder](#updating-and-saved-data), and restart. To remove a pack, move its XML out of that folder while the program is closed.
 
 The engine runs conditions, shared variables, delayed actions, trigger chains, and C# scripts. It supplies formatted ACT logs to Log triggers and raw network logs to FFXIVNetwork triggers. When the engine is unavailable, the importer can only convert simple ability matches with plain speech into Local rows.
 
@@ -128,6 +134,8 @@ The live meter works whenever the combat feed is connected. **Record encounters*
 
 In Prog, choose **Start session** once the duty and combat state are known. Starting during combat waits for the next full pull. Select a recorded pull and choose **View death recaps** to inspect that attempt's deaths, including after a restart. Prog sessions and their recaps save independently of **Record encounters** and are not removed by DPS log rotation. Interrupted attempts remain identified separately, and **Combat ended** does not mean a clear.
 
+**End session** stops collection, and leaving the duty ends the session too. Wipes and breaks stay in the same session. Notes save automatically, and deaths save as they arrive. **Back to Prog** returns from a saved recap to its pull, while **Recent deaths** returns to the current run's death history.
+
 Phase details are available for saved observations, but automatic UMAD phase detection is still waiting for verified combat recordings. New UMAD pulls show **Not recorded**. Death recaps describe events observed in the feed and cannot reconstruct exact HP or effects missed before connection.
 
 **Settings - FFLogs** can show your best recorded rDPS after a fight when you supply your personal API client details, server, and region. **IINACT Logs** opens the raw log folder for an FFLogs uploader. The program's DPS summaries are separate from those uploadable logs.
@@ -138,13 +146,15 @@ Expand **Profiles** at the bottom of the Triggers tab to save setups for differe
 
 **Default** preserves your normal setup separately. Select it and press **Apply** to return to those choices. The active profile and Default both survive a restart. Deleting the active named profile restores Default and must be done between pulls. Selecting a name or saving a new profile alone does not activate it.
 
-Profiles preserve trigger definitions and newly added triggers. They do not change the voice, Cactbot mode, or automarkers.
+Edits made while a named profile is active save to your current setup, but only **Update** copies them back into that profile's snapshot. Default cannot be deleted or overwritten with **Update**. Profiles preserve trigger definitions and newly added triggers. They do not change the voice, Cactbot mode, or automarkers.
 
 ## Voice and language
 
 Choose **System** or **Piper** in **Settings - Voice** and use **Test TTS** to check playback. Windows defaults to the system voice; Linux defaults to offline Piper. The **Model** list includes the Japanese neural voices Alpha and Kumo, which download on first selection. Additional Piper voices can be added through **Open voices folder** using a model and its matching `.onnx.json` file.
 
 **Settings - Program - Language** offers Automatic, English, and 日本語, with a restart to apply an interface change. Japanese callout translations are available separately, with English fallback for untranslated text. **Settings - Alert Sound** provides built-in sounds, volume controls, and **Import SFX** for your own `.wav` files.
+
+The sidebar volume slider controls program audio from 0% to 200%. Click the speaker button to mute or unmute, or right-click it to mute for 5 minutes, 15 minutes, or until the next zone. Muting audio leaves the combat feed, recordings, and visual callouts running.
 
 ## In-game display and automarkers
 
@@ -158,7 +168,7 @@ Party automarkers use the separate [Telesto](https://github.com/paissaheavyindus
 
 Use **Settings - Program - Check for Updates**, or leave the startup check enabled. The update banner offers installation when a new release is available. Packaged builds replace the program files and restart while preserving saved data. Git checkouts pull main with fast-forward updates and install changed Python requirements. A source copy without Git opens the download page instead. See [Updating](docs/GUIDE.md#updating) for recovery and install details.
 
-**Settings - Data - Update Triggers** refreshes the bundled trigger set without replacing your custom triggers. **Export Triggers** and **Import Triggers** transfer local definitions and folders; importing replaces the current local set. Profiles are saved separately.
+**Settings - Data - Update Triggers** refreshes the bundled trigger set without replacing your custom triggers. **Restore from Repo** downloads that set again if it needs repair. **Export Triggers** and **Import Triggers** transfer local definitions and folders; importing replaces the current local set. Profiles are saved separately.
 
 Most writable data lives beside `main.py` for source runs or beside the executable for packaged builds:
 
@@ -170,6 +180,8 @@ Most writable data lives beside `main.py` for source runs or beside the executab
 | `dps_logs/` | Recorded DPS pull summaries |
 | `prog_sessions/` | Saved sessions, notes, and per-pull deaths under `recaps/` |
 | `pull_logs/` | Optional raw captures for engine replay |
+| `nyaatriggers.log` | Program diagnostics, including dropped-callout and crash entries |
+| `nyaatriggers-update.log` | Windows update and rollback diagnostics when an update runs |
 | `voices/`, `sounds/`, `timelines/` | User voices, imported sounds, and local timelines |
 
 Imported Triggernometry packs and engine diagnostics use the per-user configuration folder instead: `~/.config/nyaatriggers/` on Linux, or `%APPDATA%\nyaatriggers\` on Windows. Linux respects `XDG_CONFIG_HOME`. Packs live under `triggernometry-packs/`; logs are `triggevent.log` and `triggernometry-core/triggernometry.log`. Include this folder as well as the program's writable data when moving your setup.
@@ -202,7 +214,13 @@ The **[full guide](docs/GUIDE.md)** covers the individual controls:
 - [Tests](tests/README.md) - running the full suite or selected checks
 - [Planned work](docs/TODO.md) - completed features and next steps
 
-For a callout problem, **Settings - Data - Save log…** exports the captured combat feed. **Settings - Connection - Record pulls to pull_logs for engine replay** can capture future attempts for replay. Include the fight, missing callout, approximate time, and relevant log when opening an [issue](https://github.com/CateDesu/NyaaTriggers/issues) or asking in [Discord](https://discord.com/invite/TQJrbZcgKF).
+## Troubleshooting callouts
+
+Check the connection, selected fight's row checkboxes, Cactbot mode, and sidebar mute first. **Test TTS** checks the voice path, while **Test Fire** previews a row without validating that a mechanic will match it.
+
+The engine indicator beside the connection turns red if an engine fails to start or stops unexpectedly. Hover it for the full message. An amber **chain failures** count means Triggevent reported failed callout sequences, even if the engine is still running. Its tooltip shows recent errors.
+
+**Settings - Data - Save log…** exports the captured combat feed. **Settings - Connection - Record pulls to pull_logs for engine replay** can capture future attempts for replay. Program and engine diagnostic logs are listed under [saved data](#updating-and-saved-data). Their `.1` files keep the previous rotation when present. Include the program version, fight, missing callout, approximate time, and relevant logs when opening an [issue](https://github.com/CateDesu/NyaaTriggers/issues) or asking in [Discord](https://discord.com/invite/TQJrbZcgKF).
 
 ---
 
