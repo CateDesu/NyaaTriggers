@@ -616,21 +616,32 @@ class DpsMeter:
                     owner_name = fields[48].strip()
         src_key = self._player_key(sid)
         tgt_key = self._player_key(tid)
+        if src_key is None and tgt_key is None:
+            return
 
         effects = []
+        reflected = False
         for i in range(8, 24, 2):
             if i + 1 >= len(fields):
                 break
             if not fields[i] and not fields[i + 1]:
                 continue
-            effects.append(_unpack_effect(fields[i], fields[i + 1]))
+            try:
+                flags = int(fields[i], 16)
+            except (TypeError, ValueError):
+                continue
+            if not 0 <= flags <= 0xFFFFFFFF:
+                continue
+            if flags & 0xFF == 0x1D:
+                reflected = True
+                continue
+            effects.append((*_unpack_effect(fields[i], fields[i + 1]), reflected))
         # Only hostile action opens an encounter lazily. A pre-pull regen or
         # buff, status effects and heals, minutes before the engage must not
         # start the clock, or every pull's duration would include the
         # preamble. Damage and misses count. Heals alone do not.
         if self.current is None:
-            if (src_key is None and tgt_key is None) or not any(
-                    e[0] in ("damage", "miss") for e in effects):
+            if not any(e[0] in ("damage", "miss") for e in effects):
                 return
             self._begin()
         now = self._clock()
@@ -665,32 +676,40 @@ class DpsMeter:
             # only. Any cast reads as activity here.
             src.swings += 1
             src.touch(now)
-        tgt = None
-        for kind, amount, crit, dh in effects:
+        reflector = None
+        for kind, amount, crit, dh, reflected in effects:
             if kind == "damage":
-                if src is not None:
-                    src.damage += amount
+                dealer = src
+                dealer_key = src_key
+                victim_key, victim_id, victim_name = tgt_key, tid, fields[7]
+                if reflected:
+                    if reflector is None and tgt_key is not None:
+                        reflector = self._combatant(enc, tgt_key,
+                                                    fields[7] if tgt_key == tid else "")
+                        if reflector is not src:
+                            reflector.swings += 1
+                            reflector.touch(now)
+                    dealer = reflector
+                    dealer_key = tgt_key
+                    victim_key, victim_id, victim_name = src_key, sid, fields[3]
+                if dealer is not None:
+                    dealer.damage += amount
                     if amount > 0:     # misses/hallowed count as swings, not hits
-                        src.hits += 1
+                        dealer.hits += 1
                         if crit:
-                            src.crits += 1
+                            dealer.crits += 1
                         if dh:
-                            src.dhits += 1
+                            dealer.dhits += 1
                         if crit and dh:
-                            src.cdhits += 1
-                        if amount > src.maxhit_amount:
-                            src.maxhit_amount = amount
-                            src.maxhit_name = ability
-                if tgt_key is not None and tgt_key != src_key \
-                        and tgt_key == tid:
-                    # Enemy damage on players is only tracked as taken. The
-                    # enemy itself never becomes a meter row. Self-damage
-                    # credits damage only, ACT excludes it from taken. A pet
-                    # target resolves to its owner and credits no one, like
-                    # ACT credits pet deaths to no one.
-                    if tgt is None:
-                        tgt = self._combatant(enc, tgt_key, fields[7])
-                    tgt.damagetaken += amount
+                            dealer.cdhits += 1
+                        if amount > dealer.maxhit_amount:
+                            dealer.maxhit_amount = amount
+                            dealer.maxhit_name = ability
+                # Self damage and pet targets do not count as owner damage taken.
+                if victim_key is not None and victim_key != dealer_key \
+                        and victim_key == victim_id:
+                    victim = self._combatant(enc, victim_key, victim_name)
+                    victim.damagetaken += amount
             elif kind == "heal":
                 if src is not None:
                     src.healed += amount
@@ -714,6 +733,8 @@ class DpsMeter:
         app_id = _actor_int(fields[17])
         app_key = self._player_key(app_id)
         tgt_key = self._player_key(tid)
+        if app_key is None and (which != "DoT" or tgt_key is None or tgt_key != tid):
+            return
         if self.current is None:
             # DoT ticks are hostile and can open an encounter. A pre-pull
             # regen, a HoT, cannot. A zero-amount tick carries no damage, so

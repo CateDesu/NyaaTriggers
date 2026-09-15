@@ -1732,13 +1732,16 @@ class TriggersTabMixin:
         its English tts_text. Gated by callouts_localized, defaults on for
         a Japanese UI. The returned template still holds the {source},
         {target} and {count} tokens. Substitution runs after. Prefers the
-        precise per-id overlay, then the text-keyed phrase map, then
-        English, so a partial or stale overlay stays safe."""
+        per-id overlay for unchanged official text, then the phrase map
+        for the current wording. Custom text stays intact."""
         if not self._settings.get("callouts_localized", active_locale() == "ja"):
             return t.tts_text
-        return (self._callouts_ja.get(t.id)
-                or self._callouts_phrases_ja.get(t.tts_text)
-                or t.tts_text)
+        official = getattr(self, "_official_triggers", {}).get(t.id)
+        if official is not None and official.tts_text == t.tts_text:
+            translated = self._callouts_ja.get(t.id)
+            if translated:
+                return translated
+        return self._callouts_phrases_ja.get(t.tts_text) or t.tts_text
 
     def _pick_fight_folder(self) -> str | None:
         """Open the fight picker. Returns the chosen folder name, "" for

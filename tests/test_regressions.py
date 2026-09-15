@@ -1326,13 +1326,12 @@ def test_graphql_401_via_real_transport():
             raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
         return FakeResp(200, b'{"data":{"ok":true}}')
 
-    real_urlopen = urllib.request.urlopen
-    urllib.request.urlopen = fake_urlopen
-    try:
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    opener = SimpleNamespace(open=fake_urlopen)
+    with patch("nyaatriggers.http_fetch.urllib.request.build_opener", return_value=opener):
         c = fflogs.FflogsClient("cid", "secret")
         out = c._graphql("query { ok }")
-    finally:
-        urllib.request.urlopen = real_urlopen
     check("urllib 401: data returned after retry", out == {"ok": True})
     check("urllib 401: two API attempts", calls["api"] == 2)
     check("urllib 401: token refetched", calls["token"] == 2 and c._token == "tok2")

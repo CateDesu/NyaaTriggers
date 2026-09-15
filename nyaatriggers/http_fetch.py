@@ -1,5 +1,7 @@
-"""HTTP setup and bounded reads for small program data files."""
+"""HTTP setup and response deadlines for program downloads."""
 
+from contextlib import contextmanager
+import http.client
 import os
 import socket
 import sys
@@ -15,6 +17,111 @@ _LINUX_CA_BUNDLES = (
     '/etc/pki/tls/certs/ca-bundle.crt',
     '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem',
 )
+
+
+@contextmanager
+def open_response(request, timeout: float, deadline: float):
+    """Acquire a response before an absolute monotonic deadline.
+
+    The caller owns body reads and their deadlines after this handoff.
+    """
+    done = threading.Event()
+    cancelled = threading.Event()
+    lock = threading.Lock()
+    connections, responses, result, errors = [], [], [], []
+
+    def check_cancelled():
+        if cancelled.is_set() or time.monotonic() >= deadline:
+            raise TimeoutError("response headers timed out")
+
+    def connection_type(base):
+        class Connection(base):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                with lock:
+                    connections.append(self)
+
+            def connect(self):
+                check_cancelled()
+                super().connect()
+                try:
+                    check_cancelled()
+                except TimeoutError:
+                    self.close()
+                    raise
+
+            def send(self, data):
+                check_cancelled()
+                super().send(data)
+
+            def getresponse(self):
+                response = super().getresponse()
+                with lock:
+                    responses.append(response)
+                return response
+        return Connection
+
+    http_connection = connection_type(http.client.HTTPConnection)
+    https_connection = connection_type(http.client.HTTPSConnection)
+
+    class HttpHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(http_connection, req)
+
+    class HttpsHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(https_connection, req, context=self._context)
+
+    opener = urllib.request.build_opener(HttpHandler(), HttpsHandler())
+
+    def acquire():
+        response = None
+        try:
+            check_cancelled()
+            response = opener.open(request, timeout=timeout)
+            with lock:
+                if not cancelled.is_set():
+                    result.append(response)
+                    response = None
+        except Exception as exc:
+            with lock:
+                abandoned = cancelled.is_set()
+                if not abandoned:
+                    errors.append(exc)
+            if abandoned and hasattr(exc, "close"):
+                exc.close()
+        finally:
+            if response is not None:
+                response.close()
+            done.set()
+
+    threading.Thread(target=acquire, daemon=True, name="http-response-reader").start()
+    if not done.wait(max(0.0, deadline - time.monotonic())) or time.monotonic() >= deadline:
+        with lock:
+            cancelled.set()
+            sockets = [conn.sock for conn in connections if conn.sock is not None]
+            # Redirect handlers can read a body before the opener returns.
+            for response in responses:
+                try:
+                    sockets.append(response.fp.raw._sock)
+                except AttributeError:
+                    pass
+            acquired = list(result)
+        for sock in sockets:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        for response in acquired:
+            response.close()
+        for exc in errors:
+            if hasattr(exc, "close"):
+                exc.close()
+        raise TimeoutError("response headers timed out")
+    if errors:
+        raise errors[0]
+    with result[0] as response:
+        yield response
 
 
 def configure_ssl_trust() -> None:

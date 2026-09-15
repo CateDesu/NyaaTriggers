@@ -144,7 +144,7 @@ def _title_of(raw: str) -> str:
     they still participate in the caps instead of leaking forever."""
     try:
         title = json.loads(raw).get("title")
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, RecursionError):
         title = None
     return str(title) if title else "Unknown"
 

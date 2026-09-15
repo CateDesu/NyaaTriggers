@@ -27,6 +27,7 @@ import urllib.error
 import urllib.request
 
 from nyaatriggers.drop_log import log_drop
+from nyaatriggers.http_fetch import open_response
 
 TOKEN_URL = "https://www.fflogs.com/oauth/token"
 API_URL = "https://www.fflogs.com/api/v2/client"
@@ -81,7 +82,9 @@ class FflogsClient:
                      timeout: float) -> "tuple[int, bytes]":
         req = urllib.request.Request(url, data=body, headers=dict(headers),
                                      method="POST")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        deadline = time.monotonic() + _RESPONSE_DEADLINE_S
+        headers_deadline = min(deadline, time.monotonic() + _READ_STALL_S)
+        with open_response(req, timeout, headers_deadline) as resp:
             # Read loop on a daemon helper, watchdog here. One flat read of
             # the whole cap would park with no way to fail it from this side,
             # so the helper reads in chunks and reports progress. The stall
@@ -111,7 +114,6 @@ class FflogsClient:
                     done.set()
 
             threading.Thread(target=_reader, daemon=True).start()
-            deadline = time.monotonic() + _RESPONSE_DEADLINE_S
             last_seen = progress[0]
             last_change = time.monotonic()
             while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):

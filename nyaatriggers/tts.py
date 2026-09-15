@@ -34,6 +34,7 @@ from nyaatriggers.paths import bundle_root
 from nyaatriggers import proc_env
 from nyaatriggers.locale_util import has_japanese   # no Qt in here, safe on the module load path
 from nyaatriggers.drop_log import log_drop
+from nyaatriggers.http_fetch import open_response
 
 # Optional fast path for volume scaling. The pure Python loops in _scale_pcm are
 # the fallback, so numpy must never become a hard dependency.
@@ -314,7 +315,9 @@ def download_kokoro_model() -> bool:
             tmp = dest.with_name(f"{dest.name}.{os.getpid()}.part")
             req = urllib.request.Request(url, headers={"User-Agent": "NyaaTriggers"})
             digest = hashlib.sha256()
-            with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as f:
+            deadline = time.monotonic() + _KOKORO_DL_DEADLINE_S
+            headers_deadline = min(deadline, time.monotonic() + _KOKORO_DL_STALL_S)
+            with open_response(req, 120, headers_deadline) as r, open(tmp, "wb") as f:
                 # A junk length from a proxy reads as unknown. The byte cap
                 # below still bounds the download.
                 try:
@@ -348,7 +351,6 @@ def download_kokoro_model() -> bool:
                         done.set()
 
                 threading.Thread(target=_reader, daemon=True).start()
-                deadline = time.monotonic() + _KOKORO_DL_DEADLINE_S
                 last_seen = progress[0]
                 last_change = time.monotonic()
                 while not done.wait(timeout=min(_KOKORO_DL_STALL_S, max(0.0, deadline - time.monotonic()))):
@@ -1307,7 +1309,7 @@ def _wav_seconds(source) -> float:
         return _riff_wav_seconds(source)
 
 
-def _play_winsound(source, flags: int) -> None:
+def _play_winsound(source, flags: int, gen: "int | None" = None) -> None:
     """winsound.PlaySound under a bounded wait. PlaySound is synchronous with
     no timeout of its own, so a wedged waveOut driver would otherwise pin its
     caller forever, the single TTS worker or a chime slot. Runs on a one-shot
@@ -1318,6 +1320,11 @@ def _play_winsound(source, flags: int) -> None:
 
     def _run() -> None:
         try:
+            # Check at the playback handoff since the thread can start late.
+            # Release the lock before audio so interrupt stays responsive.
+            with _proc_lock:
+                if gen is not None and gen != _generation:
+                    return
             winsound.PlaySound(source, flags)
         except Exception as exc:   # noqa: BLE001 - re-raised on the caller's thread
             box["err"] = exc
@@ -1344,7 +1351,7 @@ def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
     system = platform.system()
     if system == "Windows":
         import winsound
-        _play_winsound(wav_path, winsound.SND_FILENAME | winsound.SND_NODEFAULT)
+        _play_winsound(wav_path, winsound.SND_FILENAME | winsound.SND_NODEFAULT, gen)
         return
     # aplay supports `--` so a wav path that starts with `-` is handled. stderr
     # is captured, not DEVNULL, so a playback failure, typically ALSA failing to

@@ -35,7 +35,8 @@ def trig(tid, text):
 
 def loc(settings, callouts, t, phrases=None):
     me = SimpleNamespace(_settings=settings, _callouts_ja=callouts,
-                         _callouts_phrases_ja=phrases or {})
+                         _callouts_phrases_ja=phrases or {},
+                         _official_triggers={ID1: trig(ID1, "Stack {target}")})
     return MW._localized_callout(me, t)
 
 

@@ -45,7 +45,8 @@ class HttpPeer:
                 pass
 
             def do_POST(self):
-                data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                data = json.loads(body) if body else None
                 outer.requests.append(data)
                 if len(outer.requests) != 1:
                     self.send_response(200)
@@ -68,6 +69,8 @@ class HttpPeer:
                             self.wfile.flush()
                 except OSError:
                     pass
+
+            do_GET = do_POST
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
