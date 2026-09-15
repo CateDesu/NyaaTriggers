@@ -637,8 +637,8 @@ check("a clamped warning a 26|30 type keeps stays pending",
 # The helper mirrors compile_user_regex's broad catch. A deeply nested
 # pattern over the length cap raises RecursionError in a plain compile,
 # which escaped the helper and aborted the app from the Save path.
-check("a deeply nested pattern is a refusal, not a crash",
-      trigger_dialog._regex_syntax_error("(" * 500 + "a" + ")" * 500) is True)
+check("an oversized pattern stays a resource refusal without another compile",
+      trigger_dialog._regex_syntax_error("(" * 500 + "a" + ")" * 500) is False)
 check("a genuinely malformed pattern is a syntax error",
       trigger_dialog._regex_syntax_error("(") is True)
 if trigger_dialog._HAVE_REGEX:

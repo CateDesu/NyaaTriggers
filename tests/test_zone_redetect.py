@@ -137,7 +137,7 @@ class _TL:
         self.entries = None
     def reset(self):
         pass
-    def load(self, entries):
+    def load(self, entries, *, preserve_time=False):
         self.entries = entries
     def clear(self):
         self.entries = None

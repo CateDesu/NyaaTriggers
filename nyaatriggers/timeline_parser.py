@@ -48,7 +48,7 @@ _KV_RE = re.compile(r"(\w+)\s*:\s*(?:\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'|
 # which _KV_RE, scalar only, would silently drop. That leaves the entry with no
 # id, so it then syncs on any ability of its type. Capture the array and its
 # quoted items.
-_KV_ARRAY_RE = re.compile(r"(\w+)\s*:\s*\[((?:[^\[\]\"']|\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')*)\]")
+_KV_ARRAY_START_RE = re.compile(r"(\w+)\s*:\s*\[")
 _ARRAY_ITEM_RE = re.compile(r"\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'")
 # Old-style sync /regex/ clause. Unsupported, but lifted out before the event
 # search since its body can hold brace quantifiers that would fake one.
@@ -58,11 +58,11 @@ _LEGACY_SYNC_RE = re.compile(r'\bsync\s*/(?:[^/\\]|\\.)*/')
 _HIDEALL_RE = re.compile(r'^hideall\s+"([^"]+)"')
 
 
-def _array_fields(fields_text: str) -> list[tuple[str, str]]:
-    """key, body pairs for each real key: [...] field. The scan moves left to
+def _array_fields(fields_text: str) -> list[tuple[str, str | None, int, int]]:
+    """Values and spans for each real array field. The scan moves left to
     right and steps over quoted strings whole, so array syntax inside a quoted
     scalar value, say name set to "id: ['9D00']", can't fabricate a key."""
-    pairs: list[tuple[str, str]] = []
+    pairs = []
     i, n = 0, len(fields_text)
     while i < n:
         c = fields_text[i]
@@ -75,10 +75,28 @@ def _array_fields(fields_text: str) -> list[tuple[str, str]]:
                 i += 2 if fields_text[i] == "\\" else 1
             i += 1
             continue
-        m = _KV_ARRAY_RE.match(fields_text, i)
+        m = _KV_ARRAY_START_RE.match(fields_text, i)
         if m:
-            pairs.append((m.group(1), m.group(2)))
-            i = m.end()
+            j, depth, quote = m.end(), 1, ''
+            while j < n and depth:
+                c = fields_text[j]
+                if quote:
+                    if c == '\\':
+                        j += 2
+                        continue
+                    if c == quote:
+                        quote = ''
+                elif c in '\"\'':
+                    quote = c
+                elif c == '[':
+                    depth += 1
+                elif c == ']':
+                    depth -= 1
+                j += 1
+            j = min(j, n)
+            body = fields_text[m.end():j - 1] if depth == 0 else None
+            pairs.append((m.group(1), body, i, j))
+            i = j
             continue
         i += 1
     return pairs
@@ -240,17 +258,30 @@ def parse(text: str) -> list[TimelineEntry]:
         if em:
             event_type = em.group('event')
             fields_text = em.group('fields') or ''
+            # Consume arrays as whole values before scanning scalar fields.
+            # Text inside an array item must not invent another field.
+            arrays = _array_fields(fields_text)
+            scalar_chars = list(fields_text)
+            for key, body, start, end in arrays:
+                scalar_chars[start:end] = ' ' * (end - start)
+            scalar_text = ''.join(scalar_chars)
             event_fields = {key: dq or sq or bq
-                            for key, dq, sq, bq in _KV_RE.findall(fields_text)}
+                            for key, dq, sq, bq in _KV_RE.findall(scalar_text)}
             # Fold list-valued fields in as a regex alternation so they match
             # like the scalar form. Values are regex sources, matched by
             # re.fullmatch in the engine. A scalar of the same key wins.
-            for key, body in _array_fields(fields_text):
+            for key, body, start, end in arrays:
                 if key in event_fields:
                     continue
+                if body is None:
+                    event_fields[key] = '(?!)'
+                    continue
                 items = [dq or sq for dq, sq in _ARRAY_ITEM_RE.findall(body)]
-                if items:
+                shape = _ARRAY_ITEM_RE.sub("X", body)
+                if items and re.fullmatch(r'\s*X(?:\s*,\s*X)*\s*,?\s*', shape):
                     event_fields[key] = '(?:' + '|'.join(items) + ')'
+                else:
+                    event_fields[key] = '(?!)'
             rest = rest[:em.start()] + ' ' + rest[em.end():]
         else:
             # Nested-brace block, _EVENT_RE failed on it and the fields are

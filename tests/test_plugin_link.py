@@ -80,6 +80,8 @@ class FakePlugin:
                     continue
                 with self._lock:
                     self.frames.append(msg)
+                if msg.get("c") == "ping":
+                    conn.send(json.dumps({"ev": "pong"}))
         except Exception:
             pass
         finally:

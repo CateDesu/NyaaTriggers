@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TriggernometryExport Version="1">
+  <ExportedFolder Id="4e5b428b-1e8a-49f7-bb10-6e529863c09f" Name="Zelenia replay observer" Enabled="true">
+    <Folders />
+    <Triggers>
+      <Trigger Id="90702fe2-0809-4e99-b3ca-1c80db0e98cb" Name="Prepare cleanup marker" Enabled="true" RegularExpression="^NYAA_REPLAY_PREPARE$">
+        <Actions>
+          <Action OrderNumber="1" ActionType="Variable" VariableOp="SetString" VariableName="Ex7d_2_replayPending" VariableExpression="pending" Asynchronous="False" />
+          <Action OrderNumber="2" ActionType="UseTTS" UseTTSTextExpression="NYAA_REPLAY_PREPARED" Asynchronous="False" />
+        </Actions>
+      </Trigger>
+      <Trigger Id="76176525-0a6d-4f92-91fd-f7f4eb47445c" Name="Observe phase and map state" Enabled="true" RegularExpression="^NYAA_REPLAY_PROBE (?&lt;probe&gt;[0-9]+)$">
+        <Actions>
+          <Action OrderNumber="1" ActionType="UseTTS" UseTTSTextExpression="NYAA_REPLAY_STATE:${probe}:${v:Ex7d_phase}:${v:Ex7d_2_replayPending}:${v:Ex7d_2_isTopLeftSafe}" Asynchronous="False" />
+        </Actions>
+      </Trigger>
+    </Triggers>
+  </ExportedFolder>
+</TriggernometryExport>

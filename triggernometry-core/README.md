@@ -146,6 +146,11 @@ The checks cover marker offsets, player filtering, wipe resets, ACT and network 
 shared variables, generated log messages, delayed follow-ups and C# script results.
 These are replay checks, not live fight validation.
 
+The Zelenia replay loads a separate test observer to wait for phase setup,
+cleanup and map state before sending dependent events. The original pack's
+asynchronous actions remain intact. A second replay delays those state actions
+to check that the test waits for completion even on a slow engine start.
+
 ## Telesto integration
 
 `nyaatriggers/triggernometry_telesto.py` owns a loopback HTTP relay for each engine run.

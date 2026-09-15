@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+import xml.etree.ElementTree as ET
 
 
 CORE = Path(__file__).resolve().parents[1] / "triggernometry-core"
@@ -63,7 +64,7 @@ class HostReplay:
 
 
 @contextmanager
-def replay(pack, relay=None):
+def replay(pack, relay=None, extra_packs=()):
     with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryFile(mode="w+") as errors:
         environment = os.environ.copy()
         if relay:
@@ -71,7 +72,7 @@ def replay(pack, relay=None):
             environment["NYAA_TRIGGERNOMETRY_CALLBACK_URI"] = relay.callback_url
         proc = subprocess.Popen(
             ["xvfb-run", "-a", "mono", str(CORE / "bin" / "triggernometry-core.exe"),
-             temp, "--serve", str(pack)],
+             temp, "--serve", str(pack), *map(str, extra_packs)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
             text=True, start_new_session=True, env=environment)
         host = HostReplay(proc, errors)
@@ -219,11 +220,44 @@ class TriggernometryHostTests(unittest.TestCase):
             self.assertEqual(host.calls, ["Circle", "Square"])
 
     def test_zelenia_bloom_resolves_state_and_delayed_followups(self):
-        with replay(PACKS / "paissa" / "zelenia-bloom.xml") as host:
+        self.check_zelenia_bloom(PACKS / "paissa" / "zelenia-bloom.xml")
+
+    def test_zelenia_bloom_waits_for_delayed_state_actions(self):
+        tree = ET.parse(PACKS / "paissa" / "zelenia-bloom.xml")
+        for name in ("0. Init", "1. MapEffect"):
+            for action in tree.findall(f'.//Trigger[@Name="{name}"]/Actions/Action'):
+                action.set("ExecutionDelayExpression", "750")
+        with tempfile.TemporaryDirectory() as temp:
+            pack = Path(temp) / "delayed-bloom.xml"
+            tree.write(pack, encoding="utf-8", xml_declaration=True)
+            self.check_zelenia_bloom(pack)
+
+    def wait_zelenia_state(self, host, expected, timeout=10):
+        deadline = time.monotonic() + timeout
+        last = None
+        while time.monotonic() < deadline:
+            # Unique replies stay visible through the engine's TTS repeat filter.
+            probe = time.monotonic_ns()
+            prefix = f"NYAA_REPLAY_STATE:{probe}:"
+            host.send(t="log", line=f"NYAA_REPLAY_PROBE {probe}")
+            last = host.call(timeout=max(.01, deadline - time.monotonic()))
+            self.assertTrue(last.startswith(prefix), last)
+            if last == prefix + expected:
+                return
+            time.sleep(.02)
+        self.fail(f"Zelenia state did not reach {expected!r}. Last reply: {last!r}")
+
+    def check_zelenia_bloom(self, pack):
+        with replay(pack, extra_packs=[PACKS / "zelenia-state-observer.xml"]) as host:
+            # The marker proves the asynchronous cleanup finished as well
+            # as the phase assignment before the map event arrives.
+            host.send(t="log", line="NYAA_REPLAY_PREPARE")
+            self.assertEqual(host.call(), "NYAA_REPLAY_PREPARED")
             host.log("20", "40001234", "Zelenia", "AA14", "Bloom", "E0000000", "", "4.0", "100", "100", "0", "0")
-            time.sleep(0.2)
+            self.wait_zelenia_state(host, "2::")
             host.log("257", "80000001", "01000040", "05", "00", "0000")
-            time.sleep(0.2)
+            self.wait_zelenia_state(host, "2::1")
+            host.calls.clear()
             host.log("20", "40001234", "Zelenia", "A9B8", "Out", "E0000000", "", "4.0", "100", "100", "0", "0")
             started = time.monotonic()
             self.assertEqual(host.call(), "southwest，Out")

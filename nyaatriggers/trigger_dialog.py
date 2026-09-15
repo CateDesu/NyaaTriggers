@@ -13,7 +13,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from nyaatriggers.trigger_engine import (Trigger, _HAVE_REGEX, _ID_IDX, _STATUS_TYPES,
-                            _regex_mod, _safe_search, _str_or, compile_user_regex)
+                            _regex_mod, _regex_resource_limit, _safe_search,
+                            _str_or, compile_user_regex)
 from nyaatriggers.locale_util import _, N_
 
 _SOUNDS_DIR = bundle_root() / "sounds"
@@ -41,9 +42,12 @@ _SEQ_LOG_TYPES = [("20", N_("20 - Cast")), ("21", N_("21 - Ability")),
 
 
 def _regex_syntax_error(pattern: str) -> bool:
+    # A resource refusal must not invoke the compiler again to explain it.
+    if _regex_resource_limit(pattern):
+        return False
     # compile_user_regex returns None both for a malformed pattern and for a
-    # compilable one the safety policy refused, the length cap or the ReDoS
-    # heuristic. A plain compile tells the two apart so the save refusal can
+    # compilable one the ReDoS heuristic refused. A plain compile tells the
+    # two apart so the save refusal can
     # say which one bit. Diagnose with the same engine compile_user_regex
     # uses, the regex module accepts syntax stdlib rejects like \p, and catch
     # broadly like the engine does: a deeply nested pattern raises

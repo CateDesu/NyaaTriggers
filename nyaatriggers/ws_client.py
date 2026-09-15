@@ -239,11 +239,15 @@ class WSClient(QObject):
         disarmed on a mid-instance start. Called when the engine comes up so it
         learns the current zone with no reconnect or zone change needed. No-op if
         nothing cached yet. The engine then gets state live once it is active."""
-        for key in ("changeprimaryplayer", "changezone", "partychanged", "incombat"):
-            msg = self._state_cache.get(key)
-            if msg:
-                self.raw_message.emit(msg)
+        for msg in self.state_snapshot():
+            self.raw_message.emit(msg)
         self._request_combatants()
+
+    def state_snapshot(self) -> tuple[str, ...]:
+        """Current world state for a new engine or pull recording."""
+        return tuple(self._state_cache[key] for key in
+                     ("changeprimaryplayer", "changezone", "partychanged", "incombat")
+                     if key in self._state_cache)
 
     def _on_error(self, _err) -> None:
         if self._ws.isValid():

@@ -110,8 +110,14 @@ class TimelineEngine(QObject):
 
     # ── Public API ────────────────────────────────────────────────────────
 
-    def load(self, entries: list["TimelineEntry"]) -> None:
-        self.reset()
+    def load(self, entries: list["TimelineEntry"], *, preserve_time: bool = False) -> None:
+        if preserve_time and self._active:
+            now = self.current_time()
+            spoken = [self._entries[i] for i in self._fired]
+            self._fired = {i for i, entry in enumerate(entries)
+                           if entry.time <= now or entry in spoken}
+        else:
+            self.reset()
         self._entries = entries
         # An entry whose type is missing from _SYNC_TYPES never syncs. Name
         # them once at load instead of leaving a silently drifting clock.

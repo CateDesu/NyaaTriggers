@@ -103,8 +103,9 @@ class TimelineTabMixin:
         else:
             self._plugin_link.send_clear()
 
-    def _load_timeline_for_zone(self, zone: str) -> None:
-        self._timeline.reset()
+    def _load_timeline_for_zone(self, zone: str, *, preserve_time: bool = False) -> None:
+        if not preserve_time:
+            self._timeline.reset()
         fight = ""
         from_cactbot = False
         try:
@@ -155,9 +156,16 @@ class TimelineTabMixin:
                 # first line, the anchored entry regex and hideall both miss it.
                 text = path.read_text(encoding="utf-8-sig")
                 entries = timeline_parser.parse(text)
-                self._timeline.load(entries)
+                if preserve_time:
+                    if not entries:
+                        raise ValueError("refreshed timeline has no entries")
+                    self._timeline.load(entries, preserve_time=True)
+                else:
+                    self._timeline.load(entries)
                 self._timeline_reset_on_combat_end = "# reset-on-combat-end" in text
             else:
+                if preserve_time:
+                    raise ValueError("refreshed timeline is missing")
                 self._timeline.clear()
                 self._timeline_reset_on_combat_end = False
                 from_cactbot = False
@@ -168,6 +176,8 @@ class TimelineTabMixin:
             # other failure path around here leaves a trace, and the retry
             # below would otherwise fail silently every 30 s forever.
             ac.log_drop("timeline", f"{zone!r} load failed: {exc!r}")
+            if preserve_time:
+                return
             self._timeline.clear()
             self._timeline_reset_on_combat_end = False
             from_cactbot = False
@@ -244,4 +254,4 @@ class TimelineTabMixin:
         if not self._cactbot_mode:
             return
         if self._timeline_fight_tag(self._match_zone) == fight:
-            self._load_timeline_for_zone(self._match_zone)
+            self._load_timeline_for_zone(self._match_zone, preserve_time=True)

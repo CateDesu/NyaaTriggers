@@ -8,9 +8,9 @@ via the triggevent_record_pulls setting. One .jsonl per pull plus a
 Segmentation rides the parsed log_line signal: a pull starts on the first
 ability line from a non-player source and ends on a wipe, a combat end, a
 zone change, a feed drop, or the recorder switching off. Raw messages are
-buffered for a few seconds before the start line so the capture also holds
-the pre-pull state the live engine had seen. Captures are bounded in size
-and duration, and only the newest few are kept per folder. Total storage
+buffered for a few seconds before the start line. Each capture starts with
+the current player, zone, party and combat state from WSClient. Captures are
+bounded in size and duration, and only the newest few are kept per folder. Total storage
 still grows as more fights and zones are recorded.
 
 All slots run on the GUI thread, the same one the WSClient signals fire on,
@@ -53,6 +53,7 @@ _MAX_PULL_BYTES = 64 << 20
 # Newest captures kept per folder. Replay wants recent pulls, not every pull
 # since the opt-in was flipped.
 _KEEP_CAPTURES = 20
+_STATE_TYPES = frozenset({"changeprimaryplayer", "changezone", "partychanged", "incombat"})
 
 
 def _owner_only(path, flags):
@@ -71,7 +72,7 @@ def _sanitize(name: str) -> str:
 class PullCapture(QObject):
     """Writes one raw-feed .jsonl per pull, gated by set_recording."""
 
-    def __init__(self, log_dir: Path, parent=None) -> None:
+    def __init__(self, log_dir: Path, parent=None, *, state_snapshot=None) -> None:
         super().__init__(parent)
         self._log_dir = Path(log_dir)
         self._recording = False
@@ -87,6 +88,7 @@ class PullCapture(QObject):
         self._fight = ""
         self._zone = ""
         self._warned_write = False
+        self._state_snapshot = state_snapshot or (lambda: ())
         # Returns (fight tag, zone name) for the file names. Assigned by the
         # caller since the metadata lives on the main window.
         self.context = lambda: ("", "")
@@ -153,14 +155,18 @@ class PullCapture(QObject):
     def on_zone_changed(self, zone_id: int, name: str) -> None:
         if self._in_pull:
             self._finalize("reset")
+        self._buffer.clear()
+        self._buffer_bytes = 0
 
     @pyqtSlot(bool, str)
     def on_status_changed(self, connected: bool, _msg: str) -> None:
         """Feed status. A drop mid-pull closes the capture with its own
         outcome so the reconnect replay burst cannot mislabel it a reset or
         merge the next pull into the stale file."""
-        if not connected and self._in_pull:
+        if not connected:
             self._finalize("feed-lost")
+            self._buffer.clear()
+            self._buffer_bytes = 0
 
     def close(self) -> None:
         """Finalize any open pull, called from closeEvent."""
@@ -189,7 +195,17 @@ class PullCapture(QObject):
         self._bytes = 0
         self._started = time.monotonic()
         self._started_wall = datetime.now().isoformat(timespec="seconds")
+        state = self._state_snapshot()
+        for line in state:
+            self._write(line.replace("\r", " ").replace("\n", " "))
         for _ts, line in self._buffer:
+            if state:
+                try:
+                    data = json.loads(line)
+                except (ValueError, RecursionError):
+                    data = None
+                if isinstance(data, dict) and str(data.get("type", "")).lower() in _STATE_TYPES:
+                    continue
             self._write(line)
         self._buffer.clear()
         self._buffer_bytes = 0

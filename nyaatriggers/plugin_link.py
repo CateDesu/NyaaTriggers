@@ -40,6 +40,7 @@ import math
 import queue
 import socket
 import threading
+import time
 
 try:
     from PyQt6.QtCore import QObject, pyqtSignal
@@ -92,10 +93,10 @@ HELLO_TIMEOUT_S = 5.0
 RECONNECT_BASE_S = 5.0
 RECONNECT_MAX_S = 60.0
 
-# Protocol-level liveness ping after this much send-idle time. Pongs are
-# read and ignored. The ping exists so a half-dead link is noticed while no
-# fight traffic flows.
+# Probe replies are required even when fight traffic keeps sends busy.
+# Keep the existing setting name for callers that tune the interval.
 IDLE_PING_S = 15.0
+PONG_TIMEOUT_S = 10.0
 
 # A healthy loopback peer drains a frame instantly, so a send that takes this
 # long means the plugin stopped reading its socket. websockets' send has no
@@ -543,19 +544,23 @@ class PluginLink(QObject):
                 log_drop("plugin-drop", "alert re-queue overflowed; callout dropped")
 
     @staticmethod
-    def _drain_inbound(ws, stopping: threading.Event) -> None:
-        """Swallow whatever the plugin sent, pongs answer our pings. The
-        content carries nothing the app acts on. Reading is what notices a
-        plugin-side close promptly instead of at the next send. The sweep is
-        bounded per pass and honors stopping, so a flooding peer cannot park
-        the worker here while the outbox waits."""
+    def _drain_inbound(ws, stopping: threading.Event) -> bool:
+        """Read a bounded batch and report whether a pong arrived."""
+        pong = False
         for _ in range(INBOUND_DRAIN_BATCH):
             if stopping.is_set():
-                return
+                break
             try:
-                ws.recv(timeout=0.05)
+                raw = ws.recv(timeout=0)
             except TimeoutError:
-                return
+                break
+            try:
+                msg = json.loads(raw)
+            except (ValueError, RecursionError):
+                continue
+            if isinstance(msg, dict) and msg.get("ev") == "pong":
+                pong = True
+        return pong
 
     @staticmethod
     def _kill_socket(ws, done: threading.Event) -> None:
@@ -599,7 +604,8 @@ class PluginLink(QObject):
         ws = None
         dialed = 0   # port the live socket connected to, 0 while down
         delay = RECONNECT_BASE_S
-        idle = 0.0
+        next_ping = 0.0
+        pong_deadline = None
         try:
             while not stopping.is_set():
                 if not self.is_enabled():
@@ -641,7 +647,8 @@ class PluginLink(QObject):
                     if stopping.is_set():
                         break
                     delay = RECONNECT_BASE_S   # backoff resets after a good connect
-                    idle = 0.0
+                    next_ping = time.monotonic() + self._idle_ping_s
+                    pong_deadline = None
                     # The hello wait can last seconds. Ticks and schedules
                     # queued in that window are as stale as the ones dropped
                     # before connect, but alerts are fire-once and get
@@ -665,7 +672,8 @@ class PluginLink(QObject):
                     continue
 
                 try:
-                    msg = q.get(timeout=1.0)
+                    due = pong_deadline if pong_deadline is not None else next_ping
+                    msg = q.get(timeout=max(0.0, min(1.0, due - time.monotonic())))
                 except queue.Empty:
                     msg = None
                 if stopping.is_set():
@@ -674,15 +682,20 @@ class PluginLink(QObject):
                     continue
 
                 try:
+                    # Read replies even while fight traffic keeps the outbox busy.
+                    pong = self._drain_inbound(ws, stopping)
+                    now = time.monotonic()
+                    if pong and pong_deadline is not None:
+                        pong_deadline = None
+                        next_ping = now + self._idle_ping_s
+                    if pong_deadline is not None and now >= pong_deadline:
+                        raise TimeoutError("game plugin did not answer its ping")
                     if msg is not None:
                         self._send(ws, msg)
-                        idle = 0.0
-                    else:
-                        self._drain_inbound(ws, stopping)
-                        idle += 1.0
-                        if idle >= self._idle_ping_s:
-                            self._send(ws, ping_frame())
-                            idle = 0.0
+                        msg = None
+                    if pong_deadline is None and time.monotonic() >= next_ping:
+                        self._send(ws, ping_frame())
+                        pong_deadline = time.monotonic() + PONG_TIMEOUT_S
                 except Exception as exc:  # never let one bad send kill the worker
                     log_drop("plugin-link", f"connection lost: {exc}")
                     # An alert whose send failed would vanish with the socket,

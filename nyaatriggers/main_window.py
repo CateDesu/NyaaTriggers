@@ -376,7 +376,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         # Per-pull raw feed capture for engine replay, opt-in from Settings.
         # Rides the same WS signals as the sidecar tee but writes pulls to
         # pull_logs/ so tools/replay_pull.py can run them through the jar.
-        self._pull_capture = PullCapture(_DATA_DIR / "pull_logs", self)
+        self._pull_capture = PullCapture(_DATA_DIR / "pull_logs", self,
+                                         state_snapshot=self._ws.state_snapshot)
         self._pull_capture.context = lambda: (self._current_fight_tag, self._current_zone)
         self._ws.log_line.connect(self._pull_capture.on_log_line)
         self._ws.raw_message.connect(self._pull_capture.on_raw_message)

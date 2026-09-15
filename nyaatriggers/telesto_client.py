@@ -24,7 +24,9 @@ import ipaddress
 import json
 import queue
 import random
+import socket
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -208,7 +210,7 @@ class TelestoClient(QObject):
         # actor id as int -> 1-based party slot <N>, rebuilt per GetPartyMembers
         # response. Empty until the first list, mark_actor fails closed.
         self._slot_by_actor: "dict[int, int]" = {}
-        self._direct_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self._request_context = threading.local()
 
     # -- configuration ------------------------------------------------------
     def configure(self, uri: "str | None" = None, enabled: "bool | None" = None,
@@ -382,6 +384,7 @@ class TelestoClient(QObject):
             return force or self._enabled and epoch == self._command_epoch
 
     def _run(self, q: "queue.Queue", stopping: "threading.Event") -> None:
+        self._request_context.stopping = stopping
         while not stopping.is_set():
             try:
                 # Poll with a timeout, like plugin_link, so the worker re-checks
@@ -434,13 +437,9 @@ class TelestoClient(QObject):
             headers={"Content-Type": "application/json",
                      "User-Agent": "NyaaTriggers"})
         try:
-            # Local plugin requests must stay local even with a desktop proxy.
-            open_url = self._direct_opener.open if _is_loopback_uri(uri) else urllib.request.urlopen
-            with open_url(req, timeout=timeout) as resp:
-                code = resp.getcode()
-                # Cap the body. A buggy/hostile loopback peer must not be able to
-                # OOM the app. 1 MiB dwarfs any real GetPartyMembers response.
-                body = resp.read(1 << 20)
+            code, body = self._read_response(req, timeout)
+            if getattr(self._request_context, "stopping", self._stopping).is_set():
+                return
             self._report_reachable(True, f"Connected (HTTP {code})")
             if msg.get("id") == PARTY_UPDATE_ID:
                 self._update_party_slots(body)
@@ -451,14 +450,106 @@ class TelestoClient(QObject):
             # "Telesto gone".
             # The error is a response object, close it before moving on.
             exc.close()
+            if getattr(self._request_context, "stopping", self._stopping).is_set():
+                return
             self._report_reachable(True, f"Telesto error: HTTP {exc.code}", degraded=True)
             log_drop("telesto-http", f"HTTP {exc.code} for {msg.get('type')}")
         except (urllib.error.URLError, OSError, ValueError,
                 http.client.HTTPException) as exc:
             # Connection refused, timeout, bad URI, or a peer that is not HTTP
             # at all. Telesto absent, not fatal.
+            if getattr(self._request_context, "stopping", self._stopping).is_set():
+                return
             self._report_reachable(False, f"Telesto unreachable: {exc}")
             log_drop("telesto-http", f"unreachable: {exc}")
+
+    def _read_response(self, request, timeout: float) -> tuple[int, bytes]:
+        """Abort a stalled request even when its peer keeps sending bytes."""
+        stopping = getattr(self._request_context, "stopping", self._stopping)
+        done = threading.Event()
+        cancelled = threading.Event()
+        connections = []
+        responses = []
+        deadline = time.monotonic() + timeout
+
+        def check_cancelled():
+            if stopping.is_set() or cancelled.is_set() or time.monotonic() >= deadline:
+                raise TimeoutError("Telesto request cancelled" if stopping.is_set()
+                                   else "Telesto request deadline exceeded")
+
+        def connection_type(base):
+            class Connection(base):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    connections.append(self)
+
+                def connect(self):
+                    check_cancelled()
+                    super().connect()
+                    try:
+                        check_cancelled()
+                    except TimeoutError:
+                        self.close()
+                        raise
+
+                def send(self, data):
+                    check_cancelled()
+                    super().send(data)
+
+                def getresponse(self):
+                    response = super().getresponse()
+                    # Redirect handlers can read the body before open returns.
+                    responses.append(response)
+                    return response
+            return Connection
+
+        http_connection = connection_type(http.client.HTTPConnection)
+        https_connection = connection_type(http.client.HTTPSConnection)
+
+        class HttpHandler(urllib.request.HTTPHandler):
+            def http_open(self, req):
+                return self.do_open(http_connection, req)
+
+        class HttpsHandler(urllib.request.HTTPSHandler):
+            def https_open(self, req):
+                return self.do_open(https_connection, req, context=self._context)
+
+        handlers = [HttpHandler(), HttpsHandler()]
+        if _is_loopback_uri(request.full_url):
+            handlers.append(urllib.request.ProxyHandler({}))
+        opener = urllib.request.build_opener(*handlers)
+
+        def watch():
+            while not done.wait(0.02):
+                if not stopping.is_set() and time.monotonic() < deadline:
+                    continue
+                cancelled.set()
+                sockets = [sock for conn in list(connections) if (sock := conn.sock) is not None]
+                for response in list(responses):
+                    try:
+                        sockets.append(response.fp.raw._sock)
+                    except AttributeError:
+                        pass
+                for sock in sockets:
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+
+        watcher = threading.Thread(target=watch, daemon=True, name="TelestoDeadline")
+        watcher.start()
+        try:
+            check_cancelled()
+            with opener.open(request, timeout=timeout) as response:
+                check_cancelled()
+                body = response.read((1 << 20) + 1)
+                check_cancelled()
+                if len(body) > 1 << 20:
+                    raise ValueError("Telesto response too large")
+                return response.getcode(), body
+        finally:
+            done.set()
+            watcher.join()
 
     def _update_party_slots(self, body: bytes) -> None:
         """Rebuild the actor-id -> slot map from a GetPartyMembers response.

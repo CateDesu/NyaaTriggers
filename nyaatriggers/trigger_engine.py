@@ -83,6 +83,30 @@ _COUNT_IDX: dict[str, int] = {"26": 9, "30": 9}
 # GUI thread mid-combat. Returns None for anything unusable. Callers treat
 # that as never-matching.
 _MAX_PATTERN_LEN = 512
+_MAX_REPEAT_COST = 8192
+
+
+def _regex_resource_limit(pattern: str) -> bool:
+    """Bound repeat expansion before the regex compiler allocates it."""
+    if len(pattern) > _MAX_PATTERN_LEN:
+        return True
+    # Normalize each repeat separately so a literal hash earlier in the
+    # pattern cannot hide it. Multiplying separate repeats is conservative.
+    cost = max(1, len(pattern))
+    for index, char in enumerate(pattern):
+        if char != "{":
+            continue
+        source = pattern[index:]
+        compact = re.sub(r"\s+|#[^\n]*(?:\n|$)", "", source)
+        bounds = [1]
+        for spelling in (source, compact):
+            match = re.match(r"\{([0-9]*)(?:,([0-9]*))?\}", spelling)
+            if match:
+                bounds.extend(int(value or 0) for value in match.groups())
+        cost *= max(bounds)
+        if cost > _MAX_REPEAT_COST:
+            return True
+    return False
 
 
 def _looks_catastrophic(pattern: str) -> bool:
@@ -167,7 +191,7 @@ def _has_nested_unbounded(pattern: str) -> bool:
 
 @functools.lru_cache(maxsize=4096)
 def compile_user_regex(pattern: str, flags: int = 0):
-    if len(pattern) > _MAX_PATTERN_LEN or _looks_catastrophic(pattern):
+    if _regex_resource_limit(pattern) or _looks_catastrophic(pattern):
         return None
     if not _HAVE_REGEX:
         # No bounded engine, no user regex. stdlib re has no match timeout, so
