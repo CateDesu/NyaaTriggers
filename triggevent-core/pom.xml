@@ -27,6 +27,11 @@
     <dependencies>
         <dependency>
             <groupId>gg.xp</groupId>
+            <artifactId>actimport</artifactId>
+            <version>${tv.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>gg.xp</groupId>
             <artifactId>xivsupport</artifactId>
             <version>${tv.version}</version>
         </dependency>

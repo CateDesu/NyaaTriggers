@@ -125,9 +125,9 @@ NyaaTriggers auto-discovers the jar at `triggevent-core/target/triggevent-core.j
 
 ---
 
-## Engine source: the CateDesu fork and the guards branch
+## Engine source: the CateDesu fork and the main branch
 
-Since 2026-09 the engine builds from `CateDesu/event-trigger`, branch `guards`,
+Since 2026-09 the engine builds from `CateDesu/event-trigger`, branch `main`,
 not directly from upstream. The guards that used to be `patches/*.patch` now
 live there as plain commits. `build.sh` pins a commit on that branch (`ET_REF`),
 and `update_engine` fast-forwards the local clone to the branch head and builds
@@ -139,14 +139,13 @@ Syncing upstream is a deliberate manual ritual, never automatic:
 cd triggevent-core/event-trigger
 git remote add upstream https://github.com/xpdota/event-trigger.git   # once
 git fetch upstream master
-git merge upstream/master        # into guards, resolve conflicts, test
-git push fork guards
-# then bump ET_REF in build.sh to the new guards tip and rebuild
+git merge upstream/master        # into main, resolve conflicts, test
+git push fork main
+# then bump ET_REF in build.sh to the new main tip and rebuild
 ```
 
-Use merge, not rebase, and never force-push guards. The fork runs a weekly
-"Upstream drift" workflow that opens an issue when guards falls behind, so
-stagnation is loud instead of silent.
+Use merge, not rebase, and never force-push main. Update the engine commit
+in both build scripts after testing the merge.
 
 ---
 
@@ -178,7 +177,7 @@ engine since v0.7/v0.8 and real callouts fire live in-game (see "Validation find
 - [x] **RESOLVED (v0.7/v0.8+): real callouts fire live.** Triggevent ships as a working
       primary engine; the offline-replay 0-callout below was a near-empty test config, not
       an engine bug (see "Validation findings")
-- [ ] v2: combatant-poll relay for live position/HP triggers - **NOT implemented** (see Limitations)
+- [x] Combatant polling and engine refresh requests share the existing IINACT connection.
 
 ## Validation findings - the 0-callout (2026-06-14)
 
@@ -248,19 +247,33 @@ still works, but any Triggevent overlays the user has enabled **will show on scr
    3.x annotations the engine was compiled against, throwing `NoSuchFieldError` at boot and
    failing ~13 components. Reintroducing any explicit pin re-triggers that startup crash.
 
-## Limitations (v1 - current) vs. v2 (NOT implemented)
+## Automatic pull recovery
 
-**v1 (what ships now):** one-way tee. NyaaTriggers forwards the IINACT WS stream to the sidecar;
-the sidecar runs the engine and emits callouts. This covers triggers driven by the **log + event
-stream**: ability casts, ability use, status gain/lose, headmarkers, tethers, plus
-job/zone/party state (reconstructed from log lines 01/02/03/11/12).
+On startup or reconnection, the program matches its first live log line against the
+local IINACT network log. It restores actors at the last wipe or zone entry and
+silently replays the current pull before continuing with buffered live events.
+This restores trigger counters, buffs and pending waits without fight-specific
+recovery rules. Historical callouts and engine automarks are suppressed. Delayed
+events use the replay clock and continue on the live clock after the handoff.
 
-**v2 (planned, NOT built):** a **bidirectional combatant-poll relay**. Some triggers read live
-**combatant positions / current HP%**, which come from OverlayPlugin's combatant-poll WebSocket
-(Triggevent issues `RefreshCombatantsRequest`), data the one-way tee does not carry. v2 would let
-the sidecar request a poll → NyaaTriggers issues the WS call → the response is teed back. Until
-then, position/HP-dependent triggers are degraded. **This is a separate concern from the
-0-callout above** (which is trigger activation, affecting all triggers, not just position/HP ones).
+The existing IINACT log folder is found automatically. Recovery needs a matching
+local log containing the pull boundary and player. It cannot reconstruct events
+that IINACT never recorded, or read logs from a remote ACT machine. If history is
+unavailable, the engine receives current world state and the buffered live feed,
+and the reason is written to `triggevent.log`. This does not repair unrelated bugs
+inside individual triggers or custom scripts that use their own timers.
 
-- If NyaaTriggers connects mid-session, player/zone/job/party stay unknown until the next
-  01/02/03/11/12 line (or the corresponding WS state message) arrives.
+Combatant snapshots use the response tags expected by Triggevent. Engine requests
+for current positions and HP are relayed to IINACT, and actor spawn and removal
+lines update state immediately. Repeated announcements of the same zone preserve
+buffs and ongoing sequences.
+
+Recovery commands are local stdin controls. WebSocket frames cannot send them.
+An older engine jar without recovery support receives only the live feed and
+current state.
+
+Verify the shared engine behavior after building:
+
+```bash
+python3 test_recovery.py
+```

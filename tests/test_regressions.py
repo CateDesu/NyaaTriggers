@@ -2007,7 +2007,7 @@ def test_build_callouts_ja_write_is_atomic():
 # ═════════════════════════════════════════════════════════════════════════════
 # Triggevent engine update: the jar is gated on a stamp of the HEAD it was
 # built from, not the git behind count alone. A failed or timed-out build
-# leaves HEAD at origin/guards with the old jar in place, and behind==0 used
+# leaves HEAD at origin/main with the old jar in place, and behind==0 used
 # to report the engine current forever after.
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -2144,7 +2144,7 @@ def test_te_update_stamp_gate():
     # clean tree.
     ok, msg, builds, stamp_text, _r6, ops = run_once("3", "ddd444", 0, None, dirty=True)
     clean = ("checkout", "--", ".")
-    merge = ("merge", "--ff-only", "origin/guards")
+    merge = ("merge", "--ff-only", "origin/main")
     check("a dirty tree is cleaned before the merge",
           clean in ops and merge in ops and ops.index(clean) < ops.index(merge))
     check("a cleaned clone updates and stamps", ok and stamp_text == "ddd444\n")

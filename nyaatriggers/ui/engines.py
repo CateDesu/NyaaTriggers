@@ -33,6 +33,7 @@ from nyaatriggers.cactbot_reader import CactbotReader, DEFAULT_CACTBOT_URL
 from nyaatriggers.triggevent_bridge import (
     TriggeventBridge, _log as _te_log, has_java as _te_has_java, has_jar as _te_has_jar,
 )
+from nyaatriggers.triggevent_recovery import TriggeventRecovery
 try:
     from nyaatriggers.triggernometry_bridge import TriggernometryBridge, has_packs as _tn_has_packs, \
         packs_dir as _tn_packs_dir, _log as _tn_log
@@ -254,15 +255,17 @@ class EnginesMixin:
             self._triggevent.status.connect(
                 lambda active, msg, gen: self._on_engine_sidecar_status("triggevent", active, msg, gen))
             self._triggevent.chain_failure.connect(self._on_engine_chain_failure)
-            self._ws.raw_message.connect(self._triggevent.feed)   # the tee
-            # the sidecar boots ~10s after we connect, so it misses the zone/party
-            # state IINACT sends once on subscribe. When it signals ready, replay
-            # the cached state so callouts arm even when the app got restarted
-            # mid-instance, no reconnect or zone change needed.
-            self._triggevent.ready.connect(self._ws.replay_state)
+            self._triggevent_recovery = TriggeventRecovery(
+                self._triggevent, self._ws, self._find_iinact_log_dir, self)
+            self._triggevent.combatants_request.connect(self._on_triggevent_combatants_request)
+            self._ws.set_engine_combatant_polling(True)
             self._apply_engine_overrides("triggevent")            # seed override layer from settings
             self._triggevent.set_disabled(self._triggevent_disabled)
         return self._triggevent
+
+    def _on_triggevent_combatants_request(self, ids, generation):
+        if not _stale_gen(self._triggevent, generation):
+            self._ws.request_engine_combatants(ids)
 
     def _triggevent_engine_needed(self) -> bool:
         """True whenever the engine is available. The sidecar is callout

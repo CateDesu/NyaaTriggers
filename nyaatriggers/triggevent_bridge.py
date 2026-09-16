@@ -221,10 +221,10 @@ _CORE_DIR     = _BASE / "triggevent-core"
 _ET_DIR       = _CORE_DIR / "event-trigger"
 _BUILD_SCRIPT = _CORE_DIR / ("build.bat" if os.name == "nt" else "build.sh")
 # The engine is our fork of xpdota/event-trigger. Engine guards live as commits
-# on its guards branch, and upstream master only enters through a deliberate
+# on its main branch, and upstream master only enters through a deliberate
 # merge into that branch.
 _ET_REPO_URL  = "https://github.com/CateDesu/event-trigger.git"
-_ET_BRANCH    = "guards"
+_ET_BRANCH    = "main"
 # Records the event-trigger HEAD the jar was built from. update_engine trusts
 # it over a bare behind count, which a failed build leaves pointing at code
 # the jar does not contain. Written only after a successful build.
@@ -301,7 +301,7 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
 
     try:
         # Point the clone at the fork. Installs from before the fork cloned
-        # upstream directly, and a fetch of the guards branch against upstream
+        # upstream directly, and a fetch of the main branch against upstream
         # would just fail. A clone with no origin at all gets one added, same
         # as the build scripts do, or the fetch below fails forever.
         u = _git("remote", "get-url", "origin")
@@ -326,7 +326,7 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
         behind = r.stdout.strip()
         if not behind.isdigit() or int(behind) == 0:
             # behind==0 says the clone caught up, it says nothing about the
-            # jar. A failed or timed-out build leaves HEAD at origin/guards
+            # jar. A failed or timed-out build leaves HEAD at origin/main
             # with the old jar in place, so behind alone would report the
             # engine current forever. Trust only the stamp a successful build
             # writes. A missing or unreadable stamp means rebuild.
@@ -340,7 +340,7 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
         _git("checkout", "--", ".")
         if _git("merge", "--ff-only", f"origin/{_ET_BRANCH}").returncode != 0:
             return (False, "Triggevent pull skipped: local event-trigger clone has diverged or has uncommitted changes")
-        # The stamp vouches the jar was built from pristine origin/guards. If
+        # The stamp vouches the jar was built from pristine origin/main. If
         # anything is still dirty after the clean, refuse rather than compile
         # uncommitted code into a jar the stamp then certifies as clean HEAD.
         d = _git("status", "--porcelain")
@@ -532,12 +532,14 @@ class TriggeventBridge(QObject):
     phrase_seen = pyqtSignal(str)        # a callout phrase observed, for the override UI
     inventory   = pyqtSignal(str)        # one-shot JSON [{id,name,fight,group,text}] of all engine callouts
     telesto     = pyqtSignal(str, int)   # Telesto automark connection status, "good"|"bad"|"unknown", generation
-    ready       = pyqtSignal()           # sidecar is up and reading stdin, time to replay world state
+    ready       = pyqtSignal(int)        # sidecar is reading stdin, generation
     chain_failure = pyqtSignal(str, int)  # an engine chain died, the "Error in sequential trigger" line, generation
+    combatants_request = pyqtSignal(object, int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._proc: subprocess.Popen | None = None
+        self._recovery_gen = -1
         self._reader: threading.Thread | None = None
         self._errpump: threading.Thread | None = None
         self._writer: threading.Thread | None = None
@@ -910,6 +912,28 @@ class TriggeventBridge(QObject):
             except (queue.Empty, queue.Full):
                 pass
 
+    def recover(self, frames, timestamp: str) -> bool:
+        """Queue a silent replay as one bounded item before accepting live events."""
+        if not self._active or not self.supports_recovery():
+            return False
+        lines = [json.dumps({"nyaa_cmd": "recover_begin", "time": timestamp})]
+        for raw in frames:
+            try:
+                data = json.loads(raw)
+            except (ValueError, TypeError, RecursionError):
+                continue
+            if isinstance(data, dict) and "nyaa_cmd" not in data:
+                lines.append(raw.replace("\r", " ").replace("\n", " "))
+        lines.append('{"nyaa_cmd":"recover_end"}')
+        try:
+            self._wq.put_nowait("\n".join(lines))
+        except queue.Full:
+            return False
+        return True
+
+    def supports_recovery(self) -> bool:
+        return self._active and self._recovery_gen == self._gen
+
     # ------------------------------------------------------------------
     def _write_loop(self, proc: subprocess.Popen, wq: queue.Queue) -> None:
         if proc.stdin is None:
@@ -994,8 +1018,13 @@ class TriggeventBridge(QObject):
             # Printed once the sidecar starts reading stdin. That's when a replayed
             # zone/party actually lands, so tell the app to send the world state.
             # Same generation gate, a dead proc's late boot line must not fire it.
-            if "reading WS messages on stdin" in line and self._gen_live(gen):
-                self.ready.emit()
+            if "reading WS messages on stdin" in line:
+                with self._state_lock:
+                    if not self._gen_live(gen):
+                        continue
+                    if "recovery=1" in line:
+                        self._recovery_gen = gen
+                self.ready.emit(gen)
 
     def _dispatch(self, msg: dict, seq_state: "dict | None" = None,
                   gen: "int | None" = None) -> None:
@@ -1061,6 +1090,11 @@ class TriggeventBridge(QObject):
                 return
             active = bool(msg.get("active", self._active))
             self.status.emit(active, str(msg.get("message", "")), gen)
+        elif kind == "combatants_request":
+            ids = msg.get("ids")
+            if self._gen_live(gen) and isinstance(ids, list) and len(ids) <= 1000:
+                if all(type(actor) is int and 0 < actor <= 0xFFFFFFFF for actor in ids):
+                    self.combatants_request.emit(ids, gen)
         elif kind == "inventory":
             triggers = msg.get("triggers")
             if isinstance(triggers, list):

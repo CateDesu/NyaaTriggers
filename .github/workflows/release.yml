@@ -211,6 +211,11 @@ jobs:
       - name: Build triggevent-core.jar
         run: bash triggevent-core/build.sh
 
+      - name: Verify engine recovery
+        run: |
+          sudo apt-get update && sudo apt-get install -y xvfb
+          python3 triggevent-core/test_recovery.py
+
       - name: Upload sidecar jar
         uses: actions/upload-artifact@v4
         with:

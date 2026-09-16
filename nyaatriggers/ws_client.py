@@ -79,13 +79,18 @@ class WSClient(QObject):
         self._reconnect_timer.timeout.connect(self._open)
         self._reconnect_delay = 5000    # ms, doubled per retry up to 60 s
 
-        # getCombatants carries live positions/HP the LogLine/CombatData feeds
-        # do not. Off by default. main_window enables it only while the
-        # Triggernometry sidecar is active, since it needs ${_me}/position.
+        # Each engine keeps polling enabled while it needs live combatants.
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(600)
         self._poll_timer.timeout.connect(self._request_combatants)
         self._poll_enabled = False
+        self._engine_poll_enabled = False
+        self._refresh_ids: set[int] = set()
+        self._refresh_all = False
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(20)
+        self._refresh_timer.timeout.connect(self._flush_combatant_requests)
 
     # ------------------------------------------------------------------
     def connect_to(self, url: str) -> None:
@@ -153,11 +158,15 @@ class WSClient(QObject):
         self._heartbeat_timer.start(_PING_INTERVAL_MS)
         self.status_changed.emit(True, "Connected")
         self._ws.sendTextMessage(_SUBSCRIBE)
-        if self._poll_enabled:
+        if self._poll_enabled or self._engine_poll_enabled:
+            self._request_combatants()
             self._poll_timer.start()
 
     def _on_disconnected(self) -> None:
         self._poll_timer.stop()
+        self._refresh_timer.stop()
+        self._refresh_ids.clear()
+        self._refresh_all = False
         self._stop_heartbeat()
         # Player/party identity may change while we're down. Both are relearned
         # from the ChangePrimaryPlayer/PartyChanged burst IINACT sends on the
@@ -215,15 +224,41 @@ class WSClient(QObject):
     def set_combatant_polling(self, enabled: bool) -> None:
         """Toggle the getCombatants poll. Safe to call anytime. Only polls while connected."""
         self._poll_enabled = bool(enabled)
-        if self._poll_enabled and self._ws.isValid():
+        self._update_combatant_polling()
+
+    def set_engine_combatant_polling(self, enabled: bool) -> None:
+        self._engine_poll_enabled = bool(enabled)
+        self._update_combatant_polling()
+
+    def _update_combatant_polling(self) -> None:
+        enabled = self._poll_enabled or self._engine_poll_enabled
+        if enabled and self._ws.isValid():
             self._request_combatants()   # one immediately so ${_me} populates fast
             self._poll_timer.start()
-        elif not self._poll_enabled:
+        elif not enabled:
             self._poll_timer.stop()
 
     def _request_combatants(self) -> None:
         if self._ws.isValid():
-            self._ws.sendTextMessage(json.dumps({"call": "getCombatants"}))
+            self._ws.sendTextMessage(json.dumps({"call": "getCombatants", "rseq": "allCombatants"}))
+
+    def request_engine_combatants(self, ids) -> None:
+        if not ids:
+            self._refresh_all = True
+        else:
+            self._refresh_ids.update(ids)
+        if not self._refresh_timer.isActive():
+            self._refresh_timer.start()
+
+    def _flush_combatant_requests(self) -> None:
+        if self._ws.isValid():
+            if self._refresh_all:
+                self._request_combatants()
+            elif self._refresh_ids:
+                self._ws.sendTextMessage(json.dumps({"call": "getCombatants",
+                    "rseq": "specificCombatants", "ids": sorted(self._refresh_ids)}))
+        self._refresh_ids.clear()
+        self._refresh_all = False
 
     def request_combatants_once(self) -> None:
         """One-off getCombatants regardless of the polling toggle. The reply

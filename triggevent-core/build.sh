@@ -10,10 +10,10 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ET_DIR="${EVENT_TRIGGER_DIR:-$HERE/event-trigger}"
 ET_REPO="${EVENT_TRIGGER_REPO:-https://github.com/CateDesu/event-trigger.git}"
-# Pinned to a commit on the fork's guards branch, which carries the engine
+# Pinned to a commit on the fork's main branch, which carries the engine
 # guards as real commits. Bump this after a deliberate upstream sync or when
 # new guard commits land.
-ET_REF="${EVENT_TRIGGER_REF:-2491d56d3ed66c79085a78fd1090dc0f3bbb3409}"
+ET_REF="${EVENT_TRIGGER_REF:-f18f0b6224d7e06efb33c6d19b4d9acbe56e028d}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -63,7 +63,7 @@ echo ">> installing Triggevent Engine modules to local Maven repo"
 #    `triggers` is a pom aggregator. Its trigger code is in triggers-* sub-modules,
 #    so list those explicitly. `:artifactId` selectors resolve regardless of nesting.
 ( cd "$ET_DIR" && mvn -q -Dmaven.test.skip=true \
-    -pl :xivsupport,:trigger-support,:triggers-general,:triggers-ew,:triggers-sb,:triggers-dt,:titan-jails,:easytriggers,:timelines,:telesto-core -am \
+    -pl :actimport,:xivsupport,:trigger-support,:triggers-general,:triggers-ew,:triggers-sb,:triggers-dt,:titan-jails,:easytriggers,:timelines,:telesto-core -am \
     clean install )
 
 # 3. Shade the sidecar fat jar (clean, so a stale shade can't survive a source update).

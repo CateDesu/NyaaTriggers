@@ -15,6 +15,9 @@ import gg.xp.xivsupport.events.actlines.events.AbilityCastStart;
 import gg.xp.xivsupport.events.actlines.events.AbilityUsedEvent;
 import gg.xp.xivsupport.events.actlines.events.BuffApplied;
 import gg.xp.xivsupport.events.ws.ActWsRawMsg;
+import gg.xp.xivsupport.events.state.RefreshCombatantsRequest;
+import gg.xp.xivsupport.events.state.RefreshSpecificCombatantsRequest;
+import gg.xp.xivsupport.events.state.XivStateImpl;
 import gg.xp.xivsupport.persistence.UserDirPropsPersistenceProvider;
 import gg.xp.xivsupport.speech.CalloutEvent;
 import gg.xp.xivsupport.speech.CalloutTraceInfo;
@@ -39,6 +42,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -89,6 +93,9 @@ public final class TriggeventCore {
     // on an engine build without telesto-core on the classpath (feature stays inert).
     private static volatile TelestoMain TELESTO;
     private static volatile AutoMarkServiceSelector AM_SELECTOR;
+    private static FeedRecovery RECOVERY;
+    private static boolean requestedAutomark;
+    private static JsonNode automarkCommand;
 
     private static AtomicLong diagCount(String key) {
         synchronized (DIAG) {
@@ -112,7 +119,7 @@ public final class TriggeventCore {
             final EventMaster master = pico.getComponent(EventMaster.class);
 
             emitStatus(true, "Triggevent Engine ready");
-            diag("ready; reading WS messages on stdin");
+            diag("ready; reading WS messages on stdin; recovery=1");
 
             // InitEvent is dispatched synchronously in bootEngine (its @HandleEvents
             // handlers run inline on the calling thread), so ModifiedCalloutRepository is
@@ -146,7 +153,9 @@ public final class TriggeventCore {
                         handleCommand(frame);
                         continue;
                     }
-                    master.pushEvent(new ActWsRawMsg(line));
+                    if (frame != null && frame.isObject()) {
+                        RECOVERY.feed(line, frame);
+                    }
                 } catch (Throwable t) {            // never let one bad line kill the feed
                     diag("feed error: " + t);
                 }
@@ -211,6 +220,12 @@ public final class TriggeventCore {
         final MutablePicoContainer pico =
                 (MutablePicoContainer) requiredComponents.invoke(null);
 
+        final RecoveryClock clock = new RecoveryClock();
+        final RecoveryQueue queue = new RecoveryQueue(clock);
+        pico.removeComponent(BasicEventQueue.class);
+        pico.addComponent(BasicEventQueue.class, queue);
+        pico.addComponent(clock);
+
         // Real user data folder (~/.triggevent on Linux), read-only.
         pico.addComponent(UserDirPropsPersistenceProvider.inUserDataFolder("triggevent", true));
 
@@ -230,8 +245,13 @@ public final class TriggeventCore {
         pico.getComponent(PrimaryLogSource.class).setLogSource(KnownLogSource.WEBSOCKET_LIVE);
 
         final EventDistributor dist = pico.getComponent(EventDistributor.class);
+        RECOVERY = new FeedRecovery(clock, queue, pico.getComponent(EventMaster.class),
+                pico.getComponent(PrimaryLogSource.class), () -> pico.getComponent(XivStateImpl.class));
+        dist.registerHandler(RECOVERY);
         dist.registerHandler(CalloutEvent.class, TriggeventCore::onCallout);
         dist.registerHandler(TelestoStatusUpdatedEvent.class, TriggeventCore::onTelestoStatus);
+        dist.registerHandler(RefreshCombatantsRequest.class, (c, e) -> requestCombatants(List.of()));
+        dist.registerHandler(RefreshSpecificCombatantsRequest.class, (c, e) -> requestCombatants(e.getCombatants()));
 
         if (DIAG_ON) {
             dist.registerHandler(ACTLogLineEvent.class, (c, e) -> diagCount("ACTLogLineEvent").incrementAndGet());
@@ -265,7 +285,8 @@ public final class TriggeventCore {
             // makes ZERO contact with the Telesto plugin until NyaaTriggers opts in (the
             // {"nyaa_cmd":"set_automark"} line). NYAA_AUTOMARK=1 opts in at boot for
             // standalone debug runs.
-            applyAutomark("1".equals(System.getenv("NYAA_AUTOMARK")));
+            requestedAutomark = "1".equals(System.getenv("NYAA_AUTOMARK"));
+            applyAutomark(requestedAutomark);
             // One-shot boot diagnostic: confirms telesto-core scanned (telesto-am
             // registered) and which actuator is selected. Invaluable for field debugging
             // ("is the automark backend even wired?").
@@ -286,6 +307,9 @@ public final class TriggeventCore {
 
     /** Central harvest point: every resolved callout (built-in / EasyTrigger / Groovy). */
     private static void onCallout(EventContext ctx, CalloutEvent ev) {
+        if (RECOVERY.clock.replaying() || RECOVERY.clock.now().isBefore(Instant.now().minusSeconds(3))) {
+            return;
+        }
         try {
             final StringBuilder sb = new StringBuilder(128);
             sb.append("{\"t\":\"callout\"");
@@ -358,9 +382,34 @@ public final class TriggeventCore {
     private static void handleCommand(JsonNode n) {
         try {
             final String cmd = n.path("nyaa_cmd").asText("");
+            if ("pause_feed".equals(cmd)) {
+                applyAutomark(false);
+                RECOVERY.begin(RECOVERY.clock.now().toString());
+                return;
+            }
+            if ("recover_begin".equals(cmd)) {
+                applyAutomark(false);
+                RECOVERY.begin(n.path("time").asText());
+                return;
+            }
+            if ("recover_end".equals(cmd)) {
+                RECOVERY.end();
+                if (automarkCommand != null) {
+                    handleAutomark(automarkCommand);
+                }
+                else {
+                    applyAutomark(requestedAutomark);
+                }
+                println("{\"t\":\"recovered\"}");
+                return;
+            }
             // Automark control is not keyed by a callout id, so dispatch it first.
             if ("set_automark".equals(cmd)) {
-                handleAutomark(n);
+                automarkCommand = n;
+                requestedAutomark = n.path("enable").asBoolean(false);
+                if (!RECOVERY.clock.replaying()) {
+                    handleAutomark(n);
+                }
                 return;
             }
             final String id = n.path("id").asText(null);
@@ -389,6 +438,12 @@ public final class TriggeventCore {
             }
         } catch (Throwable t) {
             diag("command error: " + t);
+        }
+    }
+
+    private static void requestCombatants(java.util.Collection<Long> ids) {
+        if (!RECOVERY.clock.replaying()) {
+            println(MAPPER.writeValueAsString(Map.of("t", "combatants_request", "ids", ids)));
         }
     }
 

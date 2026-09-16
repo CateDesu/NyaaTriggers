@@ -107,11 +107,10 @@ class ConnectionMixin:
                               / rest)
                     if mapped.is_dir():
                         return mapped
-        if os.name == "nt":
-            default = Path.home() / "Documents" / "IINACT"
-            if default.is_dir():
-                return default
-        else:
+        default = Path.home() / "Documents" / "IINACT"
+        if default.is_dir():
+            return default
+        if os.name != "nt":
             for cand in sorted((Path.home() / ".xlcore" / "wineprefix"
                                 / "drive_c" / "users").glob(
                                     "*/Documents/IINACT")):
