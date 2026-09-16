@@ -214,7 +214,7 @@ jobs:
       - name: Verify engine recovery
         run: |
           sudo apt-get update && sudo apt-get install -y xvfb
-          python3 triggevent-core/test_recovery.py
+          python3 triggevent-core/test_recovery.py --compare
 
       - name: Upload sidecar jar
         uses: actions/upload-artifact@v4

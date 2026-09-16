@@ -17,7 +17,9 @@ import gg.xp.xivsupport.events.actlines.events.BuffApplied;
 import gg.xp.xivsupport.events.ws.ActWsRawMsg;
 import gg.xp.xivsupport.events.state.RefreshCombatantsRequest;
 import gg.xp.xivsupport.events.state.RefreshSpecificCombatantsRequest;
-import gg.xp.xivsupport.events.state.XivStateImpl;
+import gg.xp.xivsupport.replay.PullRecovery;
+import gg.xp.xivsupport.replay.RecoveryClock;
+import gg.xp.xivsupport.replay.RecoveryQueue;
 import gg.xp.xivsupport.persistence.UserDirPropsPersistenceProvider;
 import gg.xp.xivsupport.speech.CalloutEvent;
 import gg.xp.xivsupport.speech.CalloutTraceInfo;
@@ -42,6 +44,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -93,7 +97,7 @@ public final class TriggeventCore {
     // on an engine build without telesto-core on the classpath (feature stays inert).
     private static volatile TelestoMain TELESTO;
     private static volatile AutoMarkServiceSelector AM_SELECTOR;
-    private static FeedRecovery RECOVERY;
+    private static PullRecovery RECOVERY;
     private static boolean requestedAutomark;
     private static JsonNode automarkCommand;
 
@@ -119,7 +123,7 @@ public final class TriggeventCore {
             final EventMaster master = pico.getComponent(EventMaster.class);
 
             emitStatus(true, "Triggevent Engine ready");
-            diag("ready; reading WS messages on stdin; recovery=1");
+            diag("ready; reading WS messages on stdin; recovery=1; history=1");
 
             // InitEvent is dispatched synchronously in bootEngine (its @HandleEvents
             // handlers run inline on the calling thread), so ModifiedCalloutRepository is
@@ -245,8 +249,8 @@ public final class TriggeventCore {
         pico.getComponent(PrimaryLogSource.class).setLogSource(KnownLogSource.WEBSOCKET_LIVE);
 
         final EventDistributor dist = pico.getComponent(EventDistributor.class);
-        RECOVERY = new FeedRecovery(clock, queue, pico.getComponent(EventMaster.class),
-                pico.getComponent(PrimaryLogSource.class), () -> pico.getComponent(XivStateImpl.class));
+        RECOVERY = new PullRecovery(clock, queue, pico.getComponent(EventMaster.class),
+                pico.getComponent(PrimaryLogSource.class));
         dist.registerHandler(RECOVERY);
         dist.registerHandler(CalloutEvent.class, TriggeventCore::onCallout);
         dist.registerHandler(TelestoStatusUpdatedEvent.class, TriggeventCore::onTelestoStatus);
@@ -385,6 +389,20 @@ public final class TriggeventCore {
             if ("pause_feed".equals(cmd)) {
                 applyAutomark(false);
                 RECOVERY.begin(RECOVERY.clock.now().toString());
+                return;
+            }
+            if ("recover_log".equals(cmd)) {
+                applyAutomark(false);
+                JsonNode history = n.path("history");
+                List<String> snapshots = new ArrayList<>();
+                for (JsonNode snapshot : n.path("state")) {
+                    snapshots.add(MAPPER.writeValueAsString(snapshot));
+                }
+                var restored = RECOVERY.restore(Path.of(history.path("folder").asText()),
+                        history.path("anchor").asText(), history.path("zone").asLong(),
+                        history.path("player").asLong(), snapshots, Instant.parse(n.path("time").asText()));
+                diag("recovery: restored " + restored.lines().size() + " historical events"
+                        + (restored.reason().isEmpty() ? "" : ", " + restored.reason()));
                 return;
             }
             if ("recover_begin".equals(cmd)) {

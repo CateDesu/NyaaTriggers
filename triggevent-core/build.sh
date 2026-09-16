@@ -13,7 +13,7 @@ ET_REPO="${EVENT_TRIGGER_REPO:-https://github.com/CateDesu/event-trigger.git}"
 # Pinned to a commit on the fork's main branch, which carries the engine
 # guards as real commits. Bump this after a deliberate upstream sync or when
 # new guard commits land.
-ET_REF="${EVENT_TRIGGER_REF:-f18f0b6224d7e06efb33c6d19b4d9acbe56e028d}"
+ET_REF="${EVENT_TRIGGER_REF:-9b36262c8863ae19deddc59bba2bd7e5d1d333dd}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 

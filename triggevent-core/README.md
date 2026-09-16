@@ -256,6 +256,16 @@ This restores trigger counters, buffs and pending waits without fight-specific
 recovery rules. Historical callouts and engine automarks are suppressed. Delayed
 events use the replay clock and continue on the live clock after the handoff.
 
+History selection and actor reconstruction live in Triggevent's `PullHistoryReader`.
+Its `PullRecovery`, `RecoveryClock` and `RecoveryQueue` own replay ordering and the
+live handoff. Python sends the log folder, first buffered line and current state in
+a `recover_log` command. It does not crop or reconstruct the log. The sidecar keeps
+callout output and automarks muted until recovery ends.
+
+An actor recorded before the zone announcement can be restored when a later partial
+update confirms it is still present. A new actor Add starts fresh position data.
+Removed actors and unconfirmed actors from a previous zone are not used as seeds.
+
 The existing IINACT log folder is found automatically. Recovery needs a matching
 local log containing the pull boundary and player. It cannot reconstruct events
 that IINACT never recorded, or read logs from a remote ACT machine. If history is
@@ -269,11 +279,16 @@ lines update state immediately. Repeated announcements of the same zone preserve
 buffs and ongoing sequences.
 
 Recovery commands are local stdin controls. WebSocket frames cannot send them.
-An older engine jar without recovery support receives only the live feed and
-current state.
+An older engine jar without local history support receives only current state and
+the buffered live feed. The engine advertises local history support as `history=1`.
 
 Verify the shared engine behavior after building:
 
 ```bash
-python3 test_recovery.py
+python3 test_recovery.py --compare
 ```
+
+The comparison checks resolved call text, order and event timing against uninterrupted
+replay. To test automatic history reconstruction, also supply `--recording`, `--cut`,
+`--history-folder`, `--zone` and `--player`. The recording must retain the original
+log lines so the selected cut can be matched exactly in the network log.

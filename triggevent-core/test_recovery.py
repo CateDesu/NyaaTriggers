@@ -1,6 +1,7 @@
 """Exercise the built engine's recovery clock and recorded pull handoff."""
 
 import argparse
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -13,7 +14,14 @@ def main():
     parser.add_argument("--cut", type=int, default=10000)
     parser.add_argument("--variant", type=Path)
     parser.add_argument("--expect", action="append", default=[])
+    parser.add_argument("--history-folder", type=Path)
+    parser.add_argument("--zone")
+    parser.add_argument("--player")
+    parser.add_argument("--compare", action="store_true",
+                        help="Compare resolved calls with uninterrupted replay")
     args = parser.parse_args()
+    if args.history_folder and not (args.recording and args.zone and args.player):
+        parser.error("History verification requires a recording, zone and player")
     core = Path(__file__).resolve().parent
     jar = core / "target/triggevent-core.jar"
     resource = core / "event-trigger/triggers/triggers-dt/src/test/resources"
@@ -34,6 +42,8 @@ def main():
                 command = ["xvfb-run", "-a", "-s", "-screen 0 1024x768x24", *command]
             if recording:
                 command.extend([str(recording), str(cut)])
+                if args.history_folder:
+                    command.extend([str(args.history_folder.resolve()), args.zone, args.player])
             result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     text=True, timeout=120, cwd=core)
             output = result.stdout
@@ -51,6 +61,24 @@ def main():
                         raise SystemExit(f"FAIL {name}: missing {expected}")
                 count = output.count("RECOVERED_CALL ")
                 print(f"PASS {name}: {count} subsequent calls, no chain failures or historical output")
+                if args.compare:
+                    reference_command = list(command)
+                    reference_command.insert(reference_command.index("java") + 1, "-Drecovery.reference=true")
+                    reference = subprocess.run(reference_command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                               text=True, timeout=120, cwd=core)
+                    if reference.returncode or "RESULT PASS" not in reference.stdout:
+                        print(reference.stdout)
+                        raise SystemExit(f"FAIL {name}: uninterrupted reference")
+                    def trace(raw):
+                        return [json.loads(line.removeprefix("CALL_TRACE ")) for line in raw.splitlines()
+                                if line.startswith("CALL_TRACE ")]
+                    actual, expected = trace(output), trace(reference.stdout)
+                    if len(actual) != len(expected):
+                        raise SystemExit(f"FAIL {name}: {len(actual)} resolved calls versus {len(expected)} uninterrupted")
+                    for index, (got, want) in enumerate(zip(actual, expected)):
+                        if (got["tts"], got["text"]) != (want["tts"], want["text"]) or abs(got["at"] - want["at"]) > 100:
+                            raise SystemExit(f"FAIL {name}: call {index}: {got!r} versus {want!r}")
+                    print(f"PASS {name}: resolved text, order and timing match uninterrupted replay")
             else:
                 print(f"PASS {name}")
 

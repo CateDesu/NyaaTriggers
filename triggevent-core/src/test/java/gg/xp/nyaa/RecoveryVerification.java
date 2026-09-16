@@ -1,6 +1,8 @@
 package gg.xp.nyaa;
 
 import gg.xp.reevent.events.BaseEvent;
+import gg.xp.xivsupport.replay.PullRecovery;
+import gg.xp.xivsupport.replay.PullHistoryReader;
 import gg.xp.reevent.events.EventDistributor;
 import gg.xp.reevent.events.EventMaster;
 import gg.xp.xivsupport.callouts.RawModifiedCallout;
@@ -11,6 +13,7 @@ import gg.xp.xivsupport.events.state.RefreshSpecificCombatantsRequest;
 import gg.xp.xivsupport.events.state.XivState;
 import gg.xp.xivsupport.events.state.combatstate.StatusEffectRepository;
 import gg.xp.xivsupport.events.triggers.seq.SequentialTriggerFailedEvent;
+import gg.xp.xivsupport.speech.CalloutEvent;
 import gg.xp.xivsupport.models.XivStatusEffect;
 import org.picocontainer.MutablePicoContainer;
 import tools.jackson.databind.ObjectMapper;
@@ -45,9 +48,9 @@ public final class RecoveryVerification {
             var pico = (MutablePicoContainer) boot.invoke(null);
             var field = TriggeventCore.class.getDeclaredField("RECOVERY");
             field.setAccessible(true);
-            var recovery = (FeedRecovery) field.get(null);
+            var recovery = (PullRecovery) field.get(null);
             if (args.length > 0) {
-                recorded(pico, recovery, Path.of(args[0]), Integer.parseInt(args[1]));
+                recorded(pico, recovery, args);
             }
             else {
                 general(pico, recovery);
@@ -61,12 +64,12 @@ public final class RecoveryVerification {
         }
     }
 
-    private static void feed(FeedRecovery recovery, Map<String, ?> frame) {
+    private static void feed(PullRecovery recovery, Map<String, ?> frame) {
         String raw = mapper.writeValueAsString(frame);
         recovery.feed(raw, mapper.readTree(raw));
     }
 
-    private static void general(MutablePicoContainer pico, FeedRecovery recovery) throws Exception {
+    private static void general(MutablePicoContainer pico, PullRecovery recovery) throws Exception {
         var master = pico.getComponent(EventMaster.class);
         var dist = pico.getComponent(EventDistributor.class);
         var zones = new AtomicInteger();
@@ -105,21 +108,41 @@ public final class RecoveryVerification {
         System.out.println("VERIFIED snapshots duplicate zones buffs replay timers live timers refresh requests");
     }
 
-    private static void recorded(MutablePicoContainer pico, FeedRecovery recovery, Path path, int cut) throws Exception {
+    private static void recorded(MutablePicoContainer pico, PullRecovery recovery, String[] args) throws Exception {
+        Path path = Path.of(args[0]);
+        int cut = Integer.parseInt(args[1]);
         var lines = Files.readAllLines(path).stream().filter(line -> !line.isBlank()).toList();
+        if (args.length > 2) {
+            var history = new PullHistoryReader().read(Path.of(args[2]), lines.get(cut),
+                    Long.decode(args[3]), Long.decode(args[4]));
+            check(history.reason().isEmpty(), "History was not restored: " + history.reason());
+            var joined = new ArrayList<>(history.lines());
+            joined.addAll(lines.subList(cut, lines.size()));
+            cut = history.lines().size();
+            lines = joined;
+            System.out.println("HISTORY_RESTORED " + cut);
+        }
         var dist = pico.getComponent(EventDistributor.class);
         var calls = new ArrayList<String>();
+        var trace = new ArrayList<Map<String, Object>>();
         var failures = new ArrayList<String>();
         dist.registerHandler(RawModifiedCallout.class, (c, e) -> calls.add(e.getDescription()));
         dist.registerHandler(SequentialTriggerFailedEvent.class, (c, e) -> failures.add(e.toString()));
         Instant boundary = ZonedDateTime.parse(lines.get(cut).split("\\|")[1]).toInstant();
         Duration shift = Duration.between(boundary, Instant.now());
+        dist.registerHandler(CalloutEvent.class, (c, e) -> trace.add(Map.of(
+                "tts", e.getCallText() == null ? "" : e.getCallText(),
+                "text", e.getVisualText() == null ? "" : e.getVisualText(),
+                "at", e.getHappenedAt().minus(shift).toEpochMilli())));
         Instant first = ZonedDateTime.parse(lines.get(0).split("\\|")[1]).toInstant().plus(shift);
         recovery.begin(first.toString());
         for (int index = 0; index < lines.size(); index++) {
             if (index == cut) {
                 calls.clear();
-                recovery.end();
+                trace.clear();
+                if (!Boolean.getBoolean("recovery.reference")) {
+                    recovery.end();
+                }
                 System.out.println("RECOVERY_BOUNDARY");
             }
             String[] parts = lines.get(index).split("\\|", 3);
@@ -129,6 +152,9 @@ public final class RecoveryVerification {
         check(failures.isEmpty(), "Chain failures: " + failures);
         for (String call : calls) {
             System.out.println("RECOVERED_CALL " + call);
+        }
+        for (var call : trace) {
+            System.out.println("CALL_TRACE " + mapper.writeValueAsString(call));
         }
         check(!calls.isEmpty(), "No calls after the recovery boundary");
     }

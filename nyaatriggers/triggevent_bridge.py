@@ -540,6 +540,7 @@ class TriggeventBridge(QObject):
         super().__init__(parent)
         self._proc: subprocess.Popen | None = None
         self._recovery_gen = -1
+        self._history_gen = -1
         self._reader: threading.Thread | None = None
         self._errpump: threading.Thread | None = None
         self._writer: threading.Thread | None = None
@@ -912,11 +913,24 @@ class TriggeventBridge(QObject):
             except (queue.Empty, queue.Full):
                 pass
 
-    def recover(self, frames, timestamp: str) -> bool:
+    def recover(self, frames, timestamp: str, *, history=None, state=()) -> bool:
         """Queue a silent replay as one bounded item before accepting live events."""
         if not self._active or not self.supports_recovery():
             return False
-        lines = [json.dumps({"nyaa_cmd": "recover_begin", "time": timestamp})]
+        command = {"nyaa_cmd": "recover_begin", "time": timestamp}
+        if history is not None:
+            if not self.supports_local_history():
+                return False
+            snapshots = []
+            for raw in state:
+                try:
+                    data = json.loads(raw)
+                except (ValueError, TypeError, RecursionError):
+                    continue
+                if isinstance(data, dict) and "nyaa_cmd" not in data:
+                    snapshots.append(data)
+            command.update(nyaa_cmd="recover_log", history=history, state=snapshots)
+        lines = [json.dumps(command)]
         for raw in frames:
             try:
                 data = json.loads(raw)
@@ -933,6 +947,9 @@ class TriggeventBridge(QObject):
 
     def supports_recovery(self) -> bool:
         return self._active and self._recovery_gen == self._gen
+
+    def supports_local_history(self) -> bool:
+        return self.supports_recovery() and self._history_gen == self._gen
 
     # ------------------------------------------------------------------
     def _write_loop(self, proc: subprocess.Popen, wq: queue.Queue) -> None:
@@ -1024,6 +1041,8 @@ class TriggeventBridge(QObject):
                         continue
                     if "recovery=1" in line:
                         self._recovery_gen = gen
+                    if "history=1" in line:
+                        self._history_gen = gen
                 self.ready.emit(gen)
 
     def _dispatch(self, msg: dict, seq_state: "dict | None" = None,

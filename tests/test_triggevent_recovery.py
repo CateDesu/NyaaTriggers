@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QTest
 from nyaatriggers.triggevent_bridge import TriggeventBridge
-from nyaatriggers.triggevent_recovery import TriggeventRecovery, read_history
+from nyaatriggers.triggevent_recovery import TriggeventRecovery
 from nyaatriggers.ws_client import WSClient
 
 _app = QApplication.instance() or QApplication([])
@@ -26,61 +26,11 @@ def frame(line):
 
 
 class RecoveryTests(unittest.TestCase):
-    def history(self, lines, anchor, **kwargs):
-        with tempfile.TemporaryDirectory() as temp:
-            (Path(temp) / "Network_test.log").write_text("\n".join(lines) + "\n")
-            return read_history(Path(temp), anchor, kwargs.get("zone", 0x553), 0x10000001)
-
-    def test_recovers_only_current_pull_and_seeds_existing_combatants(self):
-        player = log(3, "10000001|Player")
-        wipe = log(33, "800375AB|40000010|0|0|0|0", 10)
-        old_cast = log(20, "40000001|Boss|1234", 5)
-        current = log(20, "40000001|Boss|5678", 12)
-        anchor = log(26, "1111|Buff", 14)
-        history, reason = self.history([
-            log(1, "553|Raid"), player, old_cast, wipe, current, anchor, log(20, "future", 15)
-        ], anchor)
-        restored = [json.loads(raw)["rawLine"] for raw in history]
-        self.assertEqual(reason, "")
-        self.assertEqual(restored[1:], [wipe, current])
-        self.assertIn("|10000001|Player|", restored[0])
-        self.assertEqual(restored[0].split("|")[1], wipe.split("|")[1])
-
-    def test_rejects_unmatched_or_wrong_zone_history(self):
-        anchor = log(20, "40000001|Boss|1234", 15)
-        lines = [log(1, "553|Raid"), log(3, "10000001|Player"), anchor]
-        self.assertFalse(self.history(lines, "missing")[0])
-        self.assertFalse(self.history(lines, anchor, zone=123)[0])
-        self.assertFalse(self.history(lines[1:], anchor)[0])
-
-    def test_restores_static_arena_objects_and_merges_position_changes(self):
-        anchor = log(20, "40000001|Boss|1234", 15)
-        history, reason = self.history([
-            log(1, "553|Raid"), log(3, "10000001|Player"),
-            log(261, "Add|40000003|Type|7|PosX|90|PosY|110", 2),
-            log(261, "Change|40000003|PosX|105", 3),
-            log(33, "800375AB|40000010|0|0|0|0", 10), anchor,
-        ], anchor)
-        self.assertEqual(reason, "")
-        positions = [json.loads(raw)["rawLine"] for raw in history
-                     if json.loads(raw)["rawLine"].startswith("261|")]
-        self.assertEqual(len(positions), 1)
-        self.assertIn("|Type|7|PosX|105|PosY|110|", positions[0])
-
-    def test_zone_changes_and_actor_removals_do_not_seed_stale_actors(self):
-        anchor = log(20, "40000001|Boss|1234", 15)
-        lines = [log(1, "553|Raid"), log(3, "10000001|Player"), log(3, "40000002|Pet"),
-                 log(4, "40000002|Pet"), log(33, "800375AB|4000000F|0|0|0|0", 10), anchor]
-        history, _ = self.history(lines, anchor)
-        self.assertNotIn("Pet", "\n".join(history))
-        lines.insert(-1, log(1, "123|Other Zone", 14))
-        self.assertFalse(self.history(lines, anchor)[0])
-
-    def test_state_then_history_then_buffer_then_live_without_command_injection(self):
+    def test_engine_history_request_then_buffer_then_live_without_command_injection(self):
         bridge = TriggeventBridge()
         bridge._active = True
         bridge._gen = 1
-        bridge._recovery_gen = 1
+        bridge._recovery_gen = bridge._history_gen = 1
         ws = WSClient()
         recovery = TriggeventRecovery(bridge, ws, lambda: None)
         recovery._on_status(True, "Starting", 1)
@@ -89,12 +39,12 @@ class RecoveryTests(unittest.TestCase):
         live = frame(log(20, "40000001|Boss|1234", 15))
         recovery.feed(live)
         recovery.feed('{"nyaa_cmd":"set_automark","enable":true}')
-        history = frame(log(20, "40000001|Boss|5678", 12))
-        recovery._finish(1, [history], "")
+        history = {"folder": "/logs", "anchor": log(20, "40000001|Boss|1234", 15), "zone": 0x553, "player": 0x10000001}
+        recovery._finish(1, history, "")
         batch = [json.loads(line) for line in bridge._wq.get_nowait().splitlines()]
-        self.assertEqual(batch[0]["nyaa_cmd"], "recover_begin")
-        self.assertEqual(batch[1], state)
-        self.assertEqual(batch[2], json.loads(history))
+        self.assertEqual(batch[0]["nyaa_cmd"], "recover_log")
+        self.assertEqual(batch[0]["history"], history)
+        self.assertEqual(batch[0]["state"], [state])
         self.assertEqual(batch[-2], json.loads(live))
         self.assertEqual(batch[-1]["nyaa_cmd"], "recover_end")
         self.assertEqual(sum("nyaa_cmd" in item for item in batch), 2)
@@ -110,12 +60,12 @@ class RecoveryTests(unittest.TestCase):
         recovery._on_status(True, "Starting", 3)
         recovery._on_status(True, "Ready", 1)
         recovery._on_ready(1)
-        recovery._finish(1, [], "")
+        recovery._finish(1, None, "")
         self.assertEqual(recovery._generation, 3)
         self.assertFalse(recovery._ready)
         self.assertTrue(bridge._wq.empty())
 
-    def test_background_loader_joins_history_to_the_first_buffered_event(self):
+    def test_engine_receives_log_location_and_the_first_buffered_event(self):
         anchor = log(20, "40000001|Boss|1234", 15)
         with tempfile.TemporaryDirectory() as temp:
             lines = [log(1, "553|Raid"), log(3, "10000001|Player"),
@@ -123,7 +73,7 @@ class RecoveryTests(unittest.TestCase):
             (Path(temp) / "Network_test.log").write_text("\n".join(lines) + "\n")
             bridge = TriggeventBridge()
             bridge._active = True
-            bridge._gen = bridge._recovery_gen = 1
+            bridge._gen = bridge._recovery_gen = bridge._history_gen = 1
             ws = WSClient()
             recovery = TriggeventRecovery(bridge, ws, lambda: Path(temp))
             recovery._on_status(True, "Starting", 1)
@@ -138,7 +88,9 @@ class RecoveryTests(unittest.TestCase):
             self.assertTrue(recovery._live)
             batch = [json.loads(raw) for raw in bridge._wq.get_nowait().splitlines()]
             self.assertEqual(sum(item.get("rawLine") == anchor for item in batch), 1)
-            self.assertTrue(any("40000010" in item.get("rawLine", "") for item in batch))
+            self.assertEqual(batch[0]["history"], {"folder": temp, "anchor": anchor,
+                                                  "zone": 0x553, "player": 0x10000001})
+            self.assertFalse(any("40000010" in item.get("rawLine", "") for item in batch))
 
     def test_old_engine_never_receives_historical_events(self):
         bridge = TriggeventBridge()
@@ -149,9 +101,50 @@ class RecoveryTests(unittest.TestCase):
         recovery._on_status(True, "Starting", 1)
         live = frame(log(20, "40000001|Boss|1234", 15))
         recovery.feed(live)
-        recovery._finish(1, [frame(log(20, "40000001|Boss|5678", 12))], "Old engine")
+        recovery._finish(1, {"folder": "/logs"}, "Old engine")
         self.assertEqual(bridge._wq.get_nowait(), live)
         self.assertTrue(bridge._wq.empty())
+
+    def test_history_request_survives_a_full_queue(self):
+        bridge = TriggeventBridge()
+        bridge._active = True
+        bridge._gen = bridge._recovery_gen = bridge._history_gen = 1
+        ws = WSClient()
+        recovery = TriggeventRecovery(bridge, ws, lambda: None)
+        recovery._on_status(True, "Starting", 1)
+        history = {"folder": "/logs", "anchor": log(20, "40000001|Boss|1234", 15),
+                   "zone": 0x553, "player": 0x10000001}
+        recovery.feed(frame(history["anchor"]))
+        with patch.object(bridge, "recover", side_effect=[False, True]) as recover:
+            recovery._finish(1, history, "")
+            self.assertFalse(recovery._live)
+            QTest.qWait(150)
+            self.assertTrue(recovery._live)
+            self.assertEqual(recover.call_count, 2)
+            self.assertEqual(recover.call_args.kwargs["history"], history)
+
+    def test_previous_history_capability_does_not_apply_to_new_engine(self):
+        bridge = TriggeventBridge()
+        bridge._active = True
+        bridge._gen = bridge._recovery_gen = 2
+        bridge._history_gen = 1
+        self.assertFalse(bridge.supports_local_history())
+        self.assertFalse(bridge.recover([], "2026-09-16T00:00:00Z", history={"folder": "/logs"}))
+
+    def test_invalid_world_state_falls_back_without_reading_history(self):
+        bridge = TriggeventBridge()
+        bridge._active = True
+        bridge._gen = bridge._recovery_gen = bridge._history_gen = 1
+        ws = WSClient()
+        recovery = TriggeventRecovery(bridge, ws, lambda: "/logs")
+        recovery._on_status(True, "Starting", 1)
+        ws._on_message('{"type":"ChangeZone","zoneID":"invalid"}')
+        ws._on_message('{"type":"ChangePrimaryPlayer","charID":268435457}')
+        ws._on_message(frame(log(20, "40000001|Boss|1234", 15)))
+        recovery._on_ready(1)
+        batch = [json.loads(raw) for raw in bridge._wq.get_nowait().splitlines()]
+        self.assertEqual(batch[0]["nyaa_cmd"], "recover_begin")
+        self.assertTrue(recovery._live)
 
     def test_polling_and_engine_requests_use_triggevent_response_tags(self):
         ws = WSClient()

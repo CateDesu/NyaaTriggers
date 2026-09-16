@@ -10,7 +10,7 @@ if not defined EVENT_TRIGGER_DIR set "EVENT_TRIGGER_DIR=%HERE%event-trigger"
 if not defined EVENT_TRIGGER_REPO set "EVENT_TRIGGER_REPO=https://github.com/CateDesu/event-trigger.git"
 REM Pinned to a commit on the fork's main branch, which carries the engine
 REM guards as real commits. Bump both scripts together.
-if not defined EVENT_TRIGGER_REF set "EVENT_TRIGGER_REF=f18f0b6224d7e06efb33c6d19b4d9acbe56e028d"
+if not defined EVENT_TRIGGER_REF set "EVENT_TRIGGER_REF=9b36262c8863ae19deddc59bba2bd7e5d1d333dd"
 
 where java >nul 2>nul || (echo ERROR: JDK 17 not found - run: winget install EclipseAdoptium.Temurin.17.JDK & exit /b 1)
 where mvn  >nul 2>nul || (echo ERROR: Maven not found - run: winget install Apache.Maven & exit /b 1)
