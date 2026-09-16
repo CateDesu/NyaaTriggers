@@ -535,12 +535,14 @@ class TriggeventBridge(QObject):
     ready       = pyqtSignal(int)        # sidecar is reading stdin, generation
     chain_failure = pyqtSignal(str, int)  # an engine chain died, the "Error in sequential trigger" line, generation
     combatants_request = pyqtSignal(object, int)
+    recovery_progress = pyqtSignal(object, int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._proc: subprocess.Popen | None = None
         self._recovery_gen = -1
         self._history_gen = -1
+        self._catchup_gen = -1
         self._reader: threading.Thread | None = None
         self._errpump: threading.Thread | None = None
         self._writer: threading.Thread | None = None
@@ -913,7 +915,7 @@ class TriggeventBridge(QObject):
             except (queue.Empty, queue.Full):
                 pass
 
-    def recover(self, frames, timestamp: str, *, history=None, state=()) -> bool:
+    def recover(self, frames, timestamp: str, *, history=None, state=(), checkpoint=None) -> bool:
         """Queue a silent replay as one bounded item before accepting live events."""
         if not self._active or not self.supports_recovery():
             return False
@@ -930,7 +932,15 @@ class TriggeventBridge(QObject):
                 if isinstance(data, dict) and "nyaa_cmd" not in data:
                     snapshots.append(data)
             command.update(nyaa_cmd="recover_log", history=history, state=snapshots)
-        lines = [json.dumps(command)]
+        return self._recovery_batch(frames, checkpoint, command=command)
+
+    def catch_up(self, frames, checkpoint: int, *, finish=False) -> bool:
+        if not self.supports_catchup():
+            return False
+        return self._recovery_batch(frames, checkpoint, finish=finish)
+
+    def _recovery_batch(self, frames, checkpoint, *, command=None, finish=False) -> bool:
+        lines = [json.dumps(command)] if command else []
         for raw in frames:
             try:
                 data = json.loads(raw)
@@ -938,7 +948,8 @@ class TriggeventBridge(QObject):
                 continue
             if isinstance(data, dict) and "nyaa_cmd" not in data:
                 lines.append(raw.replace("\r", " ").replace("\n", " "))
-        lines.append('{"nyaa_cmd":"recover_end"}')
+        lines.append(json.dumps({"nyaa_cmd": "recover_end" if finish or checkpoint is None else "recover_checkpoint",
+                                 "checkpoint": checkpoint}))
         try:
             self._wq.put_nowait("\n".join(lines))
         except queue.Full:
@@ -950,6 +961,9 @@ class TriggeventBridge(QObject):
 
     def supports_local_history(self) -> bool:
         return self.supports_recovery() and self._history_gen == self._gen
+
+    def supports_catchup(self) -> bool:
+        return self.supports_recovery() and self._catchup_gen == self._gen
 
     # ------------------------------------------------------------------
     def _write_loop(self, proc: subprocess.Popen, wq: queue.Queue) -> None:
@@ -1043,6 +1057,8 @@ class TriggeventBridge(QObject):
                         self._recovery_gen = gen
                     if "history=1" in line:
                         self._history_gen = gen
+                    if "catchup=1" in line:
+                        self._catchup_gen = gen
                 self.ready.emit(gen)
 
     def _dispatch(self, msg: dict, seq_state: "dict | None" = None,
@@ -1109,6 +1125,9 @@ class TriggeventBridge(QObject):
                 return
             active = bool(msg.get("active", self._active))
             self.status.emit(active, str(msg.get("message", "")), gen)
+        elif kind in ("recovery_checkpoint", "recovered"):
+            if self._gen_live(gen):
+                self.recovery_progress.emit(msg, gen)
         elif kind == "combatants_request":
             ids = msg.get("ids")
             if self._gen_live(gen) and isinstance(ids, list) and len(ids) <= 1000:

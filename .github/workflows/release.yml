@@ -211,10 +211,16 @@ jobs:
       - name: Build triggevent-core.jar
         run: bash triggevent-core/build.sh
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
       - name: Verify engine recovery
         run: |
-          sudo apt-get update && sudo apt-get install -y xvfb
+          sudo apt-get update && sudo apt-get install -y xvfb libegl1 libxkbcommon0 libgl1
+          pip install PyQt6==6.11.0 regex==2026.7.19
           python3 triggevent-core/test_recovery.py --compare
+          python3 triggevent-core/test_recovery_protocol.py
 
       - name: Upload sidecar jar
         uses: actions/upload-artifact@v4

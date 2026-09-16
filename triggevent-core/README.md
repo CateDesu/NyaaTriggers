@@ -262,8 +262,22 @@ live handoff. Python sends the log folder, first buffered line and current state
 a `recover_log` command. It does not crop or reconstruct the log. The sidecar keeps
 callout output and automarks muted until recovery ends.
 
+The engine advertises `catchup=1` for the acknowledged handoff. Each batch ends
+with `recover_checkpoint` and a numbered acknowledgement. Python buffers new input
+while history loads and sends further batches until the engine has consumed it.
+Only then does it send `recover_end`. The engine drains elapsed timers before
+resuming output. Due timers also run before later log events after the handoff,
+so buffered bursts preserve chained waits. Automarks are checked for freshness
+both before entering the Telesto queue and before the HTTP request.
+
+Malformed history timestamps are skipped and counted. The final acknowledgement
+reports complete, degraded, unavailable or failed history restoration. Current
+state without a history request is reported separately. These results are written
+to `triggevent.log`.
+
 An actor recorded before the zone announcement can be restored when a later partial
-update confirms it is still present. A new actor Add starts fresh position data.
+update confirms it is still present. The shared log parser preserves this state in
+uninterrupted log replay too. A new actor Add starts fresh position data.
 Removed actors and unconfirmed actors from a previous zone are not used as seeds.
 
 The existing IINACT log folder is found automatically. Recovery needs a matching
@@ -286,9 +300,15 @@ Verify the shared engine behavior after building:
 
 ```bash
 python3 test_recovery.py --compare
+python3 test_recovery_protocol.py
 ```
 
-The comparison checks resolved call text, order and event timing against uninterrupted
-replay. To test automatic history reconstruction, also supply `--recording`, `--cut`,
+The comparison checks delivered call IDs, resolved text, order and event timing
+against uninterrupted replay and passes the serialized calls through the Python
+bridge. The protocol test delays the local log flush and verifies that newly
+arriving input stays in recovery and malformed history is reported accurately.
+To test automatic history reconstruction, also supply `--recording`, `--cut`,
 `--history-folder`, `--zone` and `--player`. The recording must retain the original
-log lines so the selected cut can be matched exactly in the network log.
+log lines so the selected cut can be matched exactly in the network log. It must
+also contain the complete original state and pull for the independent reference.
+The reference does not use the history reader.

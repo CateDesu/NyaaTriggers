@@ -26,6 +26,82 @@ def frame(line):
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_slow_restore_drains_new_input_before_acknowledged_live_handoff(self):
+        bridge = TriggeventBridge()
+        bridge._active = True
+        bridge._gen = bridge._recovery_gen = bridge._history_gen = bridge._catchup_gen = 1
+        ws = WSClient()
+        recovery = TriggeventRecovery(bridge, ws, lambda: "/logs")
+        recovery._on_status(True, "Starting", 1)
+        anchor = frame(log(0, "0038|Player|Anchor"))
+        recovery.feed(anchor)
+        recovery._finish(1, {"folder": "/logs"}, "")
+        initial = [json.loads(line) for line in bridge._wq.get_nowait().splitlines()]
+        self.assertEqual(initial[-1], {"nyaa_cmd": "recover_checkpoint", "checkpoint": 1})
+        self.assertFalse(recovery._live)
+        during_restore = frame(log(0, "0038|Player|During restore", 1))
+        recovery.feed(during_restore)
+        self.assertTrue(bridge._wq.empty())
+        bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 1}, gen=1)
+        batch = [json.loads(line) for line in bridge._wq.get_nowait().splitlines()]
+        self.assertEqual(batch, [json.loads(during_restore), {"nyaa_cmd": "recover_checkpoint", "checkpoint": 2}])
+        bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 1}, gen=1)
+        self.assertTrue(bridge._wq.empty())
+        bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 2}, gen=1)
+        self.assertEqual(json.loads(bridge._wq.get_nowait()), {"nyaa_cmd": "recover_end", "checkpoint": 3})
+        self.assertFalse(recovery._live)
+        final_race = frame(log(0, "0038|Player|During acknowledgement", 2))
+        recovery.feed(final_race)
+        self.assertEqual(bridge._wq.get_nowait(), final_race)
+        with patch("nyaatriggers.triggevent_recovery._log") as report:
+            bridge._dispatch({"t": "recovered", "checkpoint": 3, "status": "degraded", "skipped": 1}, gen=1)
+            self.assertTrue(recovery._live)
+            self.assertIn("degraded, skipped 1", report.call_args.args[0])
+
+    def test_catchup_queue_retry_preserves_order_and_rejects_stale_acknowledgements(self):
+        bridge = TriggeventBridge()
+        bridge._active = True
+        bridge._gen = bridge._recovery_gen = bridge._catchup_gen = 2
+        ws = WSClient()
+        recovery = TriggeventRecovery(bridge, ws, lambda: None)
+        recovery._on_status(True, "Starting", 2)
+        recovery._finish(2, None, "")
+        bridge._wq.get_nowait()
+        first, second = frame(log(0, "0038|Player|First")), frame(log(0, "0038|Player|Second", 1))
+        recovery.feed(first)
+        with patch.object(bridge, "catch_up", side_effect=[False, True]) as catch_up:
+            bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 1}, gen=1)
+            catch_up.assert_not_called()
+            bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 1}, gen=2)
+            recovery.feed(second)
+            QTest.qWait(150)
+            self.assertEqual(catch_up.call_args.args, ([first, second], 2))
+            self.assertFalse(recovery._live)
+            self.assertEqual(recovery._pending, [])
+
+    def test_previous_catchup_capability_does_not_apply_to_new_engine(self):
+        bridge = TriggeventBridge()
+        bridge._active = True
+        bridge._gen = bridge._recovery_gen = 2
+        bridge._catchup_gen = 1
+        self.assertFalse(bridge.supports_catchup())
+        self.assertFalse(bridge.catch_up([], 1))
+
+    def test_buffer_overflow_restarts_only_an_active_engine(self):
+        bridge = TriggeventBridge()
+        ws = WSClient()
+        recovery = TriggeventRecovery(bridge, ws, lambda: None)
+        with patch("nyaatriggers.triggevent_recovery._MAX_PENDING_BYTES", 1), \
+                patch.object(bridge, "start") as start, patch.object(bridge, "stop") as stop:
+            recovery.feed(frame(log(0, "0038|Player|Inactive")))
+            start.assert_not_called()
+            bridge._active = True
+            recovery.feed(frame(log(0, "0038|Player|Active")))
+            start.assert_called_once()
+            stop.assert_called_once()
+            self.assertFalse(recovery._live)
+            self.assertEqual(recovery._pending, [])
+
     def test_engine_history_request_then_buffer_then_live_without_command_injection(self):
         bridge = TriggeventBridge()
         bridge._active = True

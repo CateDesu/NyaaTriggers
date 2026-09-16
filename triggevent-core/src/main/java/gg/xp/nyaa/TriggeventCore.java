@@ -100,6 +100,9 @@ public final class TriggeventCore {
     private static PullRecovery RECOVERY;
     private static boolean requestedAutomark;
     private static JsonNode automarkCommand;
+    private static String recoveryStatus = "state_only";
+    private static String recoveryReason = "";
+    private static int recoverySkipped;
 
     private static AtomicLong diagCount(String key) {
         synchronized (DIAG) {
@@ -123,7 +126,7 @@ public final class TriggeventCore {
             final EventMaster master = pico.getComponent(EventMaster.class);
 
             emitStatus(true, "Triggevent Engine ready");
-            diag("ready; reading WS messages on stdin; recovery=1; history=1");
+            diag("ready; reading WS messages on stdin; recovery=1; history=1; catchup=1");
 
             // InitEvent is dispatched synchronously in bootEngine (its @HandleEvents
             // handlers run inline on the calling thread), so ModifiedCalloutRepository is
@@ -161,6 +164,12 @@ public final class TriggeventCore {
                         RECOVERY.feed(line, frame);
                     }
                 } catch (Throwable t) {            // never let one bad line kill the feed
+                    if (RECOVERY.clock.replaying()) {
+                        recoverySkipped++;
+                        if ("complete".equals(recoveryStatus) || "state_only".equals(recoveryStatus)) {
+                            recoveryStatus = "degraded";
+                        }
+                    }
                     diag("feed error: " + t);
                 }
             }
@@ -280,6 +289,10 @@ public final class TriggeventCore {
         // option, so this is safe even if telesto-core is absent.
         try {
             TELESTO = pico.getComponent(TelestoMain.class);
+            if (TELESTO != null) {
+                TELESTO.setOutgoingGate(message -> RECOVERY.outputAllowed()
+                        && !message.getEffectiveHappenedAt().isBefore(Instant.now().minusSeconds(3)));
+            }
             AM_SELECTOR = pico.getComponent(AutoMarkServiceSelector.class);
             final String envUri = System.getenv("NYAA_TELESTO_URI");
             if (envUri != null && !envUri.isBlank() && TELESTO != null) {
@@ -311,7 +324,7 @@ public final class TriggeventCore {
 
     /** Central harvest point: every resolved callout (built-in / EasyTrigger / Groovy). */
     private static void onCallout(EventContext ctx, CalloutEvent ev) {
-        if (RECOVERY.clock.replaying() || RECOVERY.clock.now().isBefore(Instant.now().minusSeconds(3))) {
+        if (!RECOVERY.outputAllowed()) {
             return;
         }
         try {
@@ -323,6 +336,7 @@ public final class TriggeventCore {
             field(sb, "id", calloutId(ev));            // stable per-trigger id (may be null)
             field(sb, "tts", ev.getCallText());        // spoken text
             field(sb, "text", ev.getVisualText());     // on-screen text
+            sb.append(",\"at\":").append(ev.getEffectiveHappenedAt().toEpochMilli());
             sb.append(",\"severity\":\"").append(severity(ev.getColorOverride())).append('"');
             field(sb, "sound", ev.getSound());
             sb.append(",\"expired\":").append(ev.isExpired());
@@ -393,6 +407,10 @@ public final class TriggeventCore {
             }
             if ("recover_log".equals(cmd)) {
                 applyAutomark(false);
+                recoveryStatus = "failed";
+                recoveryReason = "History restoration did not finish";
+                recoverySkipped = 0;
+                RECOVERY.begin(n.path("time").asText());
                 JsonNode history = n.path("history");
                 List<String> snapshots = new ArrayList<>();
                 for (JsonNode snapshot : n.path("state")) {
@@ -401,16 +419,29 @@ public final class TriggeventCore {
                 var restored = RECOVERY.restore(Path.of(history.path("folder").asText()),
                         history.path("anchor").asText(), history.path("zone").asLong(),
                         history.path("player").asLong(), snapshots, Instant.parse(n.path("time").asText()));
+                recoverySkipped = restored.skipped();
+                recoveryReason = restored.reason();
+                recoveryStatus = restored.lines().isEmpty() ? "unavailable"
+                        : recoverySkipped > 0 ? "degraded" : "complete";
                 diag("recovery: restored " + restored.lines().size() + " historical events"
+                        + ", skipped " + recoverySkipped
                         + (restored.reason().isEmpty() ? "" : ", " + restored.reason()));
                 return;
             }
             if ("recover_begin".equals(cmd)) {
                 applyAutomark(false);
                 RECOVERY.begin(n.path("time").asText());
+                recoveryStatus = "state_only";
+                recoveryReason = "";
+                recoverySkipped = 0;
+                return;
+            }
+            if ("recover_checkpoint".equals(cmd)) {
+                recoveryProgress("recovery_checkpoint", n);
                 return;
             }
             if ("recover_end".equals(cmd)) {
+                RECOVERY.advance(Instant.now());
                 RECOVERY.end();
                 if (automarkCommand != null) {
                     handleAutomark(automarkCommand);
@@ -418,7 +449,7 @@ public final class TriggeventCore {
                 else {
                     applyAutomark(requestedAutomark);
                 }
-                println("{\"t\":\"recovered\"}");
+                recoveryProgress("recovered", n);
                 return;
             }
             // Automark control is not keyed by a callout id, so dispatch it first.
@@ -455,8 +486,17 @@ public final class TriggeventCore {
                 diag("reset_callout applied: " + id);
             }
         } catch (Throwable t) {
+            if (n.path("nyaa_cmd").asText("").startsWith("recover_")) {
+                recoveryStatus = "failed";
+                recoveryReason = t.toString();
+            }
             diag("command error: " + t);
         }
+    }
+
+    private static void recoveryProgress(String kind, JsonNode command) {
+        println(MAPPER.writeValueAsString(Map.of("t", kind, "checkpoint", command.path("checkpoint").asInt(0),
+                "status", recoveryStatus, "reason", recoveryReason, "skipped", recoverySkipped)));
     }
 
     private static void requestCombatants(java.util.Collection<Long> ids) {

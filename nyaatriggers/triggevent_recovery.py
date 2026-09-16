@@ -24,10 +24,13 @@ class TriggeventRecovery(QObject):
         self._ready = False
         self._loading = False
         self._live = False
+        self._ending = False
+        self._checkpoint = 0
         self._lost_connection = False
         self._initial_state = ws.state_snapshot()
         bridge.ready.connect(self._on_ready)
         bridge.status.connect(self._on_status)
+        bridge.recovery_progress.connect(self._on_progress)
         ws.raw_message.connect(self.feed)
         ws.status_changed.connect(self._connection)
 
@@ -39,6 +42,8 @@ class TriggeventRecovery(QObject):
             self._pending = []
             self._bytes = 0
             self._ready = self._loading = self._live = False
+            self._ending = False
+            self._checkpoint = 0
             self._initial_state = self.ws.state_snapshot()
 
     def _connection(self, connected, _message):
@@ -61,14 +66,17 @@ class TriggeventRecovery(QObject):
         QTimer.singleShot(1500, lambda: self._try_start(True) if generation == self._generation else None)
 
     def feed(self, raw):
-        if self._live:
+        if self._live or self._ending:
             self.bridge.feed(raw)
             return
         size = sys.getsizeof(raw)
         if self._bytes + size > _MAX_PENDING_BYTES:
             _log("recovery: feed buffer exceeded its limit")
-            self._finish(self._generation, None, "Recovery buffer full")
-            self.bridge.feed(raw)
+            self._pending = []
+            self._bytes = 0
+            if self.bridge.is_active():
+                self.bridge.stop()
+                self.bridge.start()
             return
         self._pending.append(raw)
         self._bytes += size
@@ -131,20 +139,51 @@ class TriggeventRecovery(QObject):
             start = datetime.now(timezone.utc)
         if self.bridge.supports_recovery():
             timestamp = start.astimezone(timezone.utc).isoformat()
+            checkpoint = 1 if self.bridge.supports_catchup() else None
             if history:
-                queued = self.bridge.recover(self._pending, timestamp, history=history, state=initial)
+                queued = self.bridge.recover(self._pending, timestamp, history=history, state=initial,
+                                             checkpoint=checkpoint)
             else:
-                queued = self.bridge.recover(frames, timestamp)
+                queued = self.bridge.recover(frames, timestamp, checkpoint=checkpoint)
             if not queued:
                 _log("recovery: waiting for space in the engine feed queue")
                 self._loading = True
                 QTimer.singleShot(100, lambda: self._finish(generation, history, reason))
                 return
+            self._checkpoint = checkpoint or 0
         else:
             for raw in list(initial) + self._pending:
                 self.bridge.feed(raw)
         self._pending = []
         self._bytes = 0
-        self._live = True
+        self._loading = True
+        self._live = not self.bridge.supports_catchup()
         _log("recovery: requested engine history restore" if history else f"recovery: current state only, {reason}")
         self.ws.request_combatants_once()
+
+    def _on_progress(self, message, generation):
+        if (generation != self._generation or generation != self.bridge.generation()
+                or not self._loading or self._live
+                or message.get("checkpoint") != self._checkpoint):
+            return
+        if message.get("t") == "recovered" and self._ending:
+            self._live = True
+            self._ending = self._loading = False
+            _log(f"recovery: {message.get('status', 'unknown')}, "
+                 f"skipped {message.get('skipped', 0)}, {message.get('reason', '')}")
+        elif message.get("t") == "recovery_checkpoint" and not self._ending:
+            self._flush_pending(generation, self._checkpoint)
+
+    def _flush_pending(self, generation, acknowledged):
+        if (generation != self._generation or generation != self.bridge.generation()
+                or acknowledged != self._checkpoint or self._ending or self._live):
+            return
+        finish = not self._pending
+        checkpoint = self._checkpoint + 1
+        if not self.bridge.catch_up(self._pending, checkpoint, finish=finish):
+            QTimer.singleShot(100, lambda: self._flush_pending(generation, acknowledged))
+            return
+        self._pending = []
+        self._bytes = 0
+        self._checkpoint = checkpoint
+        self._ending = finish

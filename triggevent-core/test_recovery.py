@@ -6,6 +6,47 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import sys
+
+
+def delivered_trace(output):
+    shift = next(int(line.split()[1]) for line in output.splitlines() if line.startswith("TIME_SHIFT "))
+    messages = [json.loads(line) for line in output.splitlines() if line.startswith('{"t":"callout"')]
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from PyQt6.QtWidgets import QApplication
+    from nyaatriggers.triggevent_bridge import TriggeventBridge
+    app = QApplication.instance() or QApplication([])
+    bridge = TriggeventBridge()
+    bridge._active = True
+    bridge._gen = 1
+    spoken, shown = [], []
+    bridge.tts.connect(lambda text, generation: spoken.append(text))
+    bridge.callout.connect(lambda text, severity, generation: shown.append(text))
+    state = {}
+    for index, message in enumerate(messages, 1):
+        if message.get("seq") != index:
+            raise SystemExit("FAIL delivered callout sequence is incomplete")
+        bridge._dispatch(message, state, 1)
+    expected_spoken = [(m.get("tts") or "").strip() for m in messages if (m.get("tts") or "").strip()]
+    expected_shown = [((m.get("text") or "").strip() or (m.get("tts") or "").strip()) for m in messages]
+    if spoken != expected_spoken or shown != [text for text in expected_shown if text]:
+        raise SystemExit("FAIL callouts were lost in the Python bridge")
+    return [{"id": m.get("id") or "", "tts": m.get("tts") or "", "text": m.get("text") or "",
+             "at": m["at"] - shift} for m in messages]
+
+
+def compare_trace(name, actual, expected):
+    if len(actual) != len(expected):
+        raise SystemExit(f"FAIL {name}: {len(actual)} delivered calls versus {len(expected)} expected")
+    for index, (got, want) in enumerate(zip(actual, expected)):
+        if any(got[key] != want[key] for key in ("id", "tts", "text")) or abs(got["at"] - want["at"]) > 100:
+            raise SystemExit(f"FAIL {name}: call {index}: {got!r} versus {want!r}")
+
+
+def internal_trace(raw):
+    return [json.loads(line.removeprefix("CALL_TRACE ")) for line in raw.splitlines()
+            if line.startswith("CALL_TRACE ")]
 
 
 def main():
@@ -59,8 +100,9 @@ def main():
                 for expected in args.expect:
                     if "RECOVERED_CALL " + expected + "\n" not in output:
                         raise SystemExit(f"FAIL {name}: missing {expected}")
-                count = output.count("RECOVERED_CALL ")
-                print(f"PASS {name}: {count} subsequent calls, no chain failures or historical output")
+                actual = delivered_trace(output)
+                compare_trace(name, actual, internal_trace(output))
+                print(f"PASS {name}: {len(actual)} delivered calls, no chain failures or historical output")
                 if args.compare:
                     reference_command = list(command)
                     reference_command.insert(reference_command.index("java") + 1, "-Drecovery.reference=true")
@@ -69,16 +111,8 @@ def main():
                     if reference.returncode or "RESULT PASS" not in reference.stdout:
                         print(reference.stdout)
                         raise SystemExit(f"FAIL {name}: uninterrupted reference")
-                    def trace(raw):
-                        return [json.loads(line.removeprefix("CALL_TRACE ")) for line in raw.splitlines()
-                                if line.startswith("CALL_TRACE ")]
-                    actual, expected = trace(output), trace(reference.stdout)
-                    if len(actual) != len(expected):
-                        raise SystemExit(f"FAIL {name}: {len(actual)} resolved calls versus {len(expected)} uninterrupted")
-                    for index, (got, want) in enumerate(zip(actual, expected)):
-                        if (got["tts"], got["text"]) != (want["tts"], want["text"]) or abs(got["at"] - want["at"]) > 100:
-                            raise SystemExit(f"FAIL {name}: call {index}: {got!r} versus {want!r}")
-                    print(f"PASS {name}: resolved text, order and timing match uninterrupted replay")
+                    compare_trace(name, actual, internal_trace(reference.stdout))
+                    print(f"PASS {name}: delivered IDs, text, order and timing match uninterrupted replay")
             else:
                 print(f"PASS {name}")
 
