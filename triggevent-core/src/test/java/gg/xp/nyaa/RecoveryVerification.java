@@ -5,9 +5,12 @@ import gg.xp.xivsupport.replay.PullRecovery;
 import gg.xp.xivsupport.replay.PullHistoryReader;
 import gg.xp.reevent.events.EventDistributor;
 import gg.xp.reevent.events.EventMaster;
+import gg.xp.telestosupport.TelestoMain;
 import gg.xp.xivsupport.callouts.RawModifiedCallout;
 import gg.xp.xivsupport.events.actlines.events.BuffApplied;
 import gg.xp.xivsupport.events.actlines.events.ZoneChangeEvent;
+import gg.xp.xivsupport.events.actlines.events.WipeEvent;
+import gg.xp.xivsupport.persistence.settings.IntSetting;
 import gg.xp.xivsupport.events.delaytest.BaseDelayedEvent;
 import gg.xp.xivsupport.events.state.RefreshSpecificCombatantsRequest;
 import gg.xp.xivsupport.events.state.XivState;
@@ -145,9 +148,10 @@ public final class RecoveryVerification {
                     "01|" + start + "|553|Raid|0",
                     "03|" + start + "|10000001|Player|15|64|0|0|World|0|0|10000|10000|10000|10000|0|0|100|100|0|0|0",
                     "00|invalid|0038|Player|Damaged line|0",
+                    "20|" + start.plusSeconds(1) + "|40000001|Boss|NOT_HEX|Bad cast|10000001|Player|3|100|100|0|0|0",
                     "00|" + start.plusSeconds(2) + "|0038|Player|Later valid event|0", anchor));
             var restored = recovery.restore(folder, anchor, 0x553, 0x10000001, List.of("invalid JSON"), start);
-            check(restored.skipped() == 2, "Malformed history and snapshot were not reported");
+            check(restored.skipped() == 3, "Malformed history fields and snapshot were not reported");
             check(seen.equals(List.of("Later valid event")), "Valid history after a malformed record was not processed");
         }
         finally {
@@ -176,8 +180,8 @@ public final class RecoveryVerification {
             command.invoke(null, mapper.valueToTree(Map.of("nyaa_cmd", "set_automark", "enable", true,
                     "uri", "http://127.0.0.1:" + server.getAddress().getPort() + "/")));
             pico.getComponent(EventDistributor.class).registerHandler(EchoEvent.class, (c, e) -> {
-                if (e.getLine().equals("Mark")) {
-                    c.accept(new AutoMarkSlotRequest(1));
+                if (e.getLine().startsWith("Mark")) {
+                    c.accept(new AutoMarkSlotRequest(e.getLine().endsWith("2") ? 2 : 1));
                 }
             });
             feed(recovery, Map.of("type", "LogLine", "rawLine",
@@ -193,11 +197,63 @@ public final class RecoveryVerification {
                 Thread.sleep(100);
             }
             check(received.stream().filter(body -> body.contains("ExecuteCommand")).count() == 1, "Current automark was not delivered");
+            var telesto = pico.getComponent(TelestoMain.class);
+            setDelay(telesto.getCommandDelayBase(), 3500);
+            setDelay(telesto.getCommandDelayPlus(), 0);
+            for (int mark = 0; mark < 2; mark++) {
+                feed(recovery, Map.of("type", "LogLine", "rawLine",
+                        "00|" + Instant.now() + "|0038|Player|Mark|0"));
+            }
+            for (int retry = 0; retry < 100 && markCount(received) < 3; retry++) {
+                Thread.sleep(100);
+            }
+            check(markCount(received) == 3, "Configured delays or a queued burst discarded current automarks");
+
+            setDelay(telesto.getCommandDelayBase(), 500);
+            for (String boundary : List.of("pause", "disable", "wipe")) {
+                received.clear();
+                feed(recovery, Map.of("type", "LogLine", "rawLine",
+                        "00|" + Instant.now() + "|0038|Player|Mark|0"));
+                if (boundary.equals("pause")) {
+                    command.invoke(null, mapper.valueToTree(Map.of("nyaa_cmd", "pause_feed")));
+                    command.invoke(null, mapper.valueToTree(Map.of("nyaa_cmd", "recover_end")));
+                }
+                else if (boundary.equals("disable")) {
+                    command.invoke(null, mapper.valueToTree(Map.of("nyaa_cmd", "set_automark", "enable", false)));
+                    command.invoke(null, mapper.valueToTree(Map.of("nyaa_cmd", "set_automark", "enable", true)));
+                }
+                else {
+                    pico.getComponent(EventMaster.class).pushEventAndWait(new WipeEvent());
+                }
+                feed(recovery, Map.of("type", "LogLine", "rawLine",
+                        "00|" + Instant.now() + "|0038|Player|Mark 2|0"));
+                for (int retry = 0; retry < 30 && markCount(received) == 0; retry++) {
+                    Thread.sleep(100);
+                }
+                Thread.sleep(600);
+                var commands = received.stream().filter(body -> body.contains("ExecuteCommand")).toList();
+                check(commands.size() == 1 && commands.get(0).contains("<2>"),
+                        "Pending automark survived " + boundary + ": " + commands);
+            }
             command.invoke(null, mapper.valueToTree(Map.of("nyaa_cmd", "set_automark", "enable", false)));
         }
         finally {
             server.stop(0);
         }
+    }
+
+    private static long markCount(List<String> received) {
+        return received.stream().filter(body -> body.contains("ExecuteCommand")).count();
+    }
+
+    private static void setDelay(IntSetting setting, int delay) {
+        try {
+            setting.set(delay);
+        }
+        catch (RuntimeException ignored) {
+            // The verification engine keeps settings in memory.
+        }
+        check(setting.get() == delay, "Command delay did not change");
     }
 
     private static void recorded(MutablePicoContainer pico, PullRecovery recovery, String[] args) throws Exception {

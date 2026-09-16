@@ -102,7 +102,6 @@ public final class TriggeventCore {
     private static JsonNode automarkCommand;
     private static String recoveryStatus = "state_only";
     private static String recoveryReason = "";
-    private static int recoverySkipped;
 
     private static AtomicLong diagCount(String key) {
         synchronized (DIAG) {
@@ -165,7 +164,7 @@ public final class TriggeventCore {
                     }
                 } catch (Throwable t) {            // never let one bad line kill the feed
                     if (RECOVERY.clock.replaying()) {
-                        recoverySkipped++;
+                        RECOVERY.recordFailure();
                         if ("complete".equals(recoveryStatus) || "state_only".equals(recoveryStatus)) {
                             recoveryStatus = "degraded";
                         }
@@ -292,6 +291,7 @@ public final class TriggeventCore {
             if (TELESTO != null) {
                 TELESTO.setOutgoingGate(message -> RECOVERY.outputAllowed()
                         && !message.getEffectiveHappenedAt().isBefore(Instant.now().minusSeconds(3)));
+                TELESTO.setDeliveryPermit(RECOVERY::outputPermit);
             }
             AM_SELECTOR = pico.getComponent(AutoMarkServiceSelector.class);
             final String envUri = System.getenv("NYAA_TELESTO_URI");
@@ -409,7 +409,6 @@ public final class TriggeventCore {
                 applyAutomark(false);
                 recoveryStatus = "failed";
                 recoveryReason = "History restoration did not finish";
-                recoverySkipped = 0;
                 RECOVERY.begin(n.path("time").asText());
                 JsonNode history = n.path("history");
                 List<String> snapshots = new ArrayList<>();
@@ -419,12 +418,11 @@ public final class TriggeventCore {
                 var restored = RECOVERY.restore(Path.of(history.path("folder").asText()),
                         history.path("anchor").asText(), history.path("zone").asLong(),
                         history.path("player").asLong(), snapshots, Instant.parse(n.path("time").asText()));
-                recoverySkipped = restored.skipped();
                 recoveryReason = restored.reason();
                 recoveryStatus = restored.lines().isEmpty() ? "unavailable"
-                        : recoverySkipped > 0 ? "degraded" : "complete";
+                        : restored.skipped() > 0 ? "degraded" : "complete";
                 diag("recovery: restored " + restored.lines().size() + " historical events"
-                        + ", skipped " + recoverySkipped
+                        + ", skipped " + restored.skipped()
                         + (restored.reason().isEmpty() ? "" : ", " + restored.reason()));
                 return;
             }
@@ -433,7 +431,6 @@ public final class TriggeventCore {
                 RECOVERY.begin(n.path("time").asText());
                 recoveryStatus = "state_only";
                 recoveryReason = "";
-                recoverySkipped = 0;
                 return;
             }
             if ("recover_checkpoint".equals(cmd)) {
@@ -495,8 +492,12 @@ public final class TriggeventCore {
     }
 
     private static void recoveryProgress(String kind, JsonNode command) {
+        int skipped = RECOVERY.skipped();
+        if (skipped > 0 && ("complete".equals(recoveryStatus) || "state_only".equals(recoveryStatus))) {
+            recoveryStatus = "degraded";
+        }
         println(MAPPER.writeValueAsString(Map.of("t", kind, "checkpoint", command.path("checkpoint").asInt(0),
-                "status", recoveryStatus, "reason", recoveryReason, "skipped", recoverySkipped)));
+                "status", recoveryStatus, "reason", recoveryReason, "skipped", skipped)));
     }
 
     private static void requestCombatants(java.util.Collection<Long> ids) {
@@ -522,6 +523,7 @@ public final class TriggeventCore {
      * in-memory-effective even under the read-only persistence backend (see trySet).
      */
     private static void handleAutomark(JsonNode n) {
+        RECOVERY.cancelPendingOutput();
         if (n.hasNonNull("uri") && TELESTO != null) {
             trySet(() -> TELESTO.getUriSetting().set(URI.create(n.get("uri").asText().trim())));
         }
@@ -546,6 +548,9 @@ public final class TriggeventCore {
      *    not fully close, the post-(re)start window before the first GetPartyMembers reply).
      */
     private static void applyAutomark(boolean enable) {
+        if (!enable) {
+            RECOVERY.cancelPendingOutput();
+        }
         if (TELESTO != null) {
             trySet(() -> TELESTO.getEnablePartyList().set(enable));
         }

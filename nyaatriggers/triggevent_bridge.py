@@ -74,9 +74,10 @@ class _ByteQueue(queue.Queue):
     """queue.Queue with a byte budget on top of the item count.
 
     Items are sidecar stdin lines. put_nowait raises Full once the queued
-    string memory passes the budget, so the drop oldest policy at the call
-    sites covers byte pressure unchanged. The _STOP sentinel is not a str
-    and always fits the byte budget. The item count cap still applies.
+    string memory passes the budget. Overflow requires a fresh engine so
+    control commands and event history cannot be silently lost. The _STOP
+    sentinel is not a str and always fits the byte budget. The item count cap
+    still applies.
     """
 
     def __init__(self, maxsize: int, maxbytes: int = _MAX_QUEUE_BYTES) -> None:
@@ -536,6 +537,7 @@ class TriggeventBridge(QObject):
     chain_failure = pyqtSignal(str, int)  # an engine chain died, the "Error in sequential trigger" line, generation
     combatants_request = pyqtSignal(object, int)
     recovery_progress = pyqtSignal(object, int)
+    feed_overflow = pyqtSignal(int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -543,6 +545,7 @@ class TriggeventBridge(QObject):
         self._recovery_gen = -1
         self._history_gen = -1
         self._catchup_gen = -1
+        self._overflow_gen = -1
         self._reader: threading.Thread | None = None
         self._errpump: threading.Thread | None = None
         self._writer: threading.Thread | None = None
@@ -627,10 +630,7 @@ class TriggeventBridge(QObject):
         self._send_command(cmd)
 
     def _send_command(self, cmd: dict) -> None:
-        """Queue a control command, one JSON line, for the sidecar's stdin. On a
-        full queue the oldest queued line is dropped and logged and the command
-        retried, so a set_callout / set_automark is never silently lost the way a
-        bare pass would lose it."""
+        """Queue a control command and recover if the engine cannot keep up."""
         if not self._active:
             return
         try:
@@ -640,12 +640,13 @@ class TriggeventBridge(QObject):
         try:
             self._wq.put_nowait(line)
         except queue.Full:
-            log_drop("engine-cmd", "sidecar stdin queue full; dropped oldest control command")
-            try:                       # drop one old line, retry once
-                self._wq.get_nowait()
-                self._wq.put_nowait(line)
-            except (queue.Empty, queue.Full):
-                pass
+            self._queue_overflow()
+
+    def _queue_overflow(self) -> None:
+        if self._active and self._overflow_gen != self._gen:
+            self._overflow_gen = self._gen
+            log_drop("engine-feed", "sidecar stdin queue full; restarting pull recovery")
+            self.feed_overflow.emit(self._gen)
 
     def seen_phrases(self) -> list:
         """Callout phrases observed so far this session, for the override picker."""
@@ -891,8 +892,7 @@ class TriggeventBridge(QObject):
         """Tee one raw IINACT WS message to the sidecar.
 
         Connected to WSClient.raw_message. Runs on the GUI thread, so it never
-        blocks. The writer thread drains the queue. On overflow the oldest
-        messages get dropped."""
+        blocks. The writer thread drains the queue. Overflow restarts recovery."""
         if not self._active or not raw_msg:
             return
         try:
@@ -908,12 +908,7 @@ class TriggeventBridge(QObject):
         try:
             self._wq.put_nowait(line)
         except queue.Full:
-            log_drop("engine-feed", "sidecar stdin queue full; dropped oldest log line")
-            try:                       # drop one old line, retry once
-                self._wq.get_nowait()
-                self._wq.put_nowait(line)
-            except (queue.Empty, queue.Full):
-                pass
+            self._queue_overflow()
 
     def recover(self, frames, timestamp: str, *, history=None, state=(), checkpoint=None) -> bool:
         """Queue a silent replay as one bounded item before accepting live events."""

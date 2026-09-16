@@ -268,9 +268,16 @@ while history loads and sends further batches until the engine has consumed it.
 Only then does it send `recover_end`. The engine drains elapsed timers before
 resuming output. Due timers also run before later log events after the handoff,
 so buffered bursts preserve chained waits. Automarks are checked for freshness
-both before entering the Telesto queue and before the HTTP request.
+before entering the Telesto queue. Their configured delays remain valid, while
+recovery, pull changes and automark configuration changes cancel pending requests
+before the HTTP request.
 
-Malformed history timestamps are skipped and counted. The final acknowledgement
+Feed queue overflow restarts recovery in a fresh engine. It cannot evict a queued
+recovery command and leave the engine silently waiting. A missing acknowledgement
+also triggers a fresh recovery after 60 seconds without progress.
+
+Malformed history timestamps and rejected parser fields are skipped and counted,
+including failures in buffered input during recovery. The final acknowledgement
 reports complete, degraded, unavailable or failed history restoration. Current
 state without a history request is reported separately. These results are written
 to `triggevent.log`.
@@ -307,6 +314,9 @@ The comparison checks delivered call IDs, resolved text, order and event timing
 against uninterrupted replay and passes the serialized calls through the Python
 bridge. The protocol test delays the local log flush and verifies that newly
 arriving input stays in recovery and malformed history is reported accurately.
+It also fills the production feed queue during the handoff and checks that a new
+engine resumes live callouts. The shared checks use a local HTTP server to verify
+delayed automarks and cancellation across recovery, disabling automarks and wipes.
 To test automatic history reconstruction, also supply `--recording`, `--cut`,
 `--history-folder`, `--zone` and `--player`. The recording must retain the original
 log lines so the selected cut can be matched exactly in the network log. It must

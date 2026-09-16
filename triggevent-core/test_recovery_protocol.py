@@ -14,12 +14,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from PyQt6.QtCore import QTimer
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
-from nyaatriggers.triggevent_bridge import TriggeventBridge
+from nyaatriggers.triggevent_bridge import TriggeventBridge, _ByteQueue
 from nyaatriggers.triggevent_recovery import TriggeventRecovery
 from nyaatriggers.ws_client import WSClient
 
 
-def main():
+def slow_history():
     app = QApplication.instance() or QApplication([])
     diagnostics, progress = [], []
     with tempfile.TemporaryDirectory(prefix="nyaa-protocol-test-") as temp:
@@ -29,6 +29,7 @@ def main():
             f"01|{stamp.isoformat()}|553|Raid|0",
             f"03|{stamp.isoformat()}|10000001|Player|15|64|0|0|World|0|0|10000|10000|10000|10000|0|0|100|100|0|0|0",
             "00|invalid|0038|Player|Damaged line|0",
+            f"20|{(stamp + timedelta(seconds=1)).isoformat()}|40000001|Boss|NOT_HEX|Bad cast|10000001|Player|3|100|100|0|0|0",
             f"00|{(stamp + timedelta(seconds=2)).isoformat()}|0038|Player|Later valid line|0",
         ]
         path = Path(temp) / "Network_test.log"
@@ -39,9 +40,12 @@ def main():
         bridge.recovery_progress.connect(lambda message, generation: progress.append(message))
         backlog = json.dumps({"type": "LogLine", "rawLine":
                              f"00|{(stamp + timedelta(seconds=4)).isoformat()}|0038|Player|During restore|0"})
+        damaged_backlog = json.dumps({"type": "LogLine", "rawLine":
+                                     f"20|{(stamp + timedelta(seconds=4)).isoformat()}|40000001|Boss|NOT_HEX|Bad cast|10000001|Player|3|100|100|0|0|0"})
 
         def while_loading(generation):
             recovery.feed(backlog)
+            recovery.feed(damaged_backlog)
             assert not recovery._live
             QTimer.singleShot(750, lambda: path.write_text("\n".join(history + [anchor]) + "\n"))
 
@@ -52,8 +56,8 @@ def main():
                 patch.object(bridge, "catch_up", wraps=bridge.catch_up) as catch_up:
             try:
                 bridge.start()
-                ws._on_message(json.dumps({"type": "ChangeZone", "zoneID": 0x553}))
-                ws._on_message(json.dumps({"type": "ChangePrimaryPlayer", "charID": 0x10000001}))
+                ws._on_message(json.dumps({"type": "ChangeZone", "zoneID": 0x553, "zoneName": "Raid"}))
+                ws._on_message(json.dumps({"type": "ChangePrimaryPlayer", "charID": 0x10000001, "charName": "Player"}))
                 ws._on_message(json.dumps({"type": "LogLine", "rawLine": anchor}))
                 for _ in range(1200):
                     if recovery._live:
@@ -64,8 +68,8 @@ def main():
                 assert [message["t"] for message in progress] == ["recovery_checkpoint", "recovery_checkpoint", "recovered"], progress
                 assert [message["checkpoint"] for message in progress] == [1, 2, 3], progress
                 assert progress[-1]["status"] == "degraded", progress
-                assert progress[-1]["skipped"] == 1, progress
-                assert any("restored 3 historical events, skipped 1" in line for line in diagnostics), diagnostics
+                assert [message["skipped"] for message in progress] == [2, 3, 3], progress
+                assert any("restored 4 historical events, skipped 2" in line for line in diagnostics), diagnostics
                 assert not any("command error:" in line or "feed error:" in line for line in diagnostics), diagnostics
             except BaseException:
                 print("\n".join(diagnostics))
@@ -75,5 +79,67 @@ def main():
     print("PASS real bridge catch-up during slow history loading and degraded history acknowledgement")
 
 
+def queue_pressure():
+    app = QApplication.instance() or QApplication([])
+    bridge = TriggeventBridge()
+    ws = WSClient()
+    recovery = TriggeventRecovery(bridge, ws, lambda: None)
+    diagnostics, calls, overflow_generations = [], [], []
+    bridge.callout.connect(lambda text, severity, generation: calls.append((text, generation)))
+    bridge.feed_overflow.connect(overflow_generations.append)
+    catch_up = bridge.catch_up
+    first_generation = None
+
+    def flood():
+        frame = json.dumps({"type": "LogLine", "rawLine":
+                            f"00|{datetime.now(timezone.utc).isoformat()}|0038|Player|Pressure|0"})
+        for _ in range(10000):
+            recovery.feed(frame)
+        recovery.feed(frame)
+
+    def stall_handoff(frames, checkpoint, *, finish=False):
+        nonlocal first_generation
+        if finish and first_generation is None:
+            first_generation = bridge.generation()
+            # Leave the writer waiting on its old queue to reproduce stalled stdin.
+            bridge._wq = _ByteQueue(10000)
+            queued = catch_up(frames, checkpoint, finish=finish)
+            QTimer.singleShot(0, flood)
+            return queued
+        return catch_up(frames, checkpoint, finish=finish)
+
+    with patch.dict(os.environ, {"NYAA_AUTOMARK": "0"}), \
+            patch("nyaatriggers.triggevent_bridge._log", side_effect=diagnostics.append), \
+            patch("nyaatriggers.triggevent_recovery._log", side_effect=diagnostics.append), \
+            patch.object(bridge, "catch_up", side_effect=stall_handoff):
+        try:
+            bridge.start()
+            ws._on_message(json.dumps({"type": "ChangeZone", "zoneID": 0x553, "zoneName": "Raid"}))
+            ws._on_message(json.dumps({"type": "ChangePrimaryPlayer", "charID": 0x10000001, "charName": "Player"}))
+            ws._on_message(json.dumps({"type": "LogLine", "rawLine":
+                                       f"00|{datetime.now(timezone.utc).isoformat()}|0038|Player|Anchor|0"}))
+            for _ in range(1200):
+                if recovery._live:
+                    break
+                QTest.qWait(25)
+            assert overflow_generations == [first_generation], overflow_generations
+            assert recovery._live and bridge.generation() != first_generation, "Overflow stranded recovery"
+            bridge.feed(json.dumps({"type": "LogLine", "rawLine":
+                                    f"20|{datetime.now(timezone.utc).isoformat()}|40000001|Boss|C622|Light of Judgment|10000001|Player|5|100|100|0|0|0"}))
+            for _ in range(200):
+                if calls:
+                    break
+                QTest.qWait(25)
+            assert len(calls) == 1 and calls[0][1] == bridge.generation(), calls
+            assert not any("command error:" in line or "feed error:" in line for line in diagnostics), diagnostics
+        except BaseException:
+            print("\n".join(diagnostics))
+            raise
+        finally:
+            bridge.stop(wait=True)
+    print("PASS production queue overflow restarts recovery and delivers the next live callout")
+
+
 if __name__ == "__main__":
-    main()
+    slow_history()
+    queue_pressure()

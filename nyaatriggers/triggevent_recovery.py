@@ -10,6 +10,7 @@ from nyaatriggers.triggevent_bridge import _log
 from nyaatriggers.ws_client import _extract_raw
 
 _MAX_PENDING_BYTES = 16 << 20
+_PROGRESS_TIMEOUT_MS = 60_000
 
 
 class TriggeventRecovery(QObject):
@@ -28,16 +29,24 @@ class TriggeventRecovery(QObject):
         self._checkpoint = 0
         self._lost_connection = False
         self._initial_state = ws.state_snapshot()
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setSingleShot(True)
+        self._progress_timer.setInterval(_PROGRESS_TIMEOUT_MS)
+        self._progress_timer.timeout.connect(self._recovery_timed_out)
         bridge.ready.connect(self._on_ready)
         bridge.status.connect(self._on_status)
         bridge.recovery_progress.connect(self._on_progress)
+        bridge.feed_overflow.connect(self._restart)
         ws.raw_message.connect(self.feed)
         ws.status_changed.connect(self._connection)
 
     def _on_status(self, active, _message, generation):
         if generation != self.bridge.generation():
             return
+        if not active:
+            self._progress_timer.stop()
         if active and generation != self._generation:
+            self._progress_timer.stop()
             self._generation = generation
             self._pending = []
             self._bytes = 0
@@ -45,6 +54,19 @@ class TriggeventRecovery(QObject):
             self._ending = False
             self._checkpoint = 0
             self._initial_state = self.ws.state_snapshot()
+
+    def _restart(self, generation):
+        if generation != self._generation or generation != self.bridge.generation():
+            return
+        self._progress_timer.stop()
+        if self.bridge.is_active():
+            self.bridge.stop()
+            self.bridge.start()
+
+    def _recovery_timed_out(self):
+        if self._loading and not self._live:
+            _log("recovery: engine acknowledgement timed out")
+            self._restart(self._generation)
 
     def _connection(self, connected, _message):
         if not connected:
@@ -129,6 +151,8 @@ class TriggeventRecovery(QObject):
     def _finish(self, generation, history, reason):
         if generation != self._generation or generation != self.bridge.generation() or self._live:
             return
+        if not self._progress_timer.isActive():
+            self._progress_timer.start()
         # State seeds go first. Later changes retain their original feed order.
         initial = self.ws.state_snapshot() if history else self._initial_state or self.ws.state_snapshot()
         frames = list(initial) + self._pending
@@ -154,10 +178,14 @@ class TriggeventRecovery(QObject):
         else:
             for raw in list(initial) + self._pending:
                 self.bridge.feed(raw)
+                if generation != self.bridge.generation():
+                    return
         self._pending = []
         self._bytes = 0
         self._loading = True
         self._live = not self.bridge.supports_catchup()
+        if self._live:
+            self._progress_timer.stop()
         _log("recovery: requested engine history restore" if history else f"recovery: current state only, {reason}")
         self.ws.request_combatants_once()
 
@@ -167,11 +195,13 @@ class TriggeventRecovery(QObject):
                 or message.get("checkpoint") != self._checkpoint):
             return
         if message.get("t") == "recovered" and self._ending:
+            self._progress_timer.stop()
             self._live = True
             self._ending = self._loading = False
             _log(f"recovery: {message.get('status', 'unknown')}, "
                  f"skipped {message.get('skipped', 0)}, {message.get('reason', '')}")
         elif message.get("t") == "recovery_checkpoint" and not self._ending:
+            self._progress_timer.start()
             self._flush_pending(generation, self._checkpoint)
 
     def _flush_pending(self, generation, acknowledged):
@@ -187,3 +217,4 @@ class TriggeventRecovery(QObject):
         self._bytes = 0
         self._checkpoint = checkpoint
         self._ending = finish
+        self._progress_timer.start()

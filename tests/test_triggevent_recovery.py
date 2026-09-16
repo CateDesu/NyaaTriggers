@@ -10,7 +10,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QTest
-from nyaatriggers.triggevent_bridge import TriggeventBridge
+from nyaatriggers.triggevent_bridge import TriggeventBridge, _ByteQueue
 from nyaatriggers.triggevent_recovery import TriggeventRecovery
 from nyaatriggers.ws_client import WSClient
 
@@ -26,6 +26,67 @@ def frame(line):
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_queue_overflow_restarts_without_evicting_the_handoff(self):
+        for pressure in ("count", "bytes", "command"):
+            with self.subTest(pressure=pressure):
+                bridge = TriggeventBridge()
+                bridge._active = True
+                bridge._gen = bridge._recovery_gen = bridge._catchup_gen = 1
+                if pressure == "bytes":
+                    bridge._wq = _ByteQueue(10000, maxbytes=300)
+                recovery = TriggeventRecovery(bridge, WSClient(), lambda: None)
+                recovery._on_status(True, "Starting", 1)
+                recovery._finish(1, None, "")
+                bridge._wq.get_nowait()
+                bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 1}, gen=1)
+                self.assertTrue(recovery._ending)
+                with patch.object(bridge, "start") as start, patch.object(bridge, "stop") as stop:
+                    for _ in range(10001):
+                        if pressure == "command":
+                            bridge._send_command({"nyaa_cmd": "set_automark", "enable": False})
+                        else:
+                            recovery.feed(frame(log(0, "0038|Player|Pressure")))
+                    self.assertEqual(json.loads(bridge._wq.get_nowait())["nyaa_cmd"], "recover_end")
+                    start.assert_called_once()
+                    stop.assert_called_once()
+
+    def test_missing_acknowledgement_restarts_and_stale_timeout_cannot_restart(self):
+        bridge = TriggeventBridge()
+        bridge._active = True
+        bridge._gen = bridge._recovery_gen = bridge._catchup_gen = 1
+        recovery = TriggeventRecovery(bridge, WSClient(), lambda: None)
+        recovery._on_status(True, "Starting", 1)
+        recovery._progress_timer.setInterval(20)
+        with patch.object(bridge, "start") as start, patch.object(bridge, "stop") as stop:
+            recovery._finish(1, None, "")
+            QTest.qWait(60)
+            start.assert_called_once()
+            stop.assert_called_once()
+            bridge._gen = 2
+            recovery._restart(1)
+            recovery._recovery_timed_out()
+            start.assert_called_once()
+            bridge._active = False
+            recovery._on_status(False, "Off", 2)
+            self.assertFalse(recovery._progress_timer.isActive())
+
+    def test_final_acknowledgement_cancels_timeout(self):
+        bridge = TriggeventBridge()
+        bridge._active = True
+        bridge._gen = bridge._recovery_gen = bridge._catchup_gen = 1
+        recovery = TriggeventRecovery(bridge, WSClient(), lambda: None)
+        recovery._on_status(True, "Starting", 1)
+        recovery._progress_timer.setInterval(20)
+        with patch.object(bridge, "start") as start:
+            recovery._finish(1, None, "")
+            bridge._wq.get_nowait()
+            bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 1}, gen=1)
+            bridge._dispatch({"t": "recovered", "checkpoint": 2}, gen=1)
+            QTest.qWait(60)
+            start.assert_not_called()
+            self.assertTrue(recovery._live)
+            self.assertFalse(recovery._progress_timer.isActive())
+
     def test_slow_restore_drains_new_input_before_acknowledged_live_handoff(self):
         bridge = TriggeventBridge()
         bridge._active = True
