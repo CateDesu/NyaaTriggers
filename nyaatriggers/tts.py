@@ -27,7 +27,7 @@ import wave
 from pathlib import Path
 from queue import Queue, Empty, Full
 
-from nyaatriggers.paths import bundle_root
+from nyaatriggers.paths import bundle_root, default_voice_dir
 
 # child_env undoes PyInstaller's library-path injection for spawned children,
 # so a system espeak resolves the system libespeak-ng, not the bundled copy.
@@ -56,7 +56,7 @@ if not getattr(sys, 'frozen', False):
 
 _BASE        = bundle_root()
 _VOICES      = _BASE / "voices"
-_PIPER_MODEL = _VOICES / "en_US-arctic-medium.onnx"
+_PIPER_MODEL = default_voice_dir() / "en_US-arctic-medium.onnx"
 
 # Runtime-downloaded models, Kokoro, live here. On a frozen build _VOICES sits
 # inside _internal/, which every self-update replaces wholesale, so a model saved

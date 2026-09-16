@@ -58,8 +58,8 @@ def fetch_stubbed(channel=None, payload=PAYLOAD):
         urls.append(getattr(req, "full_url", req))
         return Resp()
 
-    orig = updater.urllib.request.urlopen
-    updater.urllib.request.urlopen = fake_urlopen
+    orig = updater.open_response
+    updater.open_response = lambda req, timeout, deadline: fake_urlopen(req, timeout)
     try:
         if channel is None:
             return updater.fetch_latest_release(), urls, None
@@ -67,7 +67,7 @@ def fetch_stubbed(channel=None, payload=PAYLOAD):
     except Exception as exc:
         return None, urls, exc
     finally:
-        updater.urllib.request.urlopen = orig
+        updater.open_response = orig
 
 
 rel_stable, urls_stable, err_stable = fetch_stubbed("stable")
@@ -112,15 +112,15 @@ def fetch_error_stubbed(exc):
     def fake_urlopen(req, timeout=None):
         raise exc
 
-    orig = updater.urllib.request.urlopen
-    updater.urllib.request.urlopen = fake_urlopen
+    orig = updater.open_response
+    updater.open_response = lambda req, timeout, deadline: fake_urlopen(req, timeout)
     try:
         updater.fetch_latest_release()
         return None
     except Exception as got:
         return got
     finally:
-        updater.urllib.request.urlopen = orig
+        updater.open_response = orig
 
 
 err = fetch_error_stubbed(_http_error(403, {"X-RateLimit-Remaining": "0"}))

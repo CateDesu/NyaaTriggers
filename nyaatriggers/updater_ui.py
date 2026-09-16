@@ -287,49 +287,48 @@ class UpdaterUiMixin:
     def _start_update_check(self, manual: bool) -> None:
         def _work() -> None:
             try:
-                rel = updater.fetch_latest_release(timeout=8, channel="stable")
-            except updater.RateLimited:
-                # 60 anonymous requests per hour per IP, and a shared NAT or
-                # VPN can exhaust that before this launch ever asks. Fall back
-                # to the last good answer so a pending update still surfaces.
-                rel = updater.read_cached_release()
-                if rel is None:
+                try:
+                    rel = updater.fetch_latest_release(timeout=8, channel="stable")
+                except updater.RateLimited:
+                    # A shared network can exhaust the anonymous request budget.
+                    # Use the last good answer when it is still readable.
+                    rel = updater.read_cached_release()
+                    if rel is None:
+                        self._upd_available_signal.emit(None)
+                        self._upd_checkmsg_signal.emit(
+                            manual,
+                            _("Update check failed - GitHub rate limit reached, try again later")
+                            if manual else "")
+                        return
+                # Git and source installs get re-offered every rolling tag,
+                # one per push to main. Their _VERSION stays at the base
+                # even after a git pull, so the tag still compares newer.
+                # Dismiss, Download, or a successful Install snoozes the
+                # tag. A manual check always bypasses the snooze because
+                # the user explicitly asked.
+                snoozed = (not manual and not updater.is_frozen()
+                           and rel.tag and rel.tag == self._settings.get("update_snoozed"))
+                # A git checkout that already contains the upstream tip built or
+                # pulled the commit this release was cut from. The tag math can
+                # never see that, base _VERSION never moves, so ask git directly
+                # and stay quiet instead of offering a maintainer their own push.
+                covers = (updater.install_kind() == "git"
+                          and updater.git_covers_upstream())
+                if (rel.version and not snoozed and not covers
+                        and updater.is_update_for_here(rel.version, _VERSION)):
+                    self._upd_available_signal.emit(rel)
+                    self._upd_checkmsg_signal.emit(manual, "")   # banner handles it
+                else:
                     self._upd_available_signal.emit(None)
                     self._upd_checkmsg_signal.emit(
                         manual,
-                        _("Update check failed - GitHub rate limit reached, try again later")
-                        if manual else "")
-                    return
+                        _("Up to date (v{version})").format(version=_VERSION) if manual else "")
             except Exception:
                 self._upd_available_signal.emit(None)
                 self._upd_checkmsg_signal.emit(
                     manual,
                     _("Update check failed - no network or GitHub unreachable")
                     if manual else "")
-                return
-            # Git and source installs get re-offered every rolling tag,
-            # one per push to main. Their _VERSION stays at the base
-            # even after a git pull, so the tag still compares newer.
-            # Dismiss, Download, or a successful Install snoozes the
-            # tag. A manual check always bypasses the snooze because
-            # the user explicitly asked.
-            snoozed = (not manual and not updater.is_frozen()
-                       and rel.tag and rel.tag == self._settings.get("update_snoozed"))
-            # A git checkout that already contains the upstream tip built or
-            # pulled the commit this release was cut from. The tag math can
-            # never see that, base _VERSION never moves, so ask git directly
-            # and stay quiet instead of offering a maintainer their own push.
-            covers = (updater.install_kind() == "git"
-                      and updater.git_covers_upstream())
-            if (rel.version and not snoozed and not covers
-                    and updater.is_update_for_here(rel.version, _VERSION)):
-                self._upd_available_signal.emit(rel)
-                self._upd_checkmsg_signal.emit(manual, "")   # banner handles it
-            else:
-                self._upd_available_signal.emit(None)
-                self._upd_checkmsg_signal.emit(
-                    manual,
-                    _("Up to date (v{version})").format(version=_VERSION) if manual else "")
         # The worker body is fully guarded. Guard the thread start too, so nothing
         # in the update-check entry point can propagate out and crash the app.
         try:

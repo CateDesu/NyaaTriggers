@@ -34,6 +34,9 @@ triggevent_inventory.seed.json
 *.nyaa-old
 .nyaa-version-x
 .nyaa-update-*
+.nyaa-update.lock
+.nyaa-linux-update*
+.nyaa-timeline-backups/
 
 # Local scratch (agent handoff/audit notes, plans) - never committed
 local/

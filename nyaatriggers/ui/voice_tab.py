@@ -32,7 +32,7 @@ from nyaatriggers.app_common import _JP_NEURAL_VOICES, _sweep_stale_update_parts
 class VoiceTabMixin:
     def _scan_voices(self) -> list[tuple[str, Path]]:
         # User voices first, next to the exe they survive self-updates, then the
-        # bundled set. On a stem clash the user copy wins. The Kokoro neural
+        # bundled set. On a stem clash a complete user copy wins. The Kokoro neural
         # model also lives here as .onnx. It is not a Piper voice, so keep it
         # out of the Piper list. It has its own combo entries.
         found: dict[str, Path] = {}
@@ -40,7 +40,8 @@ class VoiceTabMixin:
             if not voices_dir.exists():
                 continue
             for p in sorted(voices_dir.glob("*.onnx")):
-                if not p.stem.startswith("kokoro") and p.stem not in found:
+                if (not p.stem.startswith("kokoro") and p.stem not in found
+                        and p.is_file() and p.with_suffix(".onnx.json").is_file()):
                     found[p.stem] = p
         return [(stem, found[stem]) for stem in sorted(found)]
 
@@ -504,13 +505,23 @@ class VoiceTabMixin:
         self._voice_combo.clear()
         self._populate_voice_combo()   # both sections. Refresh must keep the JP voices
         idx = self._voice_combo.findData(saved_data)
-        self._voice_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        if idx < 0:
+            idx = next((i for i in range(self._voice_combo.count())
+                        if isinstance(data := self._voice_combo.itemData(i), str)
+                        and data and not data.startswith("kokoro:")), -1)
+        self._voice_combo.setCurrentIndex(idx)
         self._voice_combo.blockSignals(False)
         # If the active voice was removed, re-point TTS to whatever is now
         # selected so set_model and the saved setting follow the visible
         # choice.
-        if idx < 0 and self._voice_combo.count():
+        if idx >= 0 and self._voice_combo.currentData() != saved_data:
             self._on_voice_changed(self._voice_combo.currentIndex())
+        elif isinstance(saved_data, str) and saved_data.startswith("kokoro:"):
+            # Japanese speech still needs a usable Piper voice for English callouts.
+            previous_model = self._settings.get("voice_model")
+            self._restore_voice_model()
+            if self._settings.get("voice_model") != previous_model:
+                self._save_settings()
 
     def _start_install(self, rel, kind: str) -> None:
         def _work() -> None:

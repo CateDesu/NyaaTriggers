@@ -148,6 +148,7 @@ class PersistenceRecoveryTests(unittest.TestCase):
                                                 "en_US-arctic-medium"]
         for stem in stems:
             (self.root / (stem + ".onnx")).touch()
+            (self.root / (stem + ".onnx.json")).write_text("{}")
         host = VoiceHost(settings)
         self.stack.enter_context(patch.object(ac, "_USER_VOICES_DIR", self.root))
         self.stack.enter_context(patch.object(ac, "_BUNDLE_DIR", self.root))
@@ -226,6 +227,74 @@ class PersistenceRecoveryTests(unittest.TestCase):
             model.assert_called_with(self.root / "en_GB-arctic-medium.onnx")
             host._save_settings.assert_called_once()
 
+    def test_refresh_without_usable_piper_voices_does_not_enable_japanese(self):
+        host = self.voices({"voice_model": "en_US-arctic-medium", "jp_neural_enabled": False},
+                           stems=["en_US-arctic-medium"])
+        with patch("nyaatriggers.ui.voice_tab.set_model"), \
+             patch("nyaatriggers.ui.voice_tab.set_jp_neural") as neural, \
+             patch("nyaatriggers.ui.voice_tab.kokoro_ready", return_value=False):
+            host._restore_voice_model()
+            (self.root / "en_US-arctic-medium.onnx.json").unlink()
+            host._refresh_voice_combo()
+            self.assertEqual(host._voice_combo.currentIndex(), -1)
+            self.assertFalse(host._settings["jp_neural_enabled"])
+            host._on_kokoro_download.assert_not_called()
+            neural.assert_not_called()
+            host._save_settings.assert_not_called()
+
+    def test_refresh_keeps_an_explicit_japanese_voice_without_piper(self):
+        host = self.voices({"voice_model": "en_US-arctic-medium", "jp_neural_enabled": True,
+                            "jp_neural_voice": "jm_kumo"}, stems=["en_US-arctic-medium"])
+        with patch("nyaatriggers.ui.voice_tab.set_model"), \
+             patch("nyaatriggers.ui.voice_tab.set_jp_neural") as neural:
+            host._restore_voice_model()
+            (self.root / "en_US-arctic-medium.onnx.json").unlink()
+            host._refresh_voice_combo()
+            self.assertEqual(host._voice_combo.currentData(), "kokoro:jm_kumo")
+            self.assertTrue(host._settings["jp_neural_enabled"])
+            host._on_kokoro_download.assert_not_called()
+            neural.assert_not_called()
+            host._save_settings.assert_not_called()
+
+    def test_japanese_refresh_updates_the_english_voice_fallback(self):
+        host = self.voices({"voice_model": "en_US-arctic-medium", "jp_neural_enabled": True,
+                            "jp_neural_voice": "jm_kumo"})
+        fallback = self.root / "en_GB-arctic-medium.onnx"
+        with patch("nyaatriggers.ui.voice_tab.set_model") as model, \
+             patch("nyaatriggers.ui.voice_tab.set_jp_neural") as neural:
+            host._restore_voice_model()
+            model.reset_mock()
+            (self.root / "en_US-arctic-medium.onnx.json").unlink()
+            host._refresh_voice_combo()
+            model.assert_called_once_with(fallback)
+            self.assertEqual(host._settings["voice_model"], fallback.stem)
+            self.assertEqual(host._voice_combo.currentData(), "kokoro:jm_kumo")
+            self.assertTrue(host._settings["jp_neural_enabled"])
+            host._save_settings.assert_called_once()
+            host._on_kokoro_download.assert_not_called()
+            neural.assert_not_called()
+
+    def test_japanese_refresh_uses_the_bundled_copy_of_the_same_voice(self):
+        stem = "en_US-arctic-medium"
+        host = self.voices({"voice_model": stem, "jp_neural_enabled": True,
+                            "jp_neural_voice": "jm_kumo"})
+        bundle = self.root / "voices"
+        bundle.mkdir()
+        (bundle / (stem + ".onnx")).write_bytes(b"bundled model")
+        (bundle / (stem + ".onnx.json")).write_text("{}")
+        with patch("nyaatriggers.ui.voice_tab.set_model") as model, \
+             patch("nyaatriggers.ui.voice_tab.set_jp_neural") as neural:
+            host._restore_voice_model()
+            model.reset_mock()
+            (self.root / (stem + ".onnx.json")).unlink()
+            host._refresh_voice_combo()
+            model.assert_called_once_with(bundle / (stem + ".onnx"))
+            self.assertEqual(host._settings["voice_model"], stem)
+            self.assertEqual(host._voice_combo.currentData(), "kokoro:jm_kumo")
+            host._save_settings.assert_not_called()
+            host._on_kokoro_download.assert_not_called()
+            neural.assert_not_called()
+
     def test_user_model_wins_over_the_bundled_copy(self):
         user = self.root / "user"
         bundle = self.root / "bundle"
@@ -234,6 +303,8 @@ class PersistenceRecoveryTests(unittest.TestCase):
         name = "en_US-arctic-medium.onnx"
         (user / name).touch()
         (bundle / "voices" / name).touch()
+        (user / (name + ".json")).write_text("{}")
+        (bundle / "voices" / (name + ".json")).write_text("{}")
         host = VoiceHost({"voice_model": "en_US-arctic-medium"})
         with patch.object(ac, "_USER_VOICES_DIR", user), \
              patch.object(ac, "_BUNDLE_DIR", bundle), \

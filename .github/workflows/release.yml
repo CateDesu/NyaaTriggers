@@ -111,17 +111,9 @@ jobs:
           TAG: ${{ steps.v.outputs.tag }}
           SUFFIX: ${{ steps.v.outputs.suffix }}
         run: |
-          LATEST=$(gh release list -R "${{ github.repository }}" --limit 100 --json tagName,isDraft,isPrerelease \
-            --jq '.[] | select(.isDraft | not) | select(.isPrerelease | not) | .tagName' \
-            | grep -E "^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+${SUFFIX}$" | sort -V | tail -1 || true)
-          if [ -z "$LATEST" ]; then
-            echo "No published rolling release yet; $TAG is the first"
-          elif [ "$TAG" = "$LATEST" ] || [ "$(printf '%s\n%s\n' "${TAG#v}" "${LATEST#v}" | sort -V | tail -1)" != "${TAG#v}" ]; then
-            echo "::error::$TAG is not newer than the current latest rolling release $LATEST; refusing to regress the channel (re-run of an old run or renamed workflow file? bump _VERSION in nyaatriggers/app_common.py if the rename was intended)"
-            exit 1
-          else
-            echo "$TAG sorts above current latest $LATEST"
-          fi
+          gh api --paginate --slurp "repos/${{ github.repository }}/releases?per_page=100" > release-pages.json
+          jq 'add | map({tagName: .tag_name, isDraft: .draft, isPrerelease: .prerelease})' release-pages.json > releases.json
+          python3 tools/release_policy.py check "$TAG" < releases.json
 
   # Run the test suite on every push and tag. Every build/publish job below
   # depends on this, so a commit that breaks the rollback contract or DPS
@@ -614,17 +606,22 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write
+    concurrency:
+      group: release-publication
+      cancel-in-progress: false
     steps:
+      - uses: actions/checkout@v5
       - name: Publish release (un-draft)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.meta.outputs.tag }}
-          # This job has no checkout, and gh resolves the target repo from the
-          # local git remotes when GH_REPO is unset, so it dies with "not a git
-          # repository" and the release stays a draft forever.
+          # Keep the publication target explicit.
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release edit "$TAG" --draft=false
+          gh api --paginate --slurp "repos/${{ github.repository }}/releases?per_page=100" > release-pages.json
+          jq 'add | map({tagName: .tag_name, isDraft: .draft, isPrerelease: .prerelease})' release-pages.json > releases.json
+          LATEST=$(python3 tools/release_policy.py latest "$TAG" < releases.json)
+          gh release edit "$TAG" --draft=false --latest="$LATEST"
           echo "Published $TAG"
 
   # Keep the Stable channel a single continuously-updated rolling release: after a
@@ -642,27 +639,17 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
-      # Fail-closed double gate: the prerelease flag and the tag shape must both
-      # say the release is an auto-rolling Stable, so a wrong filter here deletes
-      # nothing rather than touching hand-cut milestone releases.
+      # Keep drafts, newer builds and hand cut milestones.
       - name: Delete superseded rolling releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           KEEP: ${{ needs.meta.outputs.tag }}
-          PRE: ${{ needs.meta.outputs.prerelease }}
-          SUFFIX: ${{ needs.meta.outputs.suffix }}
         run: |
-          if [ "$PRE" = "true" ]; then
-            SELECT='select(.isPrerelease)'
-          else
-            SELECT='select(.isPrerelease | not)'
-          fi
-          echo "Pruning channel prerelease=$PRE tags matching v<x.y.z.n>${SUFFIX}"
-          gh release list --limit 100 --json tagName,isPrerelease \
-            --jq ".[] | $SELECT | .tagName" | while read -r t; do
+          gh api --paginate --slurp "repos/${{ github.repository }}/releases?per_page=100" > release-pages.json
+          jq 'add | map({tagName: .tag_name, isDraft: .draft, isPrerelease: .prerelease})' release-pages.json > releases.json
+          python3 tools/release_policy.py prune "$KEEP" < releases.json > superseded.txt
+          while read -r t; do
             [ -z "$t" ] && continue
-            [ "$t" = "$KEEP" ] && continue
-            echo "$t" | grep -qE "^v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+${SUFFIX}$" || continue
             echo "Pruning superseded rolling release $t"
-            gh release delete "$t" --cleanup-tag --yes || true
-          done
+            gh release delete "$t" --cleanup-tag --yes
+          done < superseded.txt

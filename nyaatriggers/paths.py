@@ -19,3 +19,14 @@ def data_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return source_root()
+
+
+def default_voice_dir() -> Path:
+    """Find a complete default voice or the user directory for its repair."""
+    user = data_root() / "voices"
+    bundled = bundle_root() / "voices"
+    for directory in (user, bundled):
+        if all((directory / ("en_US-arctic-medium" + ext)).is_file()
+               for ext in (".onnx", ".onnx.json")):
+            return directory
+    return user

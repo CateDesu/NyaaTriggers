@@ -245,6 +245,12 @@ def _repo_download_version() -> "str | None":
     the stamp is missing or unreadable, like a partial or pre stamp download."""
     try:
         v = json.loads(_REPO_TRIGGERS_VERSION.read_text(encoding="utf-8"))
+        # Source updates keep the base version. A newly checked out bundle
+        # must still replace a download made before that bundle arrived.
+        if not updater.is_frozen() and any(
+                bundled.exists() and bundled.stat().st_mtime_ns > _REPO_TRIGGERS_VERSION.stat().st_mtime_ns
+                for bundled in (TRIGGERS_FILE, RETIRED_FILE)):
+            return None
     except (OSError, ValueError):
         return None
     return v if isinstance(v, str) else None
@@ -265,6 +271,24 @@ def _sweep_stale_update_parts(tmpdir: "Path", older_than_s: float = 3600.0) -> N
             try:
                 if part.stat().st_mtime < cutoff:
                     part.unlink()
+            except OSError:
+                pass
+        for directory in Path(tmpdir).glob("nyaatriggers-download-*"):
+            try:
+                if not directory.is_dir() or directory.is_symlink():
+                    continue
+                entries = list(directory.iterdir())
+                if not entries or directory.stat().st_mtime >= cutoff:
+                    continue
+                names = (updater.LINUX_ASSET, updater.WINDOWS_ASSET)
+                if all(entry.is_file() and not entry.is_symlink()
+                       and entry.stat().st_mtime < cutoff
+                       and (entry.name in names or any(
+                           re.fullmatch(re.escape(name) + r"\.[0-9]+\.[0-9]+\.part", entry.name)
+                           for name in names)) for entry in entries):
+                    for entry in entries:
+                        entry.unlink()
+                    directory.rmdir()
             except OSError:
                 pass
     except OSError:

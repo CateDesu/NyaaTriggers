@@ -348,6 +348,10 @@ with tempfile.TemporaryDirectory() as base:
     (wrapped / "NyaaTriggers" / "_internal" / "x.dll").write_text("X")
     (wrapped / "NyaaTriggers" / EXE).write_text("X")
     empty = Path(tempfile.mkdtemp(prefix=".nyaa-update-", dir=str(inst.parent)))
+    for stage in (leftover, wrapped):
+        owner = stage / updater._STAGING_OWNER
+        owner.write_text(str(inst.resolve()))
+        os.utime(owner, (time.time() - 90000, time.time() - 90000))
     updater.cleanup_old_backups(inst)
     check("user folder matching the name survives", user_dir.is_dir())
     check("real flat staging swept", not leftover.exists())
@@ -377,6 +381,7 @@ try:
         # French puts a space before the colon.
         ("INFO : Aucune tâche ne correspond aux critères spécifiés.", 0, True),
         ("", 0, True),                 # clean empty stdout
+        ("INFO: No tasks match", 1, False),
         ("", 1, False),                # empty but the probe failed
         ("ERROR: The RPC server is unavailable.", 0, False),
         ("ERROR: The RPC server is unavailable.", 1, False),
@@ -410,12 +415,12 @@ class _FakeResp:
 
 with tempfile.TemporaryDirectory() as base:
     dest = Path(base) / "update.zip"
-    real_urlopen = updater.urllib.request.urlopen
+    real_urlopen = updater.open_response
     real_cap = updater._MAX_DOWNLOAD_BYTES
     updater._MAX_DOWNLOAD_BYTES = 1 << 20   # 1 MB, so the test moves 2 MB not 2 GB
     try:
         for total in (0, 10 << 20):   # no Content-Length; and one lying about 10 MB
-            updater.urllib.request.urlopen = lambda *a, **k: _FakeResp(total, None)
+            updater.open_response = lambda *a, **k: _FakeResp(total, None)
             try:
                 updater.download("https://x/update.zip", dest)
                 raised = False
@@ -426,12 +431,12 @@ with tempfile.TemporaryDirectory() as base:
                   not dest.exists() and not list(Path(base).glob("*.part")))
         # A normal download under the cap still succeeds.
         body = [b"y" * 262144] * 3
-        updater.urllib.request.urlopen = (
+        updater.open_response = (
             lambda *a, **k: _FakeResp(len(b"".join(body)), list(body)))
         updater.download("https://x/update.zip", dest)
         check("download under the cap succeeds", dest.read_bytes() == b"".join(body))
     finally:
-        updater.urllib.request.urlopen = real_urlopen
+        updater.open_response = real_urlopen
         updater._MAX_DOWNLOAD_BYTES = real_cap
 
 
@@ -546,6 +551,8 @@ def make_linux_tar(base):
     for n, c in NEW_INTERNAL.items():
         (new_root / "_internal" / n).write_text(c)
     (new_root / "NyaaTriggers").write_text("NEW-EXE")
+    shutil.copy2(Path(__file__).resolve().parent.parent / "NyaaTriggers.sh",
+                 new_root / "NyaaTriggers.sh")
     tar_path = Path(base) / "update.tar.gz"
     with tarfile.open(tar_path, "w:gz") as tf:
         tf.add(new_root, arcname="NyaaTriggers")
@@ -562,9 +569,12 @@ with tempfile.TemporaryDirectory() as base:
     check("linux _internal is the NEW tree", snap_internal(inst) == NEW_INTERNAL)
     check("linux user data untouched", (inst / "settings.json").read_text() == "USERDATA")
     baks = [n for n in leftovers(inst) if n.endswith(updater._BACKUP_SUFFIX)]
+    runtime_baks = [n for n in baks if n.startswith("_internal.")]
     check("linux old exe + _internal parked as sweepable backups",
-          f"_internal.{os.getpid()}{updater._BACKUP_SUFFIX}" in baks
-          and f"NyaaTriggers.{os.getpid()}{updater._BACKUP_SUFFIX}" in baks)
+          len(baks) == 2 and len(runtime_baks) == 1
+          and (inst / runtime_baks[0].replace("_internal.", "NyaaTriggers.", 1)).read_text() == "OLD-EXE"
+          and all((inst / runtime_baks[0] / name).read_text() == content
+                  for name, content in OLD_INTERNAL.items()))
     check("linux staging dir swept",
           not list(Path(base).glob(f"{updater._STAGING_PREFIX}*")))
     updater.cleanup_old_backups(inst)

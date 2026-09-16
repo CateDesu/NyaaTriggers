@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 from nyaatriggers import drop_log
-from nyaatriggers.paths import bundle_root, data_root
+from nyaatriggers.paths import bundle_root, data_root, default_voice_dir
 
 _LOG_FILE = data_root() / "nyaatriggers.log"
 
@@ -131,7 +131,7 @@ from nyaatriggers.theme import STYLESHEET
 
 _FFXIV_VENV = Path.home() / ".venv" / "ffxiv"
 _BUNDLE_DIR = bundle_root()
-_VOICES_DIR = _BUNDLE_DIR / "voices"
+_VOICES_DIR = default_voice_dir()
 _VOICE_STEM  = "en_US-arctic-medium"
 _VOICE_FILE  = _VOICES_DIR / f"{_VOICE_STEM}.onnx"
 _VOICE_CONFIG = _VOICES_DIR / f"{_VOICE_STEM}.onnx.json"
@@ -176,45 +176,18 @@ def _download(url: str, dest: Path, timeout: int = 30,
     Content-Length, renames on success. A clean early connection close is a
     short read with no exception, so the length check matters. `progress[0]`
     accumulates received bytes so a supervisor can tell a stall from a slow link."""
-    req = urllib.request.Request(url, headers={"User-Agent": "NyaaTriggers"})
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    part = dest.with_suffix(
-        dest.suffix + f".{os.getpid()}.{threading.get_ident()}.part")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            # A junk length from a proxy reads as unknown. The byte cap
-            # below still bounds the download.
-            try:
-                total = int(resp.headers.get("Content-Length", 0) or 0)
-            except ValueError:
-                total = 0
-            downloaded = 0
-            with part.open("wb") as f:
-                block = 65536
-                while True:
-                    chunk = resp.read(block)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    # The per-read timeout can't stop a lying Content-Length
-                    # or an endless trickle. Cap the total like install.py and
-                    # updater.download do for the same class of file.
-                    if downloaded > _MAX_DOWNLOAD_BYTES:
-                        raise OSError(
-                            f"download over {_MAX_DOWNLOAD_BYTES} bytes: {url}")
-                    if progress is not None:
-                        progress[0] += len(chunk)
-        if total and downloaded < total:
-            raise OSError(
-                f"Download incomplete: received {downloaded} of {total} bytes")
-        part.replace(dest)
-    except BaseException:
-        try:
-            part.unlink()
-        except OSError:
-            pass
-        raise
+    from nyaatriggers import updater
+
+    last = 0
+
+    def advanced(received: int, total: int) -> None:
+        nonlocal last
+        if progress is not None:
+            progress[0] += received - last
+        last = received
+
+    updater.download(url, dest, progress_cb=advanced, timeout=timeout,
+                     max_bytes=_MAX_DOWNLOAD_BYTES)
 
 
 class _SetupWorker(QThread):
@@ -288,24 +261,9 @@ class _SetupWorker(QThread):
                 time.sleep(t_couch)
             self._cur = 64
 
-            # Wait on progress, not a flat ceiling. A slow link is fine as long
-            # as bytes keep flowing. The old flat 300 s ceiling failed
-            # legitimate downloads below ~2.2 Mbps. Only a genuine stall, no
-            # new bytes for 60 s, fails. The per-read socket timeout inside
-            # _download catches lower-level hangs.
-            # A total deadline still applies on top of the stall check. Kokoro
-            # allows 30 minutes for the same class of download. 60 here is
-            # headroom for the slow connection case above.
-            dl_deadline = time.monotonic() + 3600
-            # Seed from current progress so the first 60 s window can already
-            # detect a stall instead of always passing on the initial -1.
-            last_seen = dl_progress[0]
-            while not dl_event.wait(timeout=60):
-                if dl_progress[0] == last_seen:
-                    raise RuntimeError("Download timed out.")
-                if time.monotonic() > dl_deadline:
-                    raise RuntimeError("Download timed out after 60 minutes.")
-                last_seen = dl_progress[0]
+            # Each download owns its deadline and closes before reporting failure.
+            # Keep this worker alive until it finishes so Retry cannot abandon it.
+            dl_event.wait()
             if dl_error[0]:
                 raise dl_error[0]
 

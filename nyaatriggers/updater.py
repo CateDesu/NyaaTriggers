@@ -38,12 +38,15 @@ import tempfile
 import time
 import threading
 import urllib.request
+import uuid
 import zipfile
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 
 from nyaatriggers.paths import source_root
+from nyaatriggers.http_fetch import open_response
 
 REPO            = "CateDesu/NyaaTriggers"
 API_LATEST_URL  = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -64,6 +67,9 @@ _STAGED_VERSION_NAME = ".nyaa-update-version"
 # Staging dirs apply_frozen_* create in the install dir's parent. The Windows
 # --apply-update hand-off validates against it and the next-launch sweep globs it.
 _STAGING_PREFIX  = ".nyaa-update-"
+_STAGING_OWNER = ".nyaa-update-owner"
+_UPDATE_LOCK = ".nyaa-update.lock"
+_LINUX_PENDING = ".nyaa-linux-update"
 # Hard ceiling for one release download, applied whether or not the server sent
 # an honest Content-Length. Real archives, JRE + jar + .NET, are a few hundred
 # MB, so only an endless or lying stream ever trips this.
@@ -192,7 +198,7 @@ def install_kind() -> str:
         if sys.platform.startswith("win"):
             return "frozen-windows"
         return "frozen-linux"
-    if (source_dir() / ".git").is_dir():
+    if (source_dir() / ".git").exists():
         return "git"
     return "source"
 
@@ -281,16 +287,24 @@ def mark_boot_ok() -> None:
 
 def _parse_release(data: dict) -> Release:
     tag = data.get("tag_name", "") or ""
+    if (not isinstance(tag, str) or len(tag) > 128
+            or not re.fullmatch(r"[vV]?[0-9]+(?:\.[0-9]+){0,7}(?:[-+][A-Za-z0-9.-]+)?", tag)):
+        raise ValueError("Invalid release tag")
+    raw_assets = data.get("assets", [])
+    if not isinstance(raw_assets, list):
+        raise ValueError("Invalid release assets")
     assets = {
         a.get("name", ""): a.get("browser_download_url", "")
-        for a in data.get("assets", [])
-        if a.get("name") and a.get("browser_download_url")
+        for a in raw_assets
+        if isinstance(a, dict) and isinstance(a.get("name"), str) and a["name"]
+        and isinstance(a.get("browser_download_url"), str) and a["browser_download_url"]
     }
     return Release(
         tag=tag,
         version=_strip_v(tag),
-        html_url=data.get("html_url", "") or RELEASES_URL,
-        body=data.get("body", "") or "",
+        html_url=(data.get("html_url") or RELEASES_URL)
+                 if isinstance(data.get("html_url"), str) else RELEASES_URL,
+        body=data.get("body") if isinstance(data.get("body"), str) else "",
         assets=assets,
     )
 
@@ -304,8 +318,9 @@ def fetch_latest_release(timeout: int = 8, channel: str = "stable") -> Release:
     drafts. The `channel` parameter is kept for backward compatibility and
     ignored. A successful fetch is cached on disk for read_cached_release."""
     req = urllib.request.Request(API_LATEST_URL, headers={"User-Agent": _USER_AGENT})
+    deadline = time.monotonic() + _RELEASE_DEADLINE_S
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with open_response(req, timeout, min(deadline, time.monotonic() + _READ_STALL_S)) as resp:
             # Read loop on a daemon helper, watchdog here. The body is a few
             # KB of JSON, so half a minute is already generous. The deadline
             # is enforced from outside the read because a trickling peer can
@@ -335,7 +350,6 @@ def fetch_latest_release(timeout: int = 8, channel: str = "stable") -> Release:
                     done.set()
 
             threading.Thread(target=_reader, daemon=True).start()
-            deadline = time.monotonic() + _RELEASE_DEADLINE_S
             last_seen = progress[0]
             while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
                 if progress[0] == last_seen or time.monotonic() > deadline:
@@ -363,8 +377,8 @@ def fetch_latest_release(timeout: int = 8, channel: str = "stable") -> Release:
         # The error doubles as the response object. Close it so the
         # connection is not held open while the caller handles the failure.
         exc.close()
-        if exc.code == 403 and (exc.headers.get("X-RateLimit-Remaining") == "0"
-                                or "Retry-After" in exc.headers):
+        if exc.code == 429 or (exc.code == 403 and (exc.headers.get("X-RateLimit-Remaining") == "0"
+                                                   or "Retry-After" in exc.headers)):
             raise RateLimited("GitHub API rate limit exhausted") from exc
         raise
     if not isinstance(data, dict) or not data.get("tag_name"):
@@ -407,21 +421,26 @@ def read_cached_release() -> Release | None:
     """The last successfully fetched release, or None. Backs the update
     check's rate-limit fallback."""
     try:
-        data = json.loads(_release_cache_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        with _release_cache_path().open(encoding="utf-8") as cached:
+            raw = cached.read(_MAX_RELEASE_BYTES + 1)
+        if len(raw) > _MAX_RELEASE_BYTES:
+            return None
+        data = json.loads(raw)
+    except (OSError, ValueError, RecursionError):
         return None
     if not isinstance(data, dict) or not isinstance(data.get("tag"), str) or not data["tag"]:
         return None
     assets = data.get("assets")
     if not isinstance(assets, dict):
         assets = {}
-    return Release(
-        tag=data["tag"],
-        version=str(data.get("version") or _strip_v(data["tag"])),
-        html_url=str(data.get("html_url") or RELEASES_URL),
-        body=str(data.get("body") or ""),
-        assets={str(k): str(v) for k, v in assets.items()},
-    )
+    try:
+        return _parse_release({
+            "tag_name": data["tag"], "html_url": data.get("html_url"),
+            "body": data.get("body"),
+            "assets": [{"name": k, "browser_download_url": v} for k, v in assets.items()],
+        })
+    except ValueError:
+        return None
 
 
 def asset_for_platform(release: Release) -> str | None:
@@ -436,7 +455,8 @@ def asset_for_platform(release: Release) -> str | None:
 
 # ── Download ──────────────────────────────────────────────────────────────
 
-def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | None = None, timeout: int = 60) -> None:
+def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | None = None,
+             timeout: int = 60, max_bytes: int | None = None) -> None:
     """Stream url -> dest. Calls progress_cb with downloaded and total if given.
     Total is 0 with no Content-Length. Writes to a .part and renames on success
     so a half-download is never mistaken for complete. .part removed on failure."""
@@ -445,14 +465,19 @@ def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | Non
     # two app instances or a retried UI path, can't truncate each other's write.
     part = dest.with_suffix(dest.suffix + f".{os.getpid()}.{threading.get_ident()}.part")
     dest.parent.mkdir(parents=True, exist_ok=True)
+    limit = _MAX_DOWNLOAD_BYTES if max_bytes is None else max_bytes
+    deadline = time.monotonic() + _DOWNLOAD_DEADLINE_S
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with open_response(req, timeout, min(deadline, time.monotonic() + _READ_STALL_S)) as resp:
             # A junk length from a proxy reads as unknown, same as http.client
             # itself treats it. The hard byte cap below still bounds the read.
             try:
                 total = int(resp.headers.get("Content-Length", 0) or 0)
             except ValueError:
                 total = 0
+            total = max(0, total)
+            if total > limit:
+                raise OSError(f"Download exceeds the {limit} byte safety cap")
             if total:
                 free = shutil.disk_usage(dest.parent).free
                 if free < total + (32 << 20):   # keep ~32 MB headroom
@@ -470,25 +495,32 @@ def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | Non
             def _reader() -> None:
                 try:
                     with part.open("wb") as f:
+                        read_chunk = getattr(resp, "read1", resp.read)
+                        notified = 0
+                        last_notice = time.monotonic()
                         while True:
-                            chunk = resp.read(262144)
+                            chunk = read_chunk(262144)
                             if not chunk:
                                 break
                             f.write(chunk)
                             progress[0] += len(chunk)
-                            if progress[0] > _MAX_DOWNLOAD_BYTES:
+                            if progress[0] > limit:
                                 raise OSError(
-                                    f"Download exceeded the {_MAX_DOWNLOAD_BYTES >> 30} GB "
+                                    f"Download exceeded the {limit} byte "
                                     "safety cap (missing or lying Content-Length)")
-                            if progress_cb:
+                            now = time.monotonic()
+                            if progress_cb and (progress[0] - notified >= 262144 or now - last_notice >= .2):
                                 progress_cb(progress[0], total)
+                                notified = progress[0]
+                                last_notice = now
+                        if progress_cb and progress[0] != notified:
+                            progress_cb(progress[0], total)
                 except BaseException as exc:
                     reader_error[0] = exc
                 finally:
                     done.set()
 
             threading.Thread(target=_reader, daemon=True).start()
-            deadline = time.monotonic() + _DOWNLOAD_DEADLINE_S
             last_seen = progress[0]
             last_change = time.monotonic()
             while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
@@ -535,8 +567,28 @@ def verify_release_asset(release: Release, asset_name: str, archive: Path,
         return False, "no checksum published for this release"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            text = resp.read(4096).decode("utf-8", "replace")
+        deadline = time.monotonic() + timeout
+        with open_response(req, timeout, deadline) as resp:
+            done = threading.Event()
+            body, errors = [], []
+
+            def read():
+                try:
+                    body.append(resp.read(4097))
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    done.set()
+
+            threading.Thread(target=read, daemon=True).start()
+            if not done.wait(max(0, deadline - time.monotonic())):
+                _unblock_reader(resp)
+                raise TimeoutError("checksum download timed out")
+            if errors:
+                raise errors[0]
+            if len(body[0]) > 4096:
+                raise ValueError("checksum response is too large")
+            text = body[0].decode("utf-8", "replace")
     except Exception as exc:  # noqa: BLE001
         return False, f"could not fetch the published checksum: {exc}"
     m = re.search(r"\b[0-9a-fA-F]{64}\b", text)
@@ -660,16 +712,16 @@ def _stale_cactbot_conflicts(detail: str) -> list[str]:
     return paths
 
 
-def _remove_untracked(repo_dir: Path, rel_paths: list[str]) -> int:
-    """Best effort delete of repo relative untracked files. Count removed."""
-    removed = 0
+def _preserve_untracked(repo_dir: Path, rel_paths: list[str]) -> Path:
+    """Move conflicting downloads aside without discarding local edits."""
+    backup_root = repo_dir / ".nyaa-timeline-backups"
+    backup_root.mkdir(exist_ok=True)
+    backup = Path(tempfile.mkdtemp(prefix="update-", dir=backup_root))
     for rel in rel_paths:
-        try:
-            (repo_dir / rel).unlink(missing_ok=True)
-            removed += 1
-        except OSError:
-            pass
-    return removed
+        saved = backup / rel
+        saved.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(repo_dir / rel, saved)
+    return backup
 
 
 def apply_git(repo_dir: Path | None = None) -> tuple[bool, str]:
@@ -678,8 +730,8 @@ def apply_git(repo_dir: Path | None = None) -> tuple[bool, str]:
     describe version label catches up to the rolling tags each push to main
     is cut from: plain tag following only fetches tags for commits the pull
     downloads, and a maintainer downloads none of their own. A pull blocked
-    by untracked stale cactbot timeline downloads self heals: the repo ships
-    those files now, so they are deleted and the pull retried once. A failed
+    by untracked stale cactbot timeline downloads saves them aside and retries
+    the pull once. A failed
     dependency install leaves the update incomplete and reports how to retry.
     Returns ok and a message."""
     repo_dir = repo_dir or source_dir()
@@ -690,23 +742,23 @@ def apply_git(repo_dir: Path | None = None) -> tuple[bool, str]:
     except Exception as exc:  # noqa: BLE001
         return False, f"git pull failed: {exc}"
     cleared = 0
+    backup = None
     if r.returncode != 0:
         stale = _stale_cactbot_conflicts(r.stderr.strip() or r.stdout.strip())
         if stale:
-            cleared = _remove_untracked(repo_dir, stale)
-            if cleared == len(stale):
-                try:
-                    r = _git_pull(repo_dir)
-                except Exception as exc:  # noqa: BLE001
-                    return False, f"git pull failed: {exc}"
-            else:
-                cleared = 0
+            try:
+                backup = _preserve_untracked(repo_dir, stale)
+                cleared = len(stale)
+                r = _git_pull(repo_dir)
+            except Exception as exc:
+                return False, (f"Could not retry git pull: {exc}\n"
+                               f"Saved timelines are in {repo_dir / '.nyaa-timeline-backups'}")
     if r.returncode == 0:
         msg = r.stdout.strip() or "Updated."
         if cleared:
             plural = "s" if cleared != 1 else ""
-            msg = (f"Removed {cleared} stale cactbot timeline download{plural} "
-                   "that blocked the pull.\n\n" + msg)
+            msg = (f"Saved {cleared} stale cactbot timeline download{plural} "
+                   f"that blocked the pull to {backup}.\n\n" + msg)
         deps = _install_requirements(repo_dir)
         if deps is not None:
             deps_ok, detail = deps
@@ -719,6 +771,8 @@ def apply_git(repo_dir: Path | None = None) -> tuple[bool, str]:
             msg += "\n\nPython dependencies are up to date."
         return True, msg
     detail = (r.stderr.strip() or r.stdout.strip() or "unknown error")
+    if backup is not None:
+        detail += f"\nSaved timelines are in {backup}"
     return False, (
         f"git pull failed:\n{detail}\n\n"
         "If you have local edits to tracked files, stash or revert them and try "
@@ -741,6 +795,30 @@ def _archive_app_root(extracted_to: Path) -> Path:
         if child.is_dir() and (child / "_internal").is_dir():
             return child
     return nested
+
+
+@contextmanager
+def _update_lock(dest_dir: Path):
+    """Keep swaps and cleanup from changing the same install at once."""
+    with (dest_dir / _UPDATE_LOCK).open("a+b") as lock:
+        if not lock.tell():
+            lock.write(b"0")
+            lock.flush()
+        lock.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _safe_extract_tar(tar_path: Path, dest: Path) -> None:
@@ -784,11 +862,26 @@ def _safe_extract_tar(tar_path: Path, dest: Path) -> None:
 
 def apply_frozen_linux(tar_path: Path, dest_dir: Path | None = None,
                        exe_name: str | None = None) -> tuple[bool, str]:
+    """Apply one Linux update while holding the install lock."""
+    dest_dir = (dest_dir or install_dir()).resolve()
+    try:
+        with _update_lock(dest_dir):
+            if (dest_dir / _LINUX_PENDING).exists():
+                return False, "An interrupted update needs recovery. Start NyaaTriggers.sh first."
+            return _apply_frozen_linux(tar_path, dest_dir, exe_name)
+    except OSError as exc:
+        return False, f"Could not lock the install folder. Another update may be running: {exc}"
+
+
+def _apply_frozen_linux(tar_path: Path, dest_dir: Path,
+                        exe_name: str | None) -> tuple[bool, str]:
     """Swap exe + _internal/ from a downloaded tarball into the install dir,
     preserving user-data siblings. Old files are renamed aside with the backup
     suffix and removed next launch. Returns ok and msg."""
     dest_dir = (dest_dir or install_dir()).resolve()
     exe_name = exe_name or Path(sys.executable).name
+    if Path(exe_name).name != exe_name or exe_name in ("", ".", "..", "_internal") or "\n" in exe_name:
+        return False, "Invalid executable filename"
     if not os.access(dest_dir, os.W_OK):
         return False, f"No write permission for the install folder:\n{dest_dir}"
 
@@ -798,51 +891,56 @@ def apply_frozen_linux(tar_path: Path, dest_dir: Path | None = None,
         # PARENT is not, say a user-owned /opt/NyaaTriggers under a root-owned
         # /opt, and this function's contract is ok/msg, never an exception.
         staging = Path(tempfile.mkdtemp(prefix=_STAGING_PREFIX, dir=str(dest_dir.parent)))
+        (staging / _STAGING_OWNER).write_text(str(dest_dir), encoding="utf-8")
         _safe_extract_tar(tar_path, staging)
         new_root = _archive_app_root(staging)
         new_exe = new_root / "NyaaTriggers"
         new_internal = new_root / "_internal"
-        if not new_internal.is_dir() or not new_exe.exists():
+        if not new_internal.is_dir() or not any(new_internal.iterdir()) or not new_exe.is_file():
             return False, "Downloaded update is missing expected files (exe / _internal)."
 
+        new_launcher = new_root / "NyaaTriggers.sh"
+        if not new_launcher.is_file():
+            return False, "Downloaded update is missing the recovery launcher."
+        with new_launcher.open("rb") as launcher:
+            if b"# nyaa-linux-recovery: 1" not in launcher.read(256).splitlines():
+                return False, "Downloaded update has an incompatible recovery launcher."
+
         os.chmod(new_exe, 0o755)
-        # The launcher carries the pre-boot _internal recovery. Not swap
-        # critical, the exe runs fine without it, so a copy failure must not
-        # roll the update back. Archives from before it shipped just skip it.
+        # Recovery must be available before the first runtime change.
+        launcher_dst = dest_dir / "NyaaTriggers.sh"
+        tmp = dest_dir / f"NyaaTriggers.sh.{os.getpid()}.{threading.get_ident()}.part"
         try:
-            new_launcher = new_root / "NyaaTriggers.sh"
-            if new_launcher.exists():
-                launcher_dst = dest_dir / "NyaaTriggers.sh"
-                # Temp file then rename, the .part protocol from download.
-                # A kill mid copy leaves a stale temp, not a truncated
-                # launcher.
-                tmp = dest_dir / f"NyaaTriggers.sh.{os.getpid()}.{threading.get_ident()}.part"
-                try:
-                    shutil.copy2(str(new_launcher), str(tmp))
-                    os.chmod(tmp, 0o755)
-                    os.replace(str(tmp), str(launcher_dst))
-                except OSError:
-                    try:
-                        tmp.unlink()
-                    except OSError:
-                        pass
-        except OSError:
-            pass
+            shutil.copy2(new_launcher, tmp)
+            os.chmod(tmp, 0o755)
+            os.replace(tmp, launcher_dst)
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
         internal_dst = dest_dir / "_internal"
         exe_dst = dest_dir / exe_name
-        # Pid-suffixed like the Windows backups. Two instances updating in the
-        # same window no longer race over one fixed name, and the
-        # _BACKUP_SUFFIX ending keeps them inside cleanup_old_backups' glob.
-        pid = os.getpid()
-        internal_backup = dest_dir / f"_internal.{pid}{_BACKUP_SUFFIX}"
-        exe_backup = dest_dir / f"{exe_name}.{pid}{_BACKUP_SUFFIX}"
+        # Each attempt needs its own backups even when the process updates twice.
+        generation = uuid.uuid4().int
+        internal_backup = dest_dir / f"_internal.{generation}{_BACKUP_SUFFIX}"
+        exe_backup = dest_dir / f"{exe_name}.{generation}{_BACKUP_SUFFIX}"
         internal_swapped = False
+        exe_swapped = False
+        pending = dest_dir / _LINUX_PENDING
+        pending_tmp = pending.with_name(f"{pending.name}.{generation}.tmp")
         try:
+            # Save the matching executable before changing the runtime.
+            if exe_dst.exists():
+                shutil.copy2(exe_dst, exe_backup)
+            with pending_tmp.open("w", encoding="utf-8") as record:
+                record.write(f"{generation}\n{exe_name}\n")
+                record.flush()
+                os.fsync(record.fileno())
+            os.replace(pending_tmp, pending)
             # Step 1, _internal. A dir can't be atomically overwritten, so two
             # adjacent renames on the same fs. Open inodes keep the running process safe.
             if internal_dst.exists():
-                if internal_backup.exists():
-                    _force_remove(internal_backup)
                 os.replace(internal_dst, internal_backup)
                 internal_swapped = True
             # os.replace, not shutil.move. Staging sits in dest's parent so this
@@ -852,20 +950,32 @@ def apply_frozen_linux(tar_path: Path, dest_dir: Path | None = None,
 
             # Step 2, the exe. Backup copy, then one atomic os.replace. The exe
             # is never absent, so a kill here can't leave an unlaunchable install.
-            if exe_dst.exists():
-                if exe_backup.exists():
-                    _force_remove(exe_backup)
-                shutil.copy2(exe_dst, exe_backup)
             os.replace(str(new_exe), str(exe_dst))   # same fs, staging sits in dest's parent
+            exe_swapped = True
+            pending.unlink()
         except Exception:
             # Roll back the _internal swap if the exe step failed.
             if internal_swapped and internal_backup.exists():
+                restore_backup, restore_target = internal_backup, "_internal"
                 try:
                     _force_remove(internal_dst)
                     os.replace(internal_backup, internal_dst)
-                except Exception:  # noqa: BLE001
-                    pass
+                    if exe_swapped and exe_backup.exists():
+                        restore_backup, restore_target = exe_backup, exe_name
+                        os.replace(exe_backup, exe_dst)
+                    pending.unlink(missing_ok=True)
+                except Exception as exc:
+                    _log_update(dest_dir, f"Linux rollback failed: {exc}")
+                    if restore_backup.exists():
+                        _drop_recover_note(dest_dir, restore_backup, restore_target)
+            elif not internal_swapped:
+                pending.unlink(missing_ok=True)
             raise
+        finally:
+            try:
+                pending_tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
         return True, "Update installed."
     except Exception as exc:  # noqa: BLE001
         return False, f"Could not install the update: {exc}"
@@ -938,6 +1048,7 @@ def apply_frozen_windows(zip_path: Path, dest_dir: Path | None = None,
                                f"need ~{need >> 20} MB, have {free >> 20} MB free.")
 
         staging = Path(tempfile.mkdtemp(prefix=_STAGING_PREFIX, dir=str(dest_dir.parent)))
+        (staging / _STAGING_OWNER).write_text(str(dest_dir), encoding="utf-8")
         _safe_extract_zip(zip_path, staging)
         new_root = _archive_app_root(staging)
         new_exe = new_root / "NyaaTriggers.exe"
@@ -1045,7 +1156,7 @@ def _wait_for_pid_exit(pid: int, timeout: float = 90.0) -> bool:
         # with INFO. A nonzero exit, an ERROR line, or any other unexpected
         # output means the probe itself failed. Keep polling instead
         # of swapping files the old process may still hold open.
-        if (not out and r.returncode == 0) or out.startswith(("INFO:", "INFO :")):
+        if r.returncode == 0 and (not out or out.startswith(("INFO:", "INFO :"))):
             time.sleep(1.5)
             return True
         time.sleep(0.5)
@@ -1108,13 +1219,22 @@ def _relaunch_and_verify(exe_dst: Path, dest_dir: Path, grace: float = 25.0) -> 
     proc = _relaunch_installed(exe_dst, dest_dir)
     if proc is None:
         return False
+
+    def confirmed():
+        try:
+            with marker.open("rb") as boot:
+                token = boot.read(65)
+            return len(token) <= 64 and token.strip() == str(proc.pid).encode("ascii")
+        except OSError:
+            return False
+
     deadline = time.monotonic() + grace
     while time.monotonic() < deadline:
-        if marker.exists():
+        if confirmed():
             return True
         if proc.poll() is not None:     # exited. Give the marker a beat.
             time.sleep(0.3)
-            return marker.exists()
+            return confirmed()
         time.sleep(0.25)
     _log_update(dest_dir, "new build is still running without a boot marker")
     return True
@@ -1254,6 +1374,16 @@ def _valid_windows_exe_name(name: str) -> bool:
 
 def finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
                           exe_name: str) -> None:
+    """Run the staged Windows swap with exclusive access to the install."""
+    try:
+        with _update_lock(Path(dest_dir).resolve()):
+            _finish_windows_update(dest_dir, staging_root, old_pid, exe_name)
+    except OSError as exc:
+        _log_update(dest_dir, f"could not lock the install folder; swap skipped: {exc}")
+
+
+def _finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
+                           exe_name: str) -> None:
     """Run by the NEW staged exe via --apply-update. Refuses to touch anything
     unless the argv look like a real apply_frozen_windows hand-off, a live old
     pid and staging in a _STAGING_PREFIX* dir next to dest. Waits for the old
@@ -1378,6 +1508,16 @@ def _looks_like_update_staging(d: Path) -> bool:
 
 
 def cleanup_old_backups(dest_dir: Path | None = None) -> None:
+    """Sweep completed updates while no swap is using their recovery files."""
+    try:
+        dest_dir = (dest_dir or install_dir()).resolve()
+        with _update_lock(dest_dir):
+            _cleanup_old_backups(dest_dir)
+    except OSError:
+        pass
+
+
+def _cleanup_old_backups(dest_dir: Path) -> None:
     """Remove update leftovers. *.nyaa-old backups and stale launcher .part
     temps in the install dir, orphaned .nyaa-update-* staging dirs in its
     parent. Safe every launch."""
@@ -1391,7 +1531,8 @@ def cleanup_old_backups(dest_dir: Path | None = None) -> None:
         # A RECOVER.txt means a rollback could not restore the install and the
         # note names the backup to rename back by hand. Sweeping here would
         # delete that very backup, so leave them all until the note is gone.
-        recover_pending = (dest_dir / "RECOVER.txt").exists()
+        recover_pending = ((dest_dir / "RECOVER.txt").exists()
+                           or (dest_dir / _LINUX_PENDING).exists() or not internal_ok)
         for entry in dest_dir.glob(f"*{_BACKUP_SUFFIX}"):
             if recover_pending:
                 continue
@@ -1419,8 +1560,14 @@ def cleanup_old_backups(dest_dir: Path | None = None) -> None:
             # source checkout dest_dir is the source dir, so this glob hits the
             # checkout's PARENT. A user's own folder matching the name must
             # survive, or every launch would delete it.
-            if entry.is_dir() and _looks_like_update_staging(entry):
-                _force_remove(entry)
+            if entry.is_dir() and not entry.is_symlink() and _looks_like_update_staging(entry):
+                try:
+                    owner = entry / _STAGING_OWNER
+                    if (owner.read_text(encoding="utf-8") == str(dest_dir)
+                            and owner.stat().st_mtime < time.time() - 86400):
+                        _force_remove(entry)
+                except (OSError, ValueError):
+                    pass
     except Exception:  # noqa: BLE001
         pass
 

@@ -228,8 +228,9 @@ def test_download_cut():
     for mode in ("trickle", "park"):
         with tempfile.TemporaryDirectory() as td:
             srv = _TrickleServer(mode=mode, partial=100)
-            saved = updater._READ_STALL_S
+            saved = (updater._READ_STALL_S, updater._DOWNLOAD_DEADLINE_S)
             updater._READ_STALL_S = _STALL
+            updater._DOWNLOAD_DEADLINE_S = 1.0
             try:
                 dest = Path(td) / "update.zip"
                 t0 = time.monotonic()
@@ -239,14 +240,15 @@ def test_download_cut():
                 except OSError as exc:
                     raised = exc
                 elapsed = time.monotonic() - t0
-                assert raised is not None and "stalled, no new bytes" in str(raised), mode
+                reason = "timed out after 60 minutes" if mode == "trickle" else "stalled, no new bytes"
+                assert raised is not None and reason in str(raised), mode
                 assert elapsed < 10, mode
                 assert not dest.exists() and not list(Path(td).glob("*.part")), mode
                 # The watchdog closed the response, so the server sees the
                 # connection die instead of serving a leaked reader thread.
                 assert _wait_for(lambda: srv.connections == 0), mode
             finally:
-                updater._READ_STALL_S = saved
+                updater._READ_STALL_S, updater._DOWNLOAD_DEADLINE_S = saved
                 srv.close()
 
 
@@ -303,11 +305,12 @@ def test_install_voice_cut():
             td = Path(td)
             srv = _TrickleServer(mode=mode)
             saved = (install.VOICES_DIR, install.VOICE_FILE, install.VOICE_BASE,
-                     install._READ_STALL_S)
+                     install._READ_STALL_S, install._DOWNLOAD_DEADLINE_S)
             install.VOICES_DIR = td
             install.VOICE_FILE = td / f"{install.VOICE_STEM}.onnx"
             install.VOICE_BASE = srv.base
             install._READ_STALL_S = _STALL
+            install._DOWNLOAD_DEADLINE_S = 1.0
             try:
                 t0 = time.monotonic()
                 raised = None
@@ -316,12 +319,13 @@ def test_install_voice_cut():
                 except OSError as exc:
                     raised = exc
                 elapsed = time.monotonic() - t0
-                assert raised is not None and "stalled, no new bytes" in str(raised), mode
+                reason = "timed out after 60 minutes" if mode == "trickle" else "stalled, no new bytes"
+                assert raised is not None and reason in str(raised), mode
                 assert elapsed < 10, mode
                 assert not list(td.glob("*.part")), mode
             finally:
                 (install.VOICES_DIR, install.VOICE_FILE, install.VOICE_BASE,
-                 install._READ_STALL_S) = saved
+                 install._READ_STALL_S, install._DOWNLOAD_DEADLINE_S) = saved
                 srv.close()
 
 

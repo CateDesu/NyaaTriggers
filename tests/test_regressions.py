@@ -1063,8 +1063,8 @@ def test_setup_install_voice_download():
         # the integrity check the skip path runs before keeping it.
         install.VOICE_ONNX_SHA256 = install._sha256(install.VOICE_FILE)
         fetched = []
-        orig_urlopen = urllib.request.urlopen
-        urllib.request.urlopen = lambda url, timeout=None: (fetched.append(url), _FakeResp(b"{}"))[1]
+        orig_urlopen = install.open_response
+        install.open_response = lambda url, timeout, deadline: (fetched.append(url), _FakeResp(b"{}"))[1]
         try:
             install.download_voice()
             check("present .onnx is not re-downloaded when only the .json is missing",
@@ -1072,7 +1072,7 @@ def test_setup_install_voice_download():
                   and fetched == [f"{install.VOICE_BASE}/{install.VOICE_STEM}.onnx.json"])
 
             # A stream that never ends is cut at the ceiling and the partial removed.
-            urllib.request.urlopen = lambda url, timeout=None: _FakeResp(b"", repeat=True)
+            install.open_response = lambda url, timeout, deadline: _FakeResp(b"", repeat=True)
             install._MAX_DOWNLOAD_BYTES = 1 << 16
             cfg = td / f"{install.VOICE_STEM}.onnx.json"
             cfg.unlink()
@@ -1089,7 +1089,7 @@ def test_setup_install_voice_download():
             # is re-downloaded, never skipped on bare existence.
             install.VOICE_FILE.write_bytes(b"truncated")
             fetched.clear()
-            urllib.request.urlopen = lambda url, timeout=None: (fetched.append(url), _FakeResp(b"{}"))[1]
+            install.open_response = lambda url, timeout, deadline: (fetched.append(url), _FakeResp(b"{}"))[1]
             try:
                 install.download_voice()
             except SystemExit:
@@ -1097,7 +1097,7 @@ def test_setup_install_voice_download():
             check("hash-failed pre-existing model is re-downloaded, not skipped",
                   fetched[:1] == [f"{install.VOICE_BASE}/{install.VOICE_STEM}.onnx"])
         finally:
-            urllib.request.urlopen = orig_urlopen
+            install.open_response = orig_urlopen
             (install.VOICES_DIR, install.VOICE_FILE, install._MAX_DOWNLOAD_BYTES,
              install.VOICE_ONNX_SHA256) = saved
 

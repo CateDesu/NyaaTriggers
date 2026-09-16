@@ -19,6 +19,7 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
+from nyaatriggers.http_fetch import open_response
 
 VOICES_DIR   = Path(__file__).parent / "voices"
 VENV_DIR     = Path.home() / ".venv" / "ffxiv"
@@ -137,8 +138,9 @@ def download_voice() -> None:
         # checks above to keep. Unique per process, two runs at once can't
         # truncate each other's write. Same pattern as updater.download.
         part = dest.with_name(f"{dest.name}.{os.getpid()}.part")
+        deadline = time.monotonic() + _DOWNLOAD_DEADLINE_S
         try:
-            with urllib.request.urlopen(url, timeout=30) as resp, open(part, "wb") as f:
+            with open_response(url, 30, min(deadline, time.monotonic() + _READ_STALL_S)) as resp, open(part, "wb") as f:
                 # A junk length from a proxy reads as unknown. The byte cap
                 # below still bounds the download.
                 try:
@@ -155,8 +157,9 @@ def download_voice() -> None:
 
                 def _reader() -> None:
                     try:
+                        read_chunk = getattr(resp, "read1", resp.read)
                         while True:
-                            chunk = resp.read(1 << 16)
+                            chunk = read_chunk(1 << 16)
                             if not chunk:
                                 break
                             progress[0] += len(chunk)
@@ -171,7 +174,6 @@ def download_voice() -> None:
                         done.set()
 
                 threading.Thread(target=_reader, daemon=True).start()
-                deadline = time.monotonic() + _DOWNLOAD_DEADLINE_S
                 last_seen = progress[0]
                 last_change = time.monotonic()
                 while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
@@ -201,6 +203,13 @@ def download_voice() -> None:
             if total and got < total:
                 raise OSError(
                     f"Download incomplete: received {got} of {total} bytes")
+            if ext == ".onnx":
+                actual = _sha256(part)
+                if actual != VOICE_ONNX_SHA256:
+                    raise SystemExit(
+                        f"voice model checksum mismatch for {dest.name}:\n"
+                        f"  expected {VOICE_ONNX_SHA256}\n  got      {actual}\n"
+                        "Refusing to install a tampered or truncated model.")
             os.replace(part, dest)
         except BaseException:
             # The partial download never lands at the final path, so the
@@ -211,19 +220,6 @@ def download_voice() -> None:
                 pass
             raise
         print()
-        # Verify the onnx model against the pinned hash. A bad file is removed so
-        # the next run re-downloads instead of feeding garbage to onnxruntime.
-        if ext == ".onnx":
-            actual = _sha256(dest)
-            if actual != VOICE_ONNX_SHA256:
-                try:
-                    dest.unlink()
-                except OSError:
-                    pass
-                raise SystemExit(
-                    f"voice model checksum mismatch for {dest.name}:\n"
-                    f"  expected {VOICE_ONNX_SHA256}\n  got      {actual}\n"
-                    "Refusing to install a tampered or truncated model.")
         print(f"  Saved to {dest}")
 
 
