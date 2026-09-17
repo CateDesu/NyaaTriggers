@@ -20,9 +20,10 @@ PACKS = CORE / "test" / "packs"
 
 
 class HostReplay:
-    def __init__(self, proc, errors):
+    def __init__(self, proc):
         self.proc = proc
-        self.errors = errors
+        self.diagnostics = []
+        self.diagnostic_lock = threading.Lock()
         self.frames = queue.Queue()
         self.calls = []
         self.write_lock = threading.Lock()
@@ -33,7 +34,14 @@ class HostReplay:
         for line in self.proc.stdout:
             if line.startswith("{"):
                 self.frames.put(json.loads(line))
+            else:
+                with self.diagnostic_lock:
+                    self.diagnostics.append(line)
         self.frames.put(None)
+
+    def errors(self):
+        with self.diagnostic_lock:
+            return "".join(self.diagnostics)
 
     def send(self, **frame):
         with self.write_lock:
@@ -65,25 +73,26 @@ class HostReplay:
 
 @contextmanager
 def replay(pack, relay=None, extra_packs=()):
-    with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryFile(mode="w+") as errors:
+    with tempfile.TemporaryDirectory() as temp:
         environment = os.environ.copy()
         if relay:
             environment["NYAA_TRIGGERNOMETRY_TELESTO_RELAY"] = relay.url
             environment["NYAA_TRIGGERNOMETRY_CALLBACK_URI"] = relay.callback_url
+        # Ubuntu's xvfb-run merges stderr into stdout. Collect both streams
+        # and keep diagnostics alongside the JSON replies on every distro.
         proc = subprocess.Popen(
             ["xvfb-run", "-a", "mono", str(CORE / "bin" / "triggernometry-core.exe"),
              temp, "--serve", str(pack), *map(str, extra_packs)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, start_new_session=True, env=environment)
-        host = HostReplay(proc, errors)
+        host = HostReplay(proc)
         if relay:
             relay.callback = lambda body: host.send(t="endpoint", body=body)
         try:
             host.until(lambda f: f.get("t") == "inventory")
             yield host
         except AssertionError as exc:
-            errors.seek(0)
-            raise AssertionError(f"{exc}\n{errors.read()}") from exc
+            raise AssertionError(f"{exc}\n{host.errors()}") from exc
         finally:
             proc.stdin.close()
             try:
@@ -171,7 +180,7 @@ class TriggernometryHostTests(unittest.TestCase):
             host.send(t="log", line="TN_SCRIPT_ERROR")
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
-                errors = os.pread(host.errors.fileno(), 65536, 0).decode("utf-8")
+                errors = host.errors()
                 if "expected replay failure" in errors:
                     break
                 time.sleep(0.05)
