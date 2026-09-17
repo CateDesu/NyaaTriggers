@@ -1,23 +1,5 @@
-"""Parse cactbot-compatible timeline .txt files.
-
-Supported syntax per line
-    time "label" [EventType { key: "val", ... }]
-                 [window N | window before,after]
-                 [jump time | jump "label" | forcejump time | forcejump "label"]
-    time label "name"          silent jump target
-
-Clauses after the label may appear in any order, the event block included.
-An unrecognized clause is skipped without discarding the clauses that follow
-it. duration D is one of those, cactbot uses it for timer bar length and we
-keep nothing but the label.
-
-hideall "label" hides every entry with that label. It still syncs and still
-works as a jump target, it just never speaks or shows on the bars. Same as
-cactbot's ignores set.
-
-Directives we ignore
-    sync /regex/             old-style sync, flagged at load, never syncs
-    # comment
+"""Parse cactbot timeline entries, sync windows and jump targets. Unsupported sync clauses
+remain visible for diagnostics and cannot match log lines.
 """
 
 import math
@@ -28,50 +10,34 @@ _LINE_RE = re.compile(
     r'^(?P<time>-?[\d.]+)\s+(?P<labelkw>label\s+)?"(?P<label>[^"]*)"\s*(?P<rest>.*)$'
 )
 _EVENT_RE = re.compile(r"(?P<event>[A-Za-z]\w*)\s*\{(?P<fields>(?:[^{}\"']|\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')*)\}")
-# Fallback for event blocks whose fields hold nested braces, say
-# pair: [{ key: ..., value: ... }], which _EVENT_RE cannot consume. Lifts
-# only the leading keyword, marked unsupported by the parser since an
-# empty-fields entry under a supported keyword would sync on every line
-# of that type.
+# Keep unsupported nested fields for diagnostics so an empty constraint set cannot match
+# every line.
 _EVENT_KW_RE = re.compile(r"\b([A-Za-z]\w*)\s*\{")
-# cactbot splits a single "window X" evenly, X/2 on each side, so
-# window 5000 means window 2500,2500 rather than window 5000,5000.
+# A single window value applies on both sides of the entry.
 _WINDOW_RE = re.compile(r'\bwindow\s+(?P<before>[\d.]+)(?:\s*,\s*(?P<after>[\d.]+))?')
 _JUMP_RE = re.compile(r'\b(?P<force>force)?jump\s+(?:"(?P<jlabel>[^"]*)"|(?P<jtime>-?[\d.]+))')
-# cactbot writes both single- and double-quoted values, and its JSON5 also
-# allows bare scalars like effectId: 644. findall leaves the unmatched quote
-# groups empty, so callers take whichever group matched. Quoted values keep
-# their backslashes, an escaped quote must not close the value early, and the
-# fields are matched as regexes downstream where \" still reads as a quote.
+# Accept quoted or bare values and preserve regex escapes.
 _KV_RE = re.compile(r"(\w+)\s*:\s*(?:\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'|([^\s,\[\]{},\"']+))")
-# cactbot also writes list-valued sync fields, like id set to ["9D00", "9D01"],
-# which _KV_RE, scalar only, would silently drop. That leaves the entry with no
-# id, so it then syncs on any ability of its type. Capture the array and its
-# quoted items.
+# Parse arrays explicitly so ID alternatives are not lost.
 _KV_ARRAY_START_RE = re.compile(r"(\w+)\s*:\s*\[")
 _ARRAY_ITEM_RE = re.compile(r"\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'")
-# Old-style sync /regex/ clause. Unsupported, but lifted out before the event
-# search since its body can hold brace quantifiers that would fake one.
+# Remove legacy regex sync bodies before searching for event clauses.
 _LEGACY_SYNC_RE = re.compile(r'\bsync\s*/(?:[^/\\]|\\.)*/')
-# hideall "name" directive, cactbot's ignore list. Entries it names keep
-# their sync but never speak or show.
+# Hidden entries can still sync the clock.
 _HIDEALL_RE = re.compile(r'^hideall\s+"([^"]+)"')
 
 
 def _array_fields(fields_text: str) -> list[tuple[str, str | None, int, int]]:
-    """Values and spans for each real array field. The scan moves left to
-    right and steps over quoted strings whole, so array syntax inside a quoted
-    scalar value, say name set to "id: ['9D00']", can't fabricate a key."""
+    """Scan array fields while skipping quoted text."""
     pairs = []
     i, n = 0, len(fields_text)
     while i < n:
         c = fields_text[i]
         if c in '"\'':
-            # quoted value, skip it whole so its contents can't read as fields
+            # Skip quoted text as one value.
             q = c
             i += 1
             while i < n and fields_text[i] != q:
-                # an escaped char can't close the string, step over both
                 i += 2 if fields_text[i] == "\\" else 1
             i += 1
             continue
@@ -103,11 +69,9 @@ def _array_fields(fields_text: str) -> list[tuple[str, str | None, int, int]]:
 
 
 def _strip_comment(line: str) -> str:
-    """Drop a trailing # comment, but ignore # inside a quoted string,
-    even after a \\" escape, which must not flip the string state. An
-    apostrophe opens a string only in value position, right after one of
-    : , [ or {. Anywhere else it is plain text, say the one in an old
-    sync /Boss's Move/ body, and must not keep a trailing comment alive."""
+    """Strip comments outside quoted values. Apostrophes inside bare regexes do not start
+    quoted strings.
+    """
     quote = ''
     esc = False
     prev = ''
@@ -138,11 +102,7 @@ def _strip_comment(line: str) -> str:
 
 
 def _find_jump(rest: str) -> re.Match[str] | None:
-    """Leftmost jump clause in rest, matched at quote depth zero. The jump
-    lift runs before the sync and event lifts, so a plain search would also
-    arm on jump text inside a quoted event value, say line set to
-    ".*jump 5.*", or inside a sync /regex/ body. Quoted strings and sync
-    bodies are skipped whole, with the same quote rules as _strip_comment."""
+    """Find jump clauses outside quoted values and legacy regex sync bodies."""
     quote = ''
     esc = False
     prev = ''
@@ -213,16 +173,12 @@ def parse(text: str) -> list[TimelineEntry]:
             time = float(m.group('time'))
         except ValueError:
             continue
-        # A long enough digit string parses to inf, which would poison the
-        # sort order and every clock comparison downstream.
+        # Reject nonfinite times.
         if not math.isfinite(time):
             continue
 
         rest = m.group('rest') or ''
-        # Lift the jump clause out first. Its quoted target is free text, so
-        # words inside it, say a window 5 or a brace block, must not reach
-        # the searches below as real clauses. The leftmost match wins there,
-        # a window inside a jump label would even shadow an explicit one.
+        # Parse jump targets first so quoted names cannot be read as clauses.
         jump: float | None = None
         jump_label = ''
         force = False
@@ -236,14 +192,11 @@ def parse(text: str) -> list[TimelineEntry]:
                     jump = float(jm.group('jtime'))
                 except ValueError:
                     jump = None
-                # An overflowing jump target would snap the clock to inf.
                 if jump is not None and not math.isfinite(jump):
                     continue
             rest = rest[:jm.start()] + ' ' + rest[jm.end():]
 
-        # Lift an old-style sync /regex/ clause out next. We do not support
-        # it, and its body can hold brace quantifiers the event search below
-        # would otherwise read as an event block.
+        # Exclude legacy regex bodies from event clause parsing.
         legacy_sync = False
         lm = _LEGACY_SYNC_RE.search(rest)
         if lm:
@@ -252,14 +205,12 @@ def parse(text: str) -> list[TimelineEntry]:
 
         event_type = ''
         event_fields: dict[str, str] = {}
-        # The event block need not lead the line. cactbot lets duration and
-        # friends come first, so search for it and cut it out wherever it sits.
+        # Clauses can appear in any order.
         em = _EVENT_RE.search(rest)
         if em:
             event_type = em.group('event')
             fields_text = em.group('fields') or ''
-            # Consume arrays as whole values before scanning scalar fields.
-            # Text inside an array item must not invent another field.
+            # Parse arrays before scanning scalar fields.
             arrays = _array_fields(fields_text)
             scalar_chars = list(fields_text)
             for key, body, start, end in arrays:
@@ -267,9 +218,8 @@ def parse(text: str) -> list[TimelineEntry]:
             scalar_text = ''.join(scalar_chars)
             event_fields = {key: dq or sq or bq
                             for key, dq, sq, bq in _KV_RE.findall(scalar_text)}
-            # Fold list-valued fields in as a regex alternation so they match
-            # like the scalar form. Values are regex sources, matched by
-            # re.fullmatch in the engine. A scalar of the same key wins.
+            # Join array values as regex alternatives. An explicit scalar for the same
+            # key takes precedence.
             for key, body, start, end in arrays:
                 if key in event_fields:
                     continue
@@ -284,19 +234,12 @@ def parse(text: str) -> list[TimelineEntry]:
                     event_fields[key] = '(?!)'
             rest = rest[:em.start()] + ' ' + rest[em.end():]
         else:
-            # Nested-brace block, _EVENT_RE failed on it and the fields are
-            # unusable. Record the leading keyword marked as unsupported, so
-            # the engine's unsupported-type warning names it and the entry
-            # never syncs. A bare supported keyword with empty fields would
-            # match every line of its type and snap the clock to garbage.
+            # Mark unsupported nested fields so the entry cannot match without checking
+            # them.
             kw = _EVENT_KW_RE.search(rest)
             if kw:
                 event_type = kw.group(1) + " nested fields"
 
-        # The remaining clauses, window, duration and friends, may appear in
-        # any order and may include ones we don't understand, so search rather
-        # than consume sequentially. A variant token must not eat the clauses
-        # after it.
         wbefore = wafter = 2.5
         wm = _WINDOW_RE.search(rest)
         if wm:
@@ -308,8 +251,6 @@ def parse(text: str) -> list[TimelineEntry]:
                     wbefore = wafter = wbefore / 2
             except ValueError:
                 wbefore = wafter = 2.5
-            # An overflowing window would sync the entry on every earlier
-            # fight time. Drop it like a bad time value.
             if not (math.isfinite(wbefore) and math.isfinite(wafter)):
                 continue
 
@@ -327,13 +268,12 @@ def parse(text: str) -> list[TimelineEntry]:
             legacy_sync=legacy_sync,
         ))
 
-    # Resolve 'jump "name"' targets. Prefer a 'label "name"' line, else any
-    # entry whose label text matches. Unresolvable label jumps are dropped.
+    # Prefer explicit silent labels when resolving named jumps.
     by_label: dict[str, float] = {}
     for e in entries:
         if e.label and e.label not in by_label:
             by_label[e.label] = e.time
-    for e in entries:                    # explicit 'label' definitions win
+    for e in entries:
         if e.silent and e.label:
             by_label[e.label] = e.time
     for e in entries:
@@ -342,8 +282,7 @@ def parse(text: str) -> list[TimelineEntry]:
             if e.jump is None:
                 e.force_jump = False
 
-    # Mark the hideall names. Done after the whole file is read, the
-    # directive may sit above or below the entries it names.
+    # Apply hideall after parsing because it can appear anywhere in the file.
     for e in entries:
         if e.label in hidden:
             e.hidden = True

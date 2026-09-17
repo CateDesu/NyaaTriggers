@@ -1,23 +1,9 @@
 #!/usr/bin/env python3
-"""Replay a recorded pull through the sidecar engine jar.
-
-Feeds a pull_logs/*.jsonl capture, raw IINACT WS lines written by
-pull_capture.py, to triggevent-core.jar on stdin and summarizes what came
-back: callouts fired, engine chain failures, and whether each --expect text
-appeared in a callout. This is the regression harness the captures are for:
-a guard patch that strands a chain shows up here before any raid night does.
-
-  python3 tools/replay_pull.py pull_logs/DMU/2026-09-05_21-00-00-123456.jsonl
-  python3 tools/replay_pull.py pull.jsonl --expect "Arrows" --expect "TT: Double"
-
-The feed is paced by the ACT timestamps in the capture. The engine schedules
-delayed callouts and sequential chain waits on the wall clock, so dumping
-minutes of log in milliseconds strands exactly the chains this harness
-exists to regression test. At the default speed a replay takes about as long
-as the pull did. --speed trades that fidelity for time.
-
-Exit 0 when the engine ran and every --expect matched, 1 otherwise.
-Repo tooling only, not shipped in the build.
+"""Replay captured JSONL feeds through the engine and report callouts, chain failures and
+expected text matches. Run python3 tools/replay_pull.py pull.jsonl with optional
+--expect text. Pace by ACT timestamps so delayed sequences behave as in the original
+pull. --speed shortens runtime at the cost of timing fidelity. Exit zero only when the
+engine runs and all expectations match.
 """
 from __future__ import annotations
 
@@ -37,8 +23,7 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parent.parent
 _DEFAULT_JAR = _REPO / "triggevent-core" / "target" / "triggevent-core.jar"
 
-# Margin over the paced duration for the auto timeout: engine boot, drain,
-# and the exit grace after stdin closes.
+# Allow extra time for engine startup and shutdown beyond the paced feed duration.
 _TIMEOUT_MARGIN_S = 120.0
 
 
@@ -50,16 +35,14 @@ def _java_cmd() -> "list[str]":
             java = str(candidate)
     if java is None:
         return []
-    # The engine builds Swing overlays at boot and dies on forced headless,
-    # so give it a throwaway display when one is available.
+    # Use a temporary display because the engine creates Swing overlays during startup.
     if shutil.which("xvfb-run"):
         return ["xvfb-run", "-a", "-s", "-screen 0 1024x768x24", java]
     return [java]
 
 
 def _line_time(line: str):
-    """ACT timestamp of a LogLine message, else None. Other message types
-    ride at the previous message's time."""
+    """Read an ACT log timestamp. Other messages use the preceding timestamp."""
     try:
         msg = json.loads(line)
     except (ValueError, RecursionError):
@@ -78,10 +61,9 @@ def _line_time(line: str):
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
-    """SIGKILL the replay's whole process group, xvfb-run AND its JVM child.
-    A lone proc.kill on the wrapper orphans the JVM, the same lesson the
-    bridge's _signal_group encodes. Falls back to the direct child when the
-    group is already gone."""
+    """Kill the whole replay process group, including the JVM behind xvfb-run. Fall back to
+    the direct child if needed.
+    """
     try:
         if os.name == "posix":
             os.killpg(proc.pid, signal.SIGKILL)
@@ -162,8 +144,7 @@ def main() -> int:
                         stderr=subprocess.PIPE, text=True,
                         encoding="utf-8", errors="replace")
     if os.name == "posix":
-        # Own process group so a timeout kill reaches the JVM through the
-        # xvfb-run wrapper, see _kill_tree.
+        # Create a process group so timeout cleanup reaches the JVM through xvfb-run.
         popen_kwargs["start_new_session"] = True
     proc = subprocess.Popen([*java, "-jar", str(args.jar)], **popen_kwargs)
 

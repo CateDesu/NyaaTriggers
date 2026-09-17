@@ -1,11 +1,4 @@
-"""Tests for the pull-log store (dps_store.py): chunked JSONL logs. A log is
-full after 25 pulls of one fight or 5 distinct fights. Once 5 full logs
-sit in the folder the oldest are culled, and the active log never counts.
-The caps are patched small so the tests stay fast. Temp dirs only. No Qt,
-no game.
-
-Run:  python -m tests.test_dps_store   (exit 0 = all pass)
-"""
+"""DPS log rotation and retention in temporary directories."""
 import json
 import os
 import sys
@@ -52,7 +45,7 @@ def at(sec):
     return BASE + timedelta(seconds=sec)
 
 
-# ── basic layout: one active log, fights mixed inside ─────────────────────
+# basic layout: one active log, fights mixed inside
 with tempfile.TemporaryDirectory() as tmp:
     d = Path(tmp) / "logs"
     p1 = dps_store.write_pull(d, pull("Everkeep"), when=at(0))
@@ -66,7 +59,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check("unicode title round-trips",
           titles_in(p1)[-1] == "極ゼロムス討滅戦")
 
-# ── roll-over and retention, with small patched caps ──────────────────────
+# roll-over and retention, with small patched caps
 saved = (dps_store.MAX_PULLS_PER_LOG, dps_store.MAX_FIGHTS_PER_LOG,
          dps_store.MAX_LOGS)
 dps_store.MAX_PULLS_PER_LOG = 3
@@ -121,7 +114,7 @@ finally:
     (dps_store.MAX_PULLS_PER_LOG, dps_store.MAX_FIGHTS_PER_LOG,
      dps_store.MAX_LOGS) = saved
 
-# ── robustness: corrupt lines, foreign files, under-cap no-op ─────────────
+# robustness: corrupt lines, foreign files, under-cap no-op
 with tempfile.TemporaryDirectory() as tmp:
     d = Path(tmp) / "logs"
     d.mkdir(parents=True)
@@ -139,7 +132,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check("under-cap retention is a no-op",
           p.read_text(encoding="utf-8") == before)
 
-# ── a pre-existing 0644 log is tightened to owner-only on the next write ──
+# a pre-existing 0644 log is tightened to owner-only on the next write
 with tempfile.TemporaryDirectory() as tmp:
     d = Path(tmp) / "logs"
     p = dps_store.write_pull(d, pull("Everkeep"), when=at(7200))

@@ -1,17 +1,4 @@
-"""Regression tests for the trigger hot-reload against the save path.
-
-Saving any trigger rewrites triggers.local.json. The write used to leave the
-watcher stamp stale, so the next 30 s poll read the program's own save as an
-external edit and rebuilt every trigger object. Armed status timers and
-sequence runners point at the pre-save objects and their completion guards
-require those same objects in _triggers, so pending callouts were silently
-dropped and cooldown history went with them. The save now re-baselines the
-stamp, and a genuine external reload hands the live object back to any
-trigger whose file content did not change, so only an edited trigger loses
-its pending work.
-
-Run directly:  python -m tests.test_triggers_tab_reload   (exit 0 = all pass)
-"""
+"""Trigger reloads preserve unchanged object identity, pending timers and cooldowns."""
 import json
 import os
 import sys
@@ -97,7 +84,7 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
     w._load_triggers()
     warning, seq, unrelated = w._triggers
 
-    # ── the program's own save is not an external change ────────────────────
+    # the program's own save is not an external change
     warn_runner = arm_status(w, warning, "ABC")
     seq_runner = SequentialRunner(seq, {}, w._on_seq_complete,
                                   w._on_seq_expire, w)
@@ -120,8 +107,7 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
     check("armed sequence survives an unrelated save",
           seq_runner.try_advance(SEQ_STEP_LINE) and w.fired == ["warning", "seq"])
 
-    # ── an external edit reloads only what it touched ───────────────────────
-    # A fresh effect id, the first fire burned ABC into the cooldown gate.
+    # an external edit reloads only what it touched
     warn_runner2 = arm_status(w, warning, "ABD")
     stale_runner = arm_status(w, unrelated, "ABE")
 
@@ -145,7 +131,7 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
     check("work bound to the changed trigger is invalidated",
           w.fired == ["warning", "seq", "warning"])
 
-    # ── editing the armed trigger itself invalidates its pending work ───────
+    # editing the armed trigger itself invalidates its pending work
     warn_runner3 = arm_status(w, warning, "ABF")
     data = json.loads(ac.TRIGGERS_LOCAL_FILE.read_text(encoding="utf-8"))
     next(r for r in data["triggers"] if r["id"] == "warning")["name"] = "edited"

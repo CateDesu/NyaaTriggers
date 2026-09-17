@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""NyaaTriggers entry point. Bootstrap, first-run setup, and app launch."""
+"""Program startup and first run setup."""
 import os
 import sys
 
-# Keep the app on one tested windowing path, XWayland, rather than letting Qt
-# pick the session default. That would put QtWebEngine, the headless cactbot
-# reader, on a native Wayland surface it has never been exercised against.
-# Must be set BEFORE any Qt import. setdefault respects a user override. Linux
-# only. The xcb plugin does not exist in Windows Qt builds and forcing it
-# aborts QApplication.
+# Default to XWayland on Linux because the cactbot WebEngine runs on that path. Set
+# before importing Qt and allow an explicit user override.
 if sys.platform == "linux":
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
@@ -29,17 +25,14 @@ _LOG_FILE = data_root() / "nyaatriggers.log"
 
 
 def _owner_only(path, flags):
-    # New logs are created owner-only, 0600 survives a 022 umask. A plain
-    # open in append mode would inherit the umask and leave fight/callout
-    # details world-readable on shared hosts. Same idiom as dps_store.
+    # Create logs with owner access only, independently of the process umask.
     return os.open(path, flags, 0o600)
 
 
 def _log_crash(exc_type, exc_value, exc_tb) -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
-        # drop_log.log_crash writes under the same lock and size cap as the
-        # DROP entries, so a crash write can never race a truncation.
+        # Use the drop log lock and size limit for crash entries too.
         drop_log.log_crash(
             f"\n{'='*60}\n"
             f"CRASH  {timestamp}\n"
@@ -52,8 +45,7 @@ sys.excepthook = _log_crash
 
 
 def _thread_crash(args) -> None:
-    # Worker threads bypass sys.excepthook. Without this their crashes are
-    # invisible in a frozen build, no console.
+    # Record worker exceptions because frozen builds have no console.
     if args.exc_type is SystemExit:
         return
     _log_crash(args.exc_type, args.exc_value, args.exc_traceback)
@@ -62,15 +54,13 @@ threading.excepthook = _thread_crash
 
 
 def _maybe_finish_windows_update() -> bool:
-    """When relaunched as the staged copy with --apply-update, perform the
-    Windows swap, relaunch the installed exe, and return True so the caller
-    exits without starting a GUI. No-op on a normal launch. Runs above the Qt
-    import block, see below, so it must stay stdlib-only."""
+    """Apply a staged Windows update and relaunch the installed executable. Return true to
+    exit without starting Qt. This path must use only the standard library.
+    """
     if "--apply-update" not in sys.argv:
         return False
-    # Guard the ENTIRE body, import plus arg parsing plus swap. This mode must
-    # never start a GUI or surface a traceback. Worst case the swap is skipped
-    # and the installed app stays put.
+    # Contain failures across imports, argument parsing and the swap so update mode
+    # cannot open the GUI.
     dest = None
     try:
         from nyaatriggers import updater
@@ -88,25 +78,24 @@ def _maybe_finish_windows_update() -> bool:
             pid = 0
         if dest and staging:
             updater.finish_windows_update(Path(dest), Path(staging), pid, exe_name)
-    except Exception:  # noqa: BLE001 - the updater must never crash visibly
-        # Log into the install dir when known. _LOG_FILE points inside the
-        # staging copy here, which gets swept.
+    except Exception:  # noqa: BLE001
+        # Write errors to the install directory because the staging directory will be
+        # removed.
         try:
             log = (Path(dest) / _LOG_FILE.name) if dest else _LOG_FILE
             with open(log, "a", encoding="utf-8", opener=_owner_only) as f:
                 f.write(f"\nAPPLY-UPDATE FAILED  "
                         f"{datetime.now():%Y-%m-%d %H:%M:%S}\n")
                 f.write(traceback.format_exc())
-            # os.open's mode only applies at creation. Tighten a pre-existing log.
+            # Apply owner permissions to existing logs as well as new ones.
             os.chmod(log, 0o600)
         except OSError:
             pass
     return True
 
 
-# The staged Windows updater runs out of the freshly extracted staging tree, so
-# it must do its swap before ANY Qt import. If the new build's Qt is broken,
-# this is the one path that can still roll it back. Stdlib alone, never raises.
+# Apply updates before importing Qt so a broken staged Qt build can still be rolled
+# back.
 if "--apply-update" in sys.argv:
     _maybe_finish_windows_update()
     sys.exit(0)
@@ -142,16 +131,13 @@ _VOICE_BASE  = (
 
 
 def _voice_present() -> bool:
-    # PiperVoice.load needs BOTH files. Checking only the model would skip
-    # setup after a run where the config download failed, leaving TTS
-    # silently broken with no repair path. install.py checks both too.
+    # Piper needs both files. Retry setup if either download is missing.
     return _VOICE_FILE.exists() and _VOICE_CONFIG.exists()
 
 
 def _piper_installed() -> bool:
-    # Frozen builds bundle piper, so treat it as present. Checking the venv there
-    # would trigger a fake "setup" that runs sys.executable. When frozen that's
-    # the app exe itself, so it would relaunch the setup dialog in a fork bomb.
+    # Frozen builds bundle Piper. Running their executable as Python would reopen setup
+    # recursively.
     if getattr(sys, "frozen", False):
         return True
     sp_paths  = glob.glob(str(_FFXIV_VENV / "lib" / "python*" / "site-packages"))
@@ -163,19 +149,16 @@ def _needs_setup() -> bool:
     return not _voice_present() or not _piper_installed()
 
 
-# Hard ceiling on one download. The voice model is ~77 MB, so a stream running
-# past 1 GiB has a lying Content-Length or no end at all and would otherwise be
-# written until the disk fills. Same value install.py uses for the same files.
+# Bound downloads independently of Content-Length. Keep this limit consistent with
+# install.py.
 _MAX_DOWNLOAD_BYTES = 1 << 30
 
 
 def _download(url: str, dest: Path, timeout: int = 30,
               progress: "list[int] | None" = None) -> None:
-    """Download url -> dest with a per-read timeout. Writes to a unique .part
-    so an abandoned attempt can never interleave writes with a retry, verifies
-    Content-Length, renames on success. A clean early connection close is a
-    short read with no exception, so the length check matters. `progress[0]`
-    accumulates received bytes so a supervisor can tell a stall from a slow link."""
+    """Download to a unique temporary file, verify Content-Length and rename on success.
+    Enforce read timeouts and update progress with received bytes.
+    """
     from nyaatriggers import updater
 
     last = 0
@@ -192,12 +175,10 @@ def _download(url: str, dest: Path, timeout: int = 30,
 
 class _SetupWorker(QThread):
     progress = pyqtSignal(int, str)   # percent, -1 means indeterminate, plus status message
-    # Named `done`, not `finished`. Redeclaring `finished` shadows QThread's
-    # builtin finished signal and silently breaks deleteLater/cleanup hooks.
+    # Keep QThread.finished available for thread cleanup.
     done = pyqtSignal(bool, str)      # success, error message
 
     def _fill_to(self, target: int, msg: str) -> None:
-        """Quickly animate the bar from its current position up to target."""
         for v in range(self._cur, target + 1, 2):
             self.progress.emit(v, msg)
             time.sleep(0.008)
@@ -217,12 +198,8 @@ class _SetupWorker(QThread):
             def _do_download() -> None:
                 try:
                     _VOICES_DIR.mkdir(exist_ok=True)
-                    # Sweep any .part left by a previously abandoned attempt,
-                    # a timed-out setup whose daemon thread was killed by
-                    # sys.exit before its own cleanup ran. The unique per-run
-                    # names never collide with this in-flight download. The
-                    # age guard leaves a concurrent second instance's download
-                    # alone, same as install.py.
+                    # Remove old partial downloads from interrupted setup attempts. Keep
+                    # recent files that another instance may still be writing.
                     for stale in _VOICES_DIR.glob(f"{_VOICE_STEM}.onnx*.part"):
                         try:
                             if stale.stat().st_mtime < time.time() - 3600:
@@ -249,66 +226,56 @@ class _SetupWorker(QThread):
             t_litter = 0.167 if frozen else 0.333   # ~5s frozen, ~10s source
             t_couch  = 0.200 if frozen else 0.371   # ~7s frozen, ~13s source
 
-            # 0→29%, litterbox
             for v in range(0, 30):
                 self.progress.emit(v, "Staging the litterbox...")
                 time.sleep(t_litter)
             self._cur = 29
 
-            # 30→64%, couch, then hang until download finishes
             for v in range(30, 65):
                 self.progress.emit(v, "Cat-proofing the couch...")
                 time.sleep(t_couch)
             self._cur = 64
 
-            # Each download owns its deadline and closes before reporting failure.
-            # Keep this worker alive until it finishes so Retry cannot abandon it.
+            # Wait for download cleanup before allowing Retry to start another attempt.
             dl_event.wait()
             if dl_error[0]:
                 raise dl_error[0]
 
-            # Source installs only. Never spawn sys.executable in a frozen build.
-            # It is the app exe, not python, and would fork-bomb the setup dialog.
+            # Only source installs may run this executable as Python.
             if needs_piper and not frozen:
                 self.progress.emit(-1, "Installing piper-tts - this can take a few minutes...")
                 pip = _FFXIV_VENV / (
                     "Scripts" if platform.system() == "Windows" else "bin"
                 ) / ("pip.exe" if platform.system() == "Windows" else "pip")
-                # Two app instances in first run setup at once both pass the
-                # pip gate and then build the same venv concurrently, which
-                # can corrupt it. Serialize on the cross process lock from
-                # install.py. A waiter that cannot take it raises and the
-                # dialog shows the message with a Retry button.
+                # Serialize environment setup across processes to prevent concurrent
+                # venv creation.
                 with install.setup_lock():
-                    # A killed venv create leaves the directory behind with no pip
-                    # inside. Gate on pip itself so a partial venv gets recreated.
+                    # Check pip because interrupted environment creation may leave an
+                    # incomplete directory.
                     if not pip.exists():
-                        # utf-8 like the pip call in tts.py. Under a C locale
-                        # codec a non-ASCII path raises UnicodeDecodeError and
-                        # the dialog shows codec noise instead of pip's error.
+                        # Decode subprocess output as UTF-8 so non-ASCII paths remain
+                        # readable under a C locale.
                         subprocess.run(
                             [sys.executable, "-m", "venv", str(_FFXIV_VENV)],
                             check=True, capture_output=True, text=True, timeout=120,
                             encoding="utf-8", errors="replace",
                         )
-                    # Pinned like requirements.txt for reproducible source runs. Bump on purpose.
                     subprocess.run(
                         [str(pip), "install", "--upgrade", "--no-input", "piper-tts==1.4.2"],
                         check=True, capture_output=True, text=True, timeout=600,
                         encoding="utf-8", errors="replace",
                     )
 
-            # 65→90%, pipe cat ~3s
             for v in range(65, 91):
                 self.progress.emit(v, "Making sure no cats are stuck in the pipes...")
                 time.sleep(0.073)
             self._cur = 90
 
-            # 90→100%, quick sweep
             self._fill_to(100, "Setup complete.")
             self.done.emit(True, "")
         except subprocess.CalledProcessError as e:
-            # str of the exception is only the command + exit code. The useful part is stderr.
+            # Include command output because the exception alone contains only its exit
+            # status.
             detail = ((e.stderr or "") + (e.stdout or "")).strip()
             self.done.emit(False, str(e) + (f"\n{detail[:500]}" if detail else ""))
         except Exception as e:
@@ -347,9 +314,7 @@ class _SetupDialog(QDialog):
         self._close_btn.clicked.connect(self.reject)
         layout.addWidget(self._close_btn)
 
-        # True while the worker thread runs. Closing the dialog in that window
-        # destroys a live QThread, which is a Qt fatal: the process aborts with
-        # a core dump instead of exiting. reject and closeEvent honor this.
+        # Block dialog closure while its QThread is running to avoid a Qt abort.
         self._running = False
         self._start_worker()
 
@@ -382,7 +347,7 @@ class _SetupDialog(QDialog):
 
     def _on_progress(self, pct: int, msg: str) -> None:
         if pct == -1:
-            self._bar.setRange(0, 0)   # indeterminate / pulsing
+            self._bar.setRange(0, 0)
         else:
             if self._bar.maximum() == 0:
                 self._bar.setRange(0, 100)
@@ -390,8 +355,7 @@ class _SetupDialog(QDialog):
         self._label.setText(msg)
 
     def _on_finished(self, ok: bool, err: str) -> None:
-        # done fires at the tail of run, so this wait is bounded. The thread
-        # must be fully finished before the dialog can be destroyed.
+        # Wait for run to return before allowing the dialog to be destroyed.
         self._worker.wait()
         self._running = False
         if ok:
@@ -407,12 +371,10 @@ class _SetupDialog(QDialog):
 
 
 def main() -> None:
-    # --apply-update is handled at module scope, above the Qt import block.
 
     app = QApplication(sys.argv)
     app.setApplicationName("NyaaTriggers")
-    # Bundled display font for the sidebar, brand block plus nav pills. Best-effort.
-    # A missing file just falls back to the system UI font.
+    # Load the bundled font, falling back to the system font if unavailable.
     from PyQt6.QtGui import QFontDatabase
     _bundle = bundle_root()
     _font = _bundle / "fonts" / "KosugiMaru-Regular.ttf"
@@ -425,15 +387,14 @@ def main() -> None:
         if dlg.exec() != QDialog.DialogCode.Accepted:
             sys.exit(0)
 
-    # Lazy import so tts.py's venv injection runs after setup completes.
+    # Delay the TTS import until setup has installed its dependencies.
     from nyaatriggers.main_window import MainWindow
     window = MainWindow()
     # Signal a good boot only after setup and the main window both succeed.
     from nyaatriggers import updater
     updater.mark_boot_ok()
-    # Sweep update leftovers only now. During window construction the Windows
-    # boot verify rollback may still need the *.nyaa-old backups, so a sweep
-    # inside MainWindow could leave a dead build with nothing to restore.
+    # Keep Windows rollback backups until main window construction and boot verification
+    # succeed.
     try:
         updater.cleanup_old_backups()
     except Exception as exc:  # noqa: BLE001

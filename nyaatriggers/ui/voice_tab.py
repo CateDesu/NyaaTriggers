@@ -1,7 +1,4 @@
-"""Voice page. Piper, Kokoro and system voices, the venv install flow,
-alert sounds, and the volume and mute controls. tts.py owns the speaking,
-this owns the config UI. Mixin for MainWindow, all state rides on self.
-"""
+"""Voice selection, sound settings and mute controls for MainWindow."""
 
 from collections import Counter
 from pathlib import Path
@@ -31,10 +28,8 @@ from nyaatriggers.app_common import _JP_NEURAL_VOICES, _sweep_stale_update_parts
 
 class VoiceTabMixin:
     def _scan_voices(self) -> list[tuple[str, Path]]:
-        # User voices first, next to the exe they survive self-updates, then the
-        # bundled set. On a stem clash a complete user copy wins. The Kokoro neural
-        # model also lives here as .onnx. It is not a Piper voice, so keep it
-        # out of the Piper list. It has its own combo entries.
+        # Prefer complete user voice files over bundled files with the same stem. List
+        # Kokoro separately from Piper.
         found: dict[str, Path] = {}
         for voices_dir in (ac._USER_VOICES_DIR, ac._BUNDLE_DIR / "voices"):
             if not voices_dir.exists():
@@ -53,10 +48,9 @@ class VoiceTabMixin:
         self._save_settings_debounced()
 
     def _on_mute_toggled(self, muted: bool) -> None:
-        """Apply or clear the master mute. Driven by the button's checked state, so
-        timed/zone mutes just flip the button and route through here too."""
+        """Apply the mute button state, including timed and zone mutes."""
         if not muted:
-            # Any manual or expired un-mute also cancels pending timed mutes.
+            # Unmuting also cancels any pending timed mute.
             self._mute_timer.stop()
             self._mute_until_zone = False
         if muted:
@@ -64,15 +58,12 @@ class VoiceTabMixin:
             self._mute_btn.setText("🔇")
             self._vol_label.setText(_("muted"))
         else:
-            # A hand edited numeric string would raise inside set_master_volume's
-            # min(). Same coercion guard the slider's startup read applies.
+            # Coerce saved volume before passing it to TTS.
             try:
                 vol = float(self._settings.get("master_volume", 1.0))
             except (TypeError, ValueError, OverflowError):
                 vol = 1.0
-            # json parses NaN and Infinity fine. Comparisons against NaN are
-            # all false, so the clamp in set_master_volume would pin it to 2.0
-            # and every unmuted callout blasts at double volume.
+            # Reject nonfinite values before clamping volume.
             if not math.isfinite(vol):
                 vol = 1.0
             set_master_volume(vol)
@@ -82,14 +73,14 @@ class VoiceTabMixin:
 
     def _mute_for_minutes(self, minutes: float) -> None:
         self._mute_until_zone = False
-        self._mute_btn.setChecked(True)         # _on_mute_toggled applies the mute
+        self._mute_btn.setChecked(True)
         self._mute_timer.start(int(minutes * 60_000))
 
     def _mute_until_next_zone(self) -> None:
         self._mute_timer.stop()
         self._mute_until_zone = True
         self._mute_btn.setChecked(True)
-        self._on_mute_toggled(True)             # no-op refresh if already checked
+        self._on_mute_toggled(True)
 
     def _on_mute_context_menu(self, pos) -> None:
         menu = QMenu(self._mute_btn)
@@ -111,14 +102,12 @@ class VoiceTabMixin:
 
     def _alert_sound_path(self) -> str | None:
         name = self._settings.get("overlay_sound_file", "ding.wav")
-        # A hand edited non-string must not raise out of the alert emit,
-        # same guard _alert_sound_amp carries for its setting.
         if not isinstance(name, str) or not name:
             return None
         p = Path(name)
         if p.is_absolute():
             return str(p) if p.exists() else None
-        # A user-imported SFX wins over a built-in of the same name.
+        # Imported sounds take precedence over bundled names.
         for cand in (ac._USER_SOUNDS_DIR / name, ac._BUNDLE_DIR / "sounds" / name):
             if cand.exists():
                 return str(cand)
@@ -126,9 +115,9 @@ class VoiceTabMixin:
 
     @staticmethod
     def _sound_amp_from_fraction(v: float) -> float:
-        """Map the 0..1 slider fraction to amplitude on a dB taper. Loudness is
-        ~logarithmic and a linear slider feels dead until the last 10%.
-        100% -> 0 dB or 1.0, 50% -> -20 dB or 0.1, 0% -> silent."""
+        """Map the slider to a decibel taper. Full volume is unity, halfway is one tenth
+        amplitude, and zero is silent.
+        """
         if v <= 0.0:
             return 0.0
         if v >= 1.0:
@@ -136,8 +125,6 @@ class VoiceTabMixin:
         return 10.0 ** ((v - 1.0) * 2.0)   # 40 dB usable range
 
     def _alert_sound_amp(self) -> float:
-        # Same coercion guard the slider init gets. A hand edited string,
-        # NaN or Infinity must not raise out of the alert path.
         try:
             v = float(self._settings.get("overlay_sound_volume", 0.5))
         except (TypeError, ValueError, OverflowError):
@@ -169,7 +156,7 @@ class VoiceTabMixin:
             if path:
                 self._settings["overlay_sound_file"] = path
                 self._save_settings()
-            self._select_alert_sound_in_combo()   # reflect saved value either way
+            self._select_alert_sound_in_combo()
             return
         self._settings["overlay_sound_file"] = data
         self._save_settings()
@@ -180,7 +167,6 @@ class VoiceTabMixin:
         self._save_settings()
 
     def _on_alert_sound_volume_changed(self, value: int) -> None:
-        # The alert sound's own level. tts multiplies it by the master volume.
         self._settings["overlay_sound_volume"] = value / 100.0
         self._save_settings_debounced()
         if hasattr(self, "_alert_sound_vol_lbl"):
@@ -197,18 +183,14 @@ class VoiceTabMixin:
                 ".wav file."))
 
     def _import_sfx(self) -> None:
-        """Copy a chosen .wav into the user sounds folder so it becomes a reusable
-        picker entry. The bundled sounds folder is read-only on frozen builds.
-        Selects and plays it as confirmation."""
+        """Copy a WAV into user sounds, select it and play a preview."""
         path, _unused = ac.QFileDialog.getOpenFileName(
             self, _("Import alert SFX"), str(Path.home()), _("WAV audio (*.wav)"))
         if not path:
             return
         src = Path(path)
         try:
-            # The picker accepts any path, and this copy runs on the GUI
-            # thread. A FIFO or device node would freeze the whole window, a
-            # huge file would hang it. Same prechecks as the TTS sound copy.
+            # Require a bounded regular file because copying runs on the GUI thread.
             if not src.is_file() or src.stat().st_size > _MAX_SOUND_BYTES:
                 ac.QMessageBox.warning(
                     self, _("Import SFX"),
@@ -217,7 +199,7 @@ class VoiceTabMixin:
                 return
             ac._USER_SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
             dest = ac._USER_SOUNDS_DIR / src.name
-            if dest.resolve() != src.resolve():     # picking a file already in the folder
+            if dest.resolve() != src.resolve():
                 shutil.copy2(src, dest)
         except OSError as exc:
             ac.QMessageBox.warning(self, _("Import SFX"),
@@ -232,10 +214,8 @@ class VoiceTabMixin:
             play_notification(snd, self._alert_sound_amp())
 
     def _emit_alert(self, text: str, severity: str = "info") -> None:
-        """One place every visual alert goes through. Plays the notification
-        sound and pushes the callout to the companion Dalamud plugin, which
-        draws it in game. Severities are the shared info/alert/alarm vocabulary,
-        so the push maps one to one."""
+        """Play the alert sound and send the callout and severity to the overlay plugin.
+        """
         self._maybe_play_alert_sound(severity)
         self._plugin_link.send_alert(text, severity)
 
@@ -265,15 +245,12 @@ class VoiceTabMixin:
         snd_row.addStretch(1)
         layout.addLayout(snd_row)
 
-        # Alert-sound volume, its own level, scaled by the master volume.
         vol_row = QHBoxLayout()
         vol_row.addWidget(QLabel(_("Volume:")))
         self._alert_sound_vol_slider = QSlider(Qt.Orientation.Horizontal)
         self._alert_sound_vol_slider.setMinimum(0)
         self._alert_sound_vol_slider.setMaximum(100)
         self._alert_sound_vol_slider.setMaximumWidth(180)
-        # Same coercion guard the master volume slider gets. A hand edited
-        # string, NaN or Infinity must not raise out of _build_ui.
         try:
             alert_vol = float(self._settings.get("overlay_sound_volume", 0.5))
         except (TypeError, ValueError, OverflowError):
@@ -305,9 +282,7 @@ class VoiceTabMixin:
         layout.addLayout(scope_row)
 
     def _sound_combo_items(self) -> list[tuple[str, str]]:
-        """label/data entries for the alert-sound picker."""
         items = [(_("Ding"), "ding.wav"), (_("Alert"), "alert.wav"), (_("Coin"), "coin.wav")]
-        # User-imported SFX, by filename. Skip any that shadow a built-in.
         builtin = {data for _, data in items}
         try:
             for wav in sorted(ac._USER_SOUNDS_DIR.glob("*.wav")):
@@ -319,7 +294,6 @@ class VoiceTabMixin:
         return items
 
     def _populate_sound_combo(self) -> None:
-        """Refill the sound picker, preserving the current selection."""
         combo = getattr(self, "_alert_sound_combo", None)
         if combo is None:
             return
@@ -333,16 +307,14 @@ class VoiceTabMixin:
     def _select_alert_sound_in_combo(self) -> None:
         name = self._settings.get("overlay_sound_file", "ding.wav")
         idx = self._alert_sound_combo.findData(name)
-        if idx < 0:   # a custom absolute path -> show the Custom entry
+        if idx < 0:
             idx = self._alert_sound_combo.findData("__custom__")
         self._alert_sound_combo.blockSignals(True)
         self._alert_sound_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._alert_sound_combo.blockSignals(False)
 
     def _on_triggevent_tts(self, text: str, gen: "int | None" = None) -> None:
-        # see _on_triggevent_callout. Stay silent while the engine runs but
-        # callouts are off, i.e. Cactbot is on. The gen check drops a stale
-        # emit that queued delivery landed after a restart.
+        # Respect callout mode and reject stale engine generations.
         if ac._stale_gen(getattr(self, "_triggevent", None), gen):
             return
         if not self._triggevent_mode:
@@ -358,8 +330,7 @@ class VoiceTabMixin:
 
     def _on_triggernometry_sound(self, file: str, volume: int,
                                  gen: "int | None" = None) -> None:
-        # SoundMethod=ACT routes engine sound files here. Best effort.
-        # Volume is a 0-100 int, play_sound wants 0.0-1.0.
+        # Convert engine volume percentages to playback amplitude.
         if ac._stale_gen(getattr(self, "_triggernometry", None), gen):
             return
         if not self._triggernometry_mode:
@@ -367,7 +338,7 @@ class VoiceTabMixin:
         try:
             if file and os.path.isfile(file):
                 play_sound(file, max(0.0, min(volume / 100.0, 1.0)))
-        except Exception:  # noqa: BLE001 - never let a missing sound break callouts
+        except Exception:  # noqa: BLE001
             pass
 
     def _on_cactbot_tts(self, text: str) -> None:
@@ -380,25 +351,23 @@ class VoiceTabMixin:
         self._save_settings()
 
     def _on_voice_changed(self, index: int) -> None:
-        """Model picker for BOTH languages. A "kokoro:" prefixed entry turns
-        on the in-app neural Japanese voice and sets it up on first pick.
-        A Piper entry is the English voice and sends Japanese to espeak."""
+        """Apply the selected Piper or Kokoro voice and start setup when needed."""
         data = self._voice_combo.itemData(index)
         if isinstance(data, str) and data.startswith("kokoro:"):
             voice = data[len("kokoro:"):]
             self._settings["jp_neural_enabled"] = True
             self._settings["jp_neural_voice"] = voice
             self._save_settings()
-            set_jp_neural(True, voice)          # Japanese auto-routes here since jp_auto is on
+            set_jp_neural(True, voice)
             if not kokoro_ready():
-                self._on_kokoro_download()      # first pick, download and set it up now
+                self._on_kokoro_download()
             return
         if data:
             set_model(Path(data))
             self._settings["voice_model"] = Path(data).stem
         self._settings["jp_neural_enabled"] = False
         self._save_settings()
-        set_jp_neural(False)                    # Japanese falls back to espeak
+        set_jp_neural(False)
 
     def _on_kokoro_dl_done(self, status: str) -> None:
         self._kokoro_setup_running = False
@@ -410,7 +379,7 @@ class VoiceTabMixin:
         elif status == "no-model":
             ac.QMessageBox.warning(self, _("Neural Japanese voice"),
                 _("Could not download the voice model. Check your connection and try again."))
-        else:   # deps install failed
+        else:
             ac.QMessageBox.warning(self, _("Neural Japanese voice"),
                 _("The app could not install the voice dependencies "
                   "(pip install kokoro-onnx). Check your internet connection, "
@@ -435,24 +404,18 @@ class VoiceTabMixin:
     def _test_tts_settings(self) -> None:
         data = self._voice_combo.currentData()
         if isinstance(data, str) and data.startswith("kokoro:"):
-            # Match the selected voice. A Japanese voice tests in Japanese,
-            # with a kana reading so the espeak fallback doesn't say
-            # "Chinese letter".
+            # Test Japanese voices with a kana reading.
             speak("テストトリガー発動", reading="テストトリガーはつどう")
         else:
             speak("Test trigger fired")
 
     def _open_voices_folder(self) -> None:
-        """Open the voices folder in the OS file manager. The USER one, not
-        the bundled _internal dir a self-update wipes. See
-        _USER_VOICES_DIR."""
+        """Open the user voice directory that survives program updates."""
         ac._USER_VOICES_DIR.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(ac._USER_VOICES_DIR)))
 
     def _populate_voice_combo(self) -> None:
-        """Fill the Model dropdown. Piper voices first, friendly names with
-        the path as item data, then the neural Japanese voices, whose item
-        data is the "kokoro:" prefix plus the voice id."""
+        """List Piper model paths followed by Kokoro voice IDs."""
         voices = self._scan_voices()
         labels = Counter(_voice_display(stem) for stem, _path in voices)
         for stem, path in voices:
@@ -460,10 +423,7 @@ class VoiceTabMixin:
             if labels[label] > 1:
                 label = f"{label} · {stem}"
             self._voice_combo.addItem(label, userData=str(path))
-        # The neural Japanese voices ship inside the app now, kokoro-onnx
-        # and the espeak-ng phonemizer are bundled in the frozen build too,
-        # so list them on every platform. Their model downloads on first
-        # pick.
+        # Offer Japanese voices on every platform. Download models on first selection.
         for vid, label in _JP_NEURAL_VOICES:
             self._voice_combo.addItem(label, userData="kokoro:" + vid)
 
@@ -475,7 +435,7 @@ class VoiceTabMixin:
             if isinstance(data, str) and data and not data.startswith("kokoro:"):
                 piper[i] = Path(data)
         saved = self._settings.get("voice_model", "")
-        # Full stems win before the compatibility match for older friendly labels.
+        # Prefer full stems over legacy friendly names.
         model_index = next((i for i, path in piper.items() if path.stem == saved), -1)
         if model_index < 0:
             model_index = next((i for i, path in piper.items()
@@ -491,9 +451,8 @@ class VoiceTabMixin:
             index = combo.findData("kokoro:" + voice)
         else:
             index = model_index
-        # Startup restores selection before connecting the change handler.
         combo.setCurrentIndex(index)
-        # Keep the English model even when the selected voice is Japanese.
+        # Retain the English model when selecting a Japanese voice.
         if model_index >= 0:
             path = piper[model_index]
             set_model(path)
@@ -503,7 +462,7 @@ class VoiceTabMixin:
         saved_data = self._voice_combo.currentData()
         self._voice_combo.blockSignals(True)
         self._voice_combo.clear()
-        self._populate_voice_combo()   # both sections. Refresh must keep the JP voices
+        self._populate_voice_combo()
         idx = self._voice_combo.findData(saved_data)
         if idx < 0:
             idx = next((i for i in range(self._voice_combo.count())
@@ -511,13 +470,11 @@ class VoiceTabMixin:
                         and data and not data.startswith("kokoro:")), -1)
         self._voice_combo.setCurrentIndex(idx)
         self._voice_combo.blockSignals(False)
-        # If the active voice was removed, re-point TTS to whatever is now
-        # selected so set_model and the saved setting follow the visible
-        # choice.
+        # Update TTS when the selected voice was removed.
         if idx >= 0 and self._voice_combo.currentData() != saved_data:
             self._on_voice_changed(self._voice_combo.currentIndex())
         elif isinstance(saved_data, str) and saved_data.startswith("kokoro:"):
-            # Japanese speech still needs a usable Piper voice for English callouts.
+            # Japanese mode still needs a Piper model for English callouts.
             previous_model = self._settings.get("voice_model")
             self._restore_voice_model()
             if self._settings.get("voice_model") != previous_model:
@@ -527,7 +484,6 @@ class VoiceTabMixin:
         def _work() -> None:
             download_dir = None
             try:
-                # Sweep .part leftovers from crashed earlier update downloads.
                 _sweep_stale_update_parts(Path(tempfile.gettempdir()))
                 if kind == "git":
                     self._upd_progress_signal.emit(-1, _("Running git pull..."))
@@ -568,9 +524,8 @@ class VoiceTabMixin:
                         self._upd_progress_signal.emit(-1, _("Verifying download..."))
                         ok, msg = updater.verify_release_asset(rel, updater.WINDOWS_ASSET, dest)
                         if ok:
-                            # The running exe and loaded _internal/*.dll
-                            # are OS-locked, so no in-place swap. Stage the
-                            # new build and hand off to it.
+                            # Hand Windows updates to a staged build after loaded files
+                            # are released.
                             self._upd_progress_signal.emit(-1, _("Preparing update..."))
                             ok, msg = updater.apply_frozen_windows(dest, version=rel.version)
                 else:
@@ -586,5 +541,5 @@ class VoiceTabMixin:
             self._upd_done_signal.emit(ok, msg)
         try:
             threading.Thread(target=_work, daemon=True).start()
-        except Exception as exc:  # noqa: BLE001 - a failed start must not strand the banner
+        except Exception as exc:  # noqa: BLE001
             self._on_update_done(False, str(exc))

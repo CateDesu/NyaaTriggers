@@ -1,35 +1,29 @@
-"""Ink theme. Near-black surfaces, hairline edges, one coral accent.
+"""Shared colours, widget styles and decorative drawing helpers."""
 
-The "Ink" design, see UI-REDESIGN.md. QSS supports linear
-and radial gradients, so the brand gradient, coral -> mauve, lands on primary
-buttons, checkbox checks, progress chunks, and selection bars. Gradient text is
-impossible in QSS. Titles use solid coral instead.
-"""
-
-# ── Ink palette, see UI-REDESIGN.md ──
+# Surface colours
 BASE     = "#0a0a0c"   # window background
-PANEL    = "#101013"   # subtle surface step, sidebar and list solids
-MANTLE   = "#18181d"   # inputs, chips, hover washes, the panel-2 tone
-CRUST    = BASE        # window chrome, kept name for back-compat
+PANEL    = "#101013"   # Sidebar and list backgrounds
+MANTLE   = "#18181d"   # Inputs and hovered controls
+CRUST    = BASE        # Compatibility alias
 SURFACE0 = MANTLE
 SURFACE1 = MANTLE
-SURFACE2 = "#26262e"   # raised surface / hairline edge
-EDGE     = "#26262e"   # hairlines only, never boxes
-OVERLAY0 = "#3a3a44"   # muted control hover
-OVERLAY1 = "#8f8f9a"   # lighter muted text
+SURFACE2 = "#26262e"   # Raised surfaces and borders
+EDGE     = "#26262e"
+OVERLAY0 = "#3a3a44"   # Muted hover colour
+OVERLAY1 = "#8f8f9a"
 
-# ── Accents ──
-ACCENT    = "#ff8399"   # coral, the one accent
-ACCENT2   = "#e66c82"   # accent hover
+# Accents
+ACCENT    = "#ff8399"
+ACCENT2   = "#e66c82"
 ON_ACCENT = "#2b1017"   # dark text on accent fills
 
-# ── Text ──
-TEXT     = "#e8e8ec"   # primary text
-SUBTEXT1 = "#8f8f9a"   # ink-dim
+# Text
+TEXT     = "#e8e8ec"
+SUBTEXT1 = "#8f8f9a"
 SUBTEXT0 = "#6a6a74"
-SUBTEXT_SOFT = "#b0b0be"   # inactive nav labels, kana and version marks, a cool gray-blue
+SUBTEXT_SOFT = "#b0b0be"   # Inactive navigation, kana and version labels
 
-# ── Status, catppuccin ──
+# Status colours
 OK       = "#a6e3a1"
 ERR      = "#f38ba8"
 YELLOW   = "#f9e2af"
@@ -42,23 +36,21 @@ PINK     = "#f5c2e7"
 LAVENDER = MAUVE
 SAPPHIRE = "#74c7ec"
 
-# Back-compat. The update banner and status dots used to reference GOLD/GOLD_LT.
-# Point them at the new accent so existing `theme.GOLD` references still work.
+# Retain the older colour names for existing callers.
 GOLD     = ACCENT
 GOLD_LT  = ACCENT
 
-# ── Brand gradient, coral -> mauve, 120deg ──
+# Brand gradient
 GRAD_FROM = ACCENT
 GRAD_TO   = MAUVE
 
-# Pill radius used for buttons, inputs, combos.
 PILL = 14
-# Slightly tighter radius for big surfaces, tables, trees, group boxes.
+# Corner radius for larger surfaces.
 SOFT = 6
 
 
 STYLESHEET = f"""
-/* ── Base ── */
+
 QWidget {{
     background-color: {BASE};
     color: {TEXT};
@@ -68,10 +60,7 @@ QMainWindow, QDialog {{
     background-color: {BASE};
 }}
 
-/* Root central widget and tab panes are transparent so the scenery painted on
-   the QMainWindow (sakura tree, drifting petals) shows through the gaps.
-   Solid child widgets (table, tree, inputs) sit on top and keep their own
-   surfaces. */
+/* Transparent containers reveal the window scenery. */
 QWidget#root,
 QWidget#auroraPage,
 QWidget#contentCol,
@@ -81,8 +70,7 @@ QTabWidget::pane {{
     border: none;
 }}
 
-/* ── Sidebar shell (Ink nav: solid, hairline right edge; the sidebar paints
-   its own small tree and petals, so nav text always has a quiet surface) ── */
+
 QFrame#sidebar {{
     background-color: {PANEL};
     border-right: 1px solid {EDGE};
@@ -108,7 +96,7 @@ QPushButton#navItem {{
     background-color: transparent;
     color: {SUBTEXT1};
     font-family: "Kosugi Maru";
-    border: 1px solid transparent;   /* same box as :checked, no layout shift */
+    border: 1px solid transparent;
     border-radius: 8px;
     padding: 8px 12px;
     text-align: left;
@@ -119,13 +107,13 @@ QPushButton#navItem:hover:!checked {{
     color: {TEXT};
 }}
 QPushButton#navItem:checked {{
-    background-color: rgba(255, 131, 153, 10);   /* whisper of coral; scenery bleeds through */
+    background-color: rgba(255, 131, 153, 10);
     color: {ACCENT};
     font-weight: bold;
-    border: 1px solid transparent;   /* the visible ring is painted in _NavButton.paintEvent */
+    border: 1px solid transparent;
 }}
 
-/* ── Tab widget ── */
+
 QTabBar {{ background: transparent; }}
 QTabWidget::pane {{
     border-top: 1px solid {EDGE};
@@ -146,7 +134,7 @@ QTabBar::tab:hover:!selected {{
     color: {TEXT};
 }}
 
-/* ── Buttons ── */
+
 QPushButton {{
     background-color: {MANTLE};
     color: {TEXT};
@@ -166,7 +154,7 @@ QPushButton:disabled {{
     color: {OVERLAY0};
     border-color: {PANEL};
 }}
-/* Primary button: brand gradient fill, dark text, no hairline border. */
+
 QPushButton#primary {{
     background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1,
         stop:0 {GRAD_FROM}, stop:1 {GRAD_TO});
@@ -183,7 +171,7 @@ QPushButton#primary:pressed {{
     background-color: {ACCENT2};
 }}
 
-/* ── Line edits & text edits ── */
+
 QLineEdit, QPlainTextEdit, QTextEdit {{
     background-color: {MANTLE};
     color: {TEXT};
@@ -197,7 +185,7 @@ QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {{
     border-color: {ACCENT};
 }}
 
-/* ── Spin box ── */
+
 QDoubleSpinBox, QSpinBox {{
     background-color: {MANTLE};
     color: {TEXT};
@@ -219,7 +207,7 @@ QDoubleSpinBox::down-button:hover, QSpinBox::down-button:hover {{
     background-color: {SURFACE2};
 }}
 
-/* ── Combo box ── */
+
 QComboBox {{
     background-color: {MANTLE};
     color: {TEXT};
@@ -247,7 +235,7 @@ QComboBox QAbstractItemView {{
     padding: 4px;
 }}
 
-/* ── Table ── */
+
 QTableWidget {{
     background-color: {PANEL};
     alternate-background-color: {MANTLE};
@@ -279,7 +267,7 @@ QHeaderView::section {{
     font-size: 9pt;
 }}
 
-/* ── Tree widget ── */
+
 QTreeWidget {{
     background-color: {PANEL};
     color: {TEXT};
@@ -304,7 +292,7 @@ QTreeWidget::branch {{
     background-color: {PANEL};
 }}
 
-/* ── List widget ── */
+
 QListWidget {{
     background-color: {PANEL};
     color: {TEXT};
@@ -324,7 +312,7 @@ QListWidget::item:hover:!selected {{
     background-color: {MANTLE};
 }}
 
-/* ── Checkboxes ── */
+
 QCheckBox {{
     color: {TEXT};
     spacing: 8px;
@@ -346,7 +334,7 @@ QCheckBox::indicator:hover {{
     border-color: {ACCENT};
 }}
 
-/* ── Scrollbars ── */
+
 QScrollBar:vertical {{
     background-color: transparent;
     width: 10px;
@@ -386,7 +374,7 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
     background: transparent;
 }}
 
-/* ── Splitter ── */
+
 QSplitter::handle {{
     background-color: {EDGE};
 }}
@@ -396,7 +384,7 @@ QSplitter::handle:hover {{
 QSplitter::handle:horizontal {{ width: 1px; }}
 QSplitter::handle:vertical {{ height: 1px; }}
 
-/* ── Menu ── */
+
 QMenu {{
     background-color: {PANEL};
     color: {TEXT};
@@ -418,7 +406,7 @@ QMenu::separator {{
     margin: 4px 8px;
 }}
 
-/* ── Labels ── */
+
 QLabel {{
     background-color: transparent;
     color: {TEXT};
@@ -427,12 +415,12 @@ QFormLayout QLabel {{
     color: {SUBTEXT1};
 }}
 
-/* ── Dialog button box ── */
+
 QDialogButtonBox QPushButton {{
     min-width: 80px;
 }}
 
-/* ── Group box ── */
+
 QGroupBox {{
     color: {ACCENT};
     border: 1px solid {EDGE};
@@ -448,7 +436,7 @@ QGroupBox::title {{
     left: 10px;
 }}
 
-/* ── Progress bar ── */
+
 QProgressBar {{
     background-color: {MANTLE};
     border: 1px solid {EDGE};
@@ -462,7 +450,7 @@ QProgressBar::chunk {{
     border-radius: {PILL - 1}px;
 }}
 
-/* ── Scroll area ── */
+
 QScrollArea {{
     background-color: transparent;
     border: none;
@@ -471,7 +459,7 @@ QScrollArea > QWidget > QWidget {{
     background-color: transparent;
 }}
 
-/* ── Update banner ── */
+
 QFrame#updateBanner {{
     background-color: {MANTLE};
     border: 1px solid {ACCENT};
@@ -480,20 +468,11 @@ QFrame#updateBanner {{
 """
 
 
-# ── Sakura tree ─────────────────────────────────────────────────────────────
 def make_tree(seed: int, w: int, h: int, inward: int = 1, crisp: bool = False,
               stroke_scale: float = 1.0, lift: float = 0.0) -> "QPixmap":
-    """A single cherry tree cut in half by a window edge. A straight trunk
-    rises the full height of the window, bare until the top quarter, where
-    branches reach inward and carry one cloud of light-pink blossoms.
-    inward=+1 grows from the left edge, -1 from the right. crisp=True skips
-    the soft wash ellipses and uses smaller, more opaque dots, for a tree
-    seen without a dimming band over it, so the crown reads as blossoms,
-    not blur. Prerendered once, deterministic per seed. stroke_scale multiplies
-    the trunk and branch widths only, so a wider canvas can keep the same
-    on-screen stroke thickness as a narrower one. lift raises the branch
-    origins, trunk tip and crown clamp by lift * h, so the tree sits higher
-    against the top edge without stretching anything.
+    """Render a deterministic cherry tree from a seed. inward selects the window edge.
+    crisp omits the background wash, stroke_scale controls branch widths, and lift moves
+    the crown upward as a fraction of height.
     """
     import math
     import random
@@ -501,12 +480,8 @@ def make_tree(seed: int, w: int, h: int, inward: int = 1, crisp: bool = False,
     from PyQt6.QtGui import QColor, QGuiApplication, QPainter, QPen, QPixmap
 
     rnd = random.Random(seed)
-    # Render at the display's pixel ratio so the tree stays crisp on scaled
-    # displays, like nav_icon's 2x supersample. The painter is scaled instead
-    # of tagging the pixmap with setDevicePixelRatio because the paint sites
-    # scale by the pixmap's pixel height, and a tagged pixmap draws at its
-    # device independent size, which would shrink the tree there. nav_icon
-    # can tag since QIcon handles the ratio itself.
+    # Render at the display pixel ratio without setting the pixmap ratio. Callers scale
+    # by pixel height, so a device ratio tag would shrink the tree twice.
     screen = QGuiApplication.primaryScreen()
     dpr = screen.devicePixelRatio() if screen else 1.0
     pm = QPixmap(round(w * dpr), round(h * dpr))
@@ -516,12 +491,12 @@ def make_tree(seed: int, w: int, h: int, inward: int = 1, crisp: bool = False,
     p.scale(dpr, dpr)
 
     blossoms = [
-        QColor(255, 224, 231),   # pale blossom
-        QColor(255, 205, 216),   # light pink
-        QColor(255, 185, 200),   # pink
-        QColor(255, 238, 242),   # near-white pink
+        QColor(255, 224, 231),
+        QColor(255, 205, 216),
+        QColor(255, 185, 200),
+        QColor(255, 238, 242),
     ]
-    bark = QColor(96, 66, 78, 200)   # dim warm bark, reads on near-black
+    bark = QColor(96, 66, 78, 200)
 
     def stroke(x1, y1, x2, y2, width):
         pen = QPen(bark)
@@ -531,15 +506,12 @@ def make_tree(seed: int, w: int, h: int, inward: int = 1, crisp: bool = False,
         p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
 
     tips = []
-    x0 = 3.0 if inward > 0 else w - 3.0   # trunk centered on the edge, half clipped
+    x0 = 3.0 if inward > 0 else w - 3.0   # Center the trunk on the window edge.
 
-    # Straight trunk, one unbroken stroke from the bottom edge to the top
-    # quarter. A two-segment tapered trunk stepped visibly at the joint.
+    # Draw the trunk in one stroke to avoid a visible joint.
     top_y = h * (0.24 - lift)
     stroke(x0, h, x0, top_y, w * 0.045 * stroke_scale)
 
-    # Branches sit only along the top section, angling up and inward, each
-    # forking once. Tips are collected so the crown can settle over them.
     def branch(x, y, angle, length, width, depth):
         x2 = x + math.cos(angle) * length
         y2 = y + math.sin(angle) * length
@@ -557,16 +529,14 @@ def make_tree(seed: int, w: int, h: int, inward: int = 1, crisp: bool = False,
         by = top_y + (h * 0.04) * (i / max(1, n_br - 1))
         branch(x0, by, -math.pi / 2 + inward * rnd.uniform(0.75, 1.15),
                rnd.uniform(h * 0.04, h * 0.07), w * 0.018 * stroke_scale, 2)
-    tips.append((x0 + inward * w * 0.02, top_y - h * 0.02))   # trunk tip
+    tips.append((x0 + inward * w * 0.02, top_y - h * 0.02))
 
-    # Crown, one cloud of a few overlapping ellipses packed with blossom dots,
-    # centered over the branch tips, half of it clipped by the window edge.
     cx = sum(t[0] for t in tips) / len(tips)
     cy = sum(t[1] for t in tips) / len(tips)
     lo, hi = (w * 0.04, w * 0.22) if inward > 0 else (w * 0.78, w * 0.96)
     cx = max(lo, min(hi, cx))
-    cy = max(h * (0.10 - lift), min(h * (0.15 - lift), cy))   # tight to the top corner
-    # Size the crown from the actual tip spread so no branch pokes out bare.
+    cy = max(h * (0.10 - lift), min(h * (0.15 - lift), cy))
+    # Fit the blossom crown to the branch tips.
     max_dx = max(abs(t[0] - cx) for t in tips)
     max_dy = max(abs(t[1] - cy) for t in tips)
     cover_rx = min(w * 0.45, max(w * 0.30, max_dx + w * 0.06))
@@ -574,9 +544,7 @@ def make_tree(seed: int, w: int, h: int, inward: int = 1, crisp: bool = False,
 
     p.setPen(Qt.PenStyle.NoPen)
 
-    # Base mass, a few large, very faint ellipses so the cloud reads as one
-    # shape even between the dots. Crisp crowns skip these. They are the
-    # soft wash that reads as blur when nothing dims it.
+    # Skip the background wash for crisp crowns.
     for _ in range(0 if crisp else 3):
         px = cx + rnd.uniform(-0.08, 0.08) * cover_rx
         py = cy + rnd.uniform(-0.08, 0.08) * cover_ry
@@ -585,8 +553,6 @@ def make_tree(seed: int, w: int, h: int, inward: int = 1, crisp: bool = False,
         p.setBrush(c)
         p.drawEllipse(QPointF(px, py), cover_rx * 0.9, cover_ry * 0.9)
 
-    # Blossom dots packed into overlapping puffs. Crisp crowns use smaller,
-    # more opaque dots, so they read as distinct blossoms instead of a bokeh haze.
     if crisp:
         r_lo, r_hi, a_lo, a_hi = w * 0.011, w * 0.024, 60, 115
     else:
@@ -607,7 +573,6 @@ def make_tree(seed: int, w: int, h: int, inward: int = 1, crisp: bool = False,
             p.setBrush(c)
             p.drawEllipse(QPointF(bx, by), r, r)
 
-    # Every branch tip gets its own little tuft of blossom. No bare tips.
     for tx, ty in tips:
         for _ in range(rnd.randint(4, 6)):
             ox = rnd.uniform(-w * 0.035, w * 0.035)
@@ -618,7 +583,6 @@ def make_tree(seed: int, w: int, h: int, inward: int = 1, crisp: bool = False,
             p.setBrush(c)
             p.drawEllipse(QPointF(tx + ox, ty + oy), r, r)
 
-    # Highlights, a sprinkle of small bright dots for definition.
     for _ in range(rnd.randint(25, 35)):
         a = rnd.uniform(0.0, 2.0 * math.pi)
         rr = math.sqrt(rnd.random())
@@ -633,10 +597,8 @@ def make_tree(seed: int, w: int, h: int, inward: int = 1, crisp: bool = False,
     return pm
 
 
-# ── Sakura petals ───────────────────────────────────────────────────────────
 def make_petal(size: int, tint: "QColor") -> "QPixmap":
-    """One sakura petal, a soft pointed oval with the classic notch at the
-    top. Prerendered once, so painting is a single drawPixmap."""
+    """Prerender a notched petal for reuse during animation."""
     from PyQt6.QtCore import Qt, QPointF
     from PyQt6.QtGui import QPainter, QPainterPath, QPixmap
 
@@ -649,7 +611,6 @@ def make_petal(size: int, tint: "QColor") -> "QPixmap":
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(tint)
     p.translate(pm.width() / 2, pm.height() / 2)
-    # Petal points up. The V notch sits at the top center.
     path = QPainterPath(QPointF(0, H / 2))                    # bottom tip
     path.cubicTo(QPointF(-W * 0.72, H * 0.22),
                  QPointF(-W * 0.56, -H * 0.30),
@@ -665,18 +626,15 @@ def make_petal(size: int, tint: "QColor") -> "QPixmap":
 
 
 def make_petals(seed: int, count: int) -> list:
-    """A field of petals. Each entry carries its own prerendered pixmap plus
-    the parameters paint_petals needs to place it at any time t. Fall speed,
-    sway amplitude and period, spin, opacity. The drift is fully stateless
-    and deterministic. Tints stay in the coral family."""
+    """Create petal textures and deterministic motion parameters for paint_petals."""
     import random
     from PyQt6.QtGui import QColor
 
     rnd = random.Random(seed)
     tints = [
-        QColor(255, 170, 186),   # soft pink with a coral tinge
-        QColor(255, 200, 213),   # light pink
-        QColor(255, 228, 234),   # pale blossom
+        QColor(255, 170, 186),
+        QColor(255, 200, 213),
+        QColor(255, 228, 234),
     ]
     petals = []
     for _ in range(count):
@@ -696,9 +654,7 @@ def make_petals(seed: int, count: int) -> list:
 
 
 def petal_rects(w: int, h: int, t: float, petals: list) -> list:
-    """Bounding rect of every petal at time t, same placement math as
-    paint_petals. Lets callers repaint only the strips the drift touches
-    instead of the whole window."""
+    """Return petal bounds at time t so callers can repaint only the affected areas."""
     import math
     from PyQt6.QtCore import QRect
 
@@ -707,15 +663,13 @@ def petal_rects(w: int, h: int, t: float, petals: list) -> list:
         y = ((pt["y0"] + pt["fall"] * t) % 1.15 - 0.075) * h
         x = pt["fx"] * w + math.sin(t / pt["sway_T"] * 2.0 * math.pi + pt["phase"]) * pt["sway"]
         pm = pt["pm"]
-        r = math.hypot(pm.width(), pm.height()) / 2 + 2   # spin safe radius plus AA slack
+        r = math.hypot(pm.width(), pm.height()) / 2 + 2   # Allow for rotation and antialiasing.
         rects.append(QRect(round(x - r), round(y - r), round(2 * r), round(2 * r)))
     return rects
 
 
 def paint_petals(p: "QPainter", w: int, h: int, t: float, petals: list) -> None:
-    """Paint the petal field at time t in seconds. Positions are pure
-    functions of t. A slow straight fall that wraps around the bottom, a
-    sinusoidal sideways sway, and a lazy spin."""
+    """Place petals from time in seconds using wrapped fall, sway and rotation."""
     import math
     from PyQt6.QtCore import QPointF
 
@@ -731,11 +685,10 @@ def paint_petals(p: "QPainter", w: int, h: int, t: float, petals: list) -> None:
         p.restore()
 
 
-# ── Nav icons ───────────────────────────────────────────────────────────────
 def nav_icon(name: str, color: str, size: int = 18) -> "QIcon":
-    """A modern line icon, Feather/Lucide style. Strokes on a 24x24 grid,
-    round caps and joins, tinted `color`. Drawn fresh per state because QSS
-    can't recolor icons. The active nav pill gets the coral one."""
+    """Draw a tinted icon on a 24 by 24 grid. Generate each colour separately because QSS
+    cannot recolour icons.
+    """
     import math
     from PyQt6.QtCore import Qt, QRectF, QPointF
     from PyQt6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
@@ -778,7 +731,7 @@ def nav_icon(name: str, color: str, size: int = 18) -> "QIcon":
         for x, y in [(3, 14), (9, 14), (9, 9), (15, 9), (15, 4), (21, 4)]:
             path.lineTo(x, y)
         p.drawPath(path)
-    elif name == "automarkers":      # map pin, not a target
+    elif name == "automarkers":      # Map pin
         path = QPainterPath(QPointF(21, 10))
         path.cubicTo(QPointF(21, 17), QPointF(12, 23), QPointF(12, 23))
         path.cubicTo(QPointF(12, 23), QPointF(3, 17), QPointF(3, 10))
@@ -798,19 +751,16 @@ def nav_icon(name: str, color: str, size: int = 18) -> "QIcon":
 
 
 def apply_primary(button) -> None:
-    """Style a QPushButton as the gradient primary and attach a soft coral glow.
-
-    QSS can't draw box-shadows. QGraphicsDropShadowEffect is the only way to
-    get a soft glow on the primary button. The effect replaces the
-    button's normal render pipeline, so we keep the radius small to avoid
-    artifacts."""
+    """Apply the primary button style and a glow. Keep the shadow radius small to limit
+    rendering artifacts.
+    """
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QColor
     from PyQt6.QtWidgets import QGraphicsDropShadowEffect
 
     button.setObjectName("primary")
     button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-    # Force the QSS rule to re-evaluate against the new objectName.
+    # Refresh styles after changing objectName.
     button.style().unpolish(button)
     button.style().polish(button)
     glow = QGraphicsDropShadowEffect(button)

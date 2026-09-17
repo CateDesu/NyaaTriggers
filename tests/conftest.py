@@ -1,6 +1,5 @@
-# Run the full suite with python3 -m tests. Many scripts run checks during
-# import and need their own process. Keep pytest collection limited to the
-# existing opt-in suites so collection does not run the other scripts.
+# Run all suites with python3 -m tests. Restrict pytest collection because other suites
+# execute checks on import and need separate processes.
 import glob
 import os
 

@@ -6,31 +6,24 @@ cd "$(dirname "$0")"
 echo "=== NyaaTriggers Setup ==="
 echo
 
-# Install system packages needed to run the app.
-# websockets backs the plugin link and regex backs user trigger patterns.
-# Both are hard requirements in requirements.txt, but the app still starts
-# without them, so install them here where pip cannot be blocked by PEP 668.
-# piper-tts and the voice model are handled automatically on first launch.
+# Install system dependencies through the package manager. Voice setup runs on first
+# launch.
 
-# Root shells and minimal containers often have no sudo. Only prefix when
-# needed; without root or sudo the package install fails with its own error.
+# Use sudo only when needed and available.
 SUDO=()
 if [ "$(id -u)" -ne 0 ]; then
     SUDO=(sudo)
 fi
 
-# The ${SUDO[@]+"${SUDO[@]}"} form expands to nothing when the array is empty.
-# A plain "${SUDO[@]}" errors under set -u on bash older than 4.4.
+# The guarded array expansion supports empty arrays under set -u on older Bash versions.
 if command -v pacman &>/dev/null; then
     echo "Detected pacman - installing system packages..."
     ${SUDO[@]+"${SUDO[@]}"} pacman -S --needed --noconfirm python-pyqt6 python-websockets python-regex alsa-utils
 elif command -v apt &>/dev/null; then
     echo "Detected apt - installing system packages..."
-    # Fresh minimal images ship empty package lists, install cannot locate
-    # anything until they are refreshed.
+    # Refresh package lists for minimal installations.
     ${SUDO[@]+"${SUDO[@]}"} apt update
-    # Debian splits the Qt WebSockets binding out of python3-pyqt6 and nothing
-    # else pulls it in. ws_client imports it at startup.
+    # Debian packages the Qt WebSockets binding separately.
     ${SUDO[@]+"${SUDO[@]}"} apt install -y python3-pyqt6 python3-pyqt6.qtwebsockets python3-websockets python3-regex python3-venv alsa-utils
 else
     echo "Could not detect pacman or apt. Install these manually:"

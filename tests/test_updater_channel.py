@@ -1,15 +1,4 @@
-"""Channel-collapse contract test: one stable channel only.
-
-The Stable/Master split is gone. fetch_latest_release keeps its channel
-argument for call-site compatibility but IGNORES it: every call performs the
-same /releases/latest lookup and returns the parsed release, whatever channel
-is passed. The _pick_master_release helper (which picked the highest-versioned
-pre-release off the /releases list) is deleted. Pinned here with a stubbed
-urlopen, plus the surviving version-comparison rules for git/source vs frozen
-installs.
-
-Run directly:  python3 -m tests.test_updater_channel   (exit 0 = all pass)
-"""
+"""Stable release lookup, version display and update eligibility."""
 import email.message
 import json
 import os
@@ -97,9 +86,8 @@ check("API error payload raises on the master channel too",
 check("_pick_master_release is gone", not hasattr(updater, "_pick_master_release"))
 
 
-# Rate-limit mapping. The anonymous budget exhausted and a secondary limit
-# both surface as RateLimited so the caller serves the cached release. A
-# plain 403 with neither marker still propagates as a generic error.
+# Both API budget and secondary limits use the cached release fallback. Other 403
+# responses remain errors.
 def _http_error(code, headers):
     msg = email.message.Message()
     for k, v in headers.items():
@@ -140,12 +128,8 @@ check("rolling tag outranks its base stable",
       updater.parse_version("1.1.4.40-master") > updater.parse_version("1.1.4"))
 
 
-# is_update_for_here: every install kind compares the full tag. Frozen builds
-# carry the stamped rolling version. Git/source installs report the base
-# version (repo _VERSION is never run-number-stamped), so a rolling tag on
-# their base IS offered to them: the UI snoozes each offered tag so the
-# per-push release stream does not nag, and a git checkout's Install pulls it
-# past the tag.
+# Compare complete tags for every install kind. Source base versions can still be
+# offered rolling releases.
 check("git checkout sees a rolling tag on the same base as an update",
       updater.is_update_for_here("1.1.3.46", "1.1.3", kind="git"))
 check("git checkout at the release's own version is up to date",
@@ -165,8 +149,7 @@ check("frozen install still compares the full rolling version",
 check("frozen install on the same rolling version is up to date",
       not updater.is_update_for_here("1.1.3.46", "1.1.3.46", kind="frozen-windows"))
 
-# parse_version drops trailing zeros, so "1.2.0" == "1.2" and "1.2.0.51" sorts
-# above both. Pin the comparisons every install kind now shares.
+# Trailing zero version segments do not affect ordering.
 check("git checkout at 1.2.0 sees the 1.2.1 patch release",
       updater.is_update_for_here("1.2.1", "1.2.0", kind="git"))
 check("source copy at 1.2.0 sees the 1.2.1 patch release",
@@ -187,9 +170,7 @@ check("frozen install at 1.2.0 sees 1.2.1 (strict compare)",
       updater.is_update_for_here("1.2.1", "1.2.0", kind="frozen-linux"))
 
 
-# display_version: frozen builds show the stamped _VERSION as-is; git
-# checkouts show the nearest same-base rolling tag via git describe; plain
-# source copies are marked so a screenshot can't pass for a release build.
+# Display frozen stamps, matching git tags or a source suffix as appropriate.
 check("frozen display is the stamped version",
       updater.display_version("1.3.0.175", kind="frozen-linux") == "1.3.0.175")
 check("windows frozen display is the stamped version",
@@ -215,10 +196,8 @@ check("a tag from a newer base line is rejected",
 check("a non-version describe result is rejected",
       updater._describe_label("1.3.0", "deadbee") is None)
 
-# git_covers_upstream: a checkout whose HEAD already contains the upstream
-# tip, just pushed or ahead with unpushed commits, has nothing to pull, so
-# rolling-tag offers stay quiet. A moved-on tip the clone has not fetched,
-# or any git failure, answers False and the caller falls back to version math.
+# Suppress offers when HEAD contains the upstream tip. Fall back to version checks when
+# git cannot confirm it.
 import subprocess
 import tempfile
 from pathlib import Path

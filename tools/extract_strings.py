@@ -1,18 +1,7 @@
-"""Keep lang/<loc>.json in sync with the _() call sites in the source.
-
-Parses program Python files outside the excluded directories. Uses ast to
-ignore comments and strings and collect literal translation calls, then
-merges the English keys into lang/<loc>.json:
-
-  * new keys are added with an empty "" stub for a translator to fill,
-  * existing translations are preserved untouched,
-  * keys no longer present in the source are reported (and pruned with --prune).
-
-An empty value reads as English at runtime (see locale_util._), so an un-filled
-stub is harmless. Repo tooling only, not shipped in the build.
-
-Run:  python tools/extract_strings.py [--locale ja] [--prune] [--check]
-  --check : exit 1 if the catalog is out of sync (for CI), write nothing.
+"""Sync locale catalogs with literal translation calls in program sources. Preserve
+existing translations and add empty entries for new keys. --prune removes stale keys.
+--check reports drift without writing. Run python tools/extract_strings.py with an
+optional --locale.
 """
 from __future__ import annotations
 
@@ -24,9 +13,8 @@ import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
-# _() is defined in locale_util itself and re-imported widely. Scan app modules,
-# skip tests, this tooling, vendored engine trees, and any virtualenv/build dir
-# (checked at every path level, so a repo-root .venv can't leak _() from deps).
+# Scan program modules while excluding tests, tools, vendored code and build
+# environments at every directory level.
 _SKIP_DIRS = {"tools", "tests", "triggevent-core", "triggernometry-core", ".git", "jre",
               ".venv", "venv", "env", "site-packages", "node_modules",
               "__pycache__", "build", "dist", "local"}
@@ -43,13 +31,9 @@ def _iter_py_files() -> list[Path]:
 
 
 def _keys_in(path: Path) -> set[str] | None:
-    """English keys from `_("literal")` and `N_("literal")` calls in one file.
-    Handles quoting edge cases. A non-literal first arg (e.g. _(var)) is skipped. N_ is the
-    noop mark for strings defined in data and translated later via _(value), so the
-    catalog keeps their keys too. Only static keys translate. Returns None when the
-    file cannot be read or parsed: an unreadable file must not look like zero keys,
-    or a broken checkout marks every one of its keys stale and --prune deletes
-    live translations."""
+    """Collect literal _ and N_ calls. Return None for unreadable or invalid sources so
+    pruning cannot remove their live keys.
+    """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, ValueError):
@@ -77,8 +61,8 @@ def main(argv: list[str] | None = None) -> int:
     for f in _iter_py_files():
         keys = _keys_in(f)
         if keys is None:
-            # Fail the whole run, --check included. The drift report would
-            # blame the keys instead of the file that will not parse.
+            # Fail on unreadable sources so their keys cannot be mistaken for stale
+            # translations.
             print(f"cannot parse {f.relative_to(_REPO)}, catalog left untouched",
                   file=sys.stderr)
             return 1
@@ -121,14 +105,12 @@ def main(argv: list[str] | None = None) -> int:
               + (" ..." if len(stale_keys) > 20 else ""))
 
     if args.check:
-        # Fail on EITHER drift direction: new keys (wrapped-but-untranslated) OR
-        # stale keys (translated-but-orphaned, a catalog entry with no _() site).
-        # Bare-stale used to pass, which let orphaned translations ship unnoticed.
+        # Report both missing and stale keys.
         return 1 if (new_keys or stale_keys) else 0
 
     cat_path.parent.mkdir(parents=True, exist_ok=True)
-    # Sibling tmp + rename, so an interrupted run can't leave a truncated
-    # file in place of the previous good output. Same idiom as the converters.
+    # Replace through a sibling temporary file to preserve previous output if
+    # interrupted.
     tmp = cat_path.with_name(cat_path.name + ".tmp")
     tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n",
                    encoding="utf-8")

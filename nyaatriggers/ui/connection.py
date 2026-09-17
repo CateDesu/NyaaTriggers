@@ -1,7 +1,4 @@
-"""Plugin connection handling. WebSocket connect and reconnect, plugin
-link status and the IINACT log dir. Mixin for MainWindow, all state rides
-on self.
-"""
+"""Connection controls and IINACT log folder handling for MainWindow."""
 
 from pathlib import Path
 import json
@@ -29,17 +26,14 @@ class ConnectionMixin:
         self._pull_capture.set_recording(bool(state))
 
     def _push_plugin_tick(self) -> None:
-        """Fight-clock push. Sent only while the timeline clock runs. Every
-        path that stops the clock, zone change, wipe, feed loss, local off,
-        sends a clear instead, so the plugin never interpolates a dead pull."""
+        """Push the clock only while it runs. Stop paths clear it so the plugin cannot
+        continue a dead pull.
+        """
         if self._timeline.is_active():
             self._plugin_link.send_tick(self._timeline.current_time())
 
     def _on_plugin_link_status(self, connected: bool, msg: str) -> None:
-        """Plugin link status. Drives the Settings indicator and, on reconnect,
-        re-pushes the schedule. The plugin drops all state when the app goes
-        away, so without this a link hiccup mid-pull stays blank until the
-        next zone change."""
+        """Update connection status and restore the schedule after reconnect."""
         if (connected, msg) != self._plugin_link.last_status():
             return
         self._update_plugin_link_status_label(connected, msg)
@@ -47,16 +41,13 @@ class ConnectionMixin:
             self._push_timeline_to_plugin()
 
     def _on_plugin_port_changed(self) -> None:
-        """Port field under In-Game Overlay. Saved and re-dialed on the spot,
-        mirroring the Apply button on the plugin's own port field."""
+        """Save and apply changes to the overlay port."""
         edit = getattr(self, "_plugin_port_edit", None)
         if edit is None:
             return
         raw = (edit.text() or "").strip()
         port = parse_port(raw) if raw else DEFAULT_PORT   # an empty field means the default
         if port is None:
-            # Not a usable port. Revert to the saved value and explain via
-            # tooltip, the same shape as the Telesto URL field.
             saved = parse_port(self._settings.get("plugin_port"))
             edit.setText(str(saved if saved is not None else DEFAULT_PORT))
             edit.setToolTip(_("Invalid port - must be 1024 to 65535"))
@@ -64,7 +55,7 @@ class ConnectionMixin:
         edit.setToolTip("")
         saved = parse_port(self._settings.get("plugin_port"))
         if port == (saved if saved is not None else DEFAULT_PORT):
-            return   # unchanged text, a bare focus-out must not re-dial
+            return
         if str(port) != raw:
             edit.setText(str(port))
         self._settings["plugin_port"] = port
@@ -73,12 +64,9 @@ class ConnectionMixin:
 
     @staticmethod
     def _find_iinact_log_dir() -> "Path | None":
-        """Locate the folder IINACT writes its Network log day files into.
-        Reads LogFilePath from the IINACT plugin config and resolves it.
-        On Linux the config sits under .xlcore and the C drive path maps
-        into the wine prefix. On Windows the config sits where XIVLauncher
-        puts it and the path resolves directly. Falls back to the default
-        Documents\\IINACT spot, for a config that has not been written yet."""
+        """Resolve IINACT's log directory from its configuration, mapping Windows paths
+        into Wine on Linux. Fall back to the default Documents location.
+        """
         if os.name == "nt":
             cfg = (Path(os.environ.get("APPDATA", "")) / "XIVLauncher"
                    / "pluginConfigs" / "IINACT.json")
@@ -97,11 +85,11 @@ class ConnectionMixin:
             m = re.match(r"^c:\\?(.+)$", raw.strip(), re.IGNORECASE)
             if m:
                 rest = m.group(1).replace("\\", "/").strip("/")
-                # The wine prefix only ever has lowercase users, so lower
-                # the first leg to match it. Later legs keep their case.
+                # Match the lowercase Wine user directory while preserving later path
+                # components.
                 first, _, tail = rest.partition("/")
                 rest = first.lower() + ("/" + tail if tail else "")
-                # A bare C drive root must not map onto all of drive_c.
+                # Reject a bare drive root as a log directory.
                 if rest:
                     mapped = (Path.home() / ".xlcore" / "wineprefix" / "drive_c"
                               / rest)
@@ -119,9 +107,7 @@ class ConnectionMixin:
         return None
 
     def _open_iinact_logs(self) -> None:
-        """Open IINACT's raw network log folder in the desktop file manager.
-        The location comes from the IINACT plugin config, mapped into the
-        wine prefix on Linux."""
+        """Open the resolved IINACT log folder."""
         path = self._find_iinact_log_dir()
         if path is None:
             ac.QMessageBox.information(
@@ -131,10 +117,7 @@ class ConnectionMixin:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _on_ws_party_jobs(self, jobs: dict) -> None:
-        """PartyChanged roster jobs, a dict of actor int to job int in decimal.
-        The most reliable feed, update unconditionally. Cheap, tiny dict.
-        The dps meter shares it, its own 03 burst may never have arrived."""
-        # getattr, duck-typed test windows may lack the meter or the method.
+        """Use the party roster as a shared job feed for automarkers and the meter."""
         note_job = getattr(getattr(self, "_dps_meter", None), "note_job", None)
         for k, v in jobs.items():
             if not v:
@@ -142,18 +125,16 @@ class ConnectionMixin:
             try:
                 aid, job = int(k), int(v)
             except (TypeError, ValueError):
-                continue   # one malformed entry must not kill the rest of the roster
+                continue
             self._note_actor_job(aid, job)
             if note_job is not None:
                 note_job(aid, job)
         self._rearm_umad_chain_flush()
 
     def _on_ws_primary_player(self, _char_id: int, name: str) -> None:
-        """ChangePrimaryPlayer from the WS feed, replayed from cache on
-        subscribe, live on login or character switch. An empty name, server
-        started before the game knew the player, must not clobber a saved
-        one, so only a real, different name is applied. The dps meter takes
-        the id too, its 02 line replay may never come."""
+        """Apply a known primary player from cached or live metadata without overwriting
+        the name with an empty value. Pass the ID to the meter too.
+        """
         name = name.strip()
         if name and name != self._me_name:
             self._set_me_name(name)
@@ -162,9 +143,8 @@ class ConnectionMixin:
             set_me(_char_id)
 
     def _on_ws_combatants_jobs(self, payload: dict) -> None:
-        """getCombatants snapshots double as a job feed. Entries carry decimal
-        Job ints and reflect live memory, so a mid-instance app restart, no 03
-        burst, no party change, still resolves roles. Players only."""
+        """Use live player combatant snapshots to backfill jobs after a midfight restart.
+        """
         if not self._umad_chain_enabled:
             return
         for c in (payload or {}).get("list") or []:
@@ -173,54 +153,38 @@ class ConnectionMixin:
             try:
                 cid, job = int(c.get("id") or 0), int(c.get("job") or 0)
             except (TypeError, ValueError):
-                continue   # a malformed sidecar entry must not kill the slot
+                continue
             if job and cid >= 0x10000000:
                 self._note_actor_job(cid, job)
         self._rearm_umad_chain_flush()
 
     def _quit_for_windows_handoff(self) -> None:
-        # The freshly-staged exe is waiting for this process to exit so
-        # Windows releases the locks on our exe and _internal. It then
-        # swaps the new files in and relaunches us, so we must not relaunch
-        # here. Stop the Triggevent sidecar synchronously. Its JVM runtime
-        # and jar live inside _internal and must be fully dead before we
-        # quit, or the swap fights it. Flush the "reopening" message first,
-        # since the sidecar kill can block. Each step runs isolated through
-        # _teardown_step, so one failed stop cannot skip the rest and still
-        # prints to stderr, the handoff is the worst place to lose a
-        # diagnostic.
+        # Stop sidecars synchronously before the Windows handoff so they release runtime
+        # files. The staged updater handles relaunch. Flush status first and isolate
+        # teardown steps so one failure cannot skip cleanup.
         app = QApplication.instance()
         if app is not None:
             app.processEvents()
         step = self._teardown_step
-        # Stop the timers before the 300 ms event-loop window below, so
-        # none fires mid-teardown. Same set closeEvent stops.
+        # Stop timers before allowing the final repaint.
         self._stop_background_timers()
-        step("clear status timers", lambda: self._clear_status_timers())   # no reapply warning may fire mid-teardown
+        step("clear status timers", lambda: self._clear_status_timers())
         step("clear seq runners", lambda: self._clear_seq_runners())
-        # This path bypasses closeEvent, so the debounced settings save has
-        # to be flushed here or the last slider drag is lost.
+        # Flush pending settings because this path bypasses closeEvent.
         step("settings save flush", lambda: self._flush_pending_settings_save())
-        # Finalize an in-progress meter encounter like closeEvent does,
-        # or a handoff mid-fight loses the active pull.
+        # Finish the active encounter before the handoff.
         step("meter encounter finalize", lambda: self._finalize_live_encounter())
         step("ws disconnect", lambda: self._ws.disconnect_from())
-        # This path bypasses closeEvent, so the open pull capture needs the
-        # same finalize the ordinary close gives it, meta and all.
+        # Finalize the pull capture as closeEvent would.
         step("pull capture finalize", lambda: self._pull_capture.close())
         step("cactbot reader stop", lambda: self._stop_cactbot_reader())
         step("triggevent stop", lambda: self._stop_sidecar("_triggevent", wait=True))
-        # The Triggernometry sidecar is also a child process launched
-        # out of _internal on a frozen build. It survives app.quit, and
-        # a live child holding _internal files makes the staged swap
-        # fail and roll back. wait=True, like the Triggevent stop
-        # above, so the child is confirmed dead before we quit. The
-        # off-thread reaper would be killed by app.quit 300 ms later,
-        # before it could escalate.
+        # Wait for Triggernometry shutdown too so it releases the bundled runtime before
+        # the swap.
         step("triggernometry stop", lambda: self._stop_sidecar("_triggernometry", wait=True))
         step("telesto stop", lambda: self._stop_sidecar("_telesto_client"))
         step("plugin link stop", lambda: self._stop_sidecar("_plugin_link"))
-        # Short delay so the final repaint settles. The staged copy waits on our PID.
+        # Allow the final repaint before exiting.
         QTimer.singleShot(300, app.quit if app is not None else (lambda: None))
 
     def _toggle_connection(self) -> None:

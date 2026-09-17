@@ -1,12 +1,4 @@
-"""Regression test for the first-run setup dialog lifecycle.
-
-Closing the dialog while the setup worker runs used to let main() unwind and
-destroy a live QThread, which is a Qt fatal: the process aborted with a core
-dump instead of exiting. The dialog must refuse to close until the worker's
-done signal lands, then close normally.
-
-Run directly:  python -m tests.test_setup_dialog   (exit 0 = all pass)
-"""
+"""Setup worker lifetime, output decoding and Linux dependencies."""
 import os
 import sys
 import threading
@@ -56,11 +48,7 @@ def _make_worker():
     return _last_worker
 
 
-# ── the first run venv create and pip install decode output as utf-8 ──────
-# Under a C locale codec a non-ASCII path raises UnicodeDecodeError with
-# plain text=True, and the dialog would show codec noise instead of pip's
-# error. Same environment class the tts.py pip call was hardened for. The
-# sleeps and the lock are stubbed so the worker body runs synchronously.
+# Run setup synchronously with UTF-8 output from a non-ASCII path.
 _setup_app = QApplication.instance() or QApplication(sys.argv)
 _pip_calls = []
 
@@ -142,10 +130,7 @@ for _ in range(100):
 check("success accepts the dialog", dlg2.result() == QDialog.DialogCode.Accepted)
 check("thread reaped before accept", not dlg2._worker.isRunning())
 
-# ── setup.sh installs the Qt WebSockets binding on apt systems ──────────────
-# Debian splits PyQt6.QtWebSockets out of python3-pyqt6 and nothing else
-# pulls it in. ws_client imports it unconditionally, so a clean apt install
-# that followed setup.sh failed before the connection UI opened.
+# APT setup includes the separate Qt WebSockets package.
 _setup_sh = (Path(__file__).resolve().parents[1] / "setup.sh").read_text(encoding="utf-8")
 _apt_line = next((ln for ln in _setup_sh.splitlines() if "apt install" in ln), "")
 check("setup.sh apt branch installs the Qt WebSockets binding",

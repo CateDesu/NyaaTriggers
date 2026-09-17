@@ -1,7 +1,4 @@
-"""Current Instance tab. Live log view, status timers and the zone
-detect UI. The log line dispatch spine stays in the shell and calls into
-here. Mixin for MainWindow, all state rides on self.
-"""
+"""Live log display, zone handling and status timers for MainWindow."""
 
 import math
 import re
@@ -55,9 +52,9 @@ class InstanceTabMixin:
         self._table.blockSignals(prev)
 
     def _clear_player(self, actor_id: str, name: str = "", force: bool = False) -> bool:
-        """Remove the sign from a player. Routes like _mark_player and skips
-        when the party slot is unknown. force bypasses the client's enabled
-        gate, for the clears that must land while automarkers is going off."""
+        """Clear a player's sign using the same routing as marking. force permits cleanup
+        while automarkers are disabled.
+        """
         tc = self._telesto_client
         if tc is None:
             return False
@@ -66,24 +63,15 @@ class InstanceTabMixin:
         return tc.clear_actor(actor_id, force=force)
 
     def _note_actor_job(self, aid: int, job: int) -> None:
-        """Single bounded ingestion point for the actor->job map. Every feed,
-        03 lines, party roster, combatants snapshots, shares the same cap so
-        no one path can grow the dict past it."""
+        """Update the shared actor job map within its size limit."""
         if len(self._actor_jobs) > 1024:
             self._actor_jobs.clear()
         self._actor_jobs[aid] = job
 
     def _on_ws_zone_changed(self, zone_id: int, zone_name: str) -> None:
-        """ChangeZone from the WS feed, replayed from cache on subscribe, live
-        on zone change. Seeds the Current Instance state when connecting
-        mid-instance. _apply_zone dedupes the same-zone repeat every live zone
-        change produces, this event plus the 01 log line, and owns the id on
-        that path so its same-zone redetect guard can fire. With no name there
-        is no zone to apply, but the id alone is all the zone-id cactbot index
-        needs, so that resolution runs here instead of waiting for the 30 s
-        redetect tick. The id is also retained so a restarted
-        Triggernometry sidecar can be fed the zone it missed. Its feed_zone
-        connection only fires while the bridge exists."""
+        """Apply cached or live zone metadata. Resolve ID only updates immediately and
+        retain the ID for sidecar restarts. _apply_zone handles duplicate name events.
+        """
         if zone_name:
             self._apply_zone(zone_name, zone_id)
         else:
@@ -91,66 +79,49 @@ class InstanceTabMixin:
             if track_zone is not None:
                 track_zone("", zone_id)
             self._current_zone_id = zone_id
-            # Unchanged is a strict no-op inside, so a nameless replay of
-            # the zone already loaded costs nothing. getattr, duck-typed
-            # test windows carry only the id.
             if zone_id and getattr(self, "_cactbot_mode", False):
                 self._redetect_zone_fight()
 
     @pyqtSlot(bool, str)
     def _on_status_changed(self, connected: bool, msg: str) -> None:
-        self._connected = connected   # drives _toggle_connection, not the button text, which localizes
+        self._connected = connected   # Connection state is independent of translated button text.
         if connected:
             self._status_lbl.setText(f"● {msg}")
             self._status_lbl.setStyleSheet("color:#a6e3a1; font-weight:bold;")
             self._conn_btn.setText(_("Disconnect"))
             self._zone_lbl.setText(self._zone_banner_text())
-            # The timeline engine survived the feed drop, reset keeps the
-            # entries, but the plugin was cleared. Re-push the schedule so
-            # a feed hiccup doesn't leave the overlay empty until the next
-            # zone.
+            # Restore the plugin schedule after reconnect because feed loss clears its
+            # display.
             self._push_timeline_to_plugin()
             if getattr(self, "_umad_chain_enabled", False):
-                # Job backfill for a session started or restarted
-                # mid-instance. No 01 zone line or 03 burst will come, but
-                # live memory knows the jobs.
+                # Backfill jobs from live memory when connecting midfight.
                 self._ws.request_combatants_once()
         else:
             self._status_lbl.setText(f"● {msg}")
             self._status_lbl.setStyleSheet("color:#f38ba8; font-weight:bold;")
             self._conn_btn.setText(_("Connect"))
             self._zone_lbl.setText(self._zone_banner_text())
-            # Feed loss stops the fight clock, timeline.feed_status_changed.
-            # The plugin must not keep drawing that dead pull.
             self._plugin_link.send_clear()
-            # A pending warning can no longer be cancelled by its dispel or
-            # wipe, those lines died with the feed. Drop them like a zone
-            # change does, a still valid one re-arms on the next real gain.
+            # Cancel warnings whose loss or wipe events can no longer arrive.
             self._clear_status_timers()
-            self._clear_seq_runners()       # same hazard for in-flight sequences
+            self._clear_seq_runners()
             meter = getattr(self, "_dps_meter", None)
             if meter is not None:
-                # Close the open pull and reset the combat edge, or the
-                # replay's combat on finds no rising edge and the next pull
-                # merges into this one.
+                # Close the pull and reset the combat edge so reconnect can start a new
+                # encounter.
                 meter.feed_lost()
 
     def _set_zone_aliases(self, zone: str, zone_id: int) -> None:
-        """Resolve the names this zone matches against. What the feed
-        reported, plus its canonical English name when the id is known.
-        Shipped patterns are English, so on a localized client only the
-        second one can match."""
+        """Return the reported zone name and its canonical English alias when available.
+        """
         canon = canonical_zone_name(zone_id) if zone_id else ""
         self._match_zone = canon or zone
         self._zone_aliases = (zone, canon) if (canon and canon != zone) else (zone,)
 
     def _zone_banner_text(self) -> str:
-        """Current Instance caption. Shows the client's own wording, plus
-        the English name when it differs, that is the one patterns match
-        against. Connected with no zone yet is its own state. The feed
-        only announces a zone on entry, so a mid-instance connect knows
-        nothing until the next zone change, and callouts run unfiltered
-        until then."""
+        """Show the client zone name and a differing English alias. Distinguish a connected
+        feed whose zone is still unknown.
+        """
         if self._current_zone:
             label = f"◉  {self._current_zone}"
             if self._match_zone and self._match_zone != self._current_zone:
@@ -161,18 +132,13 @@ class InstanceTabMixin:
         return _("◉  No instance")
 
     def _zone_matches(self, rx) -> bool:
-        """True if a compiled zone pattern matches the current zone under any of
-        its names. Matching both keeps a client-language name that already worked
-        working, and adds the English name every shipped pattern is written in."""
+        """Match a compiled zone pattern against every current name."""
         return any(_safe_search(rx, z) for z in self._zone_aliases if z)
 
     def _apply_zone(self, zone: str, zone_id: int = 0) -> None:
-        """Track a zone change. State teardown, fight tag, Current Instance
-        label, timeline, and the per-zone Telesto party map. Fed from both
-        the 01 log line and the ChangeZone WS event. A live zone change
-        delivers both, so a same-zone repeat is a no-op, otherwise the
-        ability log would banner the zone twice and the timeline would
-        reload needlessly."""
+        """Apply a zone change and reset its state. Duplicate reports from log and metadata
+        events do not repeat teardown.
+        """
         track_zone = getattr(self, "_track_activity_zone", None)
         if track_zone is not None:
             track_zone(zone, zone_id)
@@ -183,71 +149,53 @@ class InstanceTabMixin:
             prev_zone_id = 0
         meter = getattr(self, "_dps_meter", None)
         if meter is not None:
-            # Reconnect metadata may repeat the zone while starting a fresh
-            # roster. The meter accepts it without ending the encounter.
             meter.set_zone_metadata(zone)
         if zone == self._current_zone:
-            # Same zone, but this event may be the one that carries the
-            # id, the 01 line and the ChangeZone event arrive in either
-            # order. Resolve the English name now if we are still matching
-            # on the reported one. A changed id always re-resolves, the old
-            # id's canonical name must not keep steering the zone regexes.
-            # Re-resolution rebuilds the alias tuple wholesale, so a
-            # corrected id cannot pile up extra names.
+            # The zone ID and name can arrive in either order. Rebuild aliases when a
+            # late or corrected ID changes the canonical name.
             if zone_id and (self._current_zone_id != prev_zone_id
                             or len(self._zone_aliases) < 2):
                 self._set_zone_aliases(zone, zone_id)
             if zone_id and self._current_zone_id != prev_zone_id:
-                # A late or corrected id changes what the zone-id cactbot
-                # index maps here. A strict no-op when nothing moved.
+                # A changed ID can also select a different cactbot timeline.
                 self._redetect_zone_fight()
             return
         self._current_zone = zone
         if not zone_id:
-            # The previous zone's id must not leak into this one's lookups.
             self._current_zone_id = 0
         self._set_zone_aliases(zone, zone_id)
-        # Zone change. The plugin drops the old schedule and any live
-        # alerts. The new zone's schedule arrives from
-        # _load_timeline_for_zone below.
         self._plugin_link.send_clear()
-        # Drop pending reapply warnings from the previous zone so one can't
-        # speak after a zone change. The effect is long gone.
         self._clear_status_timers()
-        self._clear_seq_runners()         # same hazard for in-flight sequences
-        self._actor_jobs.clear()          # new zone repopulates via 03 lines
+        self._clear_seq_runners()
+        self._actor_jobs.clear()
         self._umad_actor_names.clear()
         self._umad_chain_reset()
-        self._umad_gaze_reset()           # zone change, drop gaze state, party is gone
-        self._automark_pairs.reset()      # held pair statuses die with the zone
-        self._automark_pending.clear()    # queued rule marks die with it too
-        self._automark_active.clear()     # and the placed-by bookkeeping
+        self._umad_gaze_reset()
+        self._automark_pairs.reset()
+        self._automark_pending.clear()
+        self._automark_active.clear()
         if self._umad_chain_enabled:
-            # Backfill jobs from live memory in case this session missed
-            # the 03 burst, app started mid-instance. Reply merges via the
-            # combatants signal.
+            # Backfill jobs if the session missed initial combatant lines.
             self._ws.request_combatants_once()
         self._current_fight_tag, _unused = self._fight_tag_for_zone(self._match_zone)
         self._zone_lbl.setText(self._zone_banner_text())
         self._append_zone_to_ability_log(self._current_zone)
         self._refresh_zone_column()
         self._load_timeline_for_zone(self._match_zone)
-        self._refresh_telesto_party()   # party may have changed. Refresh slot map
+        self._refresh_telesto_party()
         if self._mute_until_zone:
-            self._mute_btn.setChecked(False)   # clears the until-next-zone mute
+            self._mute_btn.setChecked(False)
 
     @pyqtSlot(bool, bool)
     def _on_in_combat(self, act: bool, game: bool) -> None:
         was = self._in_game_combat
         self._in_game_combat = game
-        # The meter's encounter boundaries follow the combat flags, either
-        # edge begins or ends one, see DpsMeter.set_in_combat.
         track_combat = getattr(self, "_track_combat", None)
         if track_combat is not None:
             track_combat(act, game)
         try:
             self._dps_meter.set_in_combat(act, game)
-        except Exception as exc:  # noqa: BLE001 - never break combat tracking
+        except Exception as exc:  # noqa: BLE001
             ac.log_drop("dps-meter", f"in-combat {exc!r}")
         finish_activity = getattr(self, "_finish_activity_event", None)
         if finish_activity is not None:
@@ -255,27 +203,19 @@ class InstanceTabMixin:
                 finish_activity()
             except Exception as exc:
                 ac.log_drop("session-tracking", f"{exc!r}")
-        # Feed the timeline the synthetic 260 line, idx 2 = ACT, 3 = game,
-        # so InCombat syncs match and a game-combat flip starts the clock.
-        # The only start a non-casting target, striking dummy, can produce.
-        # Cactbot mode feeds too, its schedule rides the same engine.
+        # Feed synthetic combat state to start timelines even for targets that never
+        # cast. Cactbot schedules use the same engine.
         if (getattr(self, "_cactbot_mode", False)
                 or (getattr(self, "_local_enabled", True)
                     and getattr(self, "_global_local_on_flag", True))):
-            # A pull starting with an empty schedule means the zone's
-            # timeline never loaded, mid-instance restart, or a zone
-            # replay that arrived before the zone could resolve. Re-arm
-            # from the current zone now, or the whole pull goes without
-            # timeline callouts. No-op whenever entries are already
-            # loaded.
+            # Try loading an empty schedule at combat start in case zone resolution was
+            # delayed.
             if game and not was and not self._timeline.upcoming():
                 self._load_timeline_for_zone(self._match_zone)
             self._timeline.process_line(
                 ["260", "", "1" if act else "0", "1" if game else "0"])
-        # Opt-in leave-combat reset, the sample fight. End the run, clear
-        # the plugin, and re-arm the schedule so the next engage starts at
-        # 0. Real timelines never set the marker because intermissions
-        # must not reset.
+        # Sample timelines can opt into reset on combat end. Real fight intermissions
+        # must preserve the clock.
         if was and not game and self._timeline_reset_on_combat_end:
             self._timeline.reset()
             self._plugin_link.send_clear()
@@ -284,12 +224,12 @@ class InstanceTabMixin:
     @pyqtSlot(str)
     def _on_log_line(self, raw: str) -> None:
         fields = raw.split("|")
-        # Capture the full feed verbatim for the Save-log export, before any
-        # display filtering. Independent of the triggers master switch.
+        # Capture the full feed before display filtering, regardless of the trigger
+        # switch.
         self._raw_capture.append(raw)
         try:
             self._dispatch_log_line(fields, raw)
-        except Exception as exc:  # noqa: BLE001 - one bad line must not abort its own dispatch
+        except Exception as exc:  # noqa: BLE001
             ac.log_drop("dispatch", f"{exc!r} on {raw[:140]!r}")
 
     def _dispatch_log_line(self, fields: list[str], raw: str) -> None:
@@ -297,15 +237,14 @@ class InstanceTabMixin:
         begin_activity = getattr(self, "_begin_activity_event", None)
         event_time = begin_activity() if begin_activity is not None else None
 
-        # DPS meter tap. Additive, and a parse bug must never break
-        # triggers.
+        # Keep meter parsing failures from interrupting triggers.
         if log_type in METER_LOG_TYPES:
             try:
                 if event_time is None:
                     self._dps_meter.process(fields, raw)
                 else:
                     self._dps_meter.process(fields, raw, now=event_time)
-            except Exception as exc:  # noqa: BLE001 - same guard as dispatch itself
+            except Exception as exc:  # noqa: BLE001
                 ac.log_drop("dps-meter", f"{exc!r} on {raw[:140]!r}")
 
         track_activity = getattr(self, "_track_activity_line", None)
@@ -315,13 +254,8 @@ class InstanceTabMixin:
             except Exception as exc:
                 ac.log_drop("session-tracking", f"{exc!r}")
 
-        # 03 = AddedCombatant, "03|ts|id|name|job|level|...", job is hex.
-        # Remember each player's ClassJob so the UMAD chain engine can
-        # split DPS from supports. Players only, the '10'-prefixed ids.
-        # Keyed by _actor_int so a 26-line target id with different
-        # padding or case still resolves. Cleared on zone change. The size
-        # cap guards pathological zones, a city streams 03 lines for every
-        # passer-by.
+        # Cache player jobs from AddedCombatant lines. Normalize actor IDs for status
+        # matching and bound the cache in busy zones.
         if log_type == "03" and len(fields) > 4 and fields[2][:2] == "10":
             try:
                 job = int(fields[4], 16)
@@ -331,11 +265,8 @@ class InstanceTabMixin:
             if aid is not None:
                 self._note_actor_job(aid, job)
 
-        # 02 = ChangePrimaryPlayer, "02|ts|id|name". Tracks the local
-        # player so status, 26 and 30, triggers know whose debuffs to call
-        # out.
         if log_type == "02" and len(fields) > 3:
-            self._me_id = fields[2].strip()      # local player actor id, for the automark self-match
+            self._me_id = fields[2].strip()
             name = fields[3].strip()
             if name and name != self._me_name:
                 self._set_me_name(name)
@@ -343,44 +274,29 @@ class InstanceTabMixin:
         if fields[0] == "01" and len(fields) > 3:
             self._apply_zone(fields[3], _hex_id(fields[2]))
 
-        # Tear down pending reapply warnings regardless of the local-enabled
-        # gate. An early LosesEffect, 30, for the same effect, source and
-        # target cancels the warning, boss death, dispel, overwrite, and a
-        # wipe, ActorControl 4000000F, clears all of them. Arming, by
-        # contrast, stays gated below.
+        # Cancel pending warnings on loss or wipe regardless of the local trigger
+        # switch. Arming remains gated below.
         if fields[0] == "30":
             self._cancel_status_timers_for_loss(fields)
         elif (fields[0] == "33" and len(fields) > 3
               and fields[3].upper() == "4000000F"):
-            # ActorControl, 33. The wipe command is field 3, `command`,
-            # not field 4, `data0`. Reading 4 never matched the constant.
+            # ActorControl stores the wipe command at field 3, before data0.
             self._clear_status_timers()
-            # Wipe and fight end. The plugin drops the schedule and live
-            # alerts instead of interpolating a clock that just stopped.
             self._plugin_link.send_clear()
-            # The clear takes the meter's end state down with it, so the
-            # overlay's hold-last never survived a wipe. When this wipe just
-            # closed a pull, re-assert the end after the clear and the held
-            # final numbers stay up the way they do after a kill.
+            # Restore the final meter frame after clearing the overlay for a wipe.
             if time.monotonic() - self._dps_last_end < 10.0:
                 self._plugin_link.send_dps(None, [], show=False)
-            # Re-push the schedule at once. The engine reset keeps its
-            # entries, and the re-arm guard in _on_in_combat skips while the
-            # schedule is non-empty, so without this the overlay stays blank
-            # until the next zone.
+            # Restore the retained schedule immediately so the next pull has bars.
             self._push_timeline_to_plugin()
-            self._clear_seq_runners()                  # wipe, drop in-flight sequences too
-            self._umad_chain_reset(clear_marks=True)   # wipe, void queues and clear stranded signs
-            self._umad_gaze_reset(clear_marks=True)    # wipe, void gaze pairs and clear signs
-            self._automark_pairs.reset()      # held pair statuses are void too
-            self._automark_pending.clear()    # so are queued rule marks
-            self._automark_active.clear()     # and the placed-by bookkeeping
+            self._clear_seq_runners()
+            self._umad_chain_reset(clear_marks=True)
+            self._umad_gaze_reset(clear_marks=True)
+            self._automark_pairs.reset()
+            self._automark_pending.clear()
+            self._automark_active.clear()
 
-        # Keep the compound-rule pair tracker current on every gain and
-        # loss of a tracked status, player targets only, independent of the
-        # enable toggles. State must be warm when rules switch on, and it
-        # must update before the automark match below so the line's own
-        # status counts toward "holds both".
+        # Update compound status state before matching and regardless of toggles so
+        # enabling midfight works.
         if fields[0] in ("26", "30") and len(fields) > 8 and fields[7].startswith("10"):
             _eff_n = self._norm_hex(fields[2])
             if _eff_n in self._automark_pairs.tracked:
@@ -389,10 +305,8 @@ class InstanceTabMixin:
                 else:
                     self._automark_pairs.on_loss(_eff_n, fields[7])
 
-        # Automark rules run off the Telesto pipeline, independent of the callout
-        # toggle. Gated only on automarkers being enabled. 26 lines place signs,
-        # 30 lines run the unmark, which clears the sign only when clear-on-loss
-        # is on but always purges the fallen debuff's queued retry.
+        # Route marker gains and losses independently of callout mode. Losses always
+        # cancel pending retries.
         if (self._automark_rules and fields[0] in ("26", "30")
                 and self._settings.get("telesto_enabled")):
             if fields[0] == "26":
@@ -400,19 +314,13 @@ class InstanceTabMixin:
             else:
                 self._match_automark_unmark(fields)
 
-        # UMAD automarker engines fed off status and cast lines. The P3
-        # black-hole chains, Accretion and Crust sequencing, off 26/30, and
-        # the P4 Cursed Shriek gaze pairing off 26/30 plus the 20 followup
-        # casts that carry each wave's real or fake tell. Each self-gates on
-        # its own toggle. Isolated like the dps-meter tap above. A raise
-        # here, a role_of callback, a future state-machine regression, must
-        # not skip the local-trigger loop and every other trigger that would
-        # have fired on this same line.
+        # Isolate each automarker engine so its failure cannot skip local triggers on
+        # the same line.
         if fields[0] in ("26", "30"):
             try:
                 self._umad_chain_line(fields)
                 self._umad_gaze_line(fields)
-            except Exception as exc:  # noqa: BLE001 - same guard as dispatch itself
+            except Exception as exc:  # noqa: BLE001
                 ac.log_drop("umad", f"{exc!r} on {raw[:140]!r}")
         elif fields[0] == "20":
             try:
@@ -420,19 +328,13 @@ class InstanceTabMixin:
             except Exception as exc:  # noqa: BLE001
                 ac.log_drop("umad", f"{exc!r} on {raw[:140]!r}")
 
-        # Local, Cactbot, and Triggevent are independent sources and may
-        # all fire at once. The Local master toggle and the global kill
-        # switch gate only the local engine. Cactbot's schedule lives in
-        # the same timeline engine and needs the feed while local triggers
-        # are muted, or its bars never advance.
+        # Cactbot timelines still need log input while local callouts are disabled.
         if (getattr(self, "_cactbot_mode", False)
                 or (self._local_enabled
                     and getattr(self, "_global_local_on_flag", True))):
             self._timeline.process_line(fields)
         if self._local_enabled:
-            # try_advance invokes _on_seq_complete on the final step, which
-            # already removes the runner. Removing again here would
-            # ValueError.
+            # Completion already removes the sequence runner.
             for runner in list(self._seq_runners):
                 runner.try_advance(fields)
 
@@ -443,15 +345,11 @@ class InstanceTabMixin:
                              f"trigger loop exceeded {_DISPATCH_BUDGET_S:g}s; "
                              f"remaining triggers skipped on {raw[:140]!r}")
                     break
-                # The zone lock only applies once we know which zone we are in.
-                # Connecting mid-instance gives us neither the 01 line nor a
-                # ChangeZone replay, and silently skipping every zone-locked
-                # trigger then is indistinguishable from the app being broken.
-                # The ability id still has to match, so fail open instead.
+                # Allow zone filters before the zone is known. The ability matcher still
+                # applies.
                 if t.zone_regex and self._zone_aliases:
-                    # Cached compile. This runs per trigger per log line,
-                    # and 900+ distinct patterns thrash re's tiny internal
-                    # cache.
+                    # Use the shared compile cache for repeated checks across many
+                    # patterns.
                     rx = compile_user_regex(t.zone_regex, re.IGNORECASE)
                     if rx is None or not self._zone_matches(rx):
                         continue
@@ -472,18 +370,11 @@ class InstanceTabMixin:
                     )
                     self._seq_runners.append(runner)
                 elif t.expiry_warn_s > 0 and fields[0] == "26":
-                    # Don't speak on the gain. Schedule a reapply warning
-                    # timed off this effect's own duration. Re-arms on
-                    # refresh. The concrete line type is tested, not
-                    # t.log_type, matching the cooldown skip in
-                    # Trigger.matches, so a piped "26|30" trigger still arms
-                    # on the gain line instead of speaking on every refresh.
+                    # Arm expiry warnings on concrete gain lines and refresh their
+                    # timers. Pipe alternatives use the incoming type.
                     self._arm_status_timer(t, m, fields)
                 elif t.expiry_warn_s > 0:
-                    # Any other matched line, say the 30 loss of a piped
-                    # "26|30" trigger, is swallowed. The loss already
-                    # cancelled the armed warning above, speaking now would
-                    # call out an effect that is gone.
+                    # Loss lines already cancelled the warning and must not speak it.
                     pass
                 else:
                     self._fire(t, m)
@@ -492,44 +383,36 @@ class InstanceTabMixin:
 
     @staticmethod
     def _status_keys(fields: list[str]) -> tuple[str, str, str]:
-        """The effect id, source id, target id triple, upper-cased, from a
-        26 or 30 line.
-        Layout, type|ts|effectId|effect|duration|srcId|src|tgtId|tgt|count."""
+        """Extract normalized effect, source and target IDs from a status line."""
         eff = fields[2].upper() if len(fields) > 2 else ""
         src = fields[5].upper() if len(fields) > 5 else ""
         tgt = fields[7].upper() if len(fields) > 7 else ""
         return eff, src, tgt
 
     def _drop_status_timer(self, runner: StatusTimerRunner) -> None:
-        """Stop a runner, drop our reference, deleteLater its QObject.
-        Same lifetime contract as _drop_seq_runner."""
+        """Stop and delete a status runner."""
         runner.cancel()
         if runner in self._status_timers:
             self._status_timers.remove(runner)
         runner.deleteLater()
 
     def _arm_status_timer(self, t: Trigger, captured: dict, fields: list[str]) -> None:
-        """Schedule or re-arm a reapply warning for a just-gained effect."""
         try:
             duration = float(fields[4]) if len(fields) > 4 else 0.0
         except ValueError:
             return
         eff, src, tgt = self._status_keys(fields)
         key = (t.id, eff, src, tgt)
-        # A refresh of the same effect re-arms. Cancel the prior timer first, so
-        # a refresh that no longer warrants a warning still tears down the stale
-        # one instead of leaving it armed.
+        # Cancel the old timer before validating a refresh, even if no new warning is
+        # needed.
         for r in list(self._status_timers):
             if r.key == key:
                 self._drop_status_timer(r)
-        # Permanent or unknown duration, or already inside the warning
-        # window at apply time. Both would arm a 0-delay timer that speaks
-        # on the gain. isfinite also drops a nan or inf duration from a
-        # malformed feed line, which slips a plain `<= 0` guard and then
-        # blows up the delay-to-int conversion in the timer.
+        # Reject unknown, nonfinite or already expiring durations instead of speaking
+        # immediately.
         if not math.isfinite(duration) or duration <= 0 or duration <= t.expiry_warn_s:
             return
-        # Clamp so a multi-day duration can't overflow QTimer's int32 interval.
+        # Keep the delay within QTimer's integer range.
         delay_ms = min((duration - t.expiry_warn_s) * 1000.0, float(2**31 - 1))
         runner = StatusTimerRunner(t, captured, eff, src, tgt, delay_ms,
                                    on_complete=self._on_status_timer, parent=self)
@@ -538,18 +421,13 @@ class InstanceTabMixin:
     def _on_status_timer(self, runner: StatusTimerRunner, captured: dict) -> None:
         t = runner.trigger
         self._drop_status_timer(runner)
-        # Suppress if the world moved on during the countdown. Local
-        # triggers off, trigger disabled, edited, the list holds a
-        # different object, or deleted. Identity, the `is` check, not
-        # equality, so an edit that produced a value-equal object still
-        # counts as gone.
+        # Check mode and object identity before firing so disabled, replaced or deleted
+        # triggers cannot speak.
         if (not self._local_enabled or not t.enabled
                 or not any(x is t for x in self._triggers)):
             return
-        # Collapse an AoE burst into one callout. The gain path skips the
-        # trigger cooldown so timers re-arm on refresh, so gate it here per
-        # effect id. Shares _last_fired with matches. No write race since
-        # matches skips its cooldown for exactly these 26 triggers.
+        # Apply cooldown when the warning fires. Gains bypass it so refreshes can rearm
+        # timers.
         if t.cooldown_s > 0:
             now = time.monotonic()
             last_fired = t._last_fired.get(runner.effect_id)
@@ -603,8 +481,8 @@ class InstanceTabMixin:
                     )
 
     def _fight_tag_for_zone(self, zone: str) -> tuple[str, str]:
-        """Return the fight_tag, zone_regex pair for zone, or an empty tag
-        plus escaped_zone if unrecognised."""
+        """Resolve a fight tag and zone pattern, falling back to an escaped zone name.
+        """
         if not zone:
             return "", ""
         seen: dict[str, str] = {}
@@ -612,11 +490,8 @@ class InstanceTabMixin:
             if t.fight and t.zone_regex and t.fight not in seen:
                 seen[t.fight] = t.zone_regex
         for fight, zrx in seen.items():
-            # Same guards as the per-log-line zone gate. Reject over-long
-            # and catastrophic shapes at compile, wall-clock-timeout the
-            # match. This runs on the 30 s redetect tick, so a raw
-            # re.search over user zone_regex values could freeze the GUI
-            # thread.
+            # Use the same bounded regex matching as log dispatch to avoid blocking the
+            # interface.
             rx = compile_user_regex(zrx, re.IGNORECASE)
             if rx is None:
                 continue
@@ -625,20 +500,13 @@ class InstanceTabMixin:
         return "", re.escape(zone)
 
     def _poll_zone_and_triggers(self) -> None:
-        """30 s housekeeping tick. Hot-reload trigger files that changed
-        on disk, then re-resolve the current fight in case the trigger
-        set, or the zone's resolution, moved under a running session."""
+        """Reload changed trigger files and recheck current fight resolution."""
         self._maybe_reload_triggers()
         self._redetect_zone_fight()
 
     def _redetect_zone_fight(self) -> None:
-        """Reload the timeline when the current zone's resolved fight no longer
-        matches the loaded one, e.g. a hot-reloaded zone_regex fix, a zone id
-        arriving after the name, or a content reload changing resolution.
-        Unchanged is a strict no-op."""
-        # The cached fight tag tracks the LOCAL name-regex resolution, it
-        # drives fight-folder prefill and UMAD-specific rules, never the
-        # cactbot index tag, which only names the timeline cache file.
+        """Reload the timeline only when the resolved fight changes."""
+        # Keep the local fight tag separate from the cactbot timeline cache tag.
         self._current_fight_tag = (self._fight_tag_for_zone(self._match_zone)[0]
                                    if self._match_zone else "")
         fight = self._timeline_fight_tag(self._match_zone)
@@ -668,10 +536,7 @@ class InstanceTabMixin:
         if not fields or (fields[0] not in _ABILITY_TYPES and fields[0] != "26"):
             return
 
-        # GainsEffect. Shows a debuff or DoT going up, with the status id,
-        # not the cast id, so a reapply trigger can be made straight from
-        # the line. The status id is field 2, the applier is the source,
-        # unlike ability lines.
+        # Status gains expose the effect ID for creating expiry reminders.
         if fields[0] == "26":
             if len(fields) < 9:
                 return
@@ -722,8 +587,7 @@ class InstanceTabMixin:
         else:
             line = f"{ts}  {src}  cancels  {ability}  [{ability_id}]"
 
-        # Only 21/22 carry a meaningful target. Gate capture to those so prefill
-        # doesn't bake "on ..." onto casts/cancels.
+        # Only ability lines 21 and 22 carry a target suitable for prefill.
         target_name = fields[7].strip() if (log_type in ("21", "22") and len(fields) > 7) else ""
         color = "#a8d8a8" if is_player else "#f4a261"
         entry = {"log_type": log_type, "is_player": is_player,

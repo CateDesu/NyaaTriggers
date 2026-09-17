@@ -1,16 +1,4 @@
-"""Regression tests for triggernometry_bridge.py.
-
-Covers the sidecar generation gate. start and stop bump a generation id that
-the reader thread carries in its args like proc and wq. Every UI bound emit
-is stamped with it and dropped at dispatch once the generation dies, so a
-previous generation's reader still draining its buffered stdout after
-stop+start swapped _proc cannot fire callouts, sounds or status into the
-live session. The token also rides each emitted payload and the UI slots
-re-check it, Qt queued delivery can land a pre restart signal at the slot
-after the restart.
-
-Run directly:  python -m tests.test_triggernometry_bridge   (exit 0 = all pass)
-"""
+"""Triggernometry generation checks before dispatch and after queued delivery."""
 import io
 import os
 import queue
@@ -46,7 +34,7 @@ class _OldProc:
         return 0
 
 
-# ── start and stop bump the generation ────────────────────────────────────────
+# start and stop bump the generation
 br = tb.TriggernometryBridge()
 g0 = br.generation()
 br._active = True          # a "running" bridge with no proc, stop must clean up
@@ -56,10 +44,7 @@ check("a stopped bridge has no live generation",
       not br._gen_live(g0) and not br._gen_live(br.generation()))
 
 
-# ── a previous generation's reader cannot fire into the live session ──────────
-# stop+start swaps _proc and bumps the generation while the old reader is
-# still draining its buffered stdout. Every frame it held must die at
-# dispatch.
+# a previous generation's reader cannot fire into the live session
 _BUF = (
     '{"t":"callout","tts":"old gen","text":"old gen","severity":"alarm"}\n'
     '{"t":"sound","file":"/tmp/nyaa-tn-gentest.wav","volume":42}\n'
@@ -96,10 +81,7 @@ check("the live generation's exit status is emitted with its generation",
       ("status", "Sidecar exited", 3) in fired)
 
 
-# ── the UI slots re-check the generation token riding the payload ─────────────
-# A stale emit that slipped out before the restart must be dropped when queued
-# delivery lands after it. Drives the real slots unbound on duck windows, the
-# test_umad_chain_wiring.py idiom.
+# the UI slots re-check the generation token riding the payload
 from nyaatriggers.ui.engines import EnginesMixin
 import nyaatriggers.ui.voice_tab as vt
 

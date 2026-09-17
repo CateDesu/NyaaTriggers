@@ -1,18 +1,12 @@
 #!/usr/bin/env bash
-# Build triggevent-core: install Triggevent's engine modules into the local Maven
-# repo, then shade the sidecar into one runnable jar.
-#
-#   target/triggevent-core.jar   <- what NyaaTriggers launches
-#
-# Requires JDK 17 + Maven. event-trigger is GPL-3.0. The produced jar is GPL-3.0.
+# Install the engine modules and package target/triggevent-core.jar. Requires JDK 17 and
+# Maven. The linked event-trigger engine and resulting jar are GPL-3.0.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ET_DIR="${EVENT_TRIGGER_DIR:-$HERE/event-trigger}"
 ET_REPO="${EVENT_TRIGGER_REPO:-https://github.com/CateDesu/event-trigger.git}"
-# Pinned to a commit on the fork's main branch, which carries the engine
-# guards as real commits. Bump this after a deliberate upstream sync or when
-# new guard commits land.
+# Keep the engine commit pin in sync with build.bat.
 ET_REF="${EVENT_TRIGGER_REF:-ca941823ff20462fca4a2c65ad64671568030f50}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -26,47 +20,38 @@ if ! have mvn; then
   exit 1
 fi
 
-# 1. Fetch event-trigger (the engine we link against).
 if [ ! -d "$ET_DIR/.git" ]; then
   echo ">> cloning event-trigger ($ET_REF) into $ET_DIR"
   git clone "$ET_REPO" "$ET_DIR"
   git -C "$ET_DIR" checkout "$ET_REF"
 else
   echo ">> reusing existing clone at $ET_DIR"
-  # Older clones point origin at upstream. The engine comes from the fork now.
+  # Update older checkouts to use the engine fork.
   if [ "$(git -C "$ET_DIR" remote get-url origin 2>/dev/null || true)" != "$ET_REPO" ]; then
     echo ">> repointing origin at $ET_REPO"
     git -C "$ET_DIR" remote add origin "$ET_REPO" 2>/dev/null || git -C "$ET_DIR" remote set-url origin "$ET_REPO"
   fi
-  # A repointed clone has none of the fork's objects yet. Fetch when the pin
-  # is unknown locally or the checkout below fails on a ref the clone never
-  # heard of.
+  # Fetch when the pinned commit is missing locally.
   if ! git -C "$ET_DIR" cat-file -e "$ET_REF^{commit}" 2>/dev/null; then
     echo ">> fetching $ET_REPO"
     git -C "$ET_DIR" fetch origin
   fi
-  # Re-assert the pin: a reused clone may have drifted (branch pull, local
-  # checkout), and only an exact HEAD match proves the tree IS the pinned source.
+  # Reset reused checkouts to the pinned source.
   if [ "$(git -C "$ET_DIR" rev-parse HEAD)" != "$ET_REF" ]; then
     echo ">> existing clone is not at the pinned ref; checking out $ET_REF"
     git -C "$ET_DIR" checkout "$ET_REF"
   fi
 fi
 
-# 2. Install just the engine modules (+ their upstream deps via -am) into ~/.m2.
-#    Skip tests AND test compilation (testutils/GUI tests are irrelevant here).
-#    `clean` is REQUIRED, not optional: after updating event-trigger (e.g. a new
-#    master with more triggers), an incremental build recompiles the changed
-#    sources but the jar/shade plugins reuse the prior artifacts, so the engine
-#    jar silently ships the OLD trigger set. clean forces a fresh jar every time.
+# Build clean engine artifacts so incremental packaging cannot retain an old trigger
+# set. Skip engine tests and test compilation.
 echo ">> installing Triggevent Engine modules to local Maven repo"
-#    `triggers` is a pom aggregator. Its trigger code is in triggers-* sub-modules,
-#    so list those explicitly. `:artifactId` selectors resolve regardless of nesting.
+# List trigger submodules explicitly because triggers is only an aggregator.
 ( cd "$ET_DIR" && mvn -q -Dmaven.test.skip=true \
     -pl :actimport,:xivsupport,:trigger-support,:triggers-general,:triggers-ew,:triggers-sb,:triggers-dt,:titan-jails,:easytriggers,:timelines,:telesto-core -am \
     clean install )
 
-# 3. Shade the sidecar fat jar (clean, so a stale shade can't survive a source update).
+# Build a clean sidecar jar too.
 echo ">> building triggevent-core.jar"
 ( cd "$HERE" && mvn -q -Dmaven.test.skip=true clean package )
 

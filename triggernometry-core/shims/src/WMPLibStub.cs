@@ -1,9 +1,5 @@
-// Minimal WMPLib (Windows Media Player COM) stub for headless Mono/Linux hosting.
-// Mono cannot generate the COM interop assembly the csproj's <COMReference> expects,
-// and WMP does not exist on Linux. The engine self-degrades (WMPUnavailable=true) if
-// construction fails, and with cfg.SoundMethod=ACT all sound routes through our
-// SoundPlaybackHook, so a no-op player is correct. This stub exists only to (a) compile
-// the 8 files that reference WMPLib and (b) let `new WindowsMediaPlayer()` succeed.
+// Provide WMPLib types for Mono builds without Windows Media Player. SoundMethod=ACT
+// routes playback through the host hook, so this player remains inactive.
 namespace WMPLib
 {
     public enum WMPPlayState

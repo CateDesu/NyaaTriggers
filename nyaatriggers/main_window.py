@@ -1,4 +1,4 @@
-"""Main application window. Tabs, triggers list, settings, and signal wiring."""
+"""Main window construction and signal wiring."""
 
 import json
 import math
@@ -84,20 +84,16 @@ from nyaatriggers.app_common import (
 )
 
 class _SidebarFrame(QFrame):
-    """Sidebar chrome with a small sakura tree at the bottom and a few petals
-    drifting behind the nav pills. Children paint after the frame and the pill
-    backgrounds are transparent, so the scenery shows through. The content
-    pages are mostly paved by their list and log panels, so the sidebar is the
-    one spot the scenery is visible on every page. MainWindow drives repaints
-    from its effects timer and parks the drift when the window loses focus,
-    leaving the petals frozen in place until focus comes back."""
+    """Paint sidebar scenery behind the navigation controls. MainWindow schedules repaints
+    and pauses animation when the window loses focus.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._petals = theme.make_petals(23, 5)
-        self._tree = theme.make_tree(17, 216, 900, inward=1)   # hugs the left edge
+        self._tree = theme.make_tree(17, 216, 900, inward=1)
         self._t0 = time.monotonic()
-        self._last_t = None   # clock value at the previous tick
+        self._last_t = None
         self.awake = True
         self.freeze_t = None   # petal clock value while parked
 
@@ -117,14 +113,12 @@ class _SidebarFrame(QFrame):
         super().paintEvent(ev)
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        s = self.height() / self._tree.height()   # scale to fill, anchored left
+        s = self.height() / self._tree.height()
         p.save()
         p.scale(s, s)
         p.drawPixmap(0, 0, self._tree)
         p.restore()
-        # Frost band. A soft vertical dark gradient behind the nav labels,
-        # dimming the blossom crown exactly where the text sits, plus a small
-        # radial dim behind the brand block so the logo reads over the crown.
+        # Dim the scenery behind navigation and branding to keep text readable.
         h = self.height()
         band = QLinearGradient(0, h * 0.05, 0, h * 0.64)
         band.setColorAt(0.0, QColor(7, 7, 11, 0))
@@ -146,24 +140,21 @@ class _SidebarFrame(QFrame):
         p.end()
 
 class _NavButton(QPushButton):
-    """Sidebar nav pill. The active pill is nearly transparent so the sakura
-    scenery bleeds through it, ringed by a soft coral neon glow, and its label
-    carries a matching glow. Inactive labels paint a dark halo. QSS supplies
-    background, hover and font, but stylesheets can't stroke text or glow
-    borders, so the ring and labels are painted here."""
+    """Paint navigation borders and text effects that QSS cannot provide. QSS still
+    supplies the background and font.
+    """
 
     def paintEvent(self, _ev):
         opt = QStyleOptionButton()
         self.initStyleOption(opt)
         p = QStylePainter(self)
-        # Bevel only, the QSS background wash. Border, icon and label are ours.
+        # Let QSS draw the background before painting the custom border and label.
         p.drawControl(QStyle.ControlElement.CE_PushButtonBevel, opt)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         round_ = (Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
                   Qt.PenJoinStyle.RoundJoin)
         if self.isChecked():
-            # Ghost pill. A whisper of coral wash, then a soft neon glow ring.
             r = QRectF(self.rect()).adjusted(3.5, 3.5, -3.5, -3.5)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(255, 131, 153, 14))
@@ -183,7 +174,7 @@ class _NavButton(QPushButton):
             p.drawPixmap(icon_x, iy, icon_size.width(), icon_size.height(), pm)
         text_x = icon_x + icon_size.width() + 4
 
-        f = QFont(self.font())   # QSS font family and size and the checked bold live on the widget font
+        f = QFont(self.font())   # Keep the font supplied by QSS.
         if self.isChecked():
             f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 105)
         fm = QFontMetricsF(f)
@@ -201,22 +192,19 @@ class _NavButton(QPushButton):
         path.addText(text_x, baseline, f, text)
         p.fillPath(path.translated(0.7, 1.0), QBrush(QColor(4, 4, 7, 190)))
         if self.isChecked():
-            # Neon label. Soft coral glow around the letterforms, then the halo.
             p.strokePath(path, QPen(QColor(255, 131, 153, 42), 6.0, *round_))
             p.strokePath(path, QPen(QColor(255, 131, 153, 62), 4.0, *round_))
             p.strokePath(path, QPen(QColor(6, 6, 9, 245), 2.6, *round_))
         else:
-            # Drop shadow and double halo so labels read over the blossoms.
             p.strokePath(path, QPen(QColor(6, 6, 9, 130), 5.0, *round_))
             p.strokePath(path, QPen(QColor(6, 6, 9, 245), 2.8, *round_))
         p.fillPath(path, QBrush(color))
         p.end()
 
 class _BrandLabel(QLabel):
-    """Brand block label painted with a dark halo, and for the wordmark a soft
-    coral neon glow matching the active nav pill, so it reads over the blossom
-    crown. Qt stylesheets can't stroke text. QSS still supplies the font,
-    meaning family, size and weight. `color`, `glow` and `spacing` are ours."""
+    """Paint branding with a text halo and optional glow. Use the QSS font with custom
+    colour and spacing.
+    """
 
     def __init__(self, text, color, glow=False, spacing=100.0, parent=None):
         super().__init__(text, parent)
@@ -269,113 +257,95 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self.resize(1280, 720)
         self.setMinimumSize(900, 600)
 
-        self._save_warned = False   # one shot flag for the failed save dialog
+        self._save_warned = False
         self._triggers: list[Trigger] = []
         self._official_ids: set[str] = set()            # IDs loaded from triggers.json
         self._official_triggers: dict[str, Trigger] = {} # id to original trigger, for reset
         self._local_ids: set[str] = set()               # IDs that belong in triggers.local.json
         self._deleted_ids: set[str] = set()             # official IDs the user has deleted
-        self._retired_ids: set[str] = set()             # IDs withdrawn in retired.json
+        self._retired_ids: set[str] = set()
         self._folders: list[dict] = []                  # [{id, name, parent_id}]
         self._current_zone: str = ""
         self._current_zone_id: int = 0   # retained for the Triggernometry zone replay
-        # Zone name used for pattern matching. The canonical English name when
-        # the zone id resolves, else whatever the feed reported. _current_zone
-        # stays the client's own wording, which is what the UI shows.
+        # Use the canonical English zone for trigger matching when available. Keep the
+        # reported name in _current_zone for display.
         self._match_zone: str = ""
-        # Every name the current zone may be matched against, reported plus English.
         self._zone_aliases: tuple = ()
-        # Local player name for self scoping status 26/30 triggers. Auto detected
-        # from the 02 ChangePrimaryPlayer line. Falls back to the saved setting.
+        # Resolve local identity from line 02, with the saved name as fallback.
         self._me_name: str = ""
-        self._me_id: str = ""     # local player actor id in hex from the 02 line. Disambiguates same name party members for automarks
+        self._me_id: str = ""     # Hex actor ID from line 02 distinguishes players with the same name.
         self._seq_runners: list[SequentialRunner] = []
         self._status_timers: list[StatusTimerRunner] = []
         self._ability_buffer: deque = deque(maxlen=MAX_ABILITY_LINES)  # dicts of log_type, is_player, line, color, ability_name, ability_id
-        # Complete raw WS feed for the Save log export. The Easy to Read log is
-        # filtered and omits player applied effects.
+        # Retain the full feed for export because the displayed log omits some effects.
         self._raw_capture: deque = deque(maxlen=MAX_RAW_CAPTURE)
 
-        self._current_fight_tag: str = ""   # cached fight tag for the current zone
-        # Fight the currently loaded timeline schedule belongs to, "" means none.
-        # The 30 s re detect tick reloads only when the resolved fight differs.
+        self._current_fight_tag: str = ""
+        # Reload the timeline only when periodic detection resolves a different fight.
         self._timeline_fight: str = ""
-        # Last _trigger_files_stamp snapshot. Re baselined by every _load_triggers.
+        # File timestamps recorded by the last trigger load.
         self._triggers_mtime: tuple = ()
 
         self._timeline = TimelineEngine(self)
-        # Timeline callouts, cactbot timeline entries in hybrid mode, are guests.
-        # The program's own triggers win, so they route through the guest dedup.
+        # Route timeline callouts through guest deduplication so local triggers take
+        # priority.
         self._timeline.tts.connect(self._on_timeline_tts)
 
-        # Cactbot reader. When on, callouts come straight from the real cactbot.
         self._cactbot_reader: CactbotReader | None = None
         self._cactbot_mode: bool = False
-        # Set around user and lifecycle requested reader stops so _on_cactbot_status
-        # can tell them apart from an asynchronous page load failure.
+        # Distinguish deliberate reader shutdown from asynchronous page load failure.
         self._cactbot_teardown: bool = False
-        # Own wins callout de duplication. Own triggers always speak and claim
-        # their text. Guest sources, cactbot timelines and the cactbot raidboss
-        # reader, are silenced when they duplicate a program callout.
+        # Local triggers claim their callout text so duplicate guest callouts can be
+        # suppressed.
         self._callout_claimed: dict[str, float] = {}   # key to monotonic expiry
-        # key to deferred guest QTimer plus severity. The severity sits beside
-        # the timer so a same text guest arriving during the wait can raise it.
-        # The cactbot popup carries the real tier while cactbotSay is always info.
+        # Deferred guest timers and severity. A popup may raise the severity of an
+        # earlier cactbotSay message.
         self._pending_guests: dict[str, tuple] = {}
-        # Tier of the guest currently holding a claim. Own trigger claims are
-        # absent. An own trigger is never upgraded by a guest.
+        # Track severity only for guest claims. Guests must not alter local trigger
+        # claims.
         self._guest_claim_sev: dict[str, str] = {}
 
-        # Triggevent Engine sidecar, needs Java plus the built jar. Tees the raw
-        # IINACT WS stream to a headless Triggevent Engine and relays its callouts.
         self._triggevent: "TriggeventBridge | None" = None
         self._triggevent_mode: bool = False
         self._triggevent_last_spoken: dict[str, float] = {}
-        # Sidecar liveness per engine source, "triggevent" or "triggernometry",
-        # mapping to a good, bad or unknown state plus a message. Drives the
-        # top bar engine indicator.
+        # Engine name to status and message for the connection indicator.
         self._engine_sidecar_state: dict = {}
-        # "Error in sequential trigger" lines seen this engine session, newest
-        # last. Drives the small amber chain failure badge in the top bar.
+        # Sequential trigger failures for the current engine session, newest last.
         self._engine_chain_failures: list = []
         self._telesto_status: str = "unknown"   # Telesto reachability, good, bad or unknown
-        self._telesto_client = None             # real client built after _load_settings
-        self._cactbot_disabled: set[str] = set()           # cactbot trigger ids the user silenced
+        self._telesto_client = None
+        self._cactbot_disabled: set[str] = set()
         self._cactbot_triggers_meta: list[dict] = []       # {id, name} rows from enumeration, if any
 
-        # Local Triggers master toggle. Cactbot timelines follow the Cactbot
-        # switch alone, no separate setting.
+        # Cactbot timelines follow the Cactbot switch alone. There is no separate
+        # timeline toggle.
         self._local_enabled: bool = False
-        self._cactbot_tl_fetching: set[str] = set()        # fight tags currently downloading
-        # Guards the set. Added on the GUI thread, discarded from the worker.
+        self._cactbot_tl_fetching: set[str] = set()
+        # Fetch state is updated from both the GUI and worker threads.
         self._cactbot_tl_lock = threading.Lock()
 
         self._ws = WSClient(self)
         self._ws.log_line.connect(self._on_log_line)
         self._ws.in_combat.connect(self._on_in_combat)
         self._ws.status_changed.connect(self._on_status_changed)
-        # Feed loss also resets the timeline clock. It must not keep firing
-        # entries against a dead feed, like a kill or disconnect mid pull.
+        # Stop the timeline clock on feed loss so disconnected sessions cannot fire
+        # cues.
         self._ws.status_changed.connect(self._timeline.feed_status_changed)
         self._ws.primary_player.connect(self._on_ws_primary_player)
         self._ws.zone_changed.connect(self._on_ws_zone_changed)
-        self._connected = False   # WS connection state. Drives the Connect/Disconnect toggle
+        self._connected = False
         self._in_game_combat = False
-        # Set by _load_timeline_for_zone from the file's "# reset-on-combat-end"
-        # marker. Only those timelines, the striking dummy sample fight, reset
-        # when combat ends. Real fights have out of combat intermissions and
-        # must keep running. timeline_engine.feed_status_changed notes why.
+        # Only timelines marked reset-on-combat-end reset on combat exit. Other fights
+        # may have intermissions outside combat.
         self._timeline_reset_on_combat_end = False
-        # True when the loaded schedule came from a cactbot file. Those only
-        # drive the bars, the reader already speaks cactbot's callouts.
+        # Cactbot schedules draw bars only because the reader already speaks their
+        # callouts.
         self._timeline_from_cactbot = False
 
         self._settings: dict = {}
-        self._settings_load_warning = None   # set by _load_settings on a corrupt file, shown below
+        self._settings_load_warning = None
         self._load_settings()
-        # Per-pull raw feed capture for engine replay, opt-in from Settings.
-        # Rides the same WS signals as the sidecar tee but writes pulls to
-        # pull_logs/ so tools/replay_pull.py can run them through the jar.
+        # Capture raw pulls for replay when enabled in Settings.
         self._pull_capture = PullCapture(_DATA_DIR / "pull_logs", self,
                                          state_snapshot=self._ws.state_snapshot)
         self._pull_capture.context = lambda: (self._current_fight_tag, self._current_zone)
@@ -385,10 +355,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._ws.zone_changed.connect(self._pull_capture.on_zone_changed)
         self._ws.status_changed.connect(self._pull_capture.on_status_changed)
         self._pull_capture.set_recording(bool(self._settings.get("triggevent_record_pulls", False)))
-        # Resolve the UI locale ONCE, before any widget text or trigger fire
-        # reads it. auto follows the system locale, explicit en/ja wins. Then
-        # load the per callout Japanese overlay so the first fire can localize.
-        # A background refresh updates it later.
+        # Set the locale and load callout translations before constructing widgets or
+        # firing triggers.
         set_locale(effective_locale(self._settings.get("ui_language", "auto")))
         if self._settings_load_warning is not None:
             # Deferred from _load_settings so the dialog follows the locale.
@@ -406,56 +374,42 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._callouts_names_text_ja: dict = {}          # english name to ja, engine triggers
         self._load_cached_callouts_ja()
         self._init_automarkers()
-        # Companion Dalamud plugin link. Pushes the timeline schedule, fight
-        # clock and alert callouts to the in game overlay over a loopback
-        # WebSocket. Runs its own worker thread with reconnect, so the game
-        # and this app can start in either order. Always on. The plugin is
-        # auto detected, there is no toggle. The port is a plain settings key
-        # so a second game client can move its plugin off the default.
+        # Keep the overlay connection active with automatic reconnect. The configured
+        # port supports a second game client.
         port = parse_port(self._settings.get("plugin_port"))
         self._plugin_link = PluginLink(
             port=port if port is not None else DEFAULT_PORT, enabled=True)
         self._plugin_link.status_changed.connect(self._on_plugin_link_status)
         self._plugin_link.start()
-        # The plugin interpolates the fight clock between ticks, so the push
-        # only has to beat drift, not the frame rate. 4 Hz is plenty.
+        # The plugin interpolates between ticks, so four clock updates per second are
+        # sufficient.
         self._plugin_tick_timer = QTimer(self)
         self._plugin_tick_timer.setInterval(250)
         self._plugin_tick_timer.timeout.connect(self._push_plugin_tick)
         self._plugin_tick_timer.start()
-        # Fight re detect plus trigger hot reload poll. Fight detection otherwise
-        # runs only on ChangeZone and startup, so a trigger fix landing mid
-        # session, a shipped zone_regex or a repo content update, never applied
-        # until a restart. Both halves are strict no ops when nothing changed,
-        # so a steady state costs one regex scan plus a few stat calls.
+        # Poll for updated triggers and fight detection so changes apply during the
+        # session. Unchanged files and fight tags require no reload.
         self._zone_redetect_timer = QTimer(self)
         self._zone_redetect_timer.setInterval(30_000)
         self._zone_redetect_timer.timeout.connect(self._poll_zone_and_triggers)
         self._zone_redetect_timer.start()
-        # Coerced like _as_dict. A hand edited null would park None in here and
-        # in trigger matching's me parameter for the whole session.
+        # Reject null or non-string character names from edited settings.
         char_name = self._settings.get("char_name")
         self._me_name = char_name if isinstance(char_name, str) else ""
         self._local_enabled = bool(self._settings.get("local_enabled", False))
         self._cactbot_disabled = _as_strset(self._settings.get("cactbot_disabled_triggers", []))
-        # Editable callouts, Local plus Triggevent plus Triggernometry, are on
-        # by default. Cactbot is the only on/off switch and is mutually
-        # exclusive with them. The Triggevent Engine runs regardless, it is the
-        # automarker infrastructure. Only its callouts follow this flag.
+        # Cactbot and editable callouts are mutually exclusive. Triggevent still runs
+        # for automarkers when its callouts are disabled.
         self._triggers_enabled = not bool(self._settings.get("cactbot_enabled", False))
         self._init_engines()
-        # Collapse state of the table's source groups. All collapsed by default.
         self._src_collapsed: dict = {"general": True, "dot": True, "local": True,
                                      "engine": True, "triggernometry": True}
         self._fight_cur: str = ""
-        # Stored direction for the two Global toggle buttons. Each flips on
-        # click, independent of per trigger state, so they cycle predictably.
-        # Local defaults on. Fresh installs and upgraders have every trigger
-        # enabled, and an off flag here would mute the timeline bars, the
-        # timeline TTS, and the combat-feed sync with no switch thrown.
+        # Track each global toggle independently of individual triggers. Local defaults
+        # on so existing configurations keep their timeline and feed behavior.
         self._global_local_on_flag: bool = bool(self._settings.get("global_local_on", True))
         self._global_tv_on_flag: bool = bool(self._settings.get("global_tv_on", False))
-        # Seed engine rows from the last harvest so they list before the engine is on.
+        # Load cached engine inventory before sidecars start.
         self._load_cached_triggevent_inventory()
         self._load_cached_triggernometry_inventory()
 
@@ -468,10 +422,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._dps_meter.on_pull_start = self._prog_pull_started
         self._dps_meter.on_pull_finish = self._prog_pull_finished
 
-        # Sliders fire valueChanged per pixel of a drag. Their handlers apply
-        # the value live but batch the settings write through this single shot
-        # timer, one disk write per drag instead of about 200. Flushed in
-        # closeEvent.
+        # Apply slider changes immediately and debounce settings writes. Flush pending
+        # writes on exit.
         self._settings_save_timer = QTimer(self)
         self._settings_save_timer.setSingleShot(True)
         self._settings_save_timer.setInterval(400)
@@ -494,31 +446,23 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._load_triggers()
         self._restore_missing_profile()
 
-        # Re apply the saved Piper venv BEFORE any TTS work below. It rewrites
-        # sys.path, and the Kokoro installer's venv selector, so the preload
-        # thread and a same session Kokoro install must come after it.
+        # Restore the saved voice environment before preloading models or installing
+        # Kokoro.
         venv_path = self._settings.get("venv_path")
-        # A hand edited non-string would raise TypeError inside Path().
         if isinstance(venv_path, str) and venv_path:
             set_venv_path(venv_path)
-        # Preload the Piper model only when Piper is active. Windows defaults to
-        # SAPI, so this skips importing onnxruntime for a model never used there.
+        # Preload Piper only when selected to avoid an unused ONNX import.
         if self._settings.get("tts_engine", default_engine()) == "piper":
             threading.Thread(target=_load_piper, daemon=True).start()
-        # Warm the kokoro import off the GUI thread too. kokoro_ready pulls in
-        # onnxruntime when the model files are present, and a later voice pick
-        # would eat that pause inside _on_voice_changed. With no models it
-        # returns before importing anything, so this costs nothing there.
+        # Warm Kokoro imports off the GUI thread to avoid a pause on voice selection.
         threading.Thread(target=kokoro_ready, daemon=True).start()
         _ensure_worker()
-        # A mistyped settings value, say a string, must not block startup.
-        # Same coercion guard the volume slider applies to the same setting.
+        # Use the default volume if the saved value cannot be converted.
         try:
             vol = float(self._settings.get("master_volume", 1.0))
         except (TypeError, ValueError, OverflowError):
             vol = 1.0
-        # json parses NaN and Infinity fine. Comparisons against NaN are all
-        # false, so the clamp in set_master_volume would pin volume to 2.0.
+        # Reject nonfinite JSON numbers before clamping volume.
         if not math.isfinite(vol):
             vol = 1.0
         set_master_volume(vol)
@@ -529,62 +473,48 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
                       self._settings.get("jp_neural_voice", "jf_alpha"))
 
         if self._settings.get("auto_connect"):
-            # Connect only, never a blind toggle. A manual Connect inside the
-            # 500 ms window would otherwise get disconnected again here.
+            # Connect without toggling because the user may have already connected
+            # manually.
             QTimer.singleShot(
                 500, lambda: None if self._connected else self._toggle_connection())
 
-        # Master switch and cactbot are mutually exclusive. Auto start whichever
-        # was last on, staggered so a slow engine boot can't block UI
-        # construction. The Triggevent Engine always runs regardless of Cactbot.
-        # Its callouts are gated separately and automarkers are native.
+        # Start engines after UI construction. Triggevent runs for automarkers
+        # regardless of the selected callout source.
         if TriggeventBridge.is_available():
             QTimer.singleShot(900, self._reconcile_triggevent_engine)
         else:
-            # No engine at all. The Triggevent section just sits there empty,
-            # which reads as "the triggers are broken". Say what is missing.
+            # Report missing engine dependencies instead of leaving the trigger section
+            # unexplained.
             QTimer.singleShot(1200, self._note_triggevent_unavailable)
-        # Restore cactbot if it was on last session, which silences your
-        # callouts. Otherwise bring your callouts up. The engine keeps running
-        # underneath.
+        # Restore the selected callout source without stopping the automarker engine.
         if self._settings.get("cactbot_enabled") and CactbotReader.is_available():
             QTimer.singleShot(950, lambda: self._on_cactbot_toggled(True))
         else:
             QTimer.singleShot(950, lambda: self._set_triggers_enabled(True))
 
-        # Schedule the silent on launch update check. It runs off the timer
-        # and is guarded in _start_update_check. The updater must never be
-        # able to abort window construction. Leftover update backups are swept
-        # in main.py after the boot marker lands, so a crash on the way there
-        # leaves them for the boot verify rollback to restore from.
+        # Schedule updates after construction. main.py retains rollback backups until
+        # boot verification succeeds.
         try:
             if self._settings.get("auto_check_updates", True):
                 QTimer.singleShot(2500, lambda: self._start_update_check(manual=False))
         except Exception as exc:  # noqa: BLE001
-            # Swallowed by design, but a silent fail here looks like "updates
-            # just never check", so leave a trace.
             print(f"[NyaaTriggers] update check scheduling failed: "
                   f"{exc!r}", file=sys.stderr)
 
-        # Refresh the Japanese callout overlay from the repo in the background,
-        # off the construction path. Silent on failure. The bundled or cached
-        # copy stands in.
+        # Refresh translations in the background. Keep bundled or cached data if the
+        # fetch fails.
         QTimer.singleShot(2800, self._refresh_callouts_ja_async)
 
-        # Pull and rebuild the Triggevent Engine in the background if it is
-        # behind upstream master. Source builds only, takes effect next launch.
+        # Source builds can update the engine in the background for the next launch.
         if self._settings.get("triggevent_auto_update", False):
             QTimer.singleShot(3000, self._maybe_update_triggevent)
 
         self._init_ambient_fx()
 
-    # ==================================================================
-    # Ambient effects, petal drift timer with focus park
-    # ==================================================================
+    # Ambient animation
 
     def event(self, ev):
-        # The drift follows window activation. Losing focus parks it
-        # instantly, getting focus back resumes from the parked frame.
+        # Pause on focus loss and resume from the same animation position.
         t = ev.type()
         if t == QEvent.Type.WindowActivate:
             self._start_fx()
@@ -593,13 +523,11 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         return super().event(ev)
 
     def hideEvent(self, ev):
-        # Hidden window. No point animating.
         self._stop_fx()
         super().hideEvent(ev)
 
     def showEvent(self, ev):
-        # Shown without focus stays parked. The activate event starts the
-        # drift the moment focus arrives.
+        # Showing an inactive window must not restart animation.
         if self.isActiveWindow():
             self._start_fx()
         else:
@@ -610,9 +538,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         super().resizeEvent(ev)
         self.update()
 
-    # ==================================================================
     # UI construction
-    # ==================================================================
 
     def _build_ui(self) -> None:
         root_widget = QWidget()
@@ -622,7 +548,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- Shell, sidebar nav plus content column, the Ink shell from UI-REDESIGN.md ---
         shell = QHBoxLayout()
         shell.setContentsMargins(0, 0, 0, 0)
         shell.setSpacing(0)
@@ -636,7 +561,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         side.setContentsMargins(6, 16, 6, 12)
         side.setSpacing(6)
 
-        # "NT" as kana, the little maker's mark above the wordmark.
         brand_kana = _BrandLabel("んて", theme.SUBTEXT_SOFT)
         brand_kana.setObjectName("brandKana")
         side.addWidget(brand_kana)
@@ -648,17 +572,13 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         side.addWidget(brand_ver)
         side.addSpacing(18)
 
-        # Pages swap inside a stack driven by the sidebar pills. The nav order
-        # here must match the addWidget order of the pages below.
+        # Keep page insertion order consistent with navigation order.
         self._stack = QStackedWidget()
         self._stack.setObjectName("pageStack")
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
         self._nav_buttons: list[QPushButton] = []
-        # Order here is both the nav order and the stack page order. Icons are
-        # drawn line icons from theme.nav_icon, tinted per state in
-        # _refresh_nav_icons. Settings is created in order, it is the last
-        # stack page, but pinned to the bottom of the sidebar, above the
+        # Settings is the last page but its navigation button sits above the sidebar
         # footer.
         self._nav_icon_names = ["triggers", "current", "dps", "recap", "prog", "automarkers", "settings"]
         settings_btn = None
@@ -671,7 +591,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.setIconSize(QSize(17, 17))
-            b.setShortcut(f"Ctrl+{idx + 1}")   # quick page jump
+            b.setShortcut(f"Ctrl+{idx + 1}")
             self._nav_group.addButton(b, idx)
             if icon_name == "settings":
                 settings_btn = b
@@ -690,7 +610,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         content_col.setSpacing(8)
         shell.addWidget(content, 1)
 
-        # --- Connection bar, content header ---
+        # Connection status
         conn = QHBoxLayout()
         conn.addWidget(QLabel(_("WebSocket:")))
         ws_url = self._settings.get("ws_url")
@@ -707,14 +627,12 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._status_lbl = QLabel(_("● Disconnected"))
         self._status_lbl.setStyleSheet("color:#f38ba8; font-weight:bold;")
         conn.addWidget(self._status_lbl)
-        # Engine sidecar liveness. Hidden until a bridge reports. A sidecar
-        # death mid session turns it red, see _on_engine_sidecar_status.
+        # Keep engine status hidden until a bridge reports.
         self._engine_status_lbl = QLabel("")
         self._engine_status_lbl.setStyleSheet("color:#8f8f9a; font-weight:bold;")
         self._engine_status_lbl.setVisible(False)
         conn.addWidget(self._engine_status_lbl)
-        # Dead engine chains this session. Hidden until the first one. Amber,
-        # a dead chain is a degraded engine, not a dead one.
+        # Show chain failures separately from engine disconnection.
         self._engine_chain_lbl = QLabel("")
         self._engine_chain_lbl.setStyleSheet("color:#f9e2af; font-weight:bold;")
         self._engine_chain_lbl.setVisible(False)
@@ -722,13 +640,10 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         conn.addStretch()
         content_col.addLayout(conn)
 
-        # --- Update banner, hidden until an update is found ---
         self._build_update_banner(content_col)
 
-        # --- Pages, the sidebar drives the stack ---
         content_col.addWidget(self._stack, 1)
 
-        # Settings tab, built here, added last at the right end
         settings_tab = QWidget()
         settings_tab.setObjectName("auroraPage")
         _s_outer = QVBoxLayout(settings_tab)
@@ -743,7 +658,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         _s_scroll.setWidget(_s_content)
         _s_outer.addWidget(_s_scroll)
 
-        # ── Program ──
         self._settings_header(settings_layout, _("Program"))
         ver_lbl = QLabel(f"NyaaTriggers Version {_DISPLAY_VERSION}")
         ver_lbl.setStyleSheet("color: #8f8f9a;")
@@ -753,9 +667,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._chk_updates_btn.setMaximumWidth(160)
         self._chk_updates_btn.clicked.connect(self._check_for_updates)
         upd_row.addWidget(self._chk_updates_btn)
-        # Manual Triggevent Engine update. Source builds git pull and rebuild
-        # from upstream. Frozen builds download the latest prebuilt engine jar
-        # from the release and swap it in, no git or Maven needed.
+        # Source builds rebuild the engine. Frozen builds download the published jar.
         self._te_update_btn = QPushButton(_("Update Triggevent Engine"))
         self._te_update_btn.clicked.connect(self._on_te_update_clicked)
         upd_row.addWidget(self._te_update_btn)
@@ -767,9 +679,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._auto_update_cb.stateChanged.connect(self._on_auto_update_changed)
         settings_layout.addWidget(self._auto_update_cb)
 
-        # Interface language. Auto follows the system locale. An explicit choice
-        # sticks. Changing it needs a restart since the UI is built once per
-        # launch.
+        # Language changes require restart because widget text is constructed once.
         lang_row = QHBoxLayout()
         _lang_lbl = QLabel(_("Language:"))
         _lang_lbl.setStyleSheet("color: #8f8f9a;")
@@ -779,7 +689,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._ui_lang_combo.addItem(_("English"), "en")
         self._ui_lang_combo.addItem(_("日本語 (Japanese)"), "ja")
         _lang_idx = self._ui_lang_combo.findData(self._settings.get("ui_language", "auto"))
-        self._ui_lang_combo.setCurrentIndex(_lang_idx if _lang_idx >= 0 else 0)  # before connect
+        self._ui_lang_combo.setCurrentIndex(_lang_idx if _lang_idx >= 0 else 0)
         self._ui_lang_combo.currentIndexChanged.connect(self._on_ui_language_changed)
         lang_row.addWidget(self._ui_lang_combo)
         lang_row.addStretch()
@@ -791,8 +701,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._callouts_ja_cb.stateChanged.connect(self._on_callouts_localized_changed)
         settings_layout.addWidget(self._callouts_ja_cb)
 
-        # Source builds only. A frozen release has no toolchain and CI already
-        # ships the latest engine.
+        # Automatic source rebuilds require a local toolchain.
         if not getattr(sys, "frozen", False):
             self._te_auto_update_cb = QCheckBox(_("Update Triggevent Engine on startup (pull + rebuild)"))
             self._te_auto_update_cb.setChecked(bool(self._settings.get("triggevent_auto_update", False)))
@@ -813,7 +722,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
 
         settings_layout.addSpacing(6)
 
-        # ── Connection ──
         self._settings_header(settings_layout, _("Connection"))
         self._auto_connect_cb = QCheckBox(_("Auto-connect on startup"))
         self._auto_connect_cb.setChecked(bool(self._settings.get("auto_connect", False)))
@@ -834,27 +742,22 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
 
         settings_layout.addSpacing(6)
 
-        # ── Cactbot ──
         self._build_cactbot_settings(settings_layout)
 
         settings_layout.addSpacing(6)
 
-        # ── In-Game Overlay ──
         self._build_plugin_link_settings(settings_layout)
 
         settings_layout.addSpacing(6)
 
-        # ── FFLogs ──
         self._build_fflogs_settings(settings_layout)
 
         settings_layout.addSpacing(6)
 
-        # ── Alert Sound ──
         self._build_alert_sound_settings(settings_layout)
 
         settings_layout.addSpacing(6)
 
-        # ── Voice ──
         self._settings_header(settings_layout, _("Voice"))
 
         engine_row = QHBoxLayout()
@@ -870,11 +773,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         engine_row.addStretch()
         settings_layout.addLayout(engine_row)
 
-        # Model is the voice, one list for both languages. English Piper voices
-        # AND in app neural Japanese voices, Kokoro entries keyed by a kokoro
-        # prefix plus name. Picking a Japanese voice auto routes Japanese
-        # callouts to it and sets it up on first pick. Picking an English
-        # voice sends Japanese to espeak.
+        # The voice list includes Piper and Kokoro. Japanese selections route Japanese
+        # callouts to that voice, with setup on first selection.
         voice_row = QHBoxLayout()
         voice_row.addWidget(QLabel(_("Model:")))
         self._voice_combo = QComboBox()
@@ -890,10 +790,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._kokoro_dl_btn = QPushButton(_("Download"))
         self._kokoro_dl_btn.setMaximumWidth(110)
         self._kokoro_dl_btn.clicked.connect(self._on_kokoro_download)
-        # The neural JP voices ship inside the app on every platform now. Frozen
-        # builds bundle kokoro-onnx and the espeak-ng phonemizer, so the
-        # Download button and hint are always shown. Only the voice model
-        # downloads.
+        # Frozen builds include Kokoro dependencies. Only the voice model needs
+        # downloading.
         voice_row.addWidget(self._kokoro_dl_btn)
         voice_row.addStretch()
         settings_layout.addLayout(voice_row)
@@ -907,7 +805,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
 
         settings_layout.addSpacing(6)
 
-        # ── Voice library ──
         lib_lbl = QLabel(
             _('To add more voices, download a Piper voice model '
               '<b>and</b> its matching <code>.onnx.json</code> config from '
@@ -934,7 +831,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
 
         settings_layout.addSpacing(6)
 
-        # ── Voice venv path, source installs only ──
         if not getattr(sys, 'frozen', False):
             venv_row = QHBoxLayout()
             venv_row.addWidget(QLabel(_("Piper venv:")))
@@ -950,7 +846,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             settings_layout.addLayout(venv_row)
             settings_layout.addSpacing(6)
 
-        # ── Data ──
         self._settings_header(settings_layout, _("Data"))
         trig_update_row = QHBoxLayout()
         self._update_trig_btn = QPushButton(_("Update Triggers"))
@@ -990,31 +885,21 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
 
         settings_layout.addStretch()
 
-        # ══════════════════════════════════════════════
-        # Tab 0 Local Triggers, your own and converted triggers
-        # ══════════════════════════════════════════════
+        # Trigger editor
         triggers_tab = QWidget()
         triggers_tab.setObjectName("auroraPage")
         triggers_layout = QVBoxLayout(triggers_tab)
         triggers_layout.setContentsMargins(0, 4, 0, 0)
-        # Triggers tab is the trigger editor. The live Current Instance log is
-        # its own top level tab, added once fight_tab is built below.
         self._stack.addWidget(triggers_tab)
 
-        # No master Triggers button. Triggers run by default. Cactbot, in
-        # Settings, is the only on/off switch and never stops the engine
-        # underneath.
         h_split = QSplitter(Qt.Orientation.Horizontal)
         triggers_layout.addWidget(h_split, 1)
 
-        # ── Left, fight tree ──
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
         self._tree.setMinimumWidth(180)
         self._tree.setIndentation(16)
-        # Animate user-driven expand/collapse. Cheap here, the rows are fixed
-        # height and only the visible viewport re-lays out per frame. The
-        # refresh rebuild opts out around its restore loop below.
+        # Disable tree animation temporarily when restoring expansion after a rebuild.
         self._tree.setAnimated(True)
         self._tree.setFont(QFont("Sans", 10))
         self._tree.setStyleSheet(
@@ -1024,16 +909,13 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             lambda cur, _prev: (self._apply_tab_filter(cur), self._update_fight_controls())
         )
         self._tree.itemClicked.connect(self._on_tree_item_clicked)
-        # Keep the ▶/▼ prefixes in sync on every expansion path. Folder items
-        # are selectable, so the click-toggle handler skips them and a
-        # double-click or branch indicator expand used to leave a stale ▶.
+        # Update arrow prefixes for clicks, double clicks and branch indicators.
         self._tree.itemExpanded.connect(lambda item: self._set_tree_arrow(item, True))
         self._tree.itemCollapsed.connect(lambda item: self._set_tree_arrow(item, False))
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         h_split.addWidget(self._tree)
 
-        # ── Right, trigger panel ──
         trig_widget = QWidget()
         trig_layout = QVBoxLayout(trig_widget)
         trig_layout.setContentsMargins(4, 0, 0, 0)
@@ -1048,7 +930,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._dup_btn  = QPushButton(_("Duplicate"))
         self._del_btn  = QPushButton(_("Delete"))
         self._test_btn = QPushButton(_("Test Fire"))
-        # Add is the primary action. Gradient fill with a soft coral glow.
         theme.apply_primary(self._add_btn)
         for b in (self._add_btn, self._edit_btn, self._dup_btn, self._del_btn, self._test_btn):
             b.setMinimumWidth(80)
@@ -1062,12 +943,10 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._test_btn.clicked.connect(self._test_trigger)
 
         bulk_bar = QHBoxLayout()
-        # Two global source toggles across every fight. Each flips all of that
-        # source on/off. Per fight checkboxes re derive and the affected table
-        # section expands or collapses to match.
+        # Global toggles update every fight and refresh their source controls.
         self._enable_btn  = QPushButton(_("Global - Triggevent On/Off"))
         self._disable_btn = QPushButton(_("Global - Local On/Off"))
-        for b in (self._disable_btn, self._enable_btn):   # Local on the left
+        for b in (self._disable_btn, self._enable_btn):
             b.setMinimumWidth(170)
             bulk_bar.addWidget(b)
         bulk_bar.addStretch()
@@ -1086,16 +965,13 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._search_edit = QLineEdit()
         self._search_edit.setPlaceholderText(_("Search triggers (all fights)..."))
         self._search_edit.setClearButtonEnabled(True)
-        # Debounced like the ability filter. The walk covers every row of the
-        # bundled set, close to a thousand, so per keystroke filtering stutters.
+        # Debounce searches to avoid scanning all trigger rows on every keystroke.
         self._tab_filter_timer = QTimer(self)
         self._tab_filter_timer.setSingleShot(True)
         self._tab_filter_timer.setInterval(150)
         self._tab_filter_timer.timeout.connect(self._apply_tab_filter)
         self._search_edit.textChanged.connect(lambda _: self._tab_filter_timer.start())
         search_bar.addWidget(self._search_edit)
-        # Result count. Only shown while a search is active and, like the
-        # search itself, it spans every fight.
         self._search_count_lbl = QLabel("")
         self._search_count_lbl.setStyleSheet("color: #8f8f9a;")
         search_bar.addWidget(self._search_count_lbl)
@@ -1122,10 +998,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_table_context_menu)
 
-        # ── Per-fight source controls, independent Local / Triggevent on-off ──
-        # Each box switches only its own source for the selected fight. Both can
-        # be on at once and callouts may double up. Checking expands the table
-        # section, unchecking collapses it.
+        # Fight controls toggle sources independently and update their section
+        # expansion.
         self._fight_bar = QWidget()
         _fb = QHBoxLayout(self._fight_bar)
         _fb.setContentsMargins(2, 4, 2, 4)
@@ -1147,16 +1021,13 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         trig_layout.addWidget(self._table, 1)
         self._build_profiles(triggers_layout)
 
-        # ══════════════════════════════════════════════
-        # Current Instance, its own top-level tab
-        # ══════════════════════════════════════════════
+        # Current instance
         fight_tab = QWidget()
         fight_tab.setObjectName("auroraPage")
         fight_layout = QVBoxLayout(fight_tab)
         fight_layout.setContentsMargins(4, 4, 4, 4)
         self._stack.addWidget(fight_tab)
 
-        # ── Zone banner ──
         self._zone_lbl = QLabel(_("◉  No instance"))
         self._zone_lbl.setStyleSheet(
             "font-size:11pt; font-weight:bold; padding:6px 12px;"
@@ -1164,7 +1035,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         )
         fight_layout.addWidget(self._zone_lbl)
 
-        # ── Hint, triggers are made straight from the live log via right-click ──
         inst_hint = QLabel(
             _("Right-click a line in the Easy-to-Read Log below to add a trigger. "
             "If you give it a zone it sorts to that zone; otherwise it lands in Unsorted."))
@@ -1172,7 +1042,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         inst_hint.setStyleSheet("color:#8f8f9a; padding:2px;")
         fight_layout.addWidget(inst_hint)
 
-        # ── Easy-to-read log panel ──
         ability_widget = QWidget()
         ability_layout = QVBoxLayout(ability_widget)
         ability_layout.setContentsMargins(0, 4, 0, 0)
@@ -1202,7 +1071,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._ability_filter_edit.setPlaceholderText(_("Filter..."))
         self._ability_filter_edit.setClearButtonEnabled(True)
         self._ability_filter_edit.setMaximumWidth(160)
-        # debounced, rewriting the whole panel on every keystroke stutters
+        # Debounce log filtering to avoid rebuilding the panel on every keystroke.
         self._ability_filter_timer = QTimer(self)
         self._ability_filter_timer.setSingleShot(True)
         self._ability_filter_timer.setInterval(150)
@@ -1221,9 +1090,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         ability_layout.addWidget(self._ability_log)
         fight_layout.addWidget(ability_widget)
 
-        # ══════════════════════════════════════════════
-        # DPS tab, live meter, the last pull stays up until the next one
-        # ══════════════════════════════════════════════
+        # DPS meter
         dps_tab = QWidget()
         dps_tab.setObjectName("auroraPage")
         dps_lay = QVBoxLayout(dps_tab)
@@ -1246,8 +1113,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._dps_idle_combo.setToolTip(
             _("Pause and reset the on-screen meter after this much damage "
               "downtime. The recorded pull always keeps its full length."))
-        # Resolved once against the offered set where the meter is seeded,
-        # so the combo and the meter can never disagree.
+        # Use the same validated idle timeout as the meter.
         idx = self._dps_idle_combo.findData(self._dps_idle_timeout)
         self._dps_idle_combo.setCurrentIndex(idx if idx >= 0 else 3)
         self._dps_idle_combo.currentIndexChanged.connect(self._on_dps_idle_changed)
@@ -1263,8 +1129,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             f"color: {theme.SUBTEXT0}; font-size: 8pt;")
         dps_lay.addWidget(dps_plugin_note)
 
-        # Live meter, fed by DpsMeter off the raw combat feed. When no fight
-        # is running it keeps showing the last finalized pull.
+        # Keep the final encounter visible until another starts.
         live_header = QWidget()
         live_header_lay = QHBoxLayout(live_header)
         live_header_lay.setContentsMargins(0, 0, 0, 0)
@@ -1295,16 +1160,13 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._dps_live_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         dps_lay.addWidget(self._dps_live_table, 1)
 
-        # Only shown while a past pull is being reviewed. A new pull's first
-        # damage flips the main feed back to live on its own.
+        # Review mode ends automatically when a new pull begins.
         self._dps_back_btn = QPushButton(_("<- Back to live"))
         self._dps_back_btn.setMaximumWidth(160)
         self._dps_back_btn.setVisible(False)
         self._dps_back_btn.clicked.connect(self._on_dps_back_to_live)
         dps_lay.addWidget(self._dps_back_btn)
 
-        # Session pull history, newest first. Clicking a row reviews that
-        # pull's per-player breakdown in the table above.
         hist_header = QLabel(_("Recent pulls"))
         hist_header.setStyleSheet(
             f"color: {theme.SUBTEXT1}; font-weight: bold; padding: 4px 0 0 0;")
@@ -1315,8 +1177,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         dps_lay.addWidget(self._dps_history_list)
 
         self._update_fflogs_visibility()
-        # 1 s tick. Repaints the live table and pushes the meter to the
-        # in-game overlay while a fight runs.
         self._dps_timer = QTimer(self)
         self._dps_timer.setInterval(1000)
         self._dps_timer.timeout.connect(self._dps_tick)
@@ -1328,9 +1188,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._prog_tab = ProgTab(self, self._prog_sessions)
         self._stack.addWidget(self._prog_tab)
 
-        # ══════════════════════════════════════════════
-        # Automarkers tab, Telesto marking
-        # ══════════════════════════════════════════════
+        # Automarkers
         automark_tab = QWidget()
         automark_tab.setObjectName("auroraPage")
         _am_outer = QVBoxLayout(automark_tab)
@@ -1348,17 +1206,13 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         _am_outer.addWidget(_am_scroll)
         self._stack.addWidget(automark_tab)
 
-        # Settings tab, rightmost
         self._stack.addWidget(settings_tab)
 
-        # Master volume lives in the sidebar footer. It's global chrome, always
-        # visible, and out of the header so the engine status text can't clip it.
         vol_corner = QWidget()
         vol_corner_layout = QHBoxLayout(vol_corner)
         vol_corner_layout.setContentsMargins(0, 0, 0, 0)
         vol_corner_layout.setSpacing(6)
-        # Quick mute. Left-click toggles an indefinite mute, right-click offers
-        # timed mutes that auto-clear.
+        # Left click toggles mute. Right click offers timed mutes.
         self._mute_until_zone = False
         self._mute_timer = QTimer(self)
         self._mute_timer.setSingleShot(True)
@@ -1376,7 +1230,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             cur_vol = float(self._settings.get("master_volume", 1.0))
         except (TypeError, ValueError, OverflowError):
             cur_vol = 1.0
-        # json parses NaN and Infinity fine, and int() raises on both.
+        # Reject nonfinite values before converting to an integer.
         if not math.isfinite(cur_vol):
             cur_vol = 1.0
         self._vol_slider.setValue(int(max(0.0, min(2.0, cur_vol)) * 100))
@@ -1398,26 +1252,19 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
 
         self._nav_buttons[0].setChecked(True)
         self._refresh_nav_icons()
-        self._stack.setCurrentIndex(0)   # start on the Triggers page
+        self._stack.setCurrentIndex(0)
 
-    # ==================================================================
-    # Sidebar nav
-    # ==================================================================
 
     def _on_nav_clicked(self, idx: int) -> None:
         self._stack.setCurrentIndex(idx)
         self._refresh_nav_icons()
 
     def _refresh_nav_icons(self) -> None:
-        # QSS can't recolor icons, so each pill's icon gets redrawn in coral
-        # while checked and ink-dim otherwise.
+        # Generate icon colours per state because QSS cannot recolour them.
         for i, b in enumerate(self._nav_buttons):
             color = theme.ACCENT if b.isChecked() else theme.SUBTEXT1
             b.setIcon(theme.nav_icon(self._nav_icon_names[i], color))
 
-    # ==================================================================
-    # Table helpers
-    # ==================================================================
 
     @pyqtSlot(QTableWidgetItem)
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
@@ -1434,14 +1281,13 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
                 self._local_ids.add(trigger_id)
                 break
         self._save_triggers()
-        self._update_fight_controls()   # re-derive the per-fight box for this change
+        self._update_fight_controls()
 
     def _dedup_speak_gate(self, last_spoken: dict, text: str,
                           window_s: float, prune_s: float) -> bool:
-        """Shared TTL dedupe for the engine speak paths, Triggevent and
-        Triggernometry. True means speak it, and it was recorded. The
-        window collapses only true back-to-back duplicates of the same text,
-        never a repeated mechanic call. The dict is pruned in place, bounded."""
+        """Return true and record the text when an engine callout is allowed. Suppress only
+        immediate duplicates and prune expired claims.
+        """
         now = time.monotonic()
         key = text.casefold()
         if now - last_spoken.get(key, 0.0) < window_s:
@@ -1452,17 +1298,11 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         last_spoken[key] = now
         return True
 
-    # ── Cross-source callout de-duplication ────────────────────────────────
-    # Own triggers always speak. Guest sources, cactbot timelines and the
-    # cactbot raidboss reader, are silenced when they duplicate a program
-    # callout. The same mechanic must not be called out twice. Guests defer
-    # briefly so an own trigger firing near simultaneously can claim the text
-    # first. In pure guest mode, own triggers off, they emit immediately with
-    # no added latency.
+    # Defer guest callouts briefly so local triggers can claim matching text first. Emit
+    # guests immediately when local callouts are disabled.
 
     def _flush_guest(self, loc: str, severity: str, key: str) -> None:
-        """Speak, alert, and claim. `loc` is already localized. Shared by
-        the immediate and deferred paths."""
+        """Emit localized guest text and record its claim."""
         speak(loc, reading=self._reading_for(loc))
         self._emit_alert(loc, severity)
         self._callout_claimed[key] = time.monotonic() + _CALLOUT_CLAIM_S
@@ -1476,12 +1316,9 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             return
         _timer, severity = entry
         if self._callout_claimed.get(key, 0.0) > time.monotonic():
-            return                       # an own trigger claimed it while we were waiting
+            return
         self._flush_guest(loc, severity, key)
 
-    # ==================================================================
-    # Firing
-    # ==================================================================
 
     def _fire(self, t: Trigger, fields: dict | None = None) -> None:
         if not t.tts_text and not t.sound_file:
@@ -1489,11 +1326,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         if t.interrupt:
             tts_interrupt()
         if t.tts_text:
-            # Localize the template by trigger id, English tts_text if
-            # none, then substitute tokens even on test fire, fields is
-            # None there, so {source}, {target} and {count} don't get
-            # spoken literally. One text feeds both TTS and the on-screen
-            # callout, so this localizes both at once.
+            # Localize before substituting tokens. Test calls use sample fields so
+            # placeholders are never spoken literally.
             template = self._localized_callout(t)      # display template, kanji
             reading = self._reading_for(template)       # kana reading for TTS
             src = fields.get("source", "") if fields else ""
@@ -1505,23 +1339,17 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             spoken = (reading.replace("{source}", src)
                       .replace("{target}", tgt)
                       .replace("{count}", cnt))
-            # text is kanji, VOICEVOX or a JP system voice read it.
-            # reading is kana, espeak can't read kanji. Displayed text
-            # always shows the kanji.
+            # Display kanji and provide a kana reading for speech engines that need it.
             speak(text, speed=t.speed, reading=spoken)
-            # Claim the text so a near-simultaneous guest callout, cactbot
-            # timeline or raidboss, for the same mechanic is silenced. Own
-            # wins.
             self._claim_callout(text)
             self._emit_alert(text, "alarm" if t.interrupt else "info")
         if t.sound_file:
             play_sound(t.sound_file)
 
     def _teardown_step(self, label: str, fn) -> None:
-        """Run one teardown step isolated from the rest. A raise must not
-        skip the steps that follow. Each guards a resource the others do
-        not reach, and a skipped sidecar stop orphans its JVM or Mono
-        child."""
+        """Run cleanup steps independently so one failure cannot skip the remaining
+        resources.
+        """
         try:
             fn()
         except Exception as exc:  # noqa: BLE001
@@ -1529,11 +1357,9 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
                   file=sys.stderr)
 
     def _stop_background_timers(self) -> None:
-        """Stop every periodic and pending timer so no slot fires into a
-        half-torn-down window, say a party refresh after telesto stops.
-        The update restart and the Windows handoff bypass closeEvent, so
-        they run the same set here. Each stop is its own step, a timer
-        missing on a half-built window must not skip the rest."""
+        """Stop periodic and pending timers before tearing down their targets. Also used by
+        update restarts that bypass closeEvent.
+        """
         step = self._teardown_step
         step("telesto party timer stop", lambda: self._telesto_party_timer.stop())
         step("mute timer stop", lambda: self._mute_timer.stop())
@@ -1541,8 +1367,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         step("zone redetect timer stop", lambda: self._zone_redetect_timer.stop())
         step("fx timer stop", lambda: self._fx_timer.stop())
         step("dps timer stop", lambda: self._dps_timer.stop())
-        # Single-shot debounce timers. A pending one would otherwise fire
-        # into the half-torn-down window just like the periodic ones above.
         step("chain flush timer stop", lambda: self._umad_chain_flush_timer.stop())
         step("gaze flush timer stop", lambda: self._umad_gaze_flush_timer.stop())
         step("ability filter timer stop", lambda: self._ability_filter_timer.stop())
@@ -1550,41 +1374,29 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         step("cactbot filter timer stop", lambda: self._cactbot_trig_filter_timer.stop())
 
     def closeEvent(self, event) -> None:
-        # Every step runs isolated through _teardown_step, as a lambda so a
-        # missing attribute on a half-built window is contained too. A raise
-        # from any step must not skip the rest of cleanup or the super
-        # closeEvent call, the window would refuse to close and leak.
+        # Use deferred lookups so missing attributes on a partially constructed window
+        # cannot stop later cleanup.
         step = self._teardown_step
         try:
             step("ws disconnect", lambda: self._ws.disconnect_from())
-            # Close out any open pull so the capture and its meta land on disk.
             step("pull capture finalize", lambda: self._pull_capture.close())
-            # Stop periodic and pending timers first so no slot fires into
-            # a half-torn-down window, say a party refresh after telesto
-            # stops.
             self._stop_background_timers()
-            # The source pin in test_regressions looks for these three
-            # single-shot stops in closeEvent's own body, so they stay
-            # inline on top of the helper. Stopping a stopped timer is a
-            # no-op.
+            # Keep these stops here for the closeEvent source regression check. Repeated
+            # stops are harmless.
             step("chain flush timer stop", lambda: self._umad_chain_flush_timer.stop())
             step("gaze flush timer stop", lambda: self._umad_gaze_flush_timer.stop())
             step("ability filter timer stop", lambda: self._ability_filter_timer.stop())
             step("clear status timers", lambda: self._clear_status_timers())
             step("clear seq runners", lambda: self._clear_seq_runners())
-            # A debounced settings save still pending dies with the event loop.
-            # Flush it now so the last slider position survives the exit.
+            # Flush debounced writes before the event loop exits.
             step("settings save flush", lambda: self._flush_pending_settings_save())
-            # Finalize an in-progress meter encounter so quitting mid-fight
-            # still records it, when Record encounters is on.
+            # Record an open encounter when closing during a fight.
             step("meter encounter finalize", lambda: self._finalize_live_encounter())
-            # A sidecar teardown raising must not skip the super closeEvent
-            # call, which would lose the main window's position on exit.
             step("cactbot reader stop", lambda: self._stop_cactbot_reader())
             step("triggevent stop", lambda: self._stop_sidecar("_triggevent"))
             step("triggernometry stop", lambda: self._stop_sidecar("_triggernometry", wait=True))
-            # Signal both long-join clients first, then join them, so the two
-            # waits overlap instead of running back to back.
+            # Request both clients to stop before joining so their shutdown waits
+            # overlap.
             step("telesto stop request", lambda: self._request_sidecar_stop("_telesto_client"))
             step("plugin link stop request", lambda: self._request_sidecar_stop("_plugin_link"))
             step("telesto stop join", lambda: self._join_sidecar("_telesto_client"))

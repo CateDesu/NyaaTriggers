@@ -1,22 +1,4 @@
-"""Tests for the Telesto marks-resilience fixes (MainWindow), driven unbound on
-a duck-typed window like test_automark_rules.py.
-
-1. _refresh_telesto_party self-heals: while automarkers is on it re-asserts the
-   client enabled flag and forces the reachability probe, so a desync or a Telesto
-   hiccup recovers on the next 10s tick without a relaunch.
-2. _on_telesto_status no longer clobbers the native client's status (the green
-   light stops flapping to off. The native client is authoritative).
-3. The real TelestoClient runs against a local fake Telesto HTTP server, the
-   checks above stub it. Covers the roster from GetPartyMembers, mark_actor
-   resolving to /mk on the wire, fail-closed on an unknown actor, and the
-   reachable/degraded/unreachable transitions.
-4. A truthy non-string telesto_uri from raw settings falls back to the default
-   instead of killing the transport, at init and via configure.
-5. Turning automarkers off runs the engine reset-with-clear forced, before the
-   client goes dark, so engine-placed signs come down instead of stranding.
-
-Run:  python -m tests.test_telesto_resilience   (exit 0 = all pass)
-"""
+"""Telesto recovery, party resolution and marker cleanup with a local HTTP server."""
 import os
 import sys
 
@@ -60,7 +42,7 @@ class FakeWin:
         pass
 
 
-# ── self-heal: the 10s refresh re-asserts enabled + forces the probe ──
+# self-heal: the 10s refresh re-asserts enabled + forces the probe
 w = FakeWin(enabled=True)
 w._refresh_telesto_party()
 check("refresh re-asserts set_enabled(True)",
@@ -71,12 +53,12 @@ check("enabled is re-asserted before the probe",
       w._telesto_client.calls.index(("set_enabled", True))
       < w._telesto_client.calls.index(("refresh", True)))
 
-# ── gated: nothing happens when automarkers is off ──
+# gated: nothing happens when automarkers is off
 w = FakeWin(enabled=False)
 w._refresh_telesto_party()
 check("refresh is a no-op when automarkers is off", w._telesto_client.calls == [])
 
-# ── the native client is the sole source of truth for the light ──
+# the native client is the sole source of truth for the light
 w = FakeWin(enabled=True)
 w._on_telesto_client_status(True, "Connected")
 check("native client turns the light green", w._telesto_status == "good")
@@ -88,9 +70,7 @@ w._on_telesto_client_status(False, "unreachable")
 check("native client can still turn it red (real reachability)",
       w._telesto_status == "bad")
 
-# ── the real client against a local fake Telesto HTTP server ──
-# Status is polled via _reachable. status_changed emissions queue to an event
-# loop the test doesn't run, same constraint as test_plugin_link.py.
+# Poll status because this test has no event loop to deliver queued signals.
 import http.server
 import json
 import threading
@@ -191,17 +171,14 @@ check("dead server reports unreachable",
 cli.stop()
 check("stop() joins the worker", cli._thread is None)
 
-# ── mark_command fallbacks ──
+# mark_command fallbacks
 check("known token passes through", mark_command("bind2", 3) == "/mk bind2 <3>")
 check("empty marker falls back to next-attack",
       mark_command("", "me") == "/mk attack <me>")
 check("unknown marker falls back like empty, drop-logged",
       mark_command("cler", "me") == "/mk attack <me>")
 
-# ── a truthy non-string uri falls back to the default, init and configure ──
-# Raw settings values reach the client from four MainWindow call sites. A
-# number from a hand edited settings file used to kill the whole transport,
-# urllib.request.Request raises on it outside _post's try.
+# Invalid URI types fall back to the default during construction and configuration.
 c = TelestoClient(uri=12345, enabled=False)
 check("numeric uri at init falls back to the default", c.uri == DEFAULT_URI)
 c = TelestoClient(uri={"host": "x"}, enabled=False)
@@ -214,7 +191,7 @@ check("empty uri via configure falls back to the default", c.uri == DEFAULT_URI)
 c.configure(uri="http://127.0.0.1:8/")
 check("a real uri via configure sticks", c.uri == "http://127.0.0.1:8/")
 
-# ── parent automarkers off runs the forced reset-with-clear first ──
+# parent automarkers off runs the forced reset-with-clear first
 import types
 
 
@@ -275,7 +252,7 @@ aw._apply_automark_state()
 check("enable runs no resets, configures on and probes the party",
       aw.events == [("configure", True), ("refresh", False)])
 
-# ── parent off force-clears rule-placed signs and drops the bookkeeping ──
+# parent off force-clears rule-placed signs and drops the bookkeeping
 aw = ApplyWin(enabled=False)
 aw._automark_active = {"10FF0001": "644", "me": "63E"}
 aw._apply_automark_state()
@@ -287,7 +264,7 @@ check("the rule clears land before configure takes the client down",
       aw.events.index(("clear-actor", "10FF0001", True))
       < aw.events.index(("configure", False)))
 
-# ── the chain reset threads force into the per-player clears ──
+# the chain reset threads force into the per-player clears
 class ResetWin:
     _umad_chain_reset = mw.MainWindow._umad_chain_reset
     _umad_name_of = mw.MainWindow._umad_name_of
@@ -319,7 +296,7 @@ rw._umad_chain_reset(clear_marks=True)
 check("wipe-path reset stays unforced by default",
       rw.clears == [("10FF0001", False)])
 
-# ── a forced clear lands even with the client disabled, unforced fails closed ──
+# a forced clear lands even with the client disabled, unforced fails closed
 srv2 = FakeTelesto()
 srv2.start()
 cli2 = TelestoClient(uri=f"http://127.0.0.1:{srv2.port}/", enabled=False,

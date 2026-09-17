@@ -54,47 +54,29 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Headless Triggevent Engine sidecar for NyaaTriggers.
- *
- * <p>Boots Triggevent's real engine (xpdota/event-trigger) with NO GUI and NO
- * live ACT WebSocket, reads raw IINACT/OverlayPlugin WS messages teed from
- * NyaaTriggers on stdin (one JSON object per line), runs ALL Triggevent triggers
- * (built-in Java + user Groovy + EasyTriggers), and writes every resolved callout
- * back to stdout as JSON lines:
- *
- * <pre>{"t":"callout","tts":"...","text":"...","severity":"info|alert|alarm","sound":"...","expired":false}</pre>
- *
- * <p>This is the data-capture counterpart to {@code ../triggevent_bridge.py}.
+ * Run Triggevent triggers from IINACT messages on stdin and emit resolved callouts as
+ * JSON lines. Uses the engine's built in triggers, Groovy scripts and EasyTriggers
+ * without opening another ACT connection.
  */
 public final class TriggeventCore {
 
-    // Pin stdout to UTF-8, matching the stdin pin in main (and the .NET host, which
-    // pins both directions): release builds bundle Temurin 17 and UTF-8-by-default
-    // only arrived in JDK 18, so on Windows System.out would encode with the system
-    // code page and mangle non-ASCII callout/inventory text.
+    // Use UTF-8 explicitly because the bundled JDK 17 can otherwise use a Windows code
+    // page.
     private static final PrintStream OUT = new PrintStream(System.out, true, StandardCharsets.UTF_8);
 
-    // Set NYAA_TV_DIAG=1 to count key events through the pipeline (printed on exit).
-    // Lets you see whether log lines parse, triggers fire, and callouts get emitted.
+    // Set NYAA_TV_DIAG=1 to print event counts on exit.
     private static final boolean DIAG_ON = System.getenv("NYAA_TV_DIAG") != null;
     private static final Map<String, AtomicLong> DIAG = new LinkedHashMap<>();
 
-    // Registry of every modifiable callout by its stable id (built at boot in
-    // emitInventory). Lets NyaaTriggers edit a trigger's spoken/visual text or
-    // toggle it via set_callout/reset_callout commands on stdin.
+    // Index modifiable callouts by stable ID for live edits and suppression.
     private static final Map<String, ModifiedCalloutHandle> CALLOUTS = new HashMap<>();
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    // Monotonic sequence stamped on every emitted callout JSON line. NyaaTriggers
-    // gaps-check it to catch callouts lost between the engine and the app.
+    // Sequence emitted callouts so the parent can detect delivery gaps.
     private static final AtomicLong CALLOUT_SEQ = new AtomicLong();
 
-    // Triggevent's own Telesto integration, captured at boot so NyaaTriggers can drive
-    // automarks through the user's Telesto Dalamud plugin (HTTP server, default
-    // http://localhost:45678/). TelestoMain pulls the game party list (GetPartyMembers)
-    // to correct slot order and POSTs "/mk attack <slot>" style commands; the engine
-    // owns slot resolution, the command-delay throttle, language and clear logic. Null
-    // on an engine build without telesto-core on the classpath (feature stays inert).
+    // Keep the engine Telesto integration available for explicit control commands. It
+    // remains absent when telesto-core is not on the classpath.
     private static volatile TelestoMain TELESTO;
     private static volatile AutoMarkServiceSelector AM_SELECTOR;
     private static PullRecovery RECOVERY;
@@ -113,12 +95,9 @@ public final class TriggeventCore {
     }
 
     public static void main(String[] args) throws Exception {
-        // NOTE: do NOT force java.awt.headless=true. Some auto-scanned engine
-        // components (e.g. PartyOverlay) build a Swing JFrame in their constructor;
-        // under forced-headless that throws HeadlessException and aborts boot. The
-        // sidecar instead runs against a display - ideally a throwaway Xvfb (launched
-        // by the Python bridge) so Triggevent's own overlays never touch the user's
-        // screen; we only harvest its CalloutEvents. Falls back to the session display.
+        // Do not force AWT headless mode. Engine components construct Swing windows
+        // during startup. The bridge supplies Xvfb when available, otherwise the
+        // session display.
 
         try {
             final MutablePicoContainer pico = bootEngine();
@@ -127,12 +106,8 @@ public final class TriggeventCore {
             emitStatus(true, "Triggevent Engine ready");
             diag("ready; reading WS messages on stdin; recovery=1; history=1; catchup=1");
 
-            // InitEvent is dispatched synchronously in bootEngine (its @HandleEvents
-            // handlers run inline on the calling thread), so ModifiedCalloutRepository is
-            // already populated by the time we get here. The waitDrain() is just a
-            // defensive flush of anything the Init handlers enqueued; then publish a
-            // one-shot inventory of every modifiable (read-only) callout so NyaaTriggers
-            // can show grouped read-only rows and suppress specific ids.
+            // InitEvent handlers populate the callout registry synchronously. Drain any
+            // queued followup work before publishing inventory.
             try {
                 pico.getComponent(BasicEventQueue.class).waitDrain();
                 emitInventory(pico);
@@ -140,10 +115,7 @@ public final class TriggeventCore {
                 diag("inventory error: " + t);
             }
 
-            // Feed loop: each stdin line is a raw OverlayPlugin/IINACT WS message.
-            // ActWsRawMsg + the engine's ActWsHandlers dispatch it into domain events
-            // (LogLine -> ACTLogLineEvent, CombatData, ChangePrimaryPlayer, ChangeZone,
-            // PartyChanged, ...) exactly as in live mode.
+            // Pass raw IINACT messages through the engine's normal event handlers.
             final BufferedReader in =
                     new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
             String line;
@@ -162,7 +134,7 @@ public final class TriggeventCore {
                     if (frame != null && frame.isObject()) {
                         RECOVERY.feed(line, frame);
                     }
-                } catch (Throwable t) {            // never let one bad line kill the feed
+                } catch (Throwable t) {
                     if (RECOVERY.clock.replaying()) {
                         RECOVERY.recordFailure();
                         if ("complete".equals(recoveryStatus) || "state_only".equals(recoveryStatus)) {
@@ -172,11 +144,8 @@ public final class TriggeventCore {
                     diag("feed error: " + t);
                 }
             }
-            // stdin closed (live shutdown, or end of an offline log replay): drain the
-            // event queue so in-flight callouts still get emitted before we exit. The
-            // brief grace loop lets short wall-clock-delayed callouts (which fire on a
-            // separate timer thread) land too - matters only for offline log replay,
-            // where the whole log is fed in milliseconds.
+            // Drain queued events on EOF and allow brief delayed callouts to finish
+            // before exit.
             try {
                 final BasicEventQueue q = pico.getComponent(BasicEventQueue.class);
                 q.waitDrain();
@@ -185,7 +154,6 @@ public final class TriggeventCore {
                     q.waitDrain();
                 }
             } catch (Throwable ignored) {
-                // queue component absent / interrupted - nothing to drain
             }
             if (DIAG_ON) {
                 final StringBuilder sb = new StringBuilder("event counts:");
@@ -196,35 +164,22 @@ public final class TriggeventCore {
             }
             emitStatus(false, "stdin closed");
         } catch (Throwable t) {
-            // A boot failure must not look like a clean stop. System.exit in the
-            // finally below runs before the default uncaught handler, so without
-            // this catch the stack trace would never print and the JVM would
-            // exit 0, indistinguishable from a normal stdin EOF shutdown.
+            // Log boot failures and return an error before finally exits the JVM.
             t.printStackTrace();
             OUT.flush();
             System.exit(1);
         } finally {
-            // The engine's EventPump threads are NON-DAEMON (EventMaster builds its
-            // factory with daemon(false)), so main returning would NOT end the JVM:
-            // on parent death the sidecar gets only stdin EOF and would orphan a JVM
-            // (plus its Xvfb) per hard crash - the orphan class Program.cs's
-            // stdin-reader finally guards against on the .NET side. try/finally (not
-            // a trailing statement) so an exception out of bootEngine after the pump
-            // started also exits.
+            // Exit explicitly because engine event threads would otherwise keep the JVM
+            // alive after stdin closes.
             OUT.flush();
             System.exit(0);
         }
     }
 
     /**
-     * Stand up the engine headlessly with the user's real Triggevent data.
-     *
-     * <p>{@code XivMain.masterInit()} force-starts a live ACT WebSocket (which would
-     * duplicate our teed feed), and {@code requiredComponents()} (the clean, no-live-WS
-     * bootstrap) is private. So we invoke it reflectively, then wire the rest with
-     * public APIs: real user persistence (loads EasyTriggers + settings, read-only so
-     * we never clobber the user's file), log-replay mode, our callout sink, InitEvent
-     * (runs user Groovy startup scripts), and start.
+     * Initialize without opening a live ACT connection. Reflectively use the private
+     * requiredComponents bootstrap, then load user settings without writing them,
+     * attach the callout sink and run startup events.
      */
     private static MutablePicoContainer bootEngine() throws Exception {
         final Method requiredComponents = XivMain.class.getDeclaredMethod("requiredComponents");
@@ -238,22 +193,14 @@ public final class TriggeventCore {
         pico.addComponent(BasicEventQueue.class, queue);
         pico.addComponent(clock);
 
-        // Real user data folder (~/.triggevent on Linux), read-only.
         pico.addComponent(UserDirPropsPersistenceProvider.inUserDataFolder("triggevent", true));
 
-        // Log-replay mode: keep the import-only parsers that reconstruct player/zone/
-        // party state from log lines enabled (they self-disable in live OP-feed mode).
+        // Keep replay parsers enabled so log lines can reconstruct player, zone and
+        // party state.
         pico.getComponent(AutoHandlerConfig.class).setNotLive(true);
 
-        // Telesto automark egress gate. TelestoMain.enabled() (and its GetPartyMembers
-        // party-order poll, which - together with pull-party-list ON and a completed
-        // round-trip, both handled in applyAutomark - is needed for "/mk attack <slot>"
-        // to hit the RIGHT player) is gated on a WEBSOCKET_LIVE log source. We feed a
-        // live OP/IINACT tee, so this
-        // is accurate; it does NOT open any ACT WebSocket (that is ActWsLogSource.start(),
-        // which the sidecar never calls) and is orthogonal to setNotLive above. Without
-        // it the entire Telesto path is inert. Side effect: RawEventStorage retains raw
-        // events (normal live behaviour) - harmless for our short-lived feed.
+        // Mark the source as live for Telesto dispatch and party polling. This does not
+        // start an ACT WebSocket and is separate from enabling replay parsers.
         pico.getComponent(PrimaryLogSource.class).setLogSource(KnownLogSource.WEBSOCKET_LIVE);
 
         final EventDistributor dist = pico.getComponent(EventDistributor.class);
@@ -275,17 +222,12 @@ public final class TriggeventCore {
             dist.registerHandler(TtsRequest.class, (c, e) -> diagCount("TtsRequest").incrementAndGet());
         }
 
-        dist.acceptEvent(new InitEvent());                 // runs startup Groovy, etc.
+        dist.acceptEvent(new InitEvent());                 // Runs startup Groovy scripts.
         pico.getComponent(EventMaster.class).start();
 
-        // Capture Triggevent's Telesto components (instantiated + bus-wired by the scan
-        // during start()). Then force a SAFE automark default: select "none". This is
-        // critical because the built-in keyboard-macro handler registers at priority 15
-        // (higher than telesto-am's 12) and is therefore the DEFAULT selected service -
-        // it injects AWT-Robot F-key presses into whatever window has focus, which is
-        // wrong AND harmful on the headless/Proton box. NyaaTriggers opts in to Telesto
-        // explicitly via a set_automark command. "none" is always a registered default
-        // option, so this is safe even if telesto-core is absent.
+        // Select the none marker service by default. The higher priority keyboard
+        // handler would otherwise send keys to the focused window. Telesto requires an
+        // explicit control command.
         try {
             TELESTO = pico.getComponent(TelestoMain.class);
             if (TELESTO != null) {
@@ -298,15 +240,10 @@ public final class TriggeventCore {
             if (envUri != null && !envUri.isBlank() && TELESTO != null) {
                 trySet(() -> TELESTO.getUriSetting().set(URI.create(envUri.trim())));
             }
-            // Default OFF: select "none" AND disable Telesto party polling so the engine
-            // makes ZERO contact with the Telesto plugin until NyaaTriggers opts in (the
-            // {"nyaa_cmd":"set_automark"} line). NYAA_AUTOMARK=1 opts in at boot for
-            // standalone debug runs.
+            // Disable Telesto polling until requested. NYAA_AUTOMARK=1 enables it for
+            // standalone debugging.
             requestedAutomark = "1".equals(System.getenv("NYAA_AUTOMARK"));
             applyAutomark(requestedAutomark);
-            // One-shot boot diagnostic: confirms telesto-core scanned (telesto-am
-            // registered) and which actuator is selected. Invaluable for field debugging
-            // ("is the automark backend even wired?").
             if (AM_SELECTOR != null) {
                 final boolean hasTelesto = AM_SELECTOR.getOptions().stream()
                         .anyMatch(hh -> "telesto-am".equals(hh.descriptor().id()));
@@ -317,12 +254,14 @@ public final class TriggeventCore {
                 diag("automark: AutoMarkServiceSelector MISSING (telesto-core not scanned?)");
             }
         } catch (Throwable t) {
-            diag("telesto wiring skipped: " + t);   // engine without telesto-core -> inert
+            diag("telesto wiring skipped: " + t);
         }
         return pico;
     }
 
-    /** Central harvest point: every resolved callout (built-in / EasyTrigger / Groovy). */
+    /**
+     * Receive resolved callouts from built in triggers, EasyTriggers and Groovy.
+     */
     private static void onCallout(EventContext ctx, CalloutEvent ev) {
         if (!RECOVERY.outputAllowed()) {
             return;
@@ -330,19 +269,17 @@ public final class TriggeventCore {
         try {
             final StringBuilder sb = new StringBuilder(128);
             sb.append("{\"t\":\"callout\"");
-            // Monotonic per-sidecar-generation sequence so the app can tell a
-            // callout lost on the wire (seq gap) apart from one never emitted.
             sb.append(",\"seq\":").append(CALLOUT_SEQ.incrementAndGet());
-            field(sb, "id", calloutId(ev));            // stable per-trigger id (may be null)
-            field(sb, "tts", ev.getCallText());        // spoken text
-            field(sb, "text", ev.getVisualText());     // on-screen text
+            field(sb, "id", calloutId(ev));
+            field(sb, "tts", ev.getCallText());
+            field(sb, "text", ev.getVisualText());
             sb.append(",\"at\":").append(ev.getEffectiveHappenedAt().toEpochMilli());
             sb.append(",\"severity\":\"").append(severity(ev.getColorOverride())).append('"');
             field(sb, "sound", ev.getSound());
             sb.append(",\"expired\":").append(ev.isExpired());
             sb.append('}');
             println(sb.toString());
-            // PrintStream swallows write failures; surface them once per streak.
+            // Report PrintStream write failures once per failure streak.
             if (OUT.checkError()) {
                 diag("stdout write failed while emitting a callout");
             }
@@ -352,11 +289,8 @@ public final class TriggeventCore {
     }
 
     /**
-     * Tee Telesto connection status so NyaaTriggers can show a live indicator.
-     *   {"t":"telesto","status":"good|bad|unknown"}
-     * GOOD after a successful POST to the Telesto plugin, BAD on a connection error.
-     * Only fires once the WEBSOCKET_LIVE log source (set in bootEngine) has enabled
-     * TelestoMain's egress; otherwise TelestoMain never updates its status.
+     * Emit engine Telesto connection status after requests. Requires the live source
+     * setting that enables Telesto dispatch.
      */
     private static void onTelestoStatus(EventContext ctx, TelestoStatusUpdatedEvent ev) {
         try {
@@ -372,12 +306,8 @@ public final class TriggeventCore {
     }
 
     /**
-     * Stable per-trigger id for a harvested callout, or null. The only production
-     * trace type is ModifiableCalloutTraceInfo (set in CalloutProcessor); its field
-     * (when present) is the static ModifiableCallout field that produced the call.
-     * The id is stable across runs/updates (it is derived from the declaring class +
-     * field name). Null for callouts with no modifiable-field origin (free Groovy text),
-     * which NyaaTriggers can then only suppress via the text find->replace layer.
+     * Return the stable declaring class and field ID for a modifiable callout, or null
+     * for free text that needs phrase overrides.
      */
     private static String calloutId(CalloutEvent ev) {
         final CalloutTraceInfo trace = ev.getTrace();
@@ -388,14 +318,8 @@ public final class TriggeventCore {
     }
 
     /**
-     * Handle a NyaaTriggers control command (one JSON line on stdin):
-     *   {"nyaa_cmd":"set_callout","id":..,"tts":..,"text":..,"enable":bool}
-     *   {"nyaa_cmd":"reset_callout","id":..}
-     * set_callout edits the live engine's own TTS/visual/enable settings for that
-     * trigger (so the change applies immediately, with tokens still substituted);
-     * reset_callout reverts to the trigger's defaults. Each setting write is guarded
-     * so a read-only persistence backend cannot abort the others (the in-memory value
-     * is updated before the optional file write, so the live engine always sees it).
+     * Apply callout edits or reset defaults from control messages. Guard each setting
+     * write so read only persistence cannot block the remaining in memory changes.
      */
     private static void handleCommand(JsonNode n) {
         try {
@@ -449,7 +373,7 @@ public final class TriggeventCore {
                 recoveryProgress("recovered", n);
                 return;
             }
-            // Automark control is not keyed by a callout id, so dispatch it first.
+            // Dispatch automarker commands before requiring a callout ID.
             if ("set_automark".equals(cmd)) {
                 automarkCommand = n;
                 requestedAutomark = n.path("enable").asBoolean(false);
@@ -510,17 +434,13 @@ public final class TriggeventCore {
         try {
             r.run();
         } catch (Throwable t) {
-            diag("setting write skipped: " + t);   // in-memory value already updated
+            diag("setting write skipped: " + t);   // The live value is already updated.
         }
     }
 
     /**
-     * Enable/disable Telesto automarking and/or point the engine at the user's Telesto
-     * plugin, from a NyaaTriggers control line:
-     *   {"nyaa_cmd":"set_automark","enable":bool,"uri":"http://localhost:45678/"}
-     * enable=true selects the "telesto-am" service; enable=false selects "none" (which
-     * also de-selects the harmful default keyboard-macro handler). Both writes are
-     * in-memory-effective even under the read-only persistence backend (see trySet).
+     * Apply the requested Telesto URL and enabled state from a control message. Use
+     * telesto-am when enabled and none otherwise.
      */
     private static void handleAutomark(JsonNode n) {
         RECOVERY.cancelPendingOutput();
@@ -534,18 +454,8 @@ public final class TriggeventCore {
     }
 
     /**
-     * Turn Telesto automarking on/off as one coupled operation:
-     *  - party polling (telesto-support.pull-party-list) is tied to the feature, so when
-     *    OFF the engine makes ZERO HTTP contact with the Telesto plugin (no GetPartyMembers
-     *    POSTs on zone/combat ticks), and when ON it polls GetPartyMembers - which is
-     *    REQUIRED for the game-correct party-slot order (without it slots are job-sorted
-     *    and "/mk attack <slot>" can mark the wrong player). We force it on/off regardless
-     *    of the user's ~/.triggevent value.
-     *  - the actuation service is set to "telesto-am" (on) or "none" (off, which also
-     *    de-selects the harmful default keyboard-macro AWT-Robot handler).
-     *  - on enable, a party-order refresh is requested immediately so the first marks
-     *    resolve to the game order rather than the job-sorted fallback (narrows, but does
-     *    not fully close, the post-(re)start window before the first GetPartyMembers reply).
+     * Change marker service and party polling together. Refresh party order immediately
+     * on enable, though slots remain unresolved until the reply arrives.
      */
     private static void applyAutomark(boolean enable) {
         if (!enable) {
@@ -556,15 +466,13 @@ public final class TriggeventCore {
         }
         selectAutomarkService(enable ? "telesto-am" : "none");
         if (enable && TELESTO != null) {
-            trySet(TELESTO::refreshPartyIfEnabled);   // request game party order now
+            trySet(TELESTO::refreshPartyIfEnabled);
         }
     }
 
     /**
-     * Select an automark actuation service by its ServiceDescriptor id ("telesto-am" /
-     * "none"). Selecting by id (not priority) is deliberate so an upstream priority
-     * change can't silently re-select the wrong actuator. No-op if the engine has no
-     * telesto-core (AM_SELECTOR null) or the id isn't registered.
+     * Select the registered marker service by ID so upstream priority changes cannot
+     * select another handler.
      */
     private static void selectAutomarkService(String id) {
         if (AM_SELECTOR == null) {
@@ -576,7 +484,9 @@ public final class TriggeventCore {
                 .ifPresent(ServiceHandle::setEnabled));
     }
 
-    /** canonicalClassName.fieldName - a stable id shared by the inventory and each callout. */
+    /**
+     * Derive a stable inventory and callout ID from the declaring class and field.
+     */
     private static String idForField(Field f) {
         if (f == null) {
             return null;
@@ -586,11 +496,8 @@ public final class TriggeventCore {
     }
 
     /**
-     * One-shot startup catalog of every modifiable callout (the read-only rows in the
-     * unified Triggers tab), grouped by fight. Emits one line:
-     *   {"t":"inventory","triggers":[{"id":..,"name":..,"fight":..,"group":..,"text":..},..]}
-     * "fight" is the KnownDuty enum constant (e.g. "FRU","DMU","None") for the Python
-     * side to map; "name" is the callout description; "text" is its default callout text.
+     * Publish the modifiable callout inventory at startup. Include stable ID,
+     * description, duty, group and default text for each row.
      */
     private static void emitInventory(MutablePicoContainer pico) {
         final ModifiedCalloutRepository repo = pico.getComponent(ModifiedCalloutRepository.class);
@@ -608,9 +515,9 @@ public final class TriggeventCore {
             for (ModifiedCalloutHandle h : g.getCallouts()) {
                 final String id = idForField(h.getField());
                 if (id == null) {
-                    continue;                          // can't address it -> can't disable it -> skip
+                    continue;
                 }
-                CALLOUTS.put(id, h);                    // addressable for set_callout/reset_callout
+                CALLOUTS.put(id, h);
                 String text = h.getOriginal().getOriginalVisualText();
                 if (text == null || text.isEmpty()) {
                     text = h.getOriginal().getOriginalTts();
@@ -619,7 +526,7 @@ public final class TriggeventCore {
                     sb.append(',');
                 }
                 first = false;
-                sb.append("{\"id\":\"").append(esc(id)).append('"');   // id is always present here
+                sb.append("{\"id\":\"").append(esc(id)).append('"');
                 field(sb, "name", h.getDescription());
                 field(sb, "fight", fight);
                 field(sb, "group", groupName);
@@ -633,9 +540,8 @@ public final class TriggeventCore {
     }
 
     /**
-     * Triggevent has no first-class severity enum; urgency is encoded via callout
-     * color. Heuristic: strongly-red override -> alarm, any other override -> alert,
-     * no override -> info. (NyaaTriggers maps these to gold / peach / red.)
+     * Infer severity from the color override. Strong red is alarm, another override is
+     * alert, and no override is info.
      */
     private static String severity(Color c) {
         if (c == null) {
@@ -647,7 +553,7 @@ public final class TriggeventCore {
         return "alert";
     }
 
-    // ── tiny JSON writer (no dependency on the engine's Jackson version) ──────────
+    // Write JSON without depending on the engine's Jackson version.
     private static void field(StringBuilder sb, String key, String val) {
         if (val == null) {
             return;

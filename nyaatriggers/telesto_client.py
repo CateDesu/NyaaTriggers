@@ -1,20 +1,6 @@
-"""Telesto client. Places FFXIV head-sign markers through the Telesto Dalamud plugin.
-
-Telesto - https://github.com/paissaheavyindustries/Telesto - serves HTTP on
-http://localhost:45678/ and runs in-game /mk commands on request. Wire format
-mirrors Triggevent's telesto-support source.
-
-Two targeting modes.
-  * on you. /mk <marker> <me>, a direct POST.
-  * on a party member. /mk <marker> <N> where <N> is the game party-list slot,
-    1..8, resolved from the GetPartyMembers response. That response is a list
-    of {order, actor} entries sorted by order, and the 1-based position is <N>.
-    Unknown slot means fail closed, skip the mark rather than guess.
-
-stdlib urllib only, no requests dep. A single daemon worker drains a queue
-serially with a base+random delay because the game throttles rapid /mk spam.
-Telesto is optional. Send errors never crash, they flip a de-duped status
-signal.
+"""Queue marker commands through the Telesto HTTP endpoint. Resolve actor IDs to party
+slots using sorted GetPartyMembers responses and skip unknown targets. A worker sends
+commands serially with configured delays and reports connection failures.
 """
 
 from __future__ import annotations
@@ -32,7 +18,7 @@ import urllib.parse
 import urllib.request
 
 from nyaatriggers.drop_log import log_drop
-from nyaatriggers.locale_util import N_   # noop mark, combo labels are translated at render via _
+from nyaatriggers.locale_util import N_   # Translate marker labels when rendering the selector.
 
 try:
     from PyQt6.QtCore import QObject, pyqtSignal
@@ -40,7 +26,7 @@ try:
 except Exception:  # pragma: no cover
     _HAVE_QT = False
 
-    class QObject:  # shim so the module imports without Qt, for CI and tests
+    class QObject:  # Allow tests to import without Qt.
         def __init__(self, *a, **k):
             pass
 
@@ -56,7 +42,7 @@ except Exception:  # pragma: no cover
                 for fn in list(self._slots):
                     try:
                         fn(*args)
-                    except Exception:  # match Qt, one bad slot doesn't stop emit
+                    except Exception:  # Continue emitting after a failing slot.
                         import traceback
                         traceback.print_exc()
 
@@ -84,12 +70,10 @@ def _is_loopback_uri(uri: str) -> bool:
         return False
 
 
-# Shutdown sentinel for the worker queue.
 _STOP = object()
 
-# Head-sign markers as UI label plus /mk token. English-client tokens. The
-# attack*/bind*/shapes are identical on every client, but "ignore1"/"ignore2"
-# are localized, DE "ignor", JP/KR "stop", and silently no-op on non-English clients.
+# Marker tokens follow the English client. Ignore markers use localized tokens on other
+# clients.
 MARKERS: list[tuple[str, str]] = [
     (N_("Attack 1"), "attack1"), (N_("Attack 2"), "attack2"), (N_("Attack 3"), "attack3"),
     (N_("Attack 4"), "attack4"), (N_("Attack 5"), "attack5"), (N_("Attack 6"), "attack6"),
@@ -102,12 +86,8 @@ MARKERS: list[tuple[str, str]] = [
 MARKER_TOKENS = frozenset(tok for _label, tok in MARKERS)
 
 
-# ----------------------------------------------------------------------------
-# Pure message builders, for exact-byte unit tests.
-# ----------------------------------------------------------------------------
 def make_message(msg_id: int, msg_type: str, payload=None) -> dict:
-    """Telesto POST envelope, mirrors TelestoMain.makeMessage. payload defaults
-    to {} like the Java side."""
+    """Build the Telesto envelope with an empty dictionary as the default payload."""
     return {
         "version": VERSION,
         "id": int(msg_id),
@@ -117,18 +97,16 @@ def make_message(msg_id: int, msg_type: str, payload=None) -> dict:
 
 
 def game_command_message(command: str) -> dict:
-    """ExecuteCommand envelope for one game text command, e.g. '/mk attack1 <me>'."""
     return make_message(GAME_CMD_ID, "ExecuteCommand", {"command": str(command)})
 
 
 def party_members_message() -> dict:
-    """GetPartyMembers envelope. Side-effect-free. Doubles as a reachability probe."""
+    """Request party members and probe reachability without changing game state."""
     return make_message(PARTY_UPDATE_ID, "GetPartyMembers", None)
 
 
 def _slot_token(slot) -> str:
-    """Wrap a target in FFXIV placeholder syntax. 2 becomes '<2>', 'me' stays '<me>'.
-    Already-wrapped '<t>' stays as-is."""
+    """Normalize slot numbers and named placeholders to angle brackets."""
     s = str(slot).strip()
     if s.startswith("<") and s.endswith(">"):
         return s
@@ -136,9 +114,9 @@ def _slot_token(slot) -> str:
 
 
 def _actor_int(actor_id) -> "int | None":
-    """Parse an actor/object id to an int. Accepts int or hex string, log lines
-    and Telesto both use hex, e.g. '10FF1234', with decimal fallback. Returns
-    None for blank/invalid ids and the no-target sentinels 0 and E0000000."""
+    """Parse numeric or hexadecimal actor IDs with decimal fallback. Reject invalid IDs and
+    no-target sentinels.
+    """
     if actor_id is None:
         return None
     if isinstance(actor_id, bool):          # bool is an int subclass
@@ -164,10 +142,9 @@ def _actor_int(actor_id) -> "int | None":
 
 
 def mark_command(marker, target) -> str:
-    """Build a `/mk` command. Empty marker falls back to generic next-attack,
-    '/mk attack <target>'. target is a slot id or placeholder like 'me'.
-    An unknown non-empty token gets the same fallback, but logged. A typo in
-    a hand-edited rule must not turn into a wrong sign with no trace."""
+    """Use the next attack marker for empty or unknown tokens. Log unknown tokens so
+    invalid rules are visible.
+    """
     m = (str(marker).strip() if marker is not None else "")
     if m not in MARKER_TOKENS:
         if m:
@@ -176,24 +153,19 @@ def mark_command(marker, target) -> str:
     return f"/mk {m} {_slot_token(target)}"
 
 
-# ----------------------------------------------------------------------------
 class TelestoClient(QObject):
     """Queued HTTP client for the Telesto plugin. Thread-safe public API."""
 
-    # reachable bool, message str, degraded bool. Drives the connection
-    # indicator. degraded marks "answers but errors", persistent HTTP non-2xx.
-    # Not down, but not healthy either.
+    # Reachable, message and degraded flags. HTTP errors indicate a reachable but
+    # failing endpoint.
     status_changed = pyqtSignal(bool, str, bool)
-    # message str. One-off non-fatal error worth surfacing.
     error = pyqtSignal(str)
 
     def __init__(self, uri: str = DEFAULT_URI, enabled: bool = False,
                  delay_base_ms: int = 100, delay_plus_ms: int = 100,
                  timeout: float = 4.0, max_queue: int = 1000, parent=None) -> None:
         super().__init__(parent)
-        # Raw settings values land here. A truthy non-string, say a number
-        # from a hand edited settings file, would raise inside
-        # urllib.request.Request on every send and kill the transport.
+        # Validate endpoint types because settings may contain arbitrary JSON values.
         self._uri = uri if isinstance(uri, str) and uri else DEFAULT_URI
         self._enabled = bool(enabled)
         self._command_epoch = 0
@@ -207,19 +179,16 @@ class TelestoClient(QObject):
         self._lock = threading.Lock()
         self._reachable: "bool | None" = None  # last reported reachability, de-duped
         self._warned_sends: set = set()        # unexpected send failures already logged
-        # actor id as int -> 1-based party slot <N>, rebuilt per GetPartyMembers
-        # response. Empty until the first list, mark_actor fails closed.
+        # Actor IDs to party slots. Keep empty until a valid roster arrives and skip
+        # unknown actors.
         self._slot_by_actor: "dict[int, int]" = {}
         self._request_context = threading.local()
 
-    # -- configuration ------------------------------------------------------
     def configure(self, uri: "str | None" = None, enabled: "bool | None" = None,
                   delay_base_ms: "int | None" = None,
                   delay_plus_ms: "int | None" = None) -> None:
-        """Update settings live. Safe from the GUI thread anytime."""
         with self._lock:
             if uri is not None:
-                # Same non-string guard as __init__, raw settings reach here too.
                 self._uri = uri if isinstance(uri, str) and uri else DEFAULT_URI
             if enabled is not None:
                 if self._enabled and not enabled:
@@ -242,20 +211,14 @@ class TelestoClient(QObject):
         with self._lock:
             return self._uri
 
-    # -- lifecycle ----------------------------------------------------------
     def start(self) -> None:
         t = self._thread
         if t and t.is_alive():
             if not self._stopping.is_set():
-                return                         # already running
-            # stop timed out joining this worker. It's finishing one blocking
-            # HTTP call, exits on its own, its stopping event is set, and never
-            # takes from the queue again, so spawning the next one is safe.
-        # Fresh stopping event per generation, bound to the worker via args.
-        # Clearing a shared event could revive an old worker that outlived
-        # stop's join timeout. The queue is created once in __init__ and kept,
-        # so commands enqueued before start aren't orphaned. The worker
-        # discards any stale _STOP left by a previous generation.
+                return
+            # Use a fresh stop event so restarting cannot revive an older worker still
+            # finishing HTTP. Retain the queue for commands submitted before start and
+            # ignore old stop sentinels.
         self._stopping = threading.Event()
         self._thread = threading.Thread(
             target=self._run, args=(self._queue, self._stopping),
@@ -263,14 +226,13 @@ class TelestoClient(QObject):
         self._thread.start()
 
     def request_stop(self) -> None:
-        """Signal the worker out and queue the sentinel, without joining.
-        closeEvent requests both clients first and joins after, so their
-        shutdown waits overlap instead of adding up."""
+        """Request shutdown without joining so callers can overlap client shutdown waits.
+        """
         self._stopping.set()
         try:
             self._queue.put_nowait(_STOP)
         except queue.Full:
-            # Drain one slot so the sentinel lands. The worker checks _stopping anyway.
+            # Free a slot for the stop sentinel. The worker also checks its stop event.
             try:
                 self._queue.get_nowait()
                 self._queue.put_nowait(_STOP)
@@ -278,14 +240,12 @@ class TelestoClient(QObject):
                 pass
 
     def join_stopped(self, timeout: float = 2.0) -> None:
-        """Join the worker after request_stop."""
         t = self._thread
         if t and t.is_alive():
             t.join(timeout=timeout)
             if t.is_alive():
-                # Still inside a blocking HTTP call, urlopen's timeout can exceed
-                # the timeout. Keep the handle so start sees the lingering
-                # worker and a repeated stop can join it again.
+                # Retain the handle if HTTP is still blocked so later stops can join the
+                # worker.
                 return
         self._thread = None
 
@@ -293,41 +253,33 @@ class TelestoClient(QObject):
         self.request_stop()
         self.join_stopped(join_timeout)
 
-    # -- high-level command API, head-signs --------------------------------
-    # These all report whether the command actually landed on the queue.
-    # False means it went nowhere, so the caller can retry instead of
-    # burning a cooldown on a mark that never left.
+    # Return whether the command was queued so callers consume cooldown only on success.
     def send_game_command(self, command: str, force: bool = False) -> bool:
-        """Queue a raw game text command, delayed. force=True bypasses the
-        enabled gate, the Test button."""
+        """Queue a delayed command. force bypasses the enabled setting for testing."""
         if not command:
             return False
         return self._enqueue(game_command_message(command), delay=True, force=force)
 
     def mark(self, marker, target, force: bool = False) -> bool:
-        """Place a head-sign, e.g. marker='attack1', target='me' -> /mk attack1 <me>."""
         return self.send_game_command(mark_command(marker, target), force=force)
 
     def mark_self(self, marker, force: bool = False) -> bool:
-        """Place a sign on you, `/mk <marker> <me>`."""
         return self.mark(marker, "me", force=force)
 
     def mark_slot(self, marker, slot, force: bool = False) -> bool:
-        """Place a sign on a party slot 1..8, `/mk <marker> <N>`."""
         return self.mark(marker, int(slot), force=force)
 
     def mark_actor(self, actor_id, marker, force: bool = False) -> bool:
-        """Place a sign on the party member with this actor id via their resolved
-        slot. Returns False, nothing queued, when the slot is unknown or the
-        command was dropped. Never guesses a slot, so a stale/empty party
-        list skips the mark."""
+        """Resolve the actor's current party slot and queue a mark. Return false when the
+        slot is unknown or queueing fails.
+        """
         slot = self.slot_of_actor(actor_id)
         if not slot:
             return False
         return self.mark_slot(marker, slot, force=force)
 
     def slot_of_actor(self, actor_id) -> "int | None":
-        """Current 1-based party slot for an actor id, or None if unknown."""
+        """Return the actor's current party slot, or None."""
         aid = _actor_int(actor_id)
         if aid is None:
             return None
@@ -335,39 +287,33 @@ class TelestoClient(QObject):
             return self._slot_by_actor.get(aid)
 
     def party_slot_count(self) -> int:
-        """Resolved party slot count, 0 until the first party list."""
         with self._lock:
             return len(self._slot_by_actor)
 
     def clear_self(self, force: bool = False) -> bool:
-        """Remove the sign on you, `/mk clear <me>`."""
         return self.send_game_command("/mk clear <me>", force=force)
 
     def clear_actor(self, actor_id, force: bool = False) -> bool:
-        """Remove the sign from this actor, failing closed like mark_actor."""
+        """Clear the actor's marker only when its party slot is known."""
         slot = self.slot_of_actor(actor_id)
         if not slot:
             return False
         return self.send_game_command(f"/mk clear <{int(slot)}>", force=force)
 
     def clear_all(self, force: bool = False) -> None:
-        """Remove head-signs from every party slot, `/mk clear <1>` through `<8>`."""
         for n in range(1, 9):
             self.send_game_command(f"/mk clear <{n}>", force=force)
 
     def request_party_members(self, force: bool = False) -> None:
-        """Ask Telesto for the party list. Every response also refreshes the
-        actor->slot map, so this doubles as a reachability probe."""
+        """Refresh the party mapping and connection status."""
         self._enqueue(party_members_message(), delay=False, force=force)
 
     def ping(self) -> None:
-        """Probe reachability now, regardless of enabled state."""
+        """Probe reachability even while marking is disabled."""
         self.request_party_members(force=True)
 
-    # -- internals ----------------------------------------------------------
     def _enqueue(self, msg: dict, delay: bool, force: bool = False) -> bool:
-        """Put the message on the worker queue. Returns False when it went
-        nowhere, gated off or a full queue, so senders can report the drop."""
+        """Return false if disabled or the queue is full."""
         try:
             with self._lock:
                 if not force and not self._enabled:
@@ -387,14 +333,12 @@ class TelestoClient(QObject):
         self._request_context.stopping = stopping
         while not stopping.is_set():
             try:
-                # Poll with a timeout, like plugin_link, so the worker re-checks
-                # `stopping` each second even if the _STOP sentinel never lands.
-                # A full-queue race in stop can strand a blocking get.
+                # Poll the stop event even if the queue cannot accept its sentinel.
                 item = q.get(timeout=1.0)
             except queue.Empty:
                 continue
             except Exception:  # pragma: no cover
-                stopping.wait(0.05)            # never hot-loop if get misbehaves
+                stopping.wait(0.05)
                 continue
             if item is _STOP:
                 if stopping.is_set():
@@ -405,15 +349,14 @@ class TelestoClient(QObject):
                 continue
             if delay:
                 self._sleep_command_delay(stopping)
-            # Both paths re-check after dequeue so a queued POST cannot fire
-            # during shutdown.
+            # Recheck shutdown after dequeue before issuing a request.
             if stopping.is_set():
                 break
             if not self._can_send(force, epoch):
                 continue
             try:
                 self._post(msg)
-            except Exception as exc:  # never let one bad send kill the worker
+            except Exception as exc:  # Continue processing after a failed command.
                 key = f"{type(exc).__name__}: {exc}"[:200]
                 if key not in self._warned_sends and len(self._warned_sends) < 32:
                     self._warned_sends.add(key)
@@ -422,10 +365,8 @@ class TelestoClient(QObject):
     def _sleep_command_delay(self, stopping: "threading.Event") -> None:
         with self._lock:
             base, plus = self._delay_base, self._delay_plus
-        # base + random * plus ms, like TelestoMain.
         delay_s = (base + (random.random() * plus)) / 1000.0
         if delay_s > 0:
-            # Interruptible so stop doesn't block for the full delay.
             stopping.wait(delay_s)
 
     def _post(self, msg: dict) -> None:
@@ -444,11 +385,8 @@ class TelestoClient(QObject):
             if msg.get("id") == PARTY_UPDATE_ID:
                 self._update_party_slots(body)
         except urllib.error.HTTPError as exc:
-            # Reached the endpoint but got non-2xx. Reachable, yet every command
-            # is failing. Report degraded, amber, not healthy green. Not a
-            # reachability flip. A transient per-command error must not read as
-            # "Telesto gone".
-            # The error is a response object, close it before moving on.
+            # HTTP errors mean the endpoint is reachable but degraded. Close the
+            # response before continuing.
             exc.close()
             if getattr(self._request_context, "stopping", self._stopping).is_set():
                 return
@@ -456,8 +394,7 @@ class TelestoClient(QObject):
             log_drop("telesto-http", f"HTTP {exc.code} for {msg.get('type')}")
         except (urllib.error.URLError, OSError, ValueError,
                 http.client.HTTPException) as exc:
-            # Connection refused, timeout, bad URI, or a peer that is not HTTP
-            # at all. Telesto absent, not fatal.
+            # Report transport failures without stopping the client.
             if getattr(self._request_context, "stopping", self._stopping).is_set():
                 return
             self._report_reachable(False, f"Telesto unreachable: {exc}")
@@ -552,21 +489,18 @@ class TelestoClient(QObject):
             watcher.join()
 
     def _update_party_slots(self, body: bytes) -> None:
-        """Rebuild the actor-id -> slot map from a GetPartyMembers response.
-
-        Body looks like {"id":..,"response":[{"order":<hex>,"actor":<hex objectId>}]}.
-        Sort by `order`. The 1-based position is FFXIV's <N> party-list slot.
-        Never raises. A malformed body keeps the previous map intact."""
+        """Sort valid party entries by order and map actors to consecutive slots. Keep the
+        previous mapping when the response is malformed.
+        """
         try:
             data = json.loads(body.decode("utf-8", "replace"))
         except (ValueError, AttributeError):
             return
         members = data.get("response") if isinstance(data, dict) else data
         if not isinstance(members, list):
-            return                              # parse/shape failure, keep the good map
+            return
         if not members:
-            # Well-formed empty party, disbanded or solo. Clear the map so
-            # mark_actor fails closed instead of resolving a defunct slot.
+            # Clear stale slots on a valid empty roster.
             with self._lock:
                 self._slot_by_actor = {}
             return
@@ -579,8 +513,7 @@ class TelestoClient(QObject):
 
         ordered = sorted((m for m in members if isinstance(m, dict)), key=_order)
         slots: "dict[int, int]" = {}
-        # Entries with no parseable actor are compressed out, no gap, matching
-        # the game's gapless party list.
+        # Skip invalid actors without leaving gaps in slot numbers.
         slot = 0
         for entry in ordered:
             aid = _actor_int(entry.get("actor"))
@@ -590,16 +523,13 @@ class TelestoClient(QObject):
             if slot > 8:
                 break
             slots[aid] = slot
-        # Authoritative, well-formed response. Install even when nothing parsed,
-        # so mark_actor fails closed instead of resolving a slot from a stale
-        # map. Marking the wrong player is worse than not marking.
+        # Replace the map for every valid roster, even if no actor parsed. Stale slots
+        # could mark the wrong player.
         with self._lock:
             self._slot_by_actor = slots
 
     def _report_reachable(self, reachable: bool, message: str, degraded: bool = False) -> None:
-        # Emit only on a transition so we don't spam the UI per command. The
-        # degraded flag is part of the state. Reachable-but-erroring must
-        # re-emit even though the boolean didn't move.
+        # Report transitions in both reachability and degraded state.
         state = (reachable, degraded)
         with self._lock:
             changed = self._reachable != state

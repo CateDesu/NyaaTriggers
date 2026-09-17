@@ -1,22 +1,6 @@
-"""Build assets/callouts_ja.json (id/text -> display, display -> kana reading) from the
-phrase map.
-
-Reads assets/triggers.json + tools/callout_phrases_ja.json. The phrase map is
-  "<english callout>": {"display": "<natural JP, kanji ok>", "reading": "<pure kana>"}
-(a plain string is accepted too and used as both display and reading). Emits:
-  callouts : {trigger-id -> display}      NyaaTriggers' own triggers (precise)
-  phrases  : {english-text -> display}    free-form engine callouts (TE/cactbot/TN)
-  readings : {display -> kana reading}    TTS form. espeak/SAPI can't read kanji
-  names    : {trigger-id -> ja name}      trigger-list labels (display only, never
-             spoken, so no reading needed). From tools/trigger_names_ja.json,
-             a flat {"<english trigger name>": "<japanese>"} map (text-keyed so
-             duplicate names translate consistently). Missing file -> empty map.
-
-Tokens ({source}/{target}/{count}) must survive in display AND reading, else the
-entry is skipped. Readings that still contain kanji are reported (they'd be spoken
-as "Chinese letter" by espeak). Machine-assisted DRAFT.
-
-Run:  python tools/build_callouts_ja.py
+"""Build Japanese callout display text, kana readings and names from the phrase maps and
+shipped triggers. Preserve every source, target and count token in display and speech.
+Report readings containing kanji. Run python tools/build_callouts_ja.py.
 """
 from __future__ import annotations
 
@@ -33,19 +17,11 @@ _NAMES = _REPO / "tools" / "trigger_names_ja.json"
 _OUT = _REPO / "assets" / "callouts_ja.json"
 _MAIN = _REPO / "nyaatriggers/app_common.py"
 
-# Only the tokens _fire() actually substitutes at runtime (.replace of
-# {source}/{target}/{count}) must survive the translation. Other braces (simple
-# Groovy vars like {longSpreadOn}, dotted engine tokens like {event.foo}) are
-# raw engine-callout text the runtime wildcard-regex (_compile_phrase_patterns)
-# matches with .*?, so a natural JP rendering legitimately drops them. Gating on
-# all {\w+} tokens wrongly skipped ~150 finished translations that only differed
-# by such non-substituted tokens, shipping them as English.
+# Preserve runtime substitution tokens. Other engine tokens are already resolved before
+# phrase matching and may be omitted from translations.
 _SUBST_TOKENS = ("source", "target", "count")
-# Count occurrences, not just membership. A translation keeping one {target}
-# where English speaks two must not pass the gate, the extra mention would
-# silently drop from the spoken callout.
+# Preserve token counts as well as names.
 _TOKENS = lambda s: {t: s.count("{" + t + "}") for t in _SUBST_TOKENS if "{" + t + "}" in s}
-# Match the ideographs stripped by the system voice in tts.py.
 _KANJI = re.compile(r"[\u3005\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002a6df\U0002a700-\U0002ceaf]")
 
 
@@ -55,14 +31,11 @@ def _app_version() -> str:
 
 
 def _str_field(v) -> str:
-    # A hand edited json can park a truthy non-string under any of these
-    # keys. Coerce to "" so the entry drops out like any blank one instead
-    # of crashing the build.
     return v.strip() if isinstance(v, str) else ""
 
 
 def _norm_phrase_map(raw: dict) -> dict:
-    """english -> (display, reading). Accepts {"display","reading"} or a bare string."""
+    """Normalize English phrase entries into display and reading pairs."""
     out = {}
     for k, v in raw.items():
         k = k.strip()
@@ -77,8 +50,8 @@ def _norm_phrase_map(raw: dict) -> dict:
         if not disp:
             continue
         if k in out:
-            # Trigger text is stripped before lookup so a padded key could never
-            # match anyway. Keep the first entry on a strip collision.
+            # Trim keys as the runtime does. Keep the first entry if trimmed keys
+            # collide.
             print(f"  WARNING: duplicate phrase key after stripping whitespace: "
                   f"{k!r}, keeping first", file=sys.stderr)
             continue
@@ -87,12 +60,8 @@ def _norm_phrase_map(raw: dict) -> dict:
 
 
 def main() -> int:
-    # A hand edited json can be any shape. Degrade to empty maps instead of
-    # crashing the build, same as the junk entry skips below.
     phrases_raw = json.loads(_PHRASES.read_text(encoding="utf-8"))
     phrase_map = _norm_phrase_map(phrases_raw if isinstance(phrases_raw, dict) else {})
-    # Skip junk entries up front. A hand edited triggers.json can park a bare
-    # string in the list, and every loop below calls .get on the entry.
     triggers_raw = json.loads(_TRIGGERS.read_text(encoding="utf-8"))
     triggers = ([t for t in triggers_raw if isinstance(t, dict)]
                 if isinstance(triggers_raw, list) else [])
@@ -108,16 +77,13 @@ def main() -> int:
     for t in triggers:
         tid, text = t.get("id"), _str_field(t.get("tts_text"))
         if isinstance(tid, str) and tid and text in valid:
-            # A reused id silently kept the last callout, and both triggers
-            # stay live at runtime, so the earlier one would speak this text.
-            # Warn like the duplicate phrase key check does.
+            # Warn when a reused ID would replace an earlier callout.
             if tid in callouts and callouts[tid] != valid[text][0]:
                 print(f"  WARNING: duplicate trigger id {tid!r} with a different "
                       f"callout, keeping last", file=sys.stderr)
             callouts[tid] = valid[text][0]
     phrases = {eng: disp for eng, (disp, _r) in valid.items()}
-    # Several phrases can share one display. Last reading wins in `readings`,
-    # warn when the dropped readings differ so the phrase map can be fixed.
+    # Warn when shared display text has conflicting readings.
     by_disp = {}
     for _e, (disp, read) in valid.items():
         if read and read != disp:
@@ -125,12 +91,9 @@ def main() -> int:
     read_clash = {d: sorted(rs) for d, rs in by_disp.items() if len(rs) > 1}
     readings = {disp: read for _e, (disp, read) in valid.items() if read and read != disp}
 
-    # Trigger names: text-keyed source -> id-keyed map, mirroring `callouts`.
     name_map = {}
     if _NAMES.exists():
-        # Strip keys too, like _norm_phrase_map does. Lookups here and the
-        # runtime both use the stripped trigger name, so a padded key could
-        # never match and shipped dead in names_text.
+        # Trim name keys to match runtime lookup.
         names_raw = json.loads(_NAMES.read_text(encoding="utf-8"))
         name_map = {ks: v.strip() for k, v in names_raw.items()
                     if (ks := k.strip()) and not ks.startswith("_")
@@ -145,8 +108,7 @@ def main() -> int:
         else:
             name_miss.add(nm)
 
-    # Scan every effective spoken form, including entries whose reading fell back to
-    # the kanji display (read == disp, filtered out of `readings`), so those warn too.
+    # Check all spoken forms, including display text used as a fallback reading.
     kanji_reading = sorted({r for _e, (d, r) in valid.items() if _KANJI.search(r)})
 
     total = sum(1 for t in triggers if _str_field(t.get("tts_text")))
@@ -160,13 +122,11 @@ def main() -> int:
         "phrases": dict(sorted(phrases.items())),
         "readings": dict(sorted(readings.items())),
         "names": dict(sorted(names.items())),
-        # Text-keyed (english name -> ja) so engine triggers (Triggevent/
-        # Triggernometry), whose ids are Groovy classpaths not in the id map,
-        # still localize by display name. Same source as `names`.
+        # Include translations by name for engine rows without known IDs.
         "names_text": dict(sorted(name_map.items())),
     }
-    # Sibling tmp + rename, so an interrupted run can't leave a truncated
-    # file in place of the previous good output. Same idiom as the converters.
+    # Replace through a sibling temporary file to preserve previous output if
+    # interrupted.
     tmp = _OUT.with_name(_OUT.name + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, _OUT)

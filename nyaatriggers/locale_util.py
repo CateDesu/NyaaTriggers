@@ -1,17 +1,6 @@
-"""Locale and translation, the single source of truth for the UI language.
-
-`_` is the translation function, a bare cheap call from anywhere, gettext
-convention. Keys ARE the English source strings, so English is a pure
-pass-through and every missing translation, or a whole missing or corrupt
-catalog, falls back to English per key. Partial coverage always ships.
-
-No Qt gets imported at module load, so tts.py and the tests can import this
-without a QApplication. The only Qt touchpoint is reading the system locale for
-`auto`, and that import is lazy and guarded.
-
-Japanese `ja` is the first additive locale, but nothing here is JP specific.
-The plumbing is locale parameterised by a 2 letter code, so a second language
-never forces a rewrite. See JAPANESE_L10N_PLAN.md.
+"""UI locale selection and translation. English source strings are lookup keys and
+fallbacks for missing translations. Qt is imported only when detecting the system
+locale.
 """
 from __future__ import annotations
 
@@ -22,33 +11,23 @@ from pathlib import Path
 
 from nyaatriggers.paths import bundle_root
 
-# Bundled translations stay beside the other program resources.
-# Mirrors main_window._BUNDLE_DIR. UI string maps ship as lang/<code>.json.
 _BUNDLE_DIR = bundle_root()
 _LANG_DIR = _BUNDLE_DIR / "lang"
 
-# English is the base locale and the universal fallback. Everything else is
-# additive. Add a code here and ship a lang/<code>.json to grow the set.
+# Add a supported code and its lang catalog to offer another locale.
 DEFAULT_LOCALE = "en"
 SUPPORTED_LOCALES = ("en", "ja")
 
-# Active locale for _. Starts English. main_window sets it once at startup from
-# effective_locale over ui_language. Module-global by design so _ needs no context.
+# Set once at startup so translation calls need no context.
 _active_locale: str = DEFAULT_LOCALE
 
-# english_key -> translated string, per locale, loaded once on first use. A locale
-# with no catalog, or a corrupt one, caches {} so every key falls back to English
-# and the disk is never re-read on a hot _ path.
+# Cache missing or invalid catalogs too so lookups do not repeatedly read disk.
 _catalogs: dict[str, dict[str, str]] = {}
 
 
-# ─────────────────────────── locale resolution ───────────────────────────
 
 def normalize_locale(loc: str | None) -> str:
-    """Coerce any locale name to a supported 2-letter code, else DEFAULT_LOCALE.
-
-    Accepts the shapes a system hands back, "ja", "ja_JP", "ja-JP",
-    "en_US.UTF-8", by taking the leading subtag. Unknown or empty -> "en"."""
+    """Normalize a locale name to a supported code, falling back to English."""
     if not loc:
         return DEFAULT_LOCALE
     code = loc.strip().lower().replace("-", "_").split("_", 1)[0].split(".", 1)[0]
@@ -56,9 +35,9 @@ def normalize_locale(loc: str | None) -> str:
 
 
 def _system_locale_name() -> str:
-    """Best-effort system locale name, e.g. "ja_JP". Prefers Qt's QLocale, which
-    matches the running client, and falls back to the standard env vars so it
-    stays usable headless and in tests. Never raises. "" if nothing is set."""
+    """Read the system locale from Qt, then environment variables. Return an empty string
+    if unavailable.
+    """
     try:
         from PyQt6.QtCore import QLocale  # lazy, keeps Qt off the module-load path
         name = QLocale.system().name()
@@ -66,8 +45,7 @@ def _system_locale_name() -> str:
             return name
     except Exception:
         pass
-    # GNU gettext precedence puts LANGUAGE first. A LANGUAGE=ja LANG=en_US
-    # box is Japanese, not English.
+    # GNU gettext gives LANGUAGE precedence over LANG.
     for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
         val = os.environ.get(var)
         if val:
@@ -76,13 +54,9 @@ def _system_locale_name() -> str:
 
 
 def effective_locale(setting: str, *, system_name: str | None = None) -> str:
-    """Resolve a `ui_language` setting, "auto"|"en"|"ja", to a concrete "en"/"ja".
-
-    "auto" follows the system locale, QLocale else env. An explicit code wins
-    outright and detection never hard-forces JP on someone. Anything unrecognised
-    resolves to English. `system_name` is an injection seam for tests. Production
-    omits it and the system is queried."""
-    # A hand edited settings value can be a truthy non-string. Treat it as empty.
+    """Resolve an explicit UI language or detect the system locale for auto. system_name
+    can supply a locale for tests.
+    """
     s = (setting if isinstance(setting, str) else "").strip().lower()
     if s == "auto":
         name = system_name if system_name is not None else _system_locale_name()
@@ -91,36 +65,31 @@ def effective_locale(setting: str, *, system_name: str | None = None) -> str:
 
 
 def set_locale(loc: str) -> None:
-    """Set the active locale for _, coerced to a supported code with "en" as fallback."""
+    """Set the active supported locale, falling back to English."""
     global _active_locale
     _active_locale = normalize_locale(loc)
 
 
 def active_locale() -> str:
-    """The locale _ currently translates into."""
+    """Return the active locale."""
     return _active_locale
 
 
-# ─────────────────────────────── translation ───────────────────────────────
 
 def _load_catalog(loc: str) -> dict[str, str]:
-    """Load lang/<loc>.json, english_key -> translation, cached. Any problem,
-    missing file, bad JSON, wrong shape, caches and returns {}, so callers fall
-    back to English per key and never re-hit the disk. Never raises. Non-string
-    entries are dropped so one bad value can't poison an unrelated lookup."""
-    # Every current caller passes an already normalized code, but `loc` names a
-    # file under _LANG_DIR, so enforce the invariant here too. An unvalidated
-    # value like "../../etc/passwd" must never reach the path join.
+    """Load and cache a locale catalog. Ignore nonstring entries and return an empty
+    catalog on failure.
+    """
+    # Validate the locale before using it in a file path.
     if loc not in SUPPORTED_LOCALES:
         return {}
     cached = _catalogs.get(loc)
     if cached is not None:
         return cached
     catalog: dict[str, str] = {}
-    if loc != DEFAULT_LOCALE:   # English keys are themselves. There is no file
+    if loc != DEFAULT_LOCALE:
         try:
-            # utf-8-sig tolerates a BOM a hand edited catalog may carry. Plain
-            # utf-8 fails the parse and caches {}, silencing every translation.
+            # Accept a BOM in hand edited catalogs.
             raw = json.loads((_LANG_DIR / f"{loc}.json").read_text(encoding="utf-8-sig"))
             if isinstance(raw, dict):
                 catalog = {k: v for k, v in raw.items()
@@ -132,19 +101,14 @@ def _load_catalog(loc: str) -> dict[str, str]:
 
 
 def reload_catalogs() -> None:
-    """Drop cached catalogs so the next lookup re-reads from disk. Used after a
-    downloaded translation update, or when _LANG_DIR is repointed under test."""
+    """Clear cached catalogs so subsequent lookups read them again."""
     _catalogs.clear()
 
 
 def _(key: str) -> str:
-    """Translate `key` into the active locale, else return it unchanged.
-
-    Keys are the English source strings, so English is a pass-through and any
-    missing translation, or a missing catalog, transparently falls back to
-    English. An EMPTY value falls back too. extract_strings.py emits "" stubs
-    for untranslated keys, which must read as English, not as a blank callout.
-    Cheap. The catalog is loaded once and cached."""
+    """Translate a source string using the cached catalog. Missing or empty translations
+    fall back to the source.
+    """
     if not isinstance(key, str):
         return key
     if _active_locale == DEFAULT_LOCALE:
@@ -153,25 +117,14 @@ def _(key: str) -> str:
 
 
 def N_(text: str) -> str:
-    """Mark a string literal for extraction without translating it now.
-
-    For strings defined in module-level data, table headers, marker labels, that
-    are translated later at render time with `_`. extract_strings.py records
-    the literal so the catalog keeps the key. N_ itself is a pass-through, so the
-    data still holds the English source that `_` looks up. gettext's noop mark."""
+    """Mark a literal for catalog extraction while leaving translation until render time.
+    """
     return text
 
 
-# ──────────────────────────────── detection ────────────────────────────────
 
 def has_japanese(text: str) -> bool:
-    """True if `text` holds any Hiragana, U+3040-309F, Katakana, U+30A0-30FF,
-    Katakana Phonetic Extensions U+31F0-31FF, Kana Supplement U+1B000-1B0FF,
-    half-width forms U+FF65-FF9F incl. the voiced marks U+FF9E/FF9F, or kanji:
-    CJK Unified Ideographs U+4E00-9FFF, Extension A U+3400-4DBF, Extension B
-    U+20000-2A6DF, Extensions C through E U+2A700-2CEAF, Compatibility
-    Ideographs U+F900-FAFF, and the iteration mark U+3005. Routes TTS to a
-    Japanese voice and serves as a general "is this JP" signal."""
+    """Detect kana and kanji characters used to select Japanese speech."""
     for ch in text:
         o = ord(ch)
         if (0x3040 <= o <= 0x309F or 0x30A0 <= o <= 0x30FF or 0xFF65 <= o <= 0xFF9F

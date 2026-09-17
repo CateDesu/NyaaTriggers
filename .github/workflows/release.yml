@@ -1,45 +1,25 @@
 name: Release
 
-# Two ways this runs:
-#   * push a v* TAG -> a full Stable release. The version comes from the tag,
-#     so _VERSION in nyaatriggers/app_common.py must already match it.
-#   * push to MAIN -> a ROLLING Stable release, built automatically on every
-#     commit with NO manual tagging. The version is <source _VERSION>.<run_number>
-#     (e.g. 1.2.1.47): that sorts ABOVE the matching base version and increases
-#     on every push, so users self-update continuously. The build stamps that
-#     version into _VERSION so the installed app reports exactly what the
-#     release advertises (else the updater would re-offer the same build
-#     forever). Older rolling releases are pruned within the channel. Hand-cut
-#     3-segment tags (vX.Y.Z) are never touched, so tagged milestones stay
-#     downloadable.
-#
-# History: this workflow also used to build a Master pre-release channel from
-# the master branch. That channel was retired when the app went Python-only.
+# Tags build stable releases using the matching source version. Main pushes build
+# rolling releases stamped with the source version and run number. Pruning removes older
+# rolling releases while preserving milestone tags.
 on:
   push:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
-# Least-privilege default. Jobs that publish (release, build-*, publish,
-# prune-rolling) re-declare contents: write. meta and build-sidecar only need
-# read access, so they inherit this instead of the repo default.
+# Grant write access only to jobs that publish or prune releases.
 permissions:
   contents: read
 
-# One in-flight build per ref. Each tag and each branch is its own ref, so
-# rolling and hand-cut releases never cancel each other. Rapid pushes to main
-# share a group, so a newer commit supersedes an older still-building rolling
-# run (saves minutes and avoids two prune steps racing). A canceled run that
-# already published self-heals: the next run's prune sweeps its leftover
-# rolling release.
+# Serialize builds per ref so newer main pushes supersede older rolling builds without
+# cancelling milestone tags.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Resolve tag / version / prerelease / rolling ONCE so a branch push (no tag ref)
-  # and a tag push flow through the exact same build+publish pipeline below.
   meta:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -61,15 +41,12 @@ jobs:
           if [ "$REF_TYPE" = "tag" ]; then
             TAG="$REF_NAME"
             VER="${TAG#v}"
-            # Tag builds skip the rolling version stamp, so the source version
-            # must already equal the tag. Fail here: a mismatch ships a build
-            # that reports the old version and offers this update forever.
+            # Require the source version to match an explicit tag so the installed build
+            # reports the right version.
             BASE=$(grep -oP '^_VERSION\s*=\s*"\K[^"]+' nyaatriggers/app_common.py)
             if [ "$BASE" != "$VER" ]; then
               echo "::error::_VERSION $BASE does not match tag $TAG"; exit 1
             fi
-            # Single Stable channel: every tag is a full release. A hyphenated
-            # tag no longer maps to a Master pre-release (that channel is retired).
             PRE=false
             SUFFIX=""
             ROLL=false
@@ -77,9 +54,7 @@ jobs:
             BASE=$(grep -oP '^_VERSION\s*=\s*"\K[^"]+' nyaatriggers/app_common.py)
             if [ -z "$BASE" ]; then echo "::error::could not read _VERSION from nyaatriggers/app_common.py"; exit 1; fi
             VER="${BASE}.${{ github.run_number }}"
-            # Only main has a release channel. An unexpected ref (e.g. a manual
-            # workflow_dispatch from another branch) must never publish over
-            # Stable, so fail rather than guess.
+            # Only main can publish rolling releases.
             if [ "$REF_NAME" != "main" ]; then
               echo "::error::branch $REF_NAME has no release channel"; exit 1
             fi
@@ -97,13 +72,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Building tag=$TAG version=$VER prerelease=$PRE rolling=$ROLL"
 
-      # A re-run of an old run keeps its old run_number, and renaming this
-      # workflow file resets the counter. Either way the new tag sorts at or
-      # below the rolling release users already update from and the channel
-      # silently stops moving, so refuse unless the new tag sorts strictly
-      # above the newest published one. Drafts do not count: a draft may be
-      # another in-flight run and /releases/latest never saw it. The first
-      # run finds nothing and passes. Hand-cut tags are exempt by the if.
+      # Require rolling versions to advance beyond published releases. Ignore drafts
+      # that may belong to builds still running.
       - name: Refuse to regress the rolling channel
         if: steps.v.outputs.rolling == 'true'
         env:
@@ -115,10 +85,7 @@ jobs:
           jq 'add | map({tagName: .tag_name, isDraft: .draft, isPrerelease: .prerelease})' release-pages.json > releases.json
           python3 tools/release_policy.py check "$TAG" < releases.json
 
-  # Run the test suite on every push and tag. Every build/publish job below
-  # depends on this, so a commit that breaks the rollback contract or DPS
-  # totals never ships to auto-updating users. The test runner gives each
-  # standalone suite its own process and fails if any suite exits nonzero.
+  # Require all test suites to pass before building or publishing.
   test:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
@@ -140,9 +107,6 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m tests
-      # The Japanese catalog drifts silently as strings are added. Fail the
-      # build when lang/ja.json is out of sync; tools/extract_strings.py
-      # (optionally --prune) brings it back.
       - name: Check translation catalog is in sync
         run: python tools/extract_strings.py --check
 
@@ -161,25 +125,15 @@ jobs:
           curl -fL --retry 3 --retry-all-errors -o voices/en_US-arctic-medium.onnx \
             "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/arctic/medium/en_US-arctic-medium.onnx"
 
-      # Pinned upstream hash of the 76,766,385-byte piper-voices v1.0.0 model: a saved
-      # HTTP error body fails here, before it can be packaged into the release.
+      # Check the voice against its pinned release checksum.
       - name: Verify voice model checksum
         run: echo "483303e294947a3ec2f910ea96093d876e1640f5772e9d89e511d6c82c667286  voices/en_US-arctic-medium.onnx" | sha256sum -c
 
       - name: Create/refresh the GitHub release with voice assets
         uses: softprops/action-gh-release@v3
         with:
-          # For a branch (rolling) build there is no tag ref, so pass the computed tag
-          # explicitly. The action creates it at this commit. Tags are always full
-          # Stable releases (prerelease is always false now that the Master
-          # channel is retired).
-          #
-          # Draft until both platform zips are uploaded: the release job runs at
-          # ~15s but the Windows/Linux zips land ~3min in, so a published release
-          # would be visible to the auto-updater with a higher version and no
-          # platform asset, surfacing "No Windows build found in the latest
-          # release". Drafts are excluded by /releases/latest, so the updater
-          # never sees it until the publish job below un-drafts it.
+          # Pass the computed tag for rolling builds. Keep the release draft until both
+          # platform archives are ready.
           tag_name: ${{ needs.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
           prerelease: ${{ needs.meta.outputs.prerelease }}
@@ -189,10 +143,7 @@ jobs:
             voices/en_US-arctic-medium.onnx
             voices/en_US-arctic-medium.onnx.json
 
-  # Build the Triggevent Engine sidecar (platform-independent fat jar) once and
-  # share it to both packaging jobs. build.sh clones xpdota/event-trigger, installs
-  # the engine modules, and shades target/triggevent-core.jar. Needs JDK 17 + Maven
-  # (Maven is preinstalled on the ubuntu runners).
+  # Build the engine jar once and share it with both platform jobs.
   build-sidecar:
     needs: [meta, test]
     runs-on: ubuntu-latest
@@ -230,17 +181,13 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      # Boot the freshly-built engine headless once and capture the trigger inventory
-      # it prints on stdout at startup. The packaging jobs bundle this as a first-run
-      # seed so the engine rows list on a FRESH install before the sidecar has ever run
-      # on the user's machine. Best-effort: a failed harvest just means no seed this
-      # release (rows then appear after the first engine boot, exactly as before).
+      # Capture an optional startup inventory so fresh installs can list engine triggers
+      # before their first launch.
       - name: Harvest Triggevent inventory seed
         continue-on-error: true
         run: |
           sudo apt-get update && sudo apt-get install -y xvfb
-          # Keep stdin open (the sidecar reads commands from it) for longer than we poll,
-          # so it doesn't shut down on EOF before emitting its inventory.
+          # Keep stdin open long enough for the engine to emit inventory.
           sleep 180 | xvfb-run -a -s "-screen 0 1024x768x24" \
             java -jar triggevent-core/target/triggevent-core.jar > engine.out 2> engine.err &
           JPID=$!
@@ -302,17 +249,13 @@ jobs:
         with:
           python-version: '3.11'
 
-      # Pinned versions (no bare `pip install`): a compromised or buggy upstream
-      # release can no longer ride into the next rolling Stable. Keep these in
-      # sync with requirements.txt. pyinstaller/piper-tts/pillow are build-only.
+      # Keep dependency versions in sync with requirements.txt and the voice installers.
       - name: Install dependencies
         run: |
           pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 piper-tts==1.6.0 pyinstaller==6.21.0 pillow==12.3.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1
 
-      # Rolling builds are versioned <source _VERSION>.<run_number>. Stamp that into
-      # _VERSION so the frozen app reports the same version the release advertises.
-      # Otherwise it would see itself as older and re-offer the same update on every
-      # launch. No-op for tag builds (their _VERSION already matches the tag).
+      # Stamp rolling builds with the release version so the updater recognizes them as
+      # current.
       - name: Stamp rolling version into _VERSION
         if: needs.meta.outputs.rolling == 'true'
         shell: bash
@@ -336,8 +279,6 @@ jobs:
       - name: Fetch voice model
         run: curl.exe -fL --retry 3 --retry-all-errors -o voices/en_US-arctic-medium.onnx "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/arctic/medium/en_US-arctic-medium.onnx"
 
-      # Pinned upstream hash of the 76,766,385-byte piper-voices v1.0.0 model: a saved
-      # HTTP error body fails here, before it can be packaged into the release.
       - name: Verify voice model checksum
         shell: bash
         run: echo "483303e294947a3ec2f910ea96093d876e1640f5772e9d89e511d6c82c667286  voices/en_US-arctic-medium.onnx" | sha256sum -c
@@ -359,16 +300,13 @@ jobs:
         shell: bash
         run: |
           curl.exe -fL --retry 3 --retry-all-errors -o jre.zip "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jre/hotspot/normal/eclipse"
-          # Verify the JRE against the checksum Adoptium's API reports for this
-          # exact binary. The JRE is native code executing with full user
-          # privileges, so a MITM'd or CDN-poisoned archive must fail here rather
-          # than ship inside the release.
+          # Check the JRE archive against the checksum reported for this binary.
           python - <<'PY'
           import json, urllib.request, hashlib, sys
           url = ("https://api.adoptium.net/v3/assets/feature_releases/17/ga"
                  "?architecture=x64&image_type=jre&jvm_impl=hotspot&os=windows"
                  "&page=0&page_size=1&vendor=eclipse")
-          # Adoptium's edge 403s urllib's default User-Agent (bot filtering).
+          # Adoptium requires an explicit User-Agent for this request.
           req = urllib.request.Request(url, headers={"User-Agent": "NyaaTriggers-CI/1.0"})
           meta = json.load(urllib.request.urlopen(req, timeout=30))
           expected = meta[0]["binaries"][0]["package"]["checksum"].lower()
@@ -407,7 +345,6 @@ jobs:
                   assert bundled.read_bytes() == source.read_bytes(), f'Bundled asset missing or changed: {source.name}'
           PY
 
-      # Both engines ship with every build. Check the packaged files too.
       - name: Verify both engines shipped
         run: |
           $jar = 'dist\NyaaTriggers\_internal\triggevent-core\target\triggevent-core.jar'
@@ -418,9 +355,6 @@ jobs:
           if (-not (Test-Path $tn -PathType Leaf)) { throw "Triggernometry missing from the build: $tn" }
           if ((Get-Item $jar).Length -lt 1MB) { throw "engine jar is too small to be the fat jar" }
 
-      # The loader reads the bundled timelines straight from _internal, with
-      # the writable cache next to the exe winning when present, so the datas
-      # set is the whole job. Verify the spec actually packed them.
       - name: Verify the bundled timelines shipped
         run: |
           $src = 'dist\NyaaTriggers\_internal\timelines'
@@ -432,8 +366,6 @@ jobs:
       - name: Zip release folder
         run: Compress-Archive -Path dist\NyaaTriggers -DestinationPath NyaaTriggers-windows.zip
 
-      # The in-app updater downloads this sidecar (if present) and refuses to
-      # install an archive whose SHA-256 doesn't match.
       - name: Write SHA-256 sidecar
         shell: bash
         run: sha256sum NyaaTriggers-windows.zip > NyaaTriggers-windows.zip.sha256
@@ -464,13 +396,10 @@ jobs:
             libxcb-cursor0 libxcb-xkb1 libxcb-icccm4 libxcb-shape0 libxcb-keysyms1 \
             libgl1 libnss3 libasound2
 
-      # Pinned versions (no bare `pip install`); keep in sync with requirements.txt.
       - name: Install Python dependencies
         run: |
           pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 piper-tts==1.6.0 pyinstaller==6.21.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1
 
-      # See build-windows: stamp the rolling version so the frozen app's reported
-      # version matches the release. No-op for tag builds.
       - name: Stamp rolling version into _VERSION
         if: needs.meta.outputs.rolling == 'true'
         shell: bash
@@ -493,8 +422,6 @@ jobs:
           curl -fL --retry 3 --retry-all-errors -o voices/en_US-arctic-medium.onnx \
             "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/arctic/medium/en_US-arctic-medium.onnx"
 
-      # Pinned upstream hash of the 76,766,385-byte piper-voices v1.0.0 model: a saved
-      # HTTP error body fails here, before it can be packaged into the release.
       - name: Verify voice model checksum
         run: echo "483303e294947a3ec2f910ea96093d876e1640f5772e9d89e511d6c82c667286  voices/en_US-arctic-medium.onnx" | sha256sum -c
 
@@ -515,15 +442,13 @@ jobs:
         run: |
           curl -fL --retry 3 --retry-all-errors -o jre.tar.gz \
             "https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jre/hotspot/normal/eclipse"
-          # Verify the JRE against the checksum Adoptium's API reports for this
-          # exact binary. Native code with full user privileges: a tampered
-          # archive must fail here, not ship inside the release.
+          # Check the JRE archive against the checksum reported for this binary.
           python3 - <<'PY'
           import json, urllib.request, hashlib, sys
           url = ("https://api.adoptium.net/v3/assets/feature_releases/17/ga"
                  "?architecture=x64&image_type=jre&jvm_impl=hotspot&os=linux"
                  "&page=0&page_size=1&vendor=eclipse")
-          # Adoptium's edge 403s urllib's default User-Agent (bot filtering).
+          # Adoptium requires an explicit User-Agent for this request.
           req = urllib.request.Request(url, headers={"User-Agent": "NyaaTriggers-CI/1.0"})
           meta = json.load(urllib.request.urlopen(req, timeout=30))
           expected = meta[0]["binaries"][0]["package"]["checksum"].lower()
@@ -558,7 +483,6 @@ jobs:
                   assert bundled.read_bytes() == source.read_bytes(), f'Bundled asset missing or changed: {source.name}'
           PY
 
-      # Both engines ship with every build. Check the packaged files too.
       - name: Verify both engines shipped
         run: |
           jar=dist/NyaaTriggers/_internal/triggevent-core/target/triggevent-core.jar
@@ -569,15 +493,12 @@ jobs:
           test -f "$tn" || { echo "Triggernometry missing from the build: $tn"; exit 1; }
           test "$(stat -c%s "$jar")" -ge 1000000 || { echo "engine jar too small"; exit 1; }
 
-      # The launcher runs the pre boot _internal recovery the frozen exe cannot
-      # run itself, then execs the real binary. Ship it next to the exe.
+      # Include the launcher so runtime recovery can run before Python starts.
       - name: Add launcher script
         run: |
           cp NyaaTriggers.sh dist/NyaaTriggers/NyaaTriggers.sh
           chmod +x dist/NyaaTriggers/NyaaTriggers.sh
 
-      # Same check as the Windows build: the loader reads the bundled
-      # timelines straight from _internal, so the spec must have packed them.
       - name: Verify the bundled timelines shipped
         run: |
           test -f dist/NyaaTriggers/_internal/timelines/UMAD.txt || { echo "bundled timeline missing from the build"; exit 1; }
@@ -588,29 +509,21 @@ jobs:
           cd dist
           tar -czf ../NyaaTriggers-linux.tar.gz NyaaTriggers
 
-      # The in-app updater downloads this sidecar (if present) and refuses to
-      # install an archive whose SHA-256 doesn't match.
       - name: Write SHA-256 sidecar
         run: sha256sum NyaaTriggers-linux.tar.gz > NyaaTriggers-linux.tar.gz.sha256
 
       - name: Upload Linux build to release
         run: |
           gh release upload ${{ needs.meta.outputs.tag }} NyaaTriggers-linux.tar.gz NyaaTriggers-linux.tar.gz.sha256 --clobber
-          # Publish the engine jar on its own so the in-app "Update Triggevent
-          # engine" button can pull it without a full app download. Its .sha256
-          # sidecar rides along: _download_engine verifies against it (fail
-          # closed) before swapping the jar in, same as the app archives.
+          # Publish the engine separately for independent updates, including its
+          # existing checksum sidecar.
           (cd triggevent-core/target && sha256sum triggevent-core.jar) > triggevent-core.jar.sha256
           gh release upload ${{ needs.meta.outputs.tag }} triggevent-core/target/triggevent-core.jar triggevent-core.jar.sha256 --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Flip the release from draft to published once both platform zips are
-  # uploaded. The release job creates it as a draft so the auto-updater never
-  # sees a half-empty release; this runs last (alongside prune) to publish it.
-  # If a build job failed, needs is unmet and the release stays a draft, which
-  # is the desired failure mode. Users keep the previous build, and the next push
-  # supersedes the orphan draft.
+  # Publish after both platform archives are ready. Failed builds leave a draft so users
+  # retain the previous release.
   publish:
     needs: [meta, build-windows, build-linux]
     runs-on: ubuntu-latest
@@ -626,7 +539,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.meta.outputs.tag }}
-          # Keep the publication target explicit.
           GH_REPO: ${{ github.repository }}
         run: |
           gh api --paginate --slurp "repos/${{ github.repository }}/releases?per_page=100" > release-pages.json
@@ -635,12 +547,8 @@ jobs:
           gh release edit "$TAG" --draft=false --latest="$LATEST"
           echo "Published $TAG"
 
-  # Keep the Stable channel a single continuously-updated rolling release: after a
-  # rolling build publishes with both assets, delete the PREVIOUS rolling releases
-  # (and their tags). Only auto-rolling tags (vN.N.N.N, a 4th numeric segment)
-  # are touched. Hand-cut vX.Y.Z Stables are left alone, so tagged milestones
-  # stay downloadable as rollback targets. Runs only after publish completes, so
-  # the previous rolling release is not deleted before the new one is visible.
+  # Prune superseded rolling releases only after publication. Preserve milestone tags as
+  # rollback choices.
   prune-rolling:
     needs: [meta, publish]
     if: needs.meta.outputs.rolling == 'true'
@@ -650,7 +558,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
-      # Keep drafts, newer builds and hand cut milestones.
       - name: Delete superseded rolling releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

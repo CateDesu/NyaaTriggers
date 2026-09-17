@@ -1,7 +1,4 @@
-"""Timeline push and scheduling. Pushes timelines to the in-game plugin
-and runs the in-combat sequence, a thin layer over timeline_engine.py.
-Mixin for MainWindow, all state rides on self.
-"""
+"""Timeline loading, plugin schedules and sequence handling for MainWindow."""
 
 import os
 import re
@@ -23,9 +20,7 @@ from nyaatriggers.app_common import (
 
 
 def _local_timeline_path(fight: str):
-    """The writable <Fight>.txt first, then the read-only bundled copy, so a
-    shipped file like UMAD.txt serves straight from _internal on a frozen
-    build. None when neither exists."""
+    """Find a writable local timeline, then its bundled fallback, or return None."""
     p = ac.TIMELINES_DIR / f"{fight}.txt"
     if p.exists():
         return p
@@ -35,27 +30,20 @@ def _local_timeline_path(fight: str):
 
 class TimelineTabMixin:
     def _on_timeline_tts(self, text: str) -> None:
-        # A cactbot sourced schedule only drives the bars. The reader already
-        # speaks cactbot's callouts, so speaking the txt entries too doubles
-        # up. Your own timeline files still talk.
+        # Cactbot schedules drive bars only because the reader already supplies speech.
         if getattr(self, "_timeline_from_cactbot", False):
             return
-        # Your own timeline talks only while the local engine and the global
-        # switch are on. The kill switch leaves the feed gated, but a callout
-        # already waiting on its timer would still fire without this check.
+        # Check local switches again when the timer fires.
         if not (getattr(self, "_local_enabled", True)
                 and getattr(self, "_global_local_on_flag", True)):
             return
-        # Your own timeline callouts are guests. Own triggers win.
         self._emit_guest_callout(text, "info")
 
     def _on_seq_complete(self, runner: SequentialRunner, captured: dict) -> None:
         trigger = runner.trigger
         self._drop_seq_runner(runner)
-        # Suppress if the world moved on during the sequence. Local off,
-        # trigger disabled, edited, the list holds a different object, or
-        # deleted. Identity, not equality, mirroring the _on_status_timer
-        # guard.
+        # Check mode and object identity so disabled, replaced or deleted triggers
+        # cannot complete stale sequences.
         if (not self._local_enabled or not trigger.enabled
                 or not any(x is trigger for x in self._triggers)):
             return
@@ -65,37 +53,31 @@ class TimelineTabMixin:
         self._drop_seq_runner(runner)
 
     def _drop_seq_runner(self, runner: SequentialRunner) -> None:
-        """Stop a sequential runner, drop our reference, deleteLater its
-        QObject. The runner is parented to the window, so without
-        deleteLater it stays a live child all session and accumulates.
-        deleteLater is event-loop-safe even from the runner's own
-        callback."""
+        """Stop and delete a sequence runner so its persistent window parent cannot retain
+        it.
+        """
         runner.cancel()
         if runner in self._seq_runners:
             self._seq_runners.remove(runner)
         runner.deleteLater()
 
     def _clear_seq_runners(self) -> None:
-        # Same teardown as status timers. A sequential runner left armed
-        # across a zone change or wipe can advance on a new-fight line
-        # inside its timeout window and speak a stale callout.
+        # Cancel sequences at encounter boundaries so later log lines cannot finish
+        # them.
         for r in list(self._seq_runners):
             self._drop_seq_runner(r)
 
     def _timeline_fight_tag(self, zone: str) -> str:
-        """The tag whose timeline the zone shows. The zone-id index tag
-        when it maps this zone, else the name-regex fight tag, blanked the
-        same way the loader blanks it."""
+        """Resolve the timeline tag from the zone index or local fight name."""
         cb = self._cactbot_zone_entry()
         if cb:
             return cb[0]
         return _bare_fight_tag(self._fight_tag_for_zone(zone)[0]) if zone else ""
 
     def _push_timeline_to_plugin(self) -> None:
-        """Push the current schedule to the plugin, or clear it when your
-        callouts are switched off. The bar belongs to the local engine: the
-        master Triggers switch and the global kill switch both take it down.
-        Cactbot mode always keeps its own bars."""
+        """Push the current schedule when its mode is enabled. Preserve cactbot bars while
+        local callouts are off.
+        """
         if (getattr(self, "_cactbot_mode", False)
                 or (getattr(self, "_local_enabled", True)
                     and getattr(self, "_global_local_on_flag", True))):
@@ -110,14 +92,9 @@ class TimelineTabMixin:
         from_cactbot = False
         try:
             local_fight, _unused = self._fight_tag_for_zone(zone) if zone else ("", "")
-            # The tag names a timeline file below, so it must be a bare name.
-            # Imported triggers carry whatever the file said, and separators
-            # or .. would walk the read out of TIMELINES_DIR.
+            # Require a bare fight tag before using it as a timeline filename.
             local_fight = _bare_fight_tag(local_fight)
-            # Primary source is the zone-id index, every cactbot timeline.
-            # The hand-written converter map stays as fallback for anything
-            # the index does not map, stale id, or a zone only the name
-            # resolved.
+            # Prefer the zone ID index, falling back to the known fight map.
             cb = self._cactbot_zone_entry()
             if (not cb and self._cactbot_mode
                     and local_fight in FIGHT_TO_CACTBOT_TXT):
@@ -126,18 +103,14 @@ class TimelineTabMixin:
             path = None
             if cb:
                 ctag, rel = cb
-                # The writable download cache wins over the read-only bundled
-                # copy, and neither clobbers a user's own <FightTag>.txt. The
-                # distinct cache name keeps a source checkout's downloads away
-                # from the committed files, the _CALLOUTS_JA_CACHE pattern.
+                # Prefer writable downloads over bundled cactbot files. Both use names
+                # separate from user timelines.
                 cb_path = ac.TIMELINES_DIR / f"{ctag}.cactbot.cache.txt"
                 if not cb_path.exists():
                     cb_path = ac._BUNDLE_TIMELINES_DIR / f"{ctag}.cactbot.txt"
                 if cb_path.exists():
-                    # Past the TTL the cached or bundled copy still serves, but
-                    # kick a background re-fetch so an upstream correction
-                    # reaches users who fetched once long ago. The refresh
-                    # always lands in the cache, never back over a shipped file.
+                    # Serve the existing copy during a background refresh after its TTL
+                    # expires.
                     try:
                         if time.time() - cb_path.stat().st_mtime > _CACTBOT_TIMELINE_TTL_S:
                             self._fetch_cactbot_timeline(ctag, rel)
@@ -146,14 +119,13 @@ class TimelineTabMixin:
                     path = cb_path
                     from_cactbot = True
                 else:
-                    self._fetch_cactbot_timeline(ctag, rel)   # async. Reloads on done
+                    self._fetch_cactbot_timeline(ctag, rel)
                     if local_fight:
-                        path = _local_timeline_path(local_fight)  # fall back meanwhile
+                        path = _local_timeline_path(local_fight)
             elif local_fight:
                 path = _local_timeline_path(local_fight)
             if path and path.exists():
-                # utf-8-sig, not plain utf-8. A BOM survives strip and eats the
-                # first line, the anchored entry regex and hideall both miss it.
+                # Accept a BOM so the first entry or hideall directive still parses.
                 text = path.read_text(encoding="utf-8-sig")
                 entries = timeline_parser.parse(text)
                 if preserve_time:
@@ -172,43 +144,29 @@ class TimelineTabMixin:
                 if cb:
                     fight = ""
         except Exception as exc:  # noqa: BLE001
-            # Corrupt or unreadable file, a parser blowup, anything. Every
-            # other failure path around here leaves a trace, and the retry
-            # below would otherwise fail silently every 30 s forever.
+            # Log loading errors before the next periodic retry.
             ac.log_drop("timeline", f"{zone!r} load failed: {exc!r}")
             if preserve_time:
                 return
             self._timeline.clear()
             self._timeline_reset_on_combat_end = False
             from_cactbot = False
-            # Do not stamp the failed fight below. Leaving fight empty lets
-            # the 30 s re-detect tick retry the load instead of treating the
-            # cleared timeline as the current state.
+            # Leave the fight unstamped after failure so periodic detection retries.
             fight = ""
-        # Record what the loaded schedule belongs to, empty string when
-        # cleared. The 30 s re-detect tick compares against this and only
-        # reloads on a real change, so a steady state sends no plugin
-        # traffic.
+        # Record the loaded fight so unchanged zones do not reload.
         self._timeline_fight = fight
         self._timeline_from_cactbot = from_cactbot
-        # Push the schedule to the plugin on every load, reload and clear.
-        # An empty one is a valid replace. A zone with no timeline shows
-        # nothing. The helper holds the bar back while your callouts are
-        # switched off.
+        # Replace the plugin schedule on load or clear, respecting the current mode.
         self._push_timeline_to_plugin()
 
     def _fetch_cactbot_timeline(self, tag: str, rel: str) -> None:
-        """Download cactbot's .txt timeline `rel`, a path under
-        ui/raidboss/data/, into the writable cache as
-        <tag>.cactbot.cache.txt, on a daemon thread. Never touches the
-        bundled copy. Re-loads the timeline via a signal when done.
-        No-ops on any error or if a fetch for this tag is already in
-        flight."""
+        """Download a cactbot timeline to the writable cache in the background and signal
+        for reload. Allow one fetch per tag and leave bundled files untouched.
+        """
         if not rel:
             return
-        # One atomic membership test plus add under the lock. The worker
-        # discards from its own thread, so the in-flight dedup must not
-        # rely on GIL luck.
+        # Protect fetch membership checks and updates because workers remove entries
+        # from another thread.
         with self._cactbot_tl_lock:
             if tag in self._cactbot_tl_fetching:
                 return
@@ -227,12 +185,10 @@ class TimelineTabMixin:
                 tmp = dest.with_name(f"{dest.name}.{os.getpid()}.{threading.get_ident()}.tmp")
                 tmp.write_bytes(data)
                 _fsync_file(tmp)
-                os.replace(tmp, dest)   # never leave a half-written timeline
+                os.replace(tmp, dest)
                 self._cactbot_tl_signal.emit(tag)
-            except Exception:  # noqa: BLE001 - timeline just stays empty
-                # Log to stderr so a corrupted download or a disk-full
-                # mid-write is diagnosable. The timeline stays empty and
-                # the TTL re-fetch self-heals, exactly as before.
+            except Exception:  # noqa: BLE001
+                # Log download failures and leave later refreshes able to retry.
                 print(f"cactbot timeline fetch failed for {tag}", file=sys.stderr)
             finally:
                 if tmp is not None:
@@ -245,12 +201,12 @@ class TimelineTabMixin:
 
         try:
             threading.Thread(target=_worker, daemon=True).start()
-        except Exception:  # noqa: BLE001 - a failed start must not strand the tag
+        except Exception:  # noqa: BLE001
             with self._cactbot_tl_lock:
                 self._cactbot_tl_fetching.discard(tag)
 
     def _on_cactbot_timeline_ready(self, fight: str) -> None:
-        """A cactbot timeline finished downloading. Reload if still relevant."""
+        """Reload a downloaded timeline if it still matches the current zone."""
         if not self._cactbot_mode:
             return
         if self._timeline_fight_tag(self._match_zone) == fight:

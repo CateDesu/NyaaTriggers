@@ -1,18 +1,4 @@
-"""Tests for the plugin link (plugin_link.py), against a local fake of the
-Dalamud plugin's WebSocket server.
-
-Covers the wire contract from the NyaaTriggers-Overlay repo's
-docs/DEVELOPING.md: connect and validate the hello (protocol gate), exact
-alert/timeline/tick/clear frames, non-finite floats never reaching the JSON,
-liveness ping on idle, reconnect after the server drops the connection,
-outbox eviction that keeps the fire-once alerts, and that the handshake
-carries no Origin header (the plugin refuses any that does).
-
-Run:  python -m tests.test_plugin_link   (exit 0 = all pass)
-
-No game, Qt, or display needed: plugin_link imports without Qt, and the fake
-plugin is the `websockets` sync server on an ephemeral loopback port, never
-the real plugin's 27080.
+"""Overlay protocol, delivery and reconnect behavior against a local WebSocket server.
 """
 import json
 import os
@@ -115,7 +101,7 @@ def make_link(fake, **kwargs):
     return pl.PluginLink(port=fake.port, **kwargs)
 
 
-# ── frame builders (pure) ────────────────────────────────────────────────
+# frame builders (pure)
 check("tick frame exact",
       pl.tick_frame(12.5) == {"c": "tick", "t": 12.5})
 check("tick frame int seconds become float",
@@ -138,7 +124,7 @@ check("alert default + unknown severity degrades to info",
 check("clear frame exact", pl.clear_frame() == {"c": "clear"})
 check("ping frame exact", pl.ping_frame() == {"c": "ping"})
 
-# ── pure helpers: port parsing and the dps capability check ──────────────
+# pure helpers: port parsing and the dps capability check
 check("port parse accepts the plugin's clamp range",
       pl.parse_port(27080) == 27080 and pl.parse_port("27081") == 27081
       and pl.parse_port(1024) == 1024 and pl.parse_port(65535) == 65535)
@@ -154,9 +140,7 @@ check("pre meter plugin versions read as too old",
 check("junk versions never raise the warning",
       pl.plugin_supports_dps("") and pl.plugin_supports_dps("dev"))
 
-# ── connect: hello, protocol check, no Origin header ─────────────────────
-# Note: status_changed emissions from the worker thread are queued to an
-# event loop the test doesn't run, so status is polled via last_status().
+# Poll status because this test has no event loop to deliver queued signals.
 fake = FakePlugin()
 link = make_link(fake)
 link.start()
@@ -170,7 +154,7 @@ check("handshake is a plain upgrade",
       all(h.get("upgrade") == "websocket" and h.get("sec-websocket-version") == "13"
           for h in fake.handshakes))
 
-# ── exact frames over the wire ────────────────────────────────────────────
+# exact frames over the wire
 link.send_alert("Stack", "alarm")
 check("alert frame arrives verbatim",
       wait_for(lambda: {"c": "alert", "text": "Stack", "sev": "alarm"} in fake.snapshot()))
@@ -192,7 +176,7 @@ check("clear frame arrives verbatim",
 check("liveness ping on idle",
       wait_for(lambda: {"c": "ping"} in fake.snapshot(), timeout=5.0))
 
-# ── reconnect after the server drops the connection ──────────────────────
+# reconnect after the server drops the connection
 before = len(fake.snapshot())
 fake.drop()
 check("reconnects after a server-side drop",
@@ -204,10 +188,7 @@ link.stop()
 check("stop() joins the worker", wait_for(lambda: not link.is_connected(), timeout=3.0))
 fake.shutdown()
 
-# ── an alert queued during reconnect backoff survives to delivery ────────
-# Regression for the drop window: the loop-top queue sweep used to discard
-# alerts too, so a callout fired while the plugin was unreachable vanished
-# before the next connect attempt was even made.
+# an alert queued during reconnect backoff survives to delivery
 fake = FakePlugin()
 link = make_link(fake)
 link.start()
@@ -237,10 +218,7 @@ check("alert queued during backoff arrives after the reconnect",
 link.stop()
 fake.shutdown()
 
-# ── an alert whose send fails is re-queued and survives the reconnect ────
-# Regression for the mid-write failure: the worker pops a frame, sends, and
-# on an error tears the connection down. The popped frame used to be gone at
-# that point, so a callout that hit a dying socket never reached the game.
+# an alert whose send fails is re-queued and survives the reconnect
 fake = FakePlugin()
 link = make_link(fake)
 link.start()
@@ -267,7 +245,7 @@ check("the send fault fired exactly once", len(failed_once) == 1)
 link.stop()
 fake.shutdown()
 
-# ── set_port re-dials a live link ────────────────────────────────────────
+# set_port re-dials a live link
 fake_a = FakePlugin()
 fake_b = FakePlugin()
 link = make_link(fake_a)
@@ -283,7 +261,7 @@ link.stop()
 fake_a.shutdown()
 fake_b.shutdown()
 
-# ── protocol mismatch: gate, do not drive ────────────────────────────────
+# protocol mismatch: gate, do not drive
 fake = FakePlugin(protocol=2)
 link = make_link(fake)
 link.start()
@@ -297,7 +275,7 @@ check("protocol mismatch reports why",
 link.stop()
 fake.shutdown()
 
-# ── disabled gate: no connect, no frames, live re-enable ─────────────────
+# disabled gate: no connect, no frames, live re-enable
 fake = FakePlugin()
 link = make_link(fake, enabled=False)
 link.start()
@@ -311,7 +289,7 @@ check("re-enabling connects promptly",
 link.stop()
 fake.shutdown()
 
-# ── stale worker exit keeps the live generation's status ─────────────────
+# stale worker exit keeps the live generation's status
 fake = FakePlugin()
 link = make_link(fake)
 link.start()
@@ -319,9 +297,8 @@ check("stale generation: connected before the churn",
       wait_for(link.is_connected) and fake.connections >= 1)
 old_stopping = link._stopping
 old_thread = link._thread
-# Simulate a stop whose join timed out. Setting the events directly, without
-# the _STOP sentinel stop would queue, keeps the old worker parked in its
-# queue get until the 1 s timeout, so the start below always runs first.
+# Set stop events without the sentinel to keep the old worker waiting until the new
+# start runs.
 old_stopping.set()
 link._wake.set()
 link.start()
@@ -334,11 +311,7 @@ check("stale worker exit leaves the live status alone",
 link.stop()
 fake.shutdown()
 
-# ── a flooding peer cannot wedge the inbound drain ───────────────────────
-# Regression for the unbounded drain: _drain_inbound used to recv until one
-# call timed out, so a peer past the hello gate that never lets the socket
-# go idle parked the worker in the drain. The outbox starved and stop joins
-# timed out. The sweep is now a bounded batch that honors stopping.
+# a flooding peer cannot wedge the inbound drain
 fake = FakePlugin()
 link = make_link(fake)
 link.start()
@@ -350,8 +323,7 @@ stop_flood = threading.Event()
 
 
 def flood():
-    # No pacing on purpose, the link's inbound must never run dry. This is
-    # what keeps an unbounded drain from ever seeing a recv time out.
+    # Keep frames arriving without pauses so the drain cannot rely on a timeout.
     pong = json.dumps({"ev": "pong"})
     while not stop_flood.is_set():
         try:
@@ -374,11 +346,8 @@ stop_flood.set()
 flood_thread.join(timeout=2)
 fake.shutdown()
 
-# ── the drain sweep itself is bounded and honors stopping ────────────────
-# The deterministic half of the flood regression. Over a real socket the
-# consumer can outrun the flood and catch a lucky recv timeout, so the wedge
-# is proven here with a recv that always has a frame. The old while True
-# drain never returned from this.
+# Use a receiver that always returns a frame to verify the drain limit
+# deterministically.
 class EndlessFloodWS:
     """recv stand-in whose frames never run out. Optionally trips a stopping
     event partway through, a stop request landing mid drain."""
@@ -412,11 +381,7 @@ pl.PluginLink._drain_inbound(fake_ws, stopping)
 check("drain sweep with stopping already set reads nothing",
       fake_ws.recvd == 0)
 
-# ── non-finite floats never reach the wire ───────────────────────────────
-# Regression for the strict parser rejection: json.dumps writes inf and nan
-# as bare Infinity and NaN tokens, and the plugin rejects the whole frame.
-# tick drops the frame like any junk seconds, dps falls back or drops the
-# offending row, and nothing non-finite may survive into the JSON.
+# non-finite floats never reach the wire
 INF, NAN = float("inf"), float("nan")
 for bad in (INF, -INF, NAN):
     check(f"tick frame drops non-finite seconds ({bad})",
@@ -453,11 +418,7 @@ check("dps JSON carries no bare Infinity or NaN token",
                                                [["Me", "BLM", bad, 50.0, 1.0, True]]))
           for bad in (INF, -INF, NAN) for token in ("Infinity", "NaN")))
 
-# ── outbox eviction keeps alerts and logs the loss ───────────────────────
-# Regression for the blind drop-oldest: the overlay plugin dying mid-fight
-# fills the outbox during reconnect backoff, 4 Hz ticks plus preserved
-# alerts. Eviction must keep the fire-once alerts, drop the oldest
-# non-alert frame, and leave a drop-log line as evidence.
+# outbox eviction keeps alerts and logs the loss
 link = pl.PluginLink()
 alerts = [pl.alert_frame(f"keep{i}") for i in range(4)]
 ticks = [pl.tick_frame(float(i)) for i in range(pl.OUTBOX_CAPACITY - len(alerts))]
@@ -489,8 +450,7 @@ check("the outbox stays at capacity", len(survivors) == pl.OUTBOX_CAPACITY)
 check("eviction leaves a drop-log line",
       any(site == "plugin-drop" for site, _detail in drops))
 
-# An outbox of nothing but alerts has nothing evictable. The bound holds
-# and the new frame is the casualty, also logged.
+# An alerts only queue rejects and logs new frames when full.
 link = pl.PluginLink()
 for i in range(pl.OUTBOX_CAPACITY):
     link._enqueue(pl.alert_frame(f"x{i}"))

@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
-"""Bridge to the headless Triggevent Engine sidecar, `triggevent-core`.
-
-Runs Triggevent's real engine, xpdota/event-trigger, GPL-3.0, as a JVM
-subprocess. Every raw IINACT/OverlayPlugin WS message is teed to the sidecar's
-stdin, one JSON per line. It runs all Triggevent triggers, built-in Java plus
-user Groovy, and writes resolved callouts to stdout as JSON lines.
-
-Mirrors the CactbotReader interface, callout/tts/status signals and
-start/feed/stop, so it drops into the same main_window wiring.
-
-The JVM is optional, so call is_available first. The app runs fine without
-Java or the jar. No heavy imports at module load.
+"""Run the GPL-3.0 Triggevent engine from xpdota/event-trigger through the maintained fork.
+Send raw IINACT JSON messages to triggevent-core and relay resolved callouts as Qt
+signals. The program can run without Java or the jar, so check availability before
+starting.
 """
 
 from __future__ import annotations
@@ -34,33 +26,25 @@ from nyaatriggers import proc_env
 from nyaatriggers.drop_log import log_drop, open_private_log, rotate_one_generation
 from nyaatriggers.trigger_engine import _safe_sub, compile_user_regex
 
-# PyInstaller puts the a.datas jar under sys._MEIPASS, but the Tree-added JRE
-# often lands next to the executable instead. Missing it makes has_java False
-# and hides the whole feature, so _bundle_bases covers every plausible spot.
+# Search both bundled resource and executable directories because jars and JRE data may
+# be packaged separately.
 _BASE = bundle_root()
 _JAVA_EXE = "java.exe" if os.name == "nt" else "java"
 
-# A single sidecar stdout line longer than this is discarded without buffering
-# it whole. Mirrors the 1 MiB cap applied to Telesto responses. A buggy or
-# hostile sidecar must not be able to OOM the app by emitting one giant line.
+# Discard oversized stdout lines without buffering them whole.
 _MAX_LINE = 1 << 20
 
-# Byte budget for the sidecar stdin queue, on top of its item count. One raw
-# WS message can be up to 4 MiB, so a sidecar stalled on stdin while a
-# hostile or buggy peer floods it would otherwise pin tens of GB before the
-# count cap engaged.
+# Bound queued bytes as well as message count because feed frames can be large.
 _MAX_QUEUE_BYTES = 64 << 20
 
 
 def _read_lines_bounded(stream):
-    """Yield lines from a text stream, skipping any single line longer than
-    _MAX_LINE chars. An over-long line drains to its newline, never held whole."""
+    """Yield bounded lines and discard oversized input through its newline."""
     while True:
         line = stream.readline(_MAX_LINE + 1)
         if not line:
             return
-        # At the cap with its newline is still a complete line. Only a chunk
-        # that fills the read window without one is genuinely overlong.
+        # A complete line at the limit includes its newline and remains valid.
         if len(line) > _MAX_LINE and not line.endswith("\n"):
             while True:
                 more = stream.readline(_MAX_LINE + 1)
@@ -71,13 +55,8 @@ def _read_lines_bounded(stream):
 
 
 class _ByteQueue(queue.Queue):
-    """queue.Queue with a byte budget on top of the item count.
-
-    Items are sidecar stdin lines. put_nowait raises Full once the queued
-    string memory passes the budget. Overflow requires a fresh engine so
-    control commands and event history cannot be silently lost. The _STOP
-    sentinel is not a str and always fits the byte budget. The item count cap
-    still applies.
+    """Bound queued strings by bytes and count. Overflow requires engine recovery to
+    preserve control and event ordering. Stop sentinels use no byte budget.
     """
 
     def __init__(self, maxsize: int, maxbytes: int = _MAX_QUEUE_BYTES) -> None:
@@ -100,7 +79,7 @@ class _ByteQueue(queue.Queue):
 
 
 def _bundle_bases() -> "list[Path]":
-    """Candidate dirs for the bundled jre/ and the sidecar jar, in priority order, deduped."""
+    """Search candidate bundle directories in priority order without duplicates."""
     bases: list[Path] = []
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
@@ -124,7 +103,6 @@ def _bundle_bases() -> "list[Path]":
 
 
 def _bundled_jre_dir() -> "Path | None":
-    """Bundled JRE root, the .../jre dir, or None on a source/dev build."""
     for base in _bundle_bases():
         if (base / "jre" / "bin" / _JAVA_EXE).exists():
             return base / "jre"
@@ -132,11 +110,9 @@ def _bundled_jre_dir() -> "Path | None":
 
 
 def _log_dir() -> Path:
-    """Writable per-user dir for the sidecar's diagnostic log. Never the
-    possibly read-only install dir."""
+    """Keep diagnostic logs in a writable user directory."""
     if os.name == "nt":
-        # `or`, not a get default. An APPDATA set-but-empty would yield
-        # Path built from an empty string, the current directory.
+        # An empty APPDATA must fall back to home rather than the current directory.
         root = Path(os.environ.get("APPDATA") or Path.home())
     else:
         root = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
@@ -146,23 +122,20 @@ def _log_dir() -> Path:
 
 
 def _log_path() -> "Path | None":
-    """Path to the Triggevent diagnostic log, or None when its dir can't be made."""
     try:
         return _log_dir() / "triggevent.log"
     except OSError:
         return None
 
 
-# _log is called from the GUI, reader and stderr-pump threads. Serialize the
-# size check, unlink, append sequence so a concurrent truncate can't drop
-# another thread's write.
+# Serialize log rotation and append across GUI and reader threads.
 _LOG_LOCK = threading.Lock()
 
 
 def _log(msg: str) -> None:
-    """Append a timestamped line to the Triggevent log file and stderr.
-    The frozen Windows build has no console, so this file is the only view of
-    engine boot and launch errors. Never raises."""
+    """Write diagnostics to a persistent log and stderr. Logging failures must not stop the
+    engine.
+    """
     try:
         print(f"[triggevent] {msg}", file=sys.stderr)
     except Exception:  # noqa: BLE001
@@ -173,7 +146,7 @@ def _log(msg: str) -> None:
     try:
         import time
         with _LOG_LOCK:
-            try:                               # bound the growth, keep one old generation
+            try:
                 if p.exists() and p.stat().st_size > (1 << 20):
                     rotate_one_generation(p)
             except OSError:
@@ -184,12 +157,11 @@ def _log(msg: str) -> None:
         pass
 
 
-# Sentinel pushed onto the write queue when the writer thread should stop.
 _STOP = object()
 
 
 def _find_java() -> str | None:
-    """Absolute `java` path. Bundled JRE first, then JAVA_HOME, then PATH."""
+    """Prefer bundled Java, then JAVA_HOME, then PATH."""
     jre = _bundled_jre_dir()
     if jre is not None:
         return str(jre / "bin" / _JAVA_EXE)
@@ -202,7 +174,6 @@ def _find_java() -> str | None:
 
 
 def _find_jar() -> Path | None:
-    """Path to the triggevent-core jar, or None. Searches the same bases as the JRE does."""
     env = os.environ.get("NYAA_TRIGGEVENT_JAR")
     if env and Path(env).is_file():
         return Path(env)
@@ -214,27 +185,23 @@ def _find_jar() -> Path | None:
 
 
 def has_java() -> bool:
-    """True if a Java runtime is on PATH, or JAVA_HOME points at one."""
+    """Check for a bundled or system Java runtime."""
     return _find_java() is not None
 
 
 _CORE_DIR     = _BASE / "triggevent-core"
 _ET_DIR       = _CORE_DIR / "event-trigger"
 _BUILD_SCRIPT = _CORE_DIR / ("build.bat" if os.name == "nt" else "build.sh")
-# The engine is our fork of xpdota/event-trigger. Engine guards live as commits
-# on its main branch, and upstream master only enters through a deliberate
-# merge into that branch.
+# Use the maintained fork. Upstream changes enter through merges to its main branch.
 _ET_REPO_URL  = "https://github.com/CateDesu/event-trigger.git"
 _ET_BRANCH    = "main"
-# Records the event-trigger HEAD the jar was built from. update_engine trusts
-# it over a bare behind count, which a failed build leaves pointing at code
-# the jar does not contain. Written only after a successful build.
+# Record source HEAD only after a successful jar build. Clone state alone cannot prove
+# the jar is current.
 _JAR_STAMP    = _CORE_DIR / "target" / "triggevent-core.jar.built-from"
 
 
 def _jar_built_from() -> "str | None":
-    """The event-trigger HEAD the built jar was stamped with. None when the
-    stamp is missing or unreadable, which callers treat as needs rebuild."""
+    """Return the jar build commit, or None when the stamp is unavailable."""
     try:
         return _JAR_STAMP.read_text(encoding="ascii").strip() or None
     except (OSError, ValueError):
@@ -242,49 +209,36 @@ def _jar_built_from() -> "str | None":
 
 
 def _kill_build_tree(proc) -> None:
-    """Kill a timed-out engine build and everything it spawned. A lone
-    proc.kill orphans Maven and the java compilers on the shared
-    event-trigger tree, which the next update click would git checkout and
-    rebuild underneath."""
+    """Stop the entire build tree so a timed out wrapper cannot leave Maven or compilers
+    using the checkout.
+    """
     try:
         if os.name == "posix":
-            # Own process group, so the kill reaches the whole tree.
             import signal
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         else:
-            # build.bat runs through cmd.exe and TerminateProcess hits only
-            # that wrapper. taskkill /T takes the tree below it.
+            # Terminate the Windows build tree because killing cmd.exe alone leaves
+            # children running.
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                            capture_output=True)
     except (OSError, ProcessLookupError):
-        try:               # process group is gone, hit the proc directly
+        try:
             proc.kill()
         except OSError:
             pass
 
 
 def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool, str]":
-    """Update the Triggevent Engine on demand.
-
-    Source builds fast-forward the event-trigger clone and rebuild the jar, needs
-    git/java/mvn. Frozen builds download the prebuilt jar from the latest release
-    and swap it in, but only on a MANUAL request, since the app's own auto-update
-    already ships the engine, so background runs stay a no-op. Returns changed and
-    a message. Blocking, so call it from a background thread.
-
-    `channel` is accepted for caller compatibility only. The engine stream is
-    pinned to stable.
+    """Update source checkouts and rebuild when the toolchain is available. Otherwise
+    install the published jar on manual request. Run on a background thread and return
+    whether it changed. Engine downloads use the stable channel.
     """
     if getattr(sys, "frozen", False):
         if not manual:
             return (False, "frozen build: the engine ships with the app")
         return _download_engine("stable")
-    # Source build. Rebuilding from the event-trigger clone needs that clone and
-    # the whole toolchain. A plain `git clone` of NyaaTriggers has neither, and
-    # no jar either, so the engine simply never starts and no Triggevent
-    # callouts exist. Fall back to the same prebuilt jar the packaged build
-    # ships, verified against the release .sha256, one click away.
-    # The POSIX build runs through bash, so probe for it too on POSIX.
+    # Use the prebuilt jar when source or build tools are missing. POSIX source builds
+    # also require bash.
     tools = ("git", "java", "mvn") if os.name == "nt" else ("git", "java", "mvn", "bash")
     missing = next((t for t in tools if not shutil.which(t)), "")
     buildable = (_ET_DIR / ".git").is_dir() and _BUILD_SCRIPT.is_file()
@@ -301,10 +255,7 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
                               capture_output=True, text=True, timeout=120)
 
     try:
-        # Point the clone at the fork. Installs from before the fork cloned
-        # upstream directly, and a fetch of the main branch against upstream
-        # would just fail. A clone with no origin at all gets one added, same
-        # as the build scripts do, or the fetch below fails forever.
+        # Point older installs at the maintained fork, adding origin if absent.
         u = _git("remote", "get-url", "origin")
         if u.returncode != 0:
             a = _git("remote", "add", "origin", _ET_REPO_URL)
@@ -326,39 +277,24 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
         head = h.stdout.strip()
         behind = r.stdout.strip()
         if not behind.isdigit() or int(behind) == 0:
-            # behind==0 says the clone caught up, it says nothing about the
-            # jar. A failed or timed-out build leaves HEAD at origin/main
-            # with the old jar in place, so behind alone would report the
-            # engine current forever. Trust only the stamp a successful build
-            # writes. A missing or unreadable stamp means rebuild.
+            # Use the successful build stamp because an updated checkout may still have
+            # an older jar after a failed build.
             if _jar_built_from() == head:
                 return (False, "Triggevent Engine already up to date")
-        # Installs from the patch era still carry uncommitted patch edits, and
-        # the merge refuses to overwrite them, wedging every run on the same
-        # message. Nothing re-applies patches anymore, so discarding the dirt
-        # is correct and final. Genuinely committed divergence still fails the
-        # ff-only merge and gets reported.
+        # Remove legacy patch edits before fast-forwarding. Committed divergence still
+        # fails the merge.
         _git("checkout", "--", ".")
         if _git("merge", "--ff-only", f"origin/{_ET_BRANCH}").returncode != 0:
             return (False, "Triggevent pull skipped: local event-trigger clone has diverged or has uncommitted changes")
-        # The stamp vouches the jar was built from pristine origin/main. If
-        # anything is still dirty after the clean, refuse rather than compile
-        # uncommitted code into a jar the stamp then certifies as clean HEAD.
+        # Require a clean checkout so the build stamp identifies the compiled source.
         d = _git("status", "--porcelain")
         if d.returncode == 0 and d.stdout.strip():
             return (False, "Triggevent pull skipped: local event-trigger clone has uncommitted changes")
         cmd = [str(_BUILD_SCRIPT)] if os.name == "nt" else ["bash", str(_BUILD_SCRIPT)]
-        # Build what was just merged, not the stale pin. Otherwise the build
-        # script checks the pin back out, rebuilds the old source every time
-        # and still reports an update.
+        # Build the newly merged commit instead of restoring the old pin.
         env = {**os.environ, "EVENT_TRIGGER_REF": f"origin/{_ET_BRANCH}"}
-        # A Maven build legitimately takes minutes. Half an hour means it hung.
-        # Popen by hand, not subprocess.run. run's timeout kills only the
-        # direct bash or build.bat child and orphans Maven and its java
-        # compilers on the shared event-trigger tree, which the next update
-        # click would git checkout and rebuild underneath. _kill_build_tree
-        # takes the whole tree, a process group on POSIX, taskkill /T on
-        # Windows, same as _signal_group.
+        # Use Popen so timeout cleanup can terminate the full build tree on either
+        # platform.
         popen_kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             text=True, env=env)
         if os.name == "posix":
@@ -375,8 +311,7 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
         return (False, f"Triggevent update timed out running {prog}")
     if proc.returncode != 0:
         return (False, f"Triggevent rebuild failed:\n{b_err.strip()[-400:]}")
-    # Stamp only now that the build succeeded. Stamping earlier would vouch
-    # for code a failed or killed build never put into the jar.
+    # Stamp only after the jar build succeeds.
     try:
         _JAR_STAMP.write_text(head + "\n", encoding="ascii")
     except OSError:
@@ -384,7 +319,6 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
     if behind.isdigit() and int(behind) > 0:
         return (True, f"Triggevent Engine updated ({behind} new commit(s)) and rebuilt. "
                       f"Restart NyaaTriggers to load the new triggers.")
-    # behind was 0, this run only rebuilt a jar that did not match HEAD.
     return (True, "Triggevent Engine rebuilt from the current source. "
                   "Restart NyaaTriggers to load it.")
 
@@ -397,7 +331,6 @@ def _unlink(p) -> None:
 
 
 def _same_file(a, b) -> bool:
-    """True if two files have identical contents. Skips a no-op engine swap."""
     try:
         if a.stat().st_size != b.stat().st_size:
             return False
@@ -414,11 +347,9 @@ def _same_file(a, b) -> bool:
 
 
 def _download_engine(channel: str) -> "tuple[bool, str]":
-    """Download the prebuilt triggevent-core.jar published on the latest release
-    for `channel` and swap it in atomically. No git or Maven needed.
-
-    With no jar yet, a fresh source clone, it installs one where the bridge
-    looks for it, so this doubles as the first-time engine install."""
+    """Download and atomically install the published jar, including on source installs
+    without a local build.
+    """
     jar = _find_jar()
     if jar is None:
         jar = _BASE / "triggevent-core" / "target" / "triggevent-core.jar"
@@ -427,17 +358,15 @@ def _download_engine(channel: str) -> "tuple[bool, str]":
         except OSError as e:
             return (False, f"Couldn't create {jar.parent}: {e}")
     try:
-        from nyaatriggers import updater  # lazy import, avoids a module-load import cycle
+        from nyaatriggers import updater  # Delay import to avoid a module cycle.
         rel = updater.fetch_latest_release(channel=channel)
-    except Exception as e:  # noqa: BLE001 - network / parse
+    except Exception as e:  # noqa: BLE001
         return (False, f"Couldn't check for an engine update: {e}")
     url = rel.assets.get("triggevent-core.jar")
     if not url:
         return (False, "The latest release has no downloadable engine yet - update the app instead")
     tmp = jar.parent / "triggevent-core.jar.new"
-    # updater.download writes a per-process .part beside tmp and a hard kill
-    # mid download leaks it. No sweep covers this dir, drop the aged ones
-    # here, same idiom as install.py.
+    # Remove old temporary jar downloads left by interrupted processes.
     for stale in jar.parent.glob("triggevent-core.jar.new.*.part"):
         try:
             if stale.stat().st_mtime < time.time() - 3600:
@@ -449,7 +378,7 @@ def _download_engine(channel: str) -> "tuple[bool, str]":
     except Exception as e:  # noqa: BLE001
         _unlink(tmp)
         return (False, f"Engine download failed: {e}")
-    # A jar is a zip. Reject anything that isn't one, a truncated file or an HTML error page.
+    # Reject downloads that are not valid ZIP archives.
     try:
         with open(tmp, "rb") as f:
             head = f.read(2)
@@ -462,32 +391,23 @@ def _download_engine(channel: str) -> "tuple[bool, str]":
     if _same_file(tmp, jar):
         _unlink(tmp)
         return (False, "Triggevent Engine is already up to date")
-    # The jar is executed by the JVM with the user's full privileges on next
-    # launch, so hold it to the same bar as the app archives. The release must
-    # publish a triggevent-core.jar.sha256 sidecar and it must match. Fails
-    # closed on a missing or unreadable sidecar or a mismatch, exactly like the
-    # self-updater's updater.verify_release_asset.
+    # Apply the existing release asset verification before installing the jar.
     ok, why = updater.verify_release_asset(rel, "triggevent-core.jar", tmp)
     if not ok:
         _unlink(tmp)
         return (False, f"Engine update rejected ({why}) - kept your current one")
     try:
-        os.replace(str(tmp), str(jar))     # atomic on the same filesystem
+        os.replace(str(tmp), str(jar))
     except OSError as e:
         _unlink(tmp)
         return (False, f"Couldn't install the new engine: {e}")
-    # The swapped jar is not the one the stamp vouches for. Drop the stamp or
-    # a later source build update would trust it for a jar it never recorded.
+    # Remove the source build stamp because it does not identify this downloaded jar.
     _unlink(_JAR_STAMP)
-    # A frozen build drops the jar into _internal, and the next app
-    # self-update swaps that tree wholesale, restoring the bundled engine.
-    # Say so now or that update looks like it silently reverted this one.
+    # A full frozen update replaces this jar with its bundled engine.
     frozen_note = (" The next NyaaTriggers update ships and restores its own "
                    "bundled engine.") if getattr(sys, "frozen", False) else ""
     if not has_java():
-        # The jar is in place but nothing can run it, and the engine is only
-        # probed at launch, so say both things now instead of letting the user
-        # restart into the same silence.
+        # Report a missing Java runtime even when jar installation succeeded.
         return (True, "Triggevent Engine installed, but no Java runtime was found. "
                       "Install one (Arch: sudo pacman -S jre-openjdk), then restart "
                       "NyaaTriggers." + frozen_note)
@@ -495,18 +415,15 @@ def _download_engine(channel: str) -> "tuple[bool, str]":
 
 
 def has_jar() -> bool:
-    """True if the built or bundled triggevent-core jar is present."""
     return _find_jar() is not None
 
 
 def is_available() -> bool:
-    """True when a Java runtime AND the built sidecar jar are both present."""
     return has_java() and has_jar()
 
 
 def _make_bundled_jre_executable() -> None:
-    """Restore exec bits on the bundled JRE. PyInstaller ships it as data, which
-    can drop them from bin/ and lib/jspawnhelper, the JVM's spawn helper. POSIX only."""
+    """Restore executable permissions on bundled Java tools and jspawnhelper."""
     jre = _bundled_jre_dir()
     if jre is None:
         return
@@ -521,12 +438,9 @@ def _make_bundled_jre_executable() -> None:
 
 
 class TriggeventBridge(QObject):
-    """Owns the triggevent-core subprocess and relays its callouts as Qt signals."""
 
-    # The trailing int on the UI bound signals is the emitter's sidecar
-    # generation. It rides the payload so the slot can re-check it against
-    # the bridge's live generation, Qt queued delivery can land a pre
-    # restart signal at the slot after the restart.
+    # Stamp UI signals with their generation so queued output can be rejected after
+    # restart.
     callout     = pyqtSignal(str, str, int)   # on-screen text, severity in {info, alert, alarm}, generation
     tts         = pyqtSignal(str, int)        # spoken text, generation
     status      = pyqtSignal(bool, str, int)  # active, message, generation
@@ -551,22 +465,16 @@ class TriggeventBridge(QObject):
         self._writer: threading.Thread | None = None
         self._wq: queue.Queue = _ByteQueue(maxsize=10000)
         self._active = False
-        # The live sidecar generation, bumped by every start and stop. Reader
-        # threads carry their own in their args like proc and wq, and every
-        # UI bound emit is stamped with it. _active alone cannot gate
-        # dispatch, a restart flips it back on while a previous generation's
-        # reader is still draining its buffered output.
+        # Increment on start and stop. An active flag alone cannot identify output from
+        # a replaced reader.
         self._gen = 0
-        # Find->replace rules {find, replace, regex, enabled}, applied before a
-        # callout is spoken or shown. Atomic list swap so the reader thread can
-        # snapshot it lock-free.
+        # Replace the rules list atomically so the reader can use a stable snapshot.
         self._replacements: list = []
-        # Callout ids the user switched off, dropped in the reader thread.
-        # Atomic frozenset swap, same reason.
+        # Replace disabled IDs atomically for reader access.
         self._disabled: frozenset = frozenset()
         self._seen: dict = {}            # ordered set of observed callout phrases
-        # _seen is written by the reader thread and snapshotted by the GUI
-        # thread. A compound update, insert plus evict, needs a real lock.
+        # Lock phrase insertion and eviction because the GUI reads snapshots
+        # concurrently.
         self._seen_lock = threading.Lock()
         # Makes stop and reader-exit check-and-clear of the _proc/_active pair atomic.
         self._state_lock = threading.Lock()
@@ -579,31 +487,28 @@ class TriggeventBridge(QObject):
         return self._active
 
     def generation(self) -> int:
-        """The live sidecar generation. Every UI bound emit carries the
-        emitter's generation and the slots compare it against this."""
+        """Current generation used by UI slots to reject stale signals."""
         return self._gen
 
     def _gen_live(self, gen: "int | None") -> bool:
-        """True when gen names the live generation and the engine is on.
-        A previous generation's reader fails this once stop or a restart
-        swapped the state out from under it."""
+        """Accept only the active generation."""
         return gen is not None and gen == self._gen and self._active
 
-    # ------------------------------------------------------------------
     def set_replacements(self, rules: list) -> None:
-        """Set find->replace overrides, {find, replace, regex, enabled} dicts.
-        An empty result suppresses the callout. Thread-safe via atomic list swap."""
+        """Replace callout rules atomically. An empty replacement result suppresses the
+        callout.
+        """
         self._replacements = list(rules or [])
 
     def set_disabled(self, ids) -> None:
-        """Set callout ids to suppress. Takes effect on the next callout, no
-        sidecar restart needed. Thread-safe via atomic swap."""
+        """Replace disabled IDs for the next callout without restarting."""
         self._disabled = frozenset(ids or ())
 
     def set_callout(self, cid: str, tts: str | None = None,
                     text: str | None = None, enable: bool | None = None) -> None:
-        """Edit a trigger's live TTS/visual/enable in the engine. Tokens still
-        substitute. No-op if the sidecar is down. The caller re-sends on restart."""
+        """Update engine text and enabled state while preserving template tokens. The
+        caller replays edits after restart.
+        """
         if not cid:
             return
         cmd: dict = {"nyaa_cmd": "set_callout", "id": cid}
@@ -616,14 +521,13 @@ class TriggeventBridge(QObject):
         self._send_command(cmd)
 
     def reset_callout(self, cid: str) -> None:
-        """Revert a Triggevent trigger's output to the engine defaults."""
         if cid:
             self._send_command({"nyaa_cmd": "reset_callout", "id": cid})
 
     def set_automark(self, enable: bool, uri: str | None = None) -> None:
-        """Enable or disable Telesto automarking. `uri` points at the user's plugin.
-        The engine resolves party slots via Telesto's GetPartyMembers and POSTs "/mk"
-        itself. Boots with automarks off. No-op if down, caller re-sends on restart."""
+        """Configure native engine automarking through Telesto. It starts disabled, and
+        callers replay settings after restart.
+        """
         cmd: dict = {"nyaa_cmd": "set_automark", "enable": bool(enable)}
         if uri:
             cmd["uri"] = str(uri)
@@ -634,7 +538,7 @@ class TriggeventBridge(QObject):
         if not self._active:
             return
         try:
-            line = json.dumps(cmd)  # dumps escapes control chars, always one line
+            line = json.dumps(cmd)
         except (TypeError, ValueError):
             return
         try:
@@ -649,21 +553,18 @@ class TriggeventBridge(QObject):
             self.feed_overflow.emit(self._gen)
 
     def seen_phrases(self) -> list:
-        """Callout phrases observed so far this session, for the override picker."""
         with self._seen_lock:
             return list(self._seen.keys())
 
     def _apply_replacements(self, s: str) -> str:
-        rules = self._replacements          # atomic snapshot of the list
+        rules = self._replacements
         if not rules or not s:
-            return s.strip()   # same whitespace handling as the rules path
+            return s.strip()
         out = s
         for r in rules:
             if not r.get("enabled", True):
                 continue
-            # A hand edited settings entry can hold values that are not
-            # strings. Coerce so one bad rule cannot raise in the dispatch
-            # and mute every callout while it is installed.
+            # Normalize edited replacement rules before dispatch.
             find = r.get("find") or ""
             if not isinstance(find, str):
                 find = str(find)
@@ -675,10 +576,9 @@ class TriggeventBridge(QObject):
             pat = find if r.get("regex") else re.escape(find)
             rx = compile_user_regex(pat, re.IGNORECASE)
             if rx is None:
-                continue                    # skip a busted regex rule
-            # Bounded engine with a match timeout. A catastrophic user pattern
-            # must not wedge the reader thread, and a bad backreference leaves
-            # the text unchanged rather than dropping the callout.
+                continue
+            # Bound regex substitution and preserve the callout if the replacement is
+            # invalid.
             out = _safe_sub(rx, repl, out)
         return out.strip()
 
@@ -693,9 +593,8 @@ class TriggeventBridge(QObject):
                 self._seen.pop(next(iter(self._seen)))
         self.phrase_seen.emit(phrase)
 
-    # ------------------------------------------------------------------
     def start(self) -> None:
-        """Spawn the sidecar. Idempotent. Guard with is_available first."""
+        """Start if not already running. Check availability first."""
         if self._active:
             return
         _log(f"start() requested (os={os.name})")
@@ -706,45 +605,33 @@ class TriggeventBridge(QObject):
             self.status.emit(False, "Java runtime or triggevent-core.jar not found", self._gen)
             return
 
-        # PyInstaller data can lose exec bits. Restore them so the JVM can start.
+        # Restore executable permissions on bundled Java tools.
         if os.name == "posix" and _bundled_jre_dir() is not None:
             _make_bundled_jre_executable()
 
-        # The engine builds Swing overlays at boot, so it needs a display, not
-        # headless. Prefer a throwaway Xvfb so those overlays stay invisible.
-        # Without xvfb-run, fall back to the session display, overlays may show.
-        # Cap the heap too. Default ergonomics scale max heap to a quarter of
-        # system RAM and G1 commits it eagerly, so a small log parser sat at
-        # hundreds of MB for nothing. 256m proved too tight on long DMU
-        # sessions: GC pressure stalls the event pump, the sequential
-        # triggers time out mid chain, and callouts silently drop. 512m
-        # keeps the cap well under default ergonomics while leaving the
-        # chain headroom.
+        # Use Xvfb for Swing initialization when available. Cap the heap at 512 MiB
+        # because 256 MiB caused GC pauses and sequential trigger timeouts during long
+        # encounters.
         cmd = [java, "-Xmx512m", "-jar", str(jar)]
         xvfb = shutil.which("xvfb-run")
         if xvfb:
-            # 24-bit depth, AWT/Swing graphics init is unreliable on 8-bit visuals.
+            # Use 24-bit visuals for reliable Swing initialization.
             cmd = [xvfb, "-a", "-s", "-screen 0 1024x768x24"] + cmd
 
-        # Own process group so stop can signal xvfb-run AND its JVM child.
-        # terminate on the xvfb-run parent alone doesn't reliably reach the JVM.
+        # Give the wrapper and JVM their own process group for shutdown.
         popen_kwargs = dict(
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             bufsize=1, text=True, encoding="utf-8", errors="replace",
-            cwd=str(jar.parent.parent),  # the triggevent-core/ dir
+            cwd=str(jar.parent.parent),
         )
         if os.name == "posix":
             popen_kwargs["start_new_session"] = True
-            # No pdeathsig preexec. The sidecar already exits on stdin EOF when
-            # this process dies hard, the finally in TriggeventCore.java's stdin
-            # pump, and a signal would reach only the xvfb-run wrapper, killing
-            # it before its own Xvfb cleanup runs and leaking Xvfb.
+            # Let stdin EOF stop the host after parent death. A parent-death signal
+            # would stop the Xvfb wrapper before it cleans up its child.
         if os.name == "nt":
-            # java.exe is a console binary. Without this it pops a black console
-            # window from the GUI app.
+            # Hide the Java console in Windows GUI builds.
             popen_kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
-        # Give xvfb-run's /bin/sh and the JVM the system libraries, not the frozen
-        # app's bundled ones, else /bin/sh dies on a libreadline symbol.
+        # Restore system library paths for the JVM and shell children.
         popen_kwargs["env"] = proc_env.child_env()
 
         try:
@@ -763,18 +650,9 @@ class TriggeventBridge(QObject):
             self._active = True
             self._gen += 1
             gen = self._gen
-        # Bind workers to this generation's proc and queue via args so a quick
-        # stop->start can't leave a stale thread on the new queue/proc. The
-        # generation id rides along too and stamps every UI bound emit from
-        # these threads, so a stale reader's output is dropped at dispatch
-        # and again at the slot. The seq gap high-water mark rides along for
-        # the same reason: a shared
-        # self._last_callout_seq survived a spontaneous sidecar exit plus the
-        # reconcile restart, since stop() early-returns once the reader-exit
-        # path cleared the state, and a late write from the old generation's
-        # reader could land after any reset. The jar numbers callouts from 1
-        # each generation, so the mark must die with its generation too or
-        # real gaps below the old mark go unreported.
+        # Bind each worker to its process, queue and generation. Keep the callout
+        # sequence watermark with that generation because the jar restarts numbering at
+        # one.
         seq_state: dict = {"last": None}
         self._reader = threading.Thread(target=self._read_loop, args=(proc, wq, seq_state, gen),
                                         daemon=True, name="triggevent-reader")
@@ -792,19 +670,15 @@ class TriggeventBridge(QObject):
             return
         with self._state_lock:
             self._active = False
-            # A stopped engine has no live generation. Bumping here retires
-            # every token the old threads could still stamp, so their queued
-            # emits fail the slot check too, not just the dispatch gate.
+            # Invalidate queued output from the stopped generation.
             self._gen += 1
             gen = self._gen
             proc, self._proc = self._proc, None
-            wq = self._wq   # capture this generation's queue under the lock
-        # Forget observed phrases with the session. A phrase seen by a previous
-        # sidecar generation must re-emit phrase_seen on the next one.
+            wq = self._wq
+        # Clear observed phrases so the next generation can report them again.
         with self._seen_lock:
             self._seen.clear()
-        # A full queue must not swallow the sentinel or the writer can stay
-        # parked in wq.get. Drop one old line and retry, same as the readers.
+        # Free a queue slot for the writer stop sentinel.
         try:
             wq.put_nowait(_STOP)
         except queue.Full:
@@ -814,40 +688,34 @@ class TriggeventBridge(QObject):
             except (queue.Empty, queue.Full):
                 pass
         if proc is not None:
-            # Term the whole group SYNCHRONOUSLY first. closeEvent and the update
-            # re-exec exit this process moments after stop returns, which would
-            # kill an off-thread reaper before it ever signalled, orphaning the
-            # JVM and its xvfb-run. The kernel delivers this regardless of our own
-            # exit, so the sidecar dies even if the escalation never gets to run.
+            # Signal the process group before returning because the parent may exit
+            # before a background reaper runs.
             self._signal_group(proc, graceful=True)
             if wait:
-                # Block until the JVM is gone. The Windows self-update needs the
-                # sidecar's locks on the JRE/jar in _internal released before it
-                # swaps that folder.
+                # Wait for Java to release bundle files before a Windows update replaces
+                # them.
                 self._reap(proc)
             else:
-                # Escalate off-thread. JVM teardown can take a moment and stop
-                # runs on the GUI thread via closeEvent, which must never block.
+                # Complete ordinary shutdown cleanup off the GUI thread.
                 threading.Thread(target=self._reap, args=(proc,), daemon=True,
                                  name="triggevent-reap").start()
         self.status.emit(False, "Off", gen)
 
     @staticmethod
     def _signal_group(proc: subprocess.Popen, graceful: bool) -> None:
-        """SIGTERM when graceful, else SIGKILL the sidecar's whole process group,
-        xvfb-run AND its JVM child. Falls back to the direct child if the
-        group is already gone. On Windows, terminate or kill the process."""
+        """Signal the process group on POSIX or the process on Windows. Fall back to the
+        direct child when the group is unavailable.
+        """
         try:
             if os.name == "posix":
                 import signal
-                # start_new_session makes the child PID its group ID.
-                # The group can survive after the wrapper has been reaped.
+                # The process group may survive its wrapper.
                 os.killpg(proc.pid,
                           signal.SIGTERM if graceful else signal.SIGKILL)
             else:
                 proc.terminate() if graceful else proc.kill()
         except (OSError, ProcessLookupError):
-            try:                       # process group is gone, hit the proc directly
+            try:
                 proc.terminate() if graceful else proc.kill()
             except OSError:
                 pass
@@ -855,7 +723,7 @@ class TriggeventBridge(QObject):
     @classmethod
     def _reap(cls, proc: subprocess.Popen) -> None:
         """Allow the sidecar to exit, then kill any surviving group members."""
-        # The reader and stop can both reach cleanup for the same process.
+        # Serialize cleanup shared by the reader and explicit stop.
         lock = proc.__dict__.setdefault("_nyaa_reap_lock", threading.Lock())
         with lock:
             if getattr(proc, "_nyaa_reaped", False):
@@ -869,7 +737,7 @@ class TriggeventBridge(QObject):
                 else:
                     if os.name != "posix":
                         return
-                    # Waiting for xvfb-run alone says nothing about its children.
+                    # Check child processes as well as the Xvfb wrapper.
                     while time.monotonic() < deadline:
                         try:
                             os.killpg(proc.pid, 0)
@@ -887,12 +755,10 @@ class TriggeventBridge(QObject):
                 proc._nyaa_reaped = True
 
 
-    # ------------------------------------------------------------------
     def feed(self, raw_msg: str) -> None:
-        """Tee one raw IINACT WS message to the sidecar.
-
-        Connected to WSClient.raw_message. Runs on the GUI thread, so it never
-        blocks. The writer thread drains the queue. Overflow restarts recovery."""
+        """Queue raw feed messages without blocking the GUI. Overflow requests engine
+        recovery.
+        """
         if not self._active or not raw_msg:
             return
         try:
@@ -903,7 +769,7 @@ class TriggeventBridge(QObject):
         if not isinstance(data, dict) or "nyaa_cmd" in data:
             log_drop("engine-feed", "discarded feed frame outside the event protocol")
             return
-        # Protocol is one JSON object per line.
+        # Keep each JSON message on one protocol line.
         line = raw_msg.replace("\r", " ").replace("\n", " ")
         try:
             self._wq.put_nowait(line)
@@ -960,7 +826,6 @@ class TriggeventBridge(QObject):
     def supports_catchup(self) -> bool:
         return self.supports_recovery() and self._catchup_gen == self._gen
 
-    # ------------------------------------------------------------------
     def _write_loop(self, proc: subprocess.Popen, wq: queue.Queue) -> None:
         if proc.stdin is None:
             return
@@ -1032,18 +897,13 @@ class TriggeventBridge(QObject):
             if not line:
                 continue
             _log(f"[sidecar stderr] {line}")
-            # A dead sequential chain only ever shows up here, never in the
-            # callout stream. Raise it so a silent pull gets noticed mid-fight.
-            # Only the live generation may raise the badge. Lines buffered in
-            # a dead proc's pipe and the JVM teardown flush during stop belong
-            # to a session that already moved on.
+            # Report sequential trigger failures from stderr only for the current
+            # generation.
             if "Error in sequential trigger" in line:
                 log_drop("engine-chain", line, 0)
                 if self._gen_live(gen):
                     self.chain_failure.emit(line, gen)
-            # Printed once the sidecar starts reading stdin. That's when a replayed
-            # zone/party actually lands, so tell the app to send the world state.
-            # Same generation gate, a dead proc's late boot line must not fire it.
+            # Replay world state once the live sidecar is reading stdin.
             if "reading WS messages on stdin" in line:
                 with self._state_lock:
                     if not self._gen_live(gen):
@@ -1060,12 +920,8 @@ class TriggeventBridge(QObject):
                   gen: "int | None" = None) -> None:
         kind = msg.get("t")
         if kind == "callout":
-            # Gap-check the engine's callout sequence before any gate, so a
-            # callout lost between sidecar stdout and this dispatch shows up as
-            # a seq jump instead of a silently missing callout. The high-water
-            # mark lives in this generation's seq_state, bound via args like
-            # proc and wq, so a late write from a previous generation's reader
-            # cannot poison the new one's mark.
+            # Check sequence gaps before filtering callouts. Keep the watermark local to
+            # this reader generation.
             if seq_state is None:
                 seq_state = {}
             seq = msg.get("seq")
@@ -1076,14 +932,8 @@ class TriggeventBridge(QObject):
                     log_drop("engine-seq",
                              f"callout seq gap {last} -> {seq}, "
                              f"{seq - last - 1} lost between engine and app", 0)
-            # Drop callouts from a dead generation. Stdout buffered in the
-            # kernel pipe when stop ran, or still drained by a previous
-            # generation's reader after a restart swapped _proc and flipped
-            # _active back on, would otherwise fire callout/phrase_seen into
-            # a session that moved on. The gen token rides each emit below so
-            # the UI slot drops it too, queued delivery can outlive the
-            # generation. Triggernometry gates the same way in
-            # triggernometry_bridge._dispatch.
+            # Reject old generation output before dispatch. UI slots also recheck queued
+            # signals.
             if not self._gen_live(gen):
                 return
             cid = msg.get("id")
@@ -1094,28 +944,23 @@ class TriggeventBridge(QObject):
             sev = msg.get("severity", "info")
             if sev not in ("info", "alert", "alarm"):
                 sev = "info"
-            # Record originals for the override UI, then apply the user's
-            # overrides. An empty result means suppressed.
+            # Record original phrases before applying overrides. Empty results mean
+            # suppression.
             for phrase in (tts, text):
                 self._record_seen(phrase)
             had_engine_text = bool(text)
             text = self._apply_replacements(text)
             tts = self._apply_replacements(tts)
             if not text and tts and not had_engine_text:
-                # TTS-only callout, most engine triggers ship no on-screen
-                # text. Show the spoken text on the overlay too, or the plugin
-                # can never display engine callouts. When the engine did send
-                # text and a rule emptied it, that means suppressed. Do not
-                # resurrect the spoken line onto the overlay.
+                # Use TTS as display text only when no visual text was supplied.
+                # Preserve intentional suppression by replacement rules.
                 text = tts
             if text:
                 self.callout.emit(text, sev, gen)
             if tts:
                 self.tts.emit(tts, gen)
         elif kind == "status":
-            # A status frame from a dead generation is stale, a late boot
-            # ready would flip the indicator back on for an engine that
-            # already stopped or got replaced. stop already said Off.
+            # Ignore status from stopped or replaced generations.
             if not self._gen_live(gen):
                 return
             active = bool(msg.get("active", self._active))
@@ -1133,15 +978,11 @@ class TriggeventBridge(QObject):
             if isinstance(triggers, list):
                 self.inventory.emit(json.dumps(triggers))
         elif kind == "telesto":
-            # A late frame from a dead generation is stale, it would flip the
-            # Telesto indicator for an engine that already stopped or got
-            # replaced. Same gate as status above. Inventory stays ungated on
-            # purpose, the harvest is useful either way, matching
-            # triggernometry_bridge.
+            # Ignore stale Telesto status. Keep inventory ungated because it remains
+            # useful after restart.
             if not self._gen_live(gen):
                 return
             st = str(msg.get("status", "unknown")).lower()
             if st not in ("good", "bad", "unknown"):
                 st = "unknown"
             self.telesto.emit(st, gen)
-        # unknown kinds get ignored

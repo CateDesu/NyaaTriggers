@@ -1,9 +1,5 @@
-"""Sequential trigger runner.
-
-When a Trigger has a non-empty `sequence` list, this tracks one in-flight
-instance. It waits for each subsequent step within its timeout window, then
-fires the trigger's TTS on completion. Concurrent instances use REPLACE_OLD
-semantics, so the caller cancels any existing runner before making a new one.
+"""Track one active trigger sequence. The caller replaces existing runners before starting
+another. Fire only after all steps complete within their timeouts.
 """
 
 import re
@@ -17,7 +13,6 @@ from nyaatriggers.trigger_engine import (
 
 
 class SequentialRunner(QObject):
-    """Tracks one in-flight sequential trigger instance."""
 
     def __init__(self, trigger, captured: dict,
                  on_complete, on_expire, parent=None):
@@ -32,7 +27,6 @@ class SequentialRunner(QObject):
         self._timer.timeout.connect(self._expire)
         self._arm_timer()
 
-    # ------------------------------------------------------------------
     def try_advance(self, fields: list[str]) -> bool:
         """Return True if all sequence steps are now complete."""
         if not fields:
@@ -40,15 +34,11 @@ class SequentialRunner(QObject):
         if self._step >= len(self.trigger.sequence):
             return False
         step = self.trigger.sequence[self._step]
-        # Stripped the same way Trigger.from_dict strips the trigger's own
-        # log_type. from_dict passes step dicts through untouched, so a hand
-        # edited step with leading whitespace would never equal a line's
-        # type field and the sequence would expire silently. Whitespace only
-        # strips to the same "20" default the load path takes.
+        # Normalize step log types using the same default and whitespace handling as
+        # Trigger.from_dict.
         log_type = _str_or(step.get("log_type"), "20").strip() or "20"
-        # A step's log_type may be pipe-separated, "21|22", like
-        # Trigger.matches. Bind the concrete type of THIS line so the
-        # field-index lookups below resolve against its layout.
+        # For alternative log types, select this line's layout before reading field
+        # indices.
         if "|" in log_type:
             if fields[0] not in (p.strip() for p in log_type.split("|")):
                 return False
@@ -58,12 +48,9 @@ class SequentialRunner(QObject):
 
         ability_id = str(step.get("ability_id", "") or "")
         ability_regex = str(step.get("ability_regex", "") or "")
-        # A log type with no _ID_IDX entry, a 00 chat line for one, has no
-        # ID field to match. An ability_id there would read field 4, chat
-        # text, as a hex ID and strand the step, so ignore it and let the
-        # regex do the matching. Same rule Trigger.from_dict loads with.
+        # Ignore ability IDs for line types without an ID field and use regex matching
+        # instead.
         if ability_id and log_type in _ID_IDX:
-            # Match the hex ID field for this log type, priority over regex.
             id_idx = _ID_IDX[log_type]
             if len(fields) <= id_idx:
                 return False
@@ -96,15 +83,10 @@ class SequentialRunner(QObject):
     def cancel(self) -> None:
         self._timer.stop()
 
-    # ------------------------------------------------------------------
     def _arm_timer(self) -> None:
         timeout_s = self.trigger.sequence[self._step].get("timeout_s")
-        # A junk timeout from a hand-edited sequence falls back to 10s
-        # instead of crashing the live dispatch loop. int of inf raises
-        # OverflowError and Qt coerces a negative interval to 1ms, so an
-        # out of range value falls back too. So does anything truncating
-        # to 0ms, an instantly expiring timer would kill the sequence on
-        # the spot instead of giving it the 10s fallback.
+        # Use ten seconds for invalid, nonfinite or sub-millisecond timeouts instead of
+        # creating an immediately expiring timer.
         try:
             timeout_ms = 10000 if timeout_s is None else int(float(timeout_s) * 1000)
         except (TypeError, ValueError, OverflowError):

@@ -1,11 +1,4 @@
-"""Runtime tests for the M2 callout overlay in main_window.
-
-M2: _localized_callout gating + per-id English fallback + token preservation.
-    _load_cached_callouts_ja cache/bundle precedence, corrupt/shape/value handling.
-
-Exercises the real methods with a stand-in `self` and monkeypatched module paths.
-Run directly:  python -m tests.test_l10n_runtime   (exit 0 = all pass)
-"""
+"""Callout translation, token preservation and cache precedence."""
 import os
 import sys
 import json
@@ -50,7 +43,7 @@ ID1 = "id-1"
 MAP = {ID1: "頭割り {target}"}
 PHRASES = {"Raidwide": "全体攻撃", "Stack": "頭割り"}
 
-# ── M2: _localized_callout gating ──
+# _localized_callout gating
 set_locale("ja")
 check("ja default localizes a known id", loc({}, MAP, trig(ID1, "Stack {target}")) == "頭割り {target}")
 check("ja default: unknown id falls back to English", loc({}, MAP, trig("x", "Stack")) == "Stack")
@@ -64,7 +57,7 @@ check("empty overlay -> English", loc({"callouts_localized": True}, {}, trig(ID1
 check("id miss -> phrase-map hit by tts_text",
       loc({"callouts_localized": True}, {}, trig("x", "Raidwide"), phrases=PHRASES) == "全体攻撃")
 
-# ── M2: _localize_text (free-form engine callouts: Triggevent/cactbot/TN) ──
+# _localize_text (free-form engine callouts: Triggevent/cactbot/TN)
 set_locale("ja")
 check("engine callout localizes by exact text", loc_text({}, PHRASES, "Raidwide") == "全体攻撃")
 check("engine callout unknown text -> English", loc_text({}, PHRASES, "Custom TE line") == "Custom TE line")
@@ -73,11 +66,7 @@ check("engine callout explicit False -> English", loc_text({"callouts_localized"
 set_locale("en")
 check("engine callout en default -> English", loc_text({}, PHRASES, "Raidwide") == "Raidwide")
 
-# Drive the REAL _localize_text through its wildcard-regex fallback (complex-token
-# key, token-free JA). Engine callouts arrive AFTER Groovy substitution ("... (5.0s)"),
-# so the raw template key can't exact-match and only the regex path can localize them.
-# Every loc_text test above feeds token-free phrases, so _compile_phrase_patterns
-# returns [] and this end-to-end path never ran.
+# Exercise tokenized phrase matching through _localize_text with resolved engine text.
 set_locale("ja")
 _RX = {"Away from Tank ({event.dur})": "タンクから離れる"}
 check("engine callout localizes via the wildcard-regex path (real _localize_text)",
@@ -88,7 +77,7 @@ set_locale("en")
 check("regex path respects the en gate (no localization)",
       loc_text({}, _RX, "Away from Tank (5.0s)") == "Away from Tank (5.0s)")
 
-# ── _localized_name (trigger-list labels, display only, same gate as callouts) ──
+# _localized_name (trigger-list labels, display only, same gate as callouts)
 def loc_name(settings, names, t):
     me = SimpleNamespace(_settings=settings, _callouts_names_ja=names,
                          _callouts_names_text_ja={})
@@ -108,7 +97,7 @@ check("name: en default stays English", loc_name({}, NAMES, ntrig) == "Stack Tow
 check("name: explicit True under en localizes",
       loc_name({"callouts_localized": True}, NAMES, ntrig) == "頭割りタワー")
 
-# ── M2: _reading_for (kanji display -> kana TTS, so espeak doesn't say "Chinese letter") ──
+# _reading_for (kanji display -> kana TTS, so espeak doesn't say "Chinese letter")
 def read_for(readings, text):
     return MW._reading_for(SimpleNamespace(_callouts_readings=readings), text)
 
@@ -117,7 +106,7 @@ check("reading maps display kanji -> kana", read_for(READ, "全体攻撃") == "�
 check("reading passes through unknown (names/English)", read_for(READ, "Alice") == "Alice")
 check("reading passes through katakana display (no entry)", read_for(READ, "タンクバスター") == "タンクバスター")
 
-# ── M2: _load_cached_callouts_ja ──
+# _load_cached_callouts_ja
 _oc, _ob = app_common._CALLOUTS_JA_CACHE, app_common._CALLOUTS_JA_BUNDLE
 
 
@@ -144,14 +133,14 @@ try:
     check("missing callouts key -> empty map", load_with(json.dumps({"schema": 1}), None) == {})
     check("non-str/empty values filtered out",
           load_with(json.dumps({"callouts": {ID1: "あ", "b": 5, "c": ""}}), None) == {ID1: "あ"})
-    # a stale (fewer-entry) cache must NOT shadow a richer bundle (the real bug)
+    # A smaller cache must not mask a richer bundle.
     rich = json.dumps({"app_version": "1.1.4", "callouts": {ID1: "あ", "x2": "い", "x3": "う"}})
     stale = json.dumps({"app_version": "1.1.4", "callouts": {ID1: "OLD"}})
     check("richer bundle wins over a smaller stale cache",
           load_with(stale, rich) == {ID1: "あ", "x2": "い", "x3": "う"})
     check("newer app_version cache wins over bundle",
           load_with(json.dumps({"app_version": "1.2.0", "callouts": {ID1: "NEW"}}), rich) == {ID1: "NEW"})
-    # A corrupt-ENCODING source (not just bad JSON) must be skipped, not crash __init__.
+    # Skip invalid text encoding as well as invalid JSON.
     dd = Path(tempfile.mkdtemp())
     (dd / "cache.json").write_bytes(b"\xff\xfe not valid utf-8")
     app_common._CALLOUTS_JA_CACHE = dd / "cache.json"
@@ -162,7 +151,7 @@ try:
 finally:
     app_common._CALLOUTS_JA_CACHE, app_common._CALLOUTS_JA_BUNDLE = _oc, _ob
 
-# ── loader: the `names` map rides the same overlay file ──
+# loader: the `names` map rides the same overlay file
 _oc2, _ob2 = app_common._CALLOUTS_JA_CACHE, app_common._CALLOUTS_JA_BUNDLE
 try:
     d = Path(tempfile.mkdtemp())
@@ -180,9 +169,7 @@ try:
 finally:
     app_common._CALLOUTS_JA_CACHE, app_common._CALLOUTS_JA_BUNDLE = _oc2, _ob2
 
-# ── ja.json integrity: every translation must keep the same {tokens} as its key,
-#    else a .format(...) on the translated string KeyErrors at runtime (e.g. the
-#    "Matches: {zone}" zone tooltip in trigger_dialog). Catches the whole class. ──
+# Translations preserve every format token.
 import re as _re
 _ja_cat = json.loads((Path(__file__).resolve().parents[1] / "lang" / "ja.json").read_text(encoding="utf-8"))
 _toks = lambda s: set(_re.findall(r"{(\w+)}", s))
@@ -191,11 +178,8 @@ check("ja.json: every translation preserves its key's {tokens}", _tok_bad == [])
 if _tok_bad:
     print("   token-mismatched keys:", _tok_bad[:5])
 
-# ── M4: dynamic-callout regex matching (engine callouts arrive post-Groovy-substitution,
-#    so a raw template key like "Away from {event.source} (...)" compiles to a regex
-#    tried after the exact dict misses). Guards: simple-token keys never compile (they'd
-#    leak {source} on the engine TTS path), too-generic keys never compile (they'd
-#    hijack unrelated callouts), and JA holding a {token} never compiles. ──
+# Dynamic phrase patterns exclude simple tokens, overly broad keys and untranslated
+# tokens.
 _comp = main_window._compile_phrase_patterns
 def _matched(phrases, text):
     ja = phrases.get(text)
@@ -208,9 +192,9 @@ def _matched(phrases, text):
 _P = {
     "Away from {event.source} ({event.estimatedRemainingDuration})": "離れる",   # complex token, JA token-free -> compiles
     "Behind": "後ろ",                                                            # static -> exact only
-    "Buster on {target}": "{target} バスター",                                    # simple token -> must NOT compile
-    "{safe}": "安全",                                                            # no literal -> too generic, must NOT compile
-    "{firstQuadrant} then {secondQuadrant}": "ギミック",                          # no literal -> must NOT compile
+    "Buster on {target}": "{target} バスター",                                    # Simple token stays in exact lookup.
+    "{safe}": "安全",                                                            # Insufficient literal text.
+    "{firstQuadrant} then {secondQuadrant}": "ギミック",                          # Insufficient literal text.
 }
 _compiled = _comp(_P)
 _compiled_en = {en for _pat, en in _compiled}
@@ -228,9 +212,7 @@ check("regex does NOT hijack an unrelated string", _matched(_P, "Triangle, far f
 # Exact path still works for the static key
 check("exact dict still serves static keys", _matched(_P, "Behind") == "後ろ")
 
-# ── M5: _localized_name text-keyed fallback. Engine triggers (Triggevent/
-#    Triggernometry) use Groovy classpath ids the id map doesn't hold, so the name
-#    localizes via a text-keyed (english name -> ja) map as a second tier. ──
+# Engine names fall back to phrase translation.
 def loc_name_text(id_map, text_map, t):
     me = SimpleNamespace(_settings={"callouts_localized": True},
                          _callouts_names_ja=id_map, _callouts_names_text_ja=text_map)

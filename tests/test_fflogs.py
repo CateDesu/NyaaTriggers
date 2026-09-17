@@ -1,14 +1,5 @@
-"""Tests for the FFLogs v2 client (fflogs.py), against a fake HTTP layer.
-
-Covers the OAuth token cache (requested once, reused), zone matching
-(exact, substring, no match), the zoneRankings parse (encounter-name match
-preferred, top-level and allStars fallbacks), and the failure paths
-(non-200, bad JSON, unknown character). Everything must return None, never
-raise.
-
-Run:  python -m tests.test_fflogs   (exit 0 = all pass)
-
-No network: every test injects its own http_post fake.
+"""FFLogs token caching, zone matching and failure handling with an injected HTTP
+transport.
 """
 import json
 import os
@@ -79,7 +70,7 @@ RANKINGS = {"rankings": [
      "bestAmount": 12345.6},
 ]}
 
-# ── happy path ───────────────────────────────────────────────────────────
+# happy path
 fake = FakeHTTP(rankings=RANKINGS)
 c = fresh_client(fake)
 res = c.fetch_best("Tini Poutini", "tonberry", "JP", "Everkeep")
@@ -88,15 +79,14 @@ check("happy path parses the exact encounter match (not the substring one)",
 check("zone matched case-insensitively (exact)",
       fake.api_bodies[-1]["variables"]["zone"] == 93)
 
-# Token reuse: a second fetch must not re-auth. The zone list is cached too,
-# so the second fetch is a single rankings call.
+# Reuse cached tokens and zones so only rankings need another request.
 res2 = c.fetch_best("Tini Poutini", "tonberry", "JP", "everkeep")
 check("second fetch returns the same data", res2 == res)
 check("token requested once and reused", fake.token_calls == 1)
 check("zone list cached (one zones query for two fetches)",
       sum("worldData" in b["query"] for b in fake.api_bodies) == 1)
 
-# ── zone matching variants ───────────────────────────────────────────────
+# zone matching variants
 fake = FakeHTTP(rankings={"rankPercent": 55.0, "bestAmount": 9000.0})
 c = fresh_client(fake)
 res = c.fetch_best("Tini Poutini", "tonberry", "JP", "voidcast dais")
@@ -105,11 +95,7 @@ check("substring/casefold zone match + top-level fallback",
 res = c.fetch_best("Tini Poutini", "tonberry", "JP", "Not A Real Zone")
 check("unknown zone -> None", res is None)
 
-# ── per-floor game names resolve to the tier level FFLogs zone ─────────────
-# FFLogs serves one zone per raid tier, "AAC Cruiserweight (Savage)", while
-# the meter passes the per-floor game name, "AAC Cruiserweight M4 (Savage)".
-# The floor token sits inside the tier name, so neither the exact nor the
-# substring pass hits. The token superset pass bridges it, most tokens wins.
+# per-floor game names resolve to the tier level FFLogs zone
 fake = FakeHTTP(rankings={"rankPercent": 77.0, "bestAmount": 5000.0},
                 zones=[{"id": 68, "name": "AAC Cruiserweight (Savage)"},
                        {"id": 69, "name": "AAC Heavyweight (Savage)"},
@@ -126,9 +112,7 @@ check("most tokens wins: light-heavyweight, not heavyweight",
 check("a normal floor does not resolve to the savage tier zone",
       c.fetch_best("Tini Poutini", "tonberry", "JP", "AAC Cruiserweight M4") is None)
 
-# The older floor format carries a colon, "Asphodelos: The First Circle
-# (Savage)" against zone "Asphodelos (Savage)". Tokenization must not trip
-# on the punctuation.
+# Ignore punctuation when matching floor names to raid tiers.
 fake = FakeHTTP(rankings={"rankPercent": 60.0, "bestAmount": 4000.0},
                 zones=[{"id": 49, "name": "Asphodelos (Savage)"}])
 c = fresh_client(fake)
@@ -136,7 +120,7 @@ res = c.fetch_best("Tini Poutini", "tonberry", "JP", "Asphodelos: The First Circ
 check("colon punctuation in the floor name still resolves",
       res is not None and res["zone"] == "Asphodelos (Savage)")
 
-# ── empty zones response: not cached, the next call refetches ─────────────
+# empty zones response: not cached, the next call refetches
 fake = FakeHTTP(rankings=RANKINGS, zones=[])
 c = fresh_client(fake)
 check("empty zones list -> None",
@@ -148,7 +132,7 @@ check("later call refetches zones and succeeds",
 check("zones queried twice, the empty response was never cached",
       sum("worldData" in b["query"] for b in fake.api_bodies) == 2)
 
-# ── rankings fallbacks ───────────────────────────────────────────────────
+# rankings fallbacks
 fake = FakeHTTP(rankings={"allStars": [{"rankPercent": 66.0},
                                        {"rankPercent": 71.5}]})
 c = fresh_client(fake)
@@ -163,8 +147,7 @@ res = c.fetch_best("Tini Poutini", "tonberry", "JP", "Everkeep")
 check("string-encoded zoneRankings still parses",
       res == {"percent": 82.5, "amount": 12345.6, "zone": "Everkeep"})
 
-# A truthy non-dict encounter on one entry must not abort the fetch. The bad
-# entry reads as nameless and the good entry after it still matches.
+# Skip malformed encounter entries and keep valid siblings.
 fake = FakeHTTP(rankings={"rankings": [
     {"encounter": "Garuda", "rankPercent": 99.0, "bestAmount": 1.0},
     {"encounter": {"name": "Everkeep"}, "rankPercent": 82.5,
@@ -175,7 +158,7 @@ res = c.fetch_best("Tini Poutini", "tonberry", "JP", "Everkeep")
 check("a non-dict encounter skips only its own entry",
       res == {"percent": 82.5, "amount": 12345.6, "zone": "Everkeep"})
 
-# ── failure paths: everything is None, nothing raises ────────────────────
+# failure paths: everything is None, nothing raises
 fake = FakeHTTP(token_status=403, rankings=RANKINGS)
 c = fresh_client(fake)
 check("token rejected -> None", c.fetch_best("a", "b", "JP", "Everkeep") is None)

@@ -1,17 +1,6 @@
-"""Regression test for finish_windows_update's swap/rollback state machine.
-
-Mocks only the Windows-only pieces (_wait_for_pid_exit, the detached relaunch)
-and drives the real os.replace/copytree/rollback paths with injected mid-swap
-failures. The updater must never leave a half-swapped, un-launchable install,
-must log one line per exit (plus a sentinel naming a boot-rejected build), and
-must never raise, even when a removal hits a sharing violation.
-
-The tail smoke-covers the Linux in-place swap, apply_frozen_linux: happy path,
-rollback when the exe step fails after the _internal swap, and rejection of an
-archive with a traversal member.
-
-Run directly:  python -m tests.test_updater_windows   (exit 0 = all pass)
-Or via pytest: python -m pytest tests/test_updater_windows.py
+"""Update swaps and rollback with injected failures. Windows process operations are mocked
+while file operations run in temporary installs. Also covers Linux archive extraction
+and swaps.
 """
 import io
 import os
@@ -29,11 +18,10 @@ from nyaatriggers import updater
 # Keep a handle on the real pid-wait before the swap tests stub it out below.
 _real_wait_for_pid_exit = updater._wait_for_pid_exit
 
-# --- mock the Windows-only pieces -------------------------------------------
+# mock the Windows-only pieces
 updater._wait_for_pid_exit = lambda pid, timeout=90.0: True
 LAUNCHED = []
-# Bail/rollback paths relaunch via _relaunch_installed. The happy path uses
-# _relaunch_and_verify, mocked here as "booted OK". Both record into LAUNCHED.
+# Record relaunches from both success and rollback paths.
 updater._relaunch_installed = lambda exe_dst, dest_dir: LAUNCHED.append(Path(exe_dst))
 updater._relaunch_and_verify = lambda exe_dst, dest_dir, grace=25.0: (
     LAUNCHED.append(Path(exe_dst)) or True)
@@ -44,10 +32,9 @@ NEW_INTERNAL = {"a.txt": "NEW", "c.txt": "NEW", "python3.dll": "NEW"}
 
 
 def build(base, nested=False):
-    """Fresh install dir + staging new_root (sibling .nyaa-update-* dir, as the
-    real apply_frozen_windows makes). With nested=True the app root sits one
-    folder inside the staging dir, as the wrapped release archive extracts.
-    Returns (inst, new_root)."""
+    """Create temporary installed and staged builds. nested places the program one level
+    below staging, as release archives do. Return both paths.
+    """
     inst = Path(base) / "Program" / "NyaaTriggers"
     (inst / "_internal").mkdir(parents=True)
     for n, c in OLD_INTERNAL.items():
@@ -80,7 +67,7 @@ def check(label, cond):
 check.failed = 0
 
 
-# === Test 1: happy path =====================================================
+# happy path
 print("Test 1: happy path (full swap)")
 with tempfile.TemporaryDirectory() as base:
     inst, new_root = build(base)
@@ -106,9 +93,7 @@ with tempfile.TemporaryDirectory() as base:
           not [n for n in leftovers(inst) if ".new" in n])
 
 
-# === Test 2: failure on the FINAL exe rename (hardest rollback) =============
-# _internal is already NEW and the old exe is in backup. Rollback must restore
-# both to OLD for a launchable install.
+# failure on the FINAL exe rename (hardest rollback)
 print("Test 2: inject failure at the last step (exe_new -> exe_dst)")
 with tempfile.TemporaryDirectory() as base:
     inst, new_root = build(base)
@@ -135,7 +120,7 @@ with tempfile.TemporaryDirectory() as base:
           not [n for n in leftovers(inst) if ".new" in n or n.endswith(".nyaa-old")])
 
 
-# === Test 3: failure during the initial sibling copy (nothing live touched) =
+# failure during the initial sibling copy (nothing live touched)
 print("Test 3: inject failure during copytree into the sibling")
 with tempfile.TemporaryDirectory() as base:
     inst, new_root = build(base)
@@ -156,7 +141,7 @@ with tempfile.TemporaryDirectory() as base:
           not [n for n in leftovers(inst) if ".new" in n])
 
 
-# === Test 4: old process never exits -> bail, no swap =======================
+# old process never exits -> bail, no swap
 print("Test 4: _wait_for_pid_exit returns False -> leave install untouched")
 with tempfile.TemporaryDirectory() as base:
     inst, new_root = build(base)
@@ -176,7 +161,7 @@ with tempfile.TemporaryDirectory() as base:
           len(log_lines) == 1 and "did not exit" in log_lines[0])
 
 
-# === Test 5: cleanup protects the only good _internal copy ==================
+# cleanup protects the only good _internal copy
 print("Test 5: cleanup keeps _internal backup when live _internal is missing")
 with tempfile.TemporaryDirectory() as base:
     inst, _ = build(base)
@@ -190,7 +175,7 @@ with tempfile.TemporaryDirectory() as base:
     check("backup _internal swept once live is healthy", not bak.exists())
 
 
-# === Test 6: helper sanity ==================================================
+# helper sanity
 print("Test 6: helper sanity")
 with tempfile.TemporaryDirectory() as base:
     inst, _ = build(base)
@@ -214,9 +199,7 @@ with tempfile.TemporaryDirectory() as base:
     check("_force_remove swallows a sharing violation on a file", swallowed)
 
 
-# === Test 7: new build swaps in but won't boot -> roll back to OLD ===========
-# Swap succeeds on disk but the new build fails to come up (e.g. AV quarantined
-# a DLL). Updater must restore and relaunch the previous version.
+# new build swaps in but won't boot -> roll back to OLD
 print("Test 7: swapped build fails to boot -> rollback + relaunch OLD")
 for version_path, version_text in (
         ("_internal/nyaatriggers.version", "9.9.9"),
@@ -229,7 +212,7 @@ for version_path, version_text in (
         version_file.write_text(version_text)
         LAUNCHED.clear()
         updater._relaunch_and_verify = lambda exe_dst, dest_dir, grace=25.0: (
-            LAUNCHED.append(Path(exe_dst)) or False)   # new build does NOT boot
+            LAUNCHED.append(Path(exe_dst)) or False)   # Boot fails.
         try:
             updater.finish_windows_update(inst, new_root, old_pid=1, exe_name=EXE)
         finally:
@@ -254,16 +237,13 @@ for version_path, version_text in (
         check("the rolled back version remains rejected after startup cleanup",
               updater.is_rejected_update("9.9.9", inst))
 
-# === Test 8: removals hit a sharing violation -> still never raises ==========
-# _force_remove's file branch used to catch only FileNotFoundError, so a locked
-# file propagated out of the rollback tail, breaking the "never raises" promise
-# and skipping the relaunch. Drive the whole boot-fail path with unlink broken.
+# removals hit a sharing violation -> still never raises
 print("Test 8: PermissionError on every unlink -> rollback completes anyway")
 with tempfile.TemporaryDirectory() as base:
     inst, new_root = build(base)
     LAUNCHED.clear()
     updater._relaunch_and_verify = lambda exe_dst, dest_dir, grace=25.0: (
-        LAUNCHED.append(Path(exe_dst)) or False)   # new build does NOT boot
+        LAUNCHED.append(Path(exe_dst)) or False)   # Boot fails.
     real_unlink = Path.unlink
     def faulty_unlink(self, *a, **k):
         raise PermissionError("injected: sharing violation (WinError 32)")
@@ -288,9 +268,7 @@ with tempfile.TemporaryDirectory() as base:
           not [n for n in leftovers(inst) if ".new" in n or n.endswith(".nyaa-old")])
 
 
-# === Test 9: --apply-update argv validation (H-2) ===========================
-# finish_windows_update takes dest/staging/pid straight from sys.argv. It must
-# refuse anything that doesn't look like a real apply_frozen_windows hand-off.
+# --apply-update argv validation
 print("Test 9: --apply-update validation refuses alien dest/staging/pid")
 with tempfile.TemporaryDirectory() as base:
     inst, new_root = build(base)
@@ -326,7 +304,7 @@ with tempfile.TemporaryDirectory() as base:
           snap_internal(inst) == OLD_INTERNAL and (inst / EXE).read_text() == "OLD-EXE")
     check("wrong-name refusal relaunches nothing", LAUNCHED == [])
 with tempfile.TemporaryDirectory() as base:
-    # The real hand-off: app root nested one folder inside the staging dir.
+    # Place the program root inside the staging directory as a release archive does.
     inst, new_root = build(base, nested=True)
     LAUNCHED.clear()
     updater.finish_windows_update(inst, new_root, old_pid=1, exe_name=EXE)
@@ -336,7 +314,7 @@ with tempfile.TemporaryDirectory() as base:
           snap_internal(inst) == NEW_INTERNAL)
 
 
-# === Test 10: cleanup only sweeps real staging dirs (L-8) ===================
+# cleanup only sweeps real staging dirs
 print("Test 10: cleanup_old_backups leaves non-staging .nyaa-update-* dirs alone")
 with tempfile.TemporaryDirectory() as base:
     inst, leftover = build(base)   # leftover is a real (flat) staging dir
@@ -359,7 +337,7 @@ with tempfile.TemporaryDirectory() as base:
     check("staging without the marker left alone", empty.is_dir())
 
 
-# === Test 11: tasklist fallback only trusts a clean "no tasks" (L-10) =======
+# tasklist fallback only trusts a clean "no tasks"
 print("Test 11: _wait_for_pid_exit fallback classifies tasklist output safely")
 
 def fake_tasklist(stdout, returncode):
@@ -395,7 +373,7 @@ finally:
     subprocess.run, time.sleep = real_run, real_sleep
 
 
-# === Test 12: download() enforces a hard byte cap (L-23) ====================
+# download() enforces a hard byte cap
 print("Test 12: download() caps runaway streams with missing/lying Content-Length")
 
 class _FakeResp:
@@ -440,16 +418,13 @@ with tempfile.TemporaryDirectory() as base:
         updater._MAX_DOWNLOAD_BYTES = real_cap
 
 
-# === Test 13: failed _internal restore logs + drops RECOVER.txt (M-3) =======
-# The rollback restore rename already retries via _retry_locked; when it still
-# fails the install is left without a working _internal. That must be loud:
-# a log line plus a RECOVER.txt naming the backup to rename back by hand.
+# failed _internal restore logs + drops RECOVER.txt
 print("Test 13: rollback that cannot restore _internal leaves RECOVER.txt")
 with tempfile.TemporaryDirectory() as base:
     inst, new_root = build(base)
     LAUNCHED.clear()
     updater._relaunch_and_verify = lambda exe_dst, dest_dir, grace=25.0: (
-        LAUNCHED.append(Path(exe_dst)) or False)   # new build does NOT boot
+        LAUNCHED.append(Path(exe_dst)) or False)   # Boot fails.
     real_replace = os.replace
     real_sleep = time.sleep
     time.sleep = lambda s: None          # _retry_locked's retry budget, instantly
@@ -482,16 +457,13 @@ with tempfile.TemporaryDirectory() as base:
           "rollback failed to restore" in (inst / updater._UPDATE_LOG_NAME).read_text())
 
 
-# === Test 17: failed exe restore logs + drops RECOVER.txt ===================
-# The exe restore gets the same loud treatment as the _internal restore. When
-# the backup will not rename back the install has no exe at all, so the log
-# line and RECOVER.txt naming the exe backup are the only recovery pointer.
+# failed exe restore logs + drops RECOVER.txt
 print("Test 17: rollback that cannot restore the exe leaves RECOVER.txt")
 with tempfile.TemporaryDirectory() as base:
     inst, new_root = build(base)
     LAUNCHED.clear()
     updater._relaunch_and_verify = lambda exe_dst, dest_dir, grace=25.0: (
-        LAUNCHED.append(Path(exe_dst)) or False)   # new build does NOT boot
+        LAUNCHED.append(Path(exe_dst)) or False)   # Boot fails.
     real_replace = os.replace
     real_sleep = time.sleep
     time.sleep = lambda s: None          # _retry_locked's retry budget, instantly
@@ -528,10 +500,7 @@ with tempfile.TemporaryDirectory() as base:
           "rollback failed to restore" in (inst / updater._UPDATE_LOG_NAME).read_text())
 
 
-# === Tests 14-16: apply_frozen_linux in-place swap ==========================
-# The Linux path needs no mocks: the running exe and _internal are not locked,
-# so the swap is plain renames in a temp install dir. Drive a real tar.gz
-# shaped like the release archive, one top-level NyaaTriggers/ folder.
+# apply_frozen_linux in-place swap
 
 def build_linux(base):
     """Fresh Linux install dir: exe, _internal, one user-data sibling."""
@@ -624,10 +593,7 @@ with tempfile.TemporaryDirectory() as base:
           and (inst / "NyaaTriggers").read_text() == "OLD-EXE")
 
 
-# === Test 18: RECOVER.txt shields the backups it names =======================
-# A failed rollback drops RECOVER.txt naming the *.nyaa-old backup to rename
-# back by hand. The next-launch sweep must not delete that backup, even with a
-# non-empty _internal making internal_ok True.
+# RECOVER.txt shields the backups it names
 print("Test 18: cleanup keeps every backup while RECOVER.txt is present")
 with tempfile.TemporaryDirectory() as base:
     inst, _ = build(base)
@@ -646,10 +612,7 @@ with tempfile.TemporaryDirectory() as base:
           not internal_bak.exists() and not exe_bak.exists())
 
 
-# === Test 19: stale launcher .part sweep respects the age guard ==============
-# apply_frozen_linux copies the launcher via a NyaaTriggers.sh.<pid>.<tid>.part
-# temp in the install dir. A kill mid copy leaks it, so the launch sweep removes
-# aged ones but leaves a concurrent update's fresh copy alone.
+# stale launcher .part sweep respects the age guard
 print("Test 19: cleanup sweeps aged launcher .part, keeps the in-flight copy")
 with tempfile.TemporaryDirectory() as base:
     inst, _ = build(base)
@@ -664,9 +627,7 @@ with tempfile.TemporaryDirectory() as base:
     check("fresh launcher .part untouched", fresh.is_file())
 
 
-# === Test 20: RECOVER.txt tells the user to delete it ========================
-# The backup sweep stays off while RECOVER.txt exists, so the note must say to
-# remove it once the app starts or backups pile up for the life of the install.
+# RECOVER.txt tells the user to delete it
 print("Test 20: RECOVER.txt tells the user to delete it after recovery")
 with tempfile.TemporaryDirectory() as base:
     inst, _ = build(base)

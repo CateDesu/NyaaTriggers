@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the triggernometry-core stub host (Strategy A, Mono) into the engine's output dir so all deps colocate.
-# Requires: the engine already built (see build-engine.sh) at $ENGINE_BIN/TriggernometryPlugin.dll, plus mono/mcs.
+# Build the host beside the engine dependencies. Requires the built engine at ENGINE_BIN
+# and Mono with mcs.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ENGINE_BIN="${ENGINE_BIN:-$HERE/.engine/Source/Triggernometry/bin/Release}"
@@ -20,5 +20,5 @@ mcs -target:exe -out:triggernometry-core.exe \
 
 echo "built: $ENGINE_BIN/triggernometry-core.exe ($(stat -c %s triggernometry-core.exe) bytes)"
 
-# Re-assemble bin/ so the bundled sidecar the bridge discovers is never stale.
+# Refresh the bundled sidecar after building the host.
 bash "$HERE/package.sh"

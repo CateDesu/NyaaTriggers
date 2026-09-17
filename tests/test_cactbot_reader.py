@@ -1,12 +1,4 @@
-"""Regression test for the cactbot relay payload guard.
-
-A page on a user configured cactbot_url can call the harvest bridge with
-arbitrary JSON. A truthy non-string text raised AttributeError in the Qt
-slot, which lost the callout and wrote a CRASH log line. The slot now
-coerces non-strings to empty and drops the payload.
-
-Run directly:  python -m tests.test_cactbot_reader   (exit 0 = all pass)
-"""
+"""Cactbot relay payload validation and diagnostic routing."""
 import json
 import os
 import sys
@@ -46,9 +38,7 @@ check("string say text still lands", spoken == ["Spread"])
 r._on_message("popup", json.dumps({"text": None}))
 check("null text is dropped", callouts == [("Tank buster", "alert")])
 
-# ── non subscribe status dicts go to the drop log, not stderr ────────────
-# The injected JS reports bridge ready, hook results and observer state as
-# status events. Printing each one spammed stderr on every page load.
+# non subscribe status dicts go to the drop log, not stderr
 from nyaatriggers import cactbot_reader
 
 drops = []

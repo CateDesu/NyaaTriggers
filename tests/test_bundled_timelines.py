@@ -1,15 +1,4 @@
-"""The shipped cactbot timeline set must match the generated zone-id index.
-
-tools/gen_cactbot_timelines.py rebuilds cactbot_timelines.json from upstream.
-When cactbot adds a dungeon the shipped timelines/ set has to follow, or a
-fresh install silently misses the new fight's bars. Two fights sharing a
-filename stem would shadow each other in the one flat cache. And the runtime
-download cache must never write under a shipped name: on a source checkout
-TIMELINES_DIR is the git tree, where that stray file blocks the next pull.
-This pins all of it.
-
-Run directly:  python -m tests.test_bundled_timelines   (exit 0 = all pass)
-"""
+"""Bundled timeline coverage, cache naming and supported sync fields."""
 import json
 import os
 import re
@@ -31,8 +20,7 @@ def check(name, cond):
 index = json.loads((ROOT / "assets" / "cactbot_timelines.json").read_text(encoding="utf-8"))
 shipped = {p.name[:-len(".cactbot.txt")] for p in (ROOT / "timelines").glob("*.cactbot.txt")}
 
-# Every timeline serves from one flat namespace, <tag>.cactbot(.cache).txt, so
-# two fights whose txt files share a stem would shadow each other.
+# Timeline cache names share a flat directory, so stems must be unique.
 stem_paths = defaultdict(set)
 for entry in index.values():
     stem_paths[entry["tag"]].add(entry["txt_path"])
@@ -59,11 +47,8 @@ check("no shipped timeline is empty", not empty)
 for name in empty:
     print(f"  empty: {name}")
 
-# The runtime cache writes <tag>.cactbot.cache.txt, never a shipped name. A
-# bare .cactbot.txt write into TIMELINES_DIR lands in the git tree on source
-# checkouts, untracked, and the next pull that tracks that name deadlocks.
-# Pre-bundle checkouts stranded exactly this way once already. The word
-# boundary keeps _BUNDLE_TIMELINES_DIR reads out of the match.
+# Download caches must use names separate from shipped files. Exclude bundled path reads
+# from this source check.
 tl_src = (ROOT / "nyaatriggers" / "ui" / "timeline_tab.py").read_text(encoding="utf-8")
 bare_writes = [
     ln.strip() for ln in tl_src.splitlines()
@@ -76,12 +61,7 @@ check("runtime never writes a cactbot timeline under a shipped name",
 for ln in bare_writes:
     print(f"  {ln}")
 
-# Every sync field the shipped timelines use must be indexed in the engine's
-# _SYNC_TYPES map. An unindexed field used to count as satisfied, which let a
-# 7DC arena seal shared across Aloalo bosses sync the wrong section when the
-# distinguishing param1 went unread. Now the entry never matches instead.
-# Either way an unindexed field is a bug, so fail when a shipped file starts
-# using one.
+# Require indexed fields for every shipped sync constraint.
 sys.path.insert(0, str(ROOT))
 from nyaatriggers import timeline_parser
 from nyaatriggers.timeline_engine import _SYNC_TYPES

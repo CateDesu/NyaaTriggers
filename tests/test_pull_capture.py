@@ -1,12 +1,4 @@
-"""Regression tests for pull_capture.py.
-
-Covers the pull segmentation and file layout of the raw feed recorder:
-buffered pre-pull lines make the capture, a boss ability opens a pull, a
-player ability does not, a wipe finalizes with the right outcome, and
-recording off means nothing lands anywhere.
-
-Run directly:  python -m tests.test_pull_capture   (exit 0 = all pass)
-"""
+"""Pull capture boundaries, feed contents and recording controls."""
 import json
 import os
 import subprocess
@@ -118,9 +110,7 @@ with tempfile.TemporaryDirectory() as td:
     meta = json.loads(_meta_files(td)[0].read_text(encoding="utf-8"))
     check("a raw zone line finalizes as a reset", meta.get("outcome") == "reset")
 
-    # A feed drop closes the pull with its own outcome, and the reconnect
-    # burst of a still running fight starts a fresh file instead of merging
-    # into the stale one.
+    # Feed loss closes the pull and reconnect starts a separate capture.
     cap.on_log_line(_BOSS_CAST)
     cap.on_status_changed(False, "Disconnected")
     meta = json.loads(_meta_files(td)[1].read_text(encoding="utf-8"))
@@ -197,9 +187,7 @@ with tempfile.TemporaryDirectory() as td:
     finally:
         drop_log._LOG_FILE = orig_log
 
-# Replay smoke, opt-in since it boots the real engine jar. The capture holds
-# real feed lines so a feed path that rejects every line cannot pass, and the
-# jar is resolved from this file so any cwd works.
+# Optional replay against the real engine jar using actual feed lines.
 REPO = Path(__file__).resolve().parents[1]
 jar = REPO / "triggevent-core" / "target" / "triggevent-core.jar"
 if os.environ.get("NYAA_REPLAY_TEST") == "1" and jar.is_file():

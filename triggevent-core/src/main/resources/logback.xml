@@ -1,12 +1,6 @@
 <configuration debug="false">
 
-    <!-- Sidecar logging config. Shades over xivsupport's logback.xml: stdout
-         carries the JSON protocol only, so the engine's own console logging
-         must go to stderr instead. A debug line spliced into the 600 KB
-         inventory line, which flushes in many separately synchronized chunks,
-         would corrupt it. The Python bridge reads stderr as the diagnostic
-         channel, so nothing is lost. No %highlight, ANSI colors would just
-         pollute the bridge log. -->
+    <!-- Send engine logs to stderr so they cannot corrupt the JSON protocol on stdout. Omit ANSI colors from bridge logs. -->
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <target>System.err</target>

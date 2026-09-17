@@ -1,23 +1,5 @@
-"""Merged regression suite for the audit/review fix batches.
-
-Consolidates these five one-off scripts (all checks preserved verbatim,
-215 in total on this machine):
-  - test_review_fixes.py        (2026-07 review pass)
-  - test_review_fixes_2.py      (2026-07-22 review pass)
-  - test_review_fixes_3.py      (third review pass, main_window.py)
-  - test_audit_setup_fixes.py   (2026-08 audit setup pass)
-  - test_audit_low_fixes.py     (low-severity audit pass)
-
-Each section banner names its source file. The five originals' module-level
-checks are wrapped in per-section test functions so one failure aborts only
-its own group; monkeypatch restore-in-finally, temp dirs, lru_cache clears
-and the drop_log redirection are kept as the originals had them.
-
-Each test_* function is both a pytest case and a step of the direct-run
-script.
-
-Run directly:  python -m tests.test_regressions   (exit 0 = all pass)
-        or:    python -m pytest tests/test_regressions.py -q
+"""Regression checks for parsing, persistence, updates and runtime recovery. Test groups
+run independently through pytest or the direct runner.
 """
 import hashlib
 import io
@@ -65,10 +47,7 @@ FAILS = []
 
 
 class _CheckFailed(Exception):
-    """A recorded check() failure. Kept distinct from AssertionError so the
-    direct-run loop can tell a recorded failure apart from a stray assert in
-    a helper or fake. Only this type is swallowed there, anything else lands
-    in FAILS instead of passing silently."""
+    """Distinguish a recorded check failure from an unexpected assertion in a helper."""
 
 
 def _program_sources():
@@ -85,18 +64,13 @@ def check(name, cond):
     print(("PASS  " if cond else "FAIL  ") + name)
     if not cond:
         FAILS.append(name)
-        # Under pytest this fails the calling test; the direct-run loop below
-        # catches it and moves on to the next test function.
+        # Fail this pytest case, or let the direct runner continue to the next group.
         raise _CheckFailed(name)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# From test_review_fixes.py — version-compare padding, fail-closed release
-# verification, the shared user-regex guard, trigger matcher hygiene, and
-# from_dict validation.
-# ═════════════════════════════════════════════════════════════════════════════
+# Version comparison, release checks and trigger matching.
 
-# ── Version comparison: trailing zeros must not read as "newer" ────────────
+# Version comparison: trailing zeros must not read as "newer"
 def test_r1_version_trailing_zeros():
     check("1.0.0 == 1.0", updater.parse_version("1.0.0") == updater.parse_version("1.0"))
     check("v1.0.0 is not newer than v1.0", not updater.is_newer("1.0.0", "1.0"))
@@ -105,7 +79,7 @@ def test_r1_version_trailing_zeros():
     check("vv-prefix over-strip fixed", updater.parse_version("vv1.2") == (0, 2))
 
 
-# ── Release verification fails closed with no checksum sidecar ─────────────
+# Release verification fails closed with no checksum sidecar
 def test_r1_release_verification_fails_closed():
     release = updater.Release(tag="v9.9", version="9.9", html_url="",
                               assets={"NyaaTriggers-linux.tar.gz": "https://x/a.tar.gz"})
@@ -114,7 +88,7 @@ def test_r1_release_verification_fails_closed():
     check("missing .sha256 sidecar refuses to verify", not ok)
 
 
-# ── User-regex guard: catastrophic shapes rejected, normal ones cached ─────
+# User-regex guard: catastrophic shapes rejected, normal ones cached
 def test_r1_user_regex_guard():
     check("(a+)+ rejected", compile_user_regex("(a+)+$") is None)
     check("(\\w*)* rejected", compile_user_regex(r"(\w*)*!") is None)
@@ -125,7 +99,7 @@ def test_r1_user_regex_guard():
     check("invalid regex returns None, not raises", compile_user_regex("(") is None)
 
 
-# ── _safe_* wrappers: timeout reads as no-match, bad backref keeps text ────
+# _safe_* wrappers: timeout reads as no-match, bad backref keeps text
 def test_r1_safe_wrappers():
     check("bad backref sub leaves text unchanged",
           _safe_sub(compile_user_regex(r"(abc)"), r"\2", "abc") == "abc")
@@ -139,8 +113,7 @@ def test_r1_safe_wrappers():
         check("timeout guard does not break normal matches",
               _safe_search(compile_user_regex(r"(a|aa)+$"), "aaaa") is not None)
 
-    # Stdlib-compiled patterns must also work through the wrappers (the timeout
-    # kwarg exists only on the regex module, so the wrappers dispatch on type).
+    # Wrappers also accept standard library patterns without a timeout argument.
     _stdlib_rx = re.compile(r"abc")
     check("stdlib pattern search works via wrapper",
           _safe_search(_stdlib_rx, "xxabcxx") is not None)
@@ -150,7 +123,7 @@ def test_r1_safe_wrappers():
           _safe_sub(_stdlib_rx, r"\2", "abc") == "abc")
 
 
-# ── Literal ability IDs: no regex smuggling, whitespace/case tolerated ─────
+# Literal ability IDs: no regex smuggling, whitespace/case tolerated
 def test_r1_literal_ability_ids():
     check("id set splits and uppercases", _id_set("a55d | A55E") == {"A55D", "A55E"})
     t = Trigger(log_type="21", ability_id="A55D|A55E", tts_text="x", cooldown_s=0.0)
@@ -161,7 +134,7 @@ def test_r1_literal_ability_ids():
           evil.matches(line) is None)
 
 
-# ── from_dict hygiene: scope fallback + cooldown clamp ─────────────────────
+# from_dict hygiene: scope fallback + cooldown clamp
 def test_r1_from_dict_scope_and_cooldown():
     check("unknown status_scope narrows to self",
           Trigger.from_dict({"status_scope": "byme"}).status_scope == "self")
@@ -188,7 +161,7 @@ def test_cooldown_at_clock_zero():
               trigger.matches(line) is not None)
 
 
-# ── Cooldown map stays bounded across churning source IDs ──────────────────
+# Cooldown map stays bounded across churning source IDs
 def test_r1_cooldown_map_bounded():
     t2 = Trigger(log_type="21", ability_id="BEEF", tts_text="x", cooldown_s=5.0)
     old = time.monotonic() - 60.0
@@ -197,7 +170,7 @@ def test_r1_cooldown_map_bounded():
     check("expired cooldown entries pruned on write", len(t2._last_fired) < 300)
 
 
-# ── Cooldown key case: _last_fired is shared with _on_status_timer ─────────
+# Cooldown key case: _last_fired is shared with _on_status_timer
 def test_r1_cooldown_key_uppercased():
     t3 = Trigger(log_type="26", tts_text="x", cooldown_s=5.0)
     line = ["26", "ts", "8d1", "Vulnerability Up", "60.0",
@@ -209,7 +182,7 @@ def test_r1_cooldown_key_uppercased():
           t3.matches(line, me="Player") is None)
 
 
-# ── from_dict: non-finite counts degrade like _as_float, never raise ───────
+# from_dict: non-finite counts degrade like _as_float, never raise
 def test_r1_from_dict_nonfinite_counts():
     check('"inf" count_min degrades to default (no OverflowError)',
           Trigger.from_dict({"count_min": "inf"}).count_min == 0)
@@ -225,7 +198,7 @@ def test_r1_from_dict_nonfinite_counts():
           Trigger.from_dict({"count_min": 3}).count_min == 3)
 
 
-# ── from_dict: a truthy non-list sequence is skipped, trigger kept ─────────
+# from_dict: a truthy non-list sequence is skipped, trigger kept
 def test_r1_from_dict_nonlist_sequence():
     check("int sequence skipped, trigger kept",
           Trigger.from_dict({"sequence": 42}).sequence == [])
@@ -240,7 +213,7 @@ def test_r1_from_dict_nonlist_sequence():
           == [{"log_type": "21"}])
 
 
-# ── from_dict: non-string scalars in match fields coerced or rejected ──────
+# from_dict: non-string scalars in match fields coerced or rejected
 def test_r1_from_dict_nonstring_fields():
     check("int ability_id coerced to str",
           Trigger.from_dict({"ability_id": 123}).ability_id == "123")
@@ -268,22 +241,16 @@ def test_r1_from_dict_nonstring_fields():
           Trigger.from_dict({"ability_id": 0}).ability_id == "")
     check("int log_type still coerced",
           Trigger.from_dict({"log_type": 26}).log_type == "26")
-    # The coerced id must reach the matcher as a working literal, not raise in
-    # _id_set the way the raw int/list used to.
+    # Coerced IDs must work as literal matchers.
     t_num = Trigger.from_dict({"log_type": "21", "ability_id": 123, "cooldown_s": 0})
     check("coerced ability_id matches literally downstream",
           t_num.matches(["21", "ts", "40001234", "Boss", "123", "Ability",
                          "10001111", "P"]) is not None)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# From test_review_fixes_2.py — engine-jar verification fails closed, the
-# nested-quantifier ReDoS guard, the 261 pair parser bound, converter fixes,
-# timeline comment escapes, chain-loss staleness, and the DPS logger close
-# flush.
-# ═════════════════════════════════════════════════════════════════════════════
+# Engine archives, regex limits, converters and timeline parsing.
 
-# ── S1: the Triggevent Engine download verifies against the .sha256 sidecar ──
+# the Triggevent Engine download verifies against the .sha256 sidecar
 def test_r2_engine_jar_verification():
     def _fake_env(assets, download_body=b"PK" + b"\0" * 200_000):
         """Point _download_engine at a temp jar + stubbed release/download."""
@@ -295,10 +262,8 @@ def test_r2_engine_jar_verification():
         orig_fetch, orig_dl = updater.fetch_latest_release, updater.download
         updater.fetch_latest_release = lambda timeout=8, channel="stable": rel
         updater.download = lambda url, dest, *a, **k: dest.write_bytes(download_body)
-        # Sandbox the build stamp too. The success path of _download_engine
-        # unlinks it, and an unsandboxed run would delete the live stamp in
-        # triggevent-core/target and force a full jar rebuild on the next
-        # app launch.
+        # Redirect the build stamp so downloads cannot delete the working engine's
+        # stamp.
         orig_stamp = triggevent_bridge._JAR_STAMP
         triggevent_bridge._JAR_STAMP = jar.parent / "stamp"
 
@@ -342,7 +307,7 @@ def test_r2_engine_jar_verification():
         restore()
 
 
-# ── C5: nested-quantifier shapes rejected, field-skip idiom kept ─────────────
+# nested-quantifier shapes rejected, field-skip idiom kept
 def test_r2_nested_quantifier_guard():
     check("(?:a(?:b+)c)+ rejected (nested unbounded)",
           compile_user_regex(r"(?:a(?:b+)c)+") is None)
@@ -351,8 +316,7 @@ def test_r2_nested_quantifier_guard():
     check("(a|b(c+)+)+ rejected", compile_user_regex(r"(a|b(c+)+)+") is None)
     check("(?:x(?:y*)z){2,} rejected (open-ended brace)",
           compile_user_regex(r"(?:x(?:y*)z){2,}") is None)
-    # Pre-existing level-1 strictness, pinned: ANY brace after a group containing a
-    # quantifier is rejected, bounded or not ((a+){50} is a degree-50 polynomial).
+    # The existing guard rejects quantified groups followed by a brace repeat.
     check("(?:[^|]*\\|){5} still rejected by the legacy brace guard",
           compile_user_regex(r"(?:[^|]*\|){5}") is None)
     check("unquantified field-skip group allowed",
@@ -369,7 +333,7 @@ def test_r2_nested_quantifier_guard():
     check("legacy (x+)+ still rejected", compile_user_regex(r"(x+)+$") is None)
 
 
-# ── C8/C9: Triggernometry converter type collapse + escaped ']' classes ──────
+# Triggernometry converter type collapse + escaped ']' classes
 def test_r2_triggernometry_converter():
     pairs = extract_ids(r"^.{14}1[56]:[^:]*:[^:]*:9CFF:")
     check("1[56] colon type maps to pipe 21|22",
@@ -382,21 +346,18 @@ def test_r2_triggernometry_converter():
           expand_id_expr(r"9CF[0-2]") == ["9CF0", "9CF1", "9CF2"])
 
 
-# ── Colon 1A/1E status lines pin the effect id at field 0 ────────────────────
+# Colon 1A/1E status lines pin the effect id at field 0
 def test_r2_triggernometry_colon_status_types():
-    # 7.x packs anchor these as \A.{25}1A:AB6:..., effect id first, unlike the
-    # 15/1[56] casts where the id sits at field 2.
+    # Colon status lines place the effect ID first, unlike ability lines.
     check("colon 1A maps to 26 with the effect id first",
           extract_ids(r"\A.{25}1A:AB6:[^:]*:") == [("26", "AB6")])
     check("colon 1E maps to 30 with the effect id first",
           extract_ids(r"\A.{25}1E:AB6:[^:]*:") == [("30", "AB6")])
 
 
-# ── review 5: strip loop bounded, ACT type word colon form ───────────────────
+# review 5: strip loop bounded, ACT type word colon form
 def test_r5_triggernometry_strip_cap_and_type_word():
-    # A crafted export nesting thousands of parens ran the strip loop once per
-    # level with a full string scan each, quadratic, on the GUI thread. The
-    # loop is capped now, so degenerate input bails fast instead.
+    # Excessive nested groups must hit the expansion limit.
     deep = "(" * 5000 + "5CFF" + ")" * 5000
     start = time.monotonic()
     result = expand_id_expr(deep)
@@ -404,16 +365,14 @@ def test_r5_triggernometry_strip_cap_and_type_word():
           result is None and time.monotonic() - start < 1.0)
     check("ordinary nesting still strips",
           expand_id_expr("((5CFF))") == ["5CFF"])
-    # The ACT message log dialect writes a type word between .{N} and the hex
-    # type, "^.{15}StatusAdd 1A:..." or "^.{15}\S+ 15:...". The skip clause
-    # only matched the literal (?:[^:]*) form, so these yielded no ids.
+    # Accept ACT type words and skip patterns before colon format IDs.
     check("colon form with a \\S+ type word maps the cast",
           extract_ids(r"^.{15}\S+ 15:[^:]*:[^:]*:9CFF:") == [("21", "9CFF")])
     check("colon form with StatusAdd before 1A maps the effect",
           extract_ids(r"^.{15}StatusAdd 1A:4A6F:") == [("26", "4A6F")])
 
 
-# ── review 5: a hand edited sound setting must not kill the alert emit ───────
+# review 5: a hand edited sound setting must not kill the alert emit
 def test_r5_alert_sound_path_tolerates_non_string_setting():
     import types as _t
     w = _t.SimpleNamespace(_settings={"overlay_sound_file": 5})
@@ -421,7 +380,7 @@ def test_r5_alert_sound_path_tolerates_non_string_setting():
           mw.MainWindow._alert_sound_path(w) is None)
 
 
-# ── C4: cactbot comment stripper survives regex literals ─────────────────────
+# cactbot comment stripper survives regex literals
 def test_r2_cactbot_comment_stripper():
     src = "const r = /\\/\\//;\nconst x = 1; // real comment\n"
     out = strip_js_comments(src)
@@ -439,7 +398,7 @@ def test_r2_cactbot_comment_stripper():
           "y: 'a/b'" in strip_js_comments(src4))
 
 
-# ── C10: timeline comment stripper honors escaped quotes ─────────────────────
+# timeline comment stripper honors escaped quotes
 def test_r2_timeline_comment_escapes():
     check("# outside quotes stripped", _strip_comment('12.3 "label" # c') == '12.3 "label" ')
     check("# inside quotes kept", _strip_comment('12.3 "a # b"') == '12.3 "a # b"')
@@ -447,7 +406,7 @@ def test_r2_timeline_comment_escapes():
           _strip_comment('12.3 "say \\"hi\\"" # c') == '12.3 "say \\"hi\\"" ')
 
 
-# ── L1/N7: timeline parser honors single quotes and quoted } or ] ───────────
+# timeline parser honors single quotes and quoted } or ]
 def test_r2_timeline_single_quotes_and_braces():
     check("# inside single-quoted value kept",
           _strip_comment("1.0 \"x\" Ability { id: 'a#b' }") == "1.0 \"x\" Ability { id: 'a#b' }")
@@ -463,11 +422,9 @@ def test_r2_timeline_single_quotes_and_braces():
           e.event_fields == {"id": "(?:66[01]F|6620)", "source": "Kefka"})
 
 
-# ── timeline parser drops non-finite times, windows and jump targets ──────
+# timeline parser drops non-finite times, windows and jump targets
 def test_r2_timeline_nonfinite_dropped():
-    # The time, window and jump regexes take plain digits, and float() of a
-    # long enough digit string is inf. That used to reach the engine and the
-    # plugin frame, where bare Infinity breaks the strict JSON parse.
+    # Reject numeric strings that parse as infinite timeline values.
     huge = "9" * 400
     check("400-digit time yields no entry", parse(f'{huge} "x"') == [])
     check("finite entries around an overflowing one survive",
@@ -484,7 +441,7 @@ def test_r2_timeline_nonfinite_dropped():
           == {"c": "timeline", "v": [[1.0, "z", "mechanic"]]})
 
 
-# ── C7: BlackHoleChains.on_loss ignores stale Crust losses ───────────────────
+# BlackHoleChains.on_loss ignores stale Crust losses
 def test_r2_chain_loss_staleness():
     roles = {"A1": "dps", "A2": "dps", "A3": "dps", "B1": "dps", "H1": "support"}
 
@@ -519,7 +476,7 @@ def test_r2_chain_loss_staleness():
           any(a[0] == "mark" and a[1] == "A2" for a in walked))
 
 
-# ── S4: locale catalog loader refuses non-supported codes outright ───────────
+# locale catalog loader refuses non-supported codes outright
 def test_r2_locale_catalog_guard():
     check("_load_catalog rejects a path-shaped locale",
           locale_util._load_catalog("../../etc/passwd") == {})
@@ -528,7 +485,7 @@ def test_r2_locale_catalog_guard():
           isinstance(locale_util._load_catalog("ja"), dict))
 
 
-# ── C1: TriggernometryBridge replays the disabled set on start ───────────────
+# TriggernometryBridge replays the disabled set on start
 def test_r2_triggernometry_disabled_replay():
     br = TriggernometryBridge()
     br.set_disabled({"guid#0", "guid#1"})           # sidecar down: command dropped...
@@ -548,7 +505,7 @@ def test_r2_triggernometry_disabled_replay():
           in src_start.split("def start", 1)[1].split("def stop", 1)[0])
 
 
-# ── M4: observed-phrase dedup resets with the session ────────────────────────
+# observed-phrase dedup resets with the session
 def test_r2_triggevent_seen_reset():
     tv = TriggeventBridge()
     tv._record_seen("Spread!")
@@ -558,14 +515,9 @@ def test_r2_triggevent_seen_reset():
     check("stop() clears seen phrases", tv.seen_phrases() == [])
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# From test_review_fixes_3.py — main_window.py trigger-store hygiene, import
-# backup, bad-name rotation, zone/fight tag guards, stale .part sweep,
-# inventory parse logging, and source pins. Drives the real methods unbound on
-# duck-typed windows (no QApplication).
-# ═════════════════════════════════════════════════════════════════════════════
+# Trigger persistence, imports and cache cleanup.
 
-# ── isolate the trigger store in a temp dir (same pattern as the other suites)
+# isolate the trigger store in a temp dir (same pattern as the other suites)
 R3_TMP = Path(tempfile.mkdtemp(prefix="nyaa_review3_"))
 R3_SHIPPED = R3_TMP / "triggers.json"
 R3_LOCAL = R3_TMP / "triggers.local.json"
@@ -576,9 +528,9 @@ R3_RETIRED = R3_TMP / "retired.json"
 
 
 def _isolate_store():
-    """Re-point main_window's trigger-store globals at this suite's tmp dir.
-    Under pytest, another suite's import-time checks may re-point them at its
-    own tmp between collection and test execution, so every test re-asserts."""
+    """Restore temporary storage paths before each test because collection can import other
+    suites.
+    """
     app_common.TRIGGERS_FILE = R3_SHIPPED
     app_common.TRIGGERS_LOCAL_FILE = R3_LOCAL
     app_common._REPO_TRIGGERS_FILE = R3_REPO
@@ -637,7 +589,7 @@ def _with_recorded_drops(fn):
         app_common.log_drop = orig
 
 
-# ── L-16: null / mixed-type "deleted" must not quarantine the file ──────────
+# null / mixed-type "deleted" must not quarantine the file
 def test_deleted_null_loads_as_empty_set():
     _isolate_store()
     write_shipped([Trigger(id="aaa", fight="F1", zone_regex="Zone One")])
@@ -651,7 +603,7 @@ def test_deleted_null_loads_as_empty_set():
 def test_deleted_mixed_types_keep_only_strings():
     _isolate_store()
     write_shipped([Trigger(id="aaa", fight="F1")])
-    write_local(deleted=[123, "abc", None, "def"])  # mixed junk
+    write_local(deleted=[123, "abc", None, "def"])
     w = _TrigWin()
     w._load_triggers()
     check("mixed deleted keeps only str ids", w._deleted_ids == {"abc", "def"})
@@ -676,7 +628,7 @@ def test_valid_tombstone_still_hides_its_trigger():
     check("valid tombstone still hides the trigger", w._triggers == [])
 
 
-# ── L-20: a poisoned in-memory tombstone set cannot kill saves ──────────────
+# a poisoned in-memory tombstone set cannot kill saves
 def test_save_with_mixed_type_set_degrades_to_warning():
     _isolate_store()
     write_shipped([Trigger(id="aaa", fight="F1")])
@@ -696,7 +648,7 @@ def test_save_with_mixed_type_set_degrades_to_warning():
     check("clean save does not warn again", len(w.warned) == 1)
 
 
-# ── L-13/L-18: _next_bad_name rotates and caps ──────────────────────────────
+# _next_bad_name rotates and caps
 def test_next_bad_name_rotates_then_caps():
     d = Path(tempfile.mkdtemp(prefix="nyaa_bad_"))
     f = d / "nyaatriggers_settings.json"
@@ -713,7 +665,7 @@ def test_next_bad_name_rotates_then_caps():
           mw._next_bad_name(f, cap=3) == d / (f.name + ".bad.2"))
 
 
-# ── H-3: _fight_tag_for_zone goes through the ReDoS guards ──────────────────
+# _fight_tag_for_zone goes through the ReDoS guards
 class _ZoneWin:
     _fight_tag_for_zone = mw.MainWindow._fight_tag_for_zone
 
@@ -748,7 +700,7 @@ def test_fight_tag_uncompilable_pattern_skipped_like_old_re_error_path():
           z._fight_tag_for_zone("Zone One") == ("GoodFight", "Zone One"))
 
 
-# ── L-17: corrupt repo override falls back to the bundled set ───────────────
+# corrupt repo override falls back to the bundled set
 def test_corrupt_override_falls_back_to_bundled():
     _isolate_store()
     write_shipped([Trigger(id="aaa", fight="F1")])
@@ -815,7 +767,7 @@ def test_corrupt_bundled_without_override_logged_and_override_purged():
     _with_recorded_drops(body)
 
 
-# ── M-6: import backs up the pre-import local file ───────────────────────────
+# import backs up the pre-import local file
 class _FakeMessageBox:
     class StandardButton:
         Yes = 1
@@ -864,7 +816,7 @@ def test_import_triggers_keeps_bak_of_previous_local_file():
         app_common.QMessageBox, app_common.QFileDialog = orig_mb, orig_fd
 
 
-# ── L-9: stale .part sweep respects the age guard ────────────────────────────
+# stale .part sweep respects the age guard
 def test_sweep_stale_update_parts_respects_age_guard():
     pd = Path(tempfile.mkdtemp(prefix="nyaa_parts_"))
     old_part = pd / "NyaaTriggers-linux.tar.gz.111.222.part"
@@ -881,7 +833,7 @@ def test_sweep_stale_update_parts_respects_age_guard():
     check("non-update .part is untouched", unrelated.exists())
 
 
-# ── L-15: sidecar inventory parse failures log a drop ────────────────────────
+# sidecar inventory parse failures log a drop
 def test_sidecar_inventory_parse_failures_log_drop():
     def body(drops):
         mw.MainWindow._on_triggernometry_inventory(object(), "{not json")
@@ -895,7 +847,7 @@ def test_sidecar_inventory_parse_failures_log_drop():
     _with_recorded_drops(body)
 
 
-# ── L-6/L-14: source pins (same style as the start()-replay pin in fixes_2) ──
+# source pins (same style as the start()-replay pin in fixes_2)
 def test_dialogs_delete_later_and_close_event_stops_timers():
     src = _program_sources()
     check("all six exec()'d dialogs are deleteLater()'d",
@@ -906,13 +858,9 @@ def test_dialogs_delete_later_and_close_event_stops_timers():
         check(f"closeEvent stops {timer}", f"self.{timer}.stop()" in close_body)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# From test_audit_setup_fixes.py — piper-tts pinned in both installers,
-# nyaatriggers.log owner-only (drop_log and main.py), install.py skips voice
-# files already on disk, and both download loops enforce a hard byte ceiling.
-# ═════════════════════════════════════════════════════════════════════════════
+# Installer dependencies, log permissions and download limits.
 
-# ── L-7: drop_log writes nyaatriggers.log owner-only ─────────────────────────
+# drop_log writes nyaatriggers.log owner-only
 def test_setup_drop_log_owner_only():
     with tempfile.TemporaryDirectory() as td:
         log = Path(td) / "nyaatriggers.log"
@@ -943,7 +891,7 @@ def test_setup_drop_log_owner_only():
             drop_log._perms_tightened = False
 
 
-# ── L-7: main._log_crash writes the same log owner-only ──────────────────────
+# main._log_crash writes the same log owner-only
 def test_setup_main_crash_log_owner_only():
     with tempfile.TemporaryDirectory() as td:
         log = Path(td) / "nyaatriggers.log"
@@ -963,7 +911,7 @@ def test_setup_main_crash_log_owner_only():
             drop_log._perms_tightened = False
 
 
-# ── L-7: drop_log rotates one generation to .1 at the cap ────────────────────
+# drop_log rotates one generation to .1 at the cap
 def test_drop_log_rotation_keeps_one_generation():
     with tempfile.TemporaryDirectory() as td:
         log = Path(td) / "nyaatriggers.log"
@@ -988,7 +936,7 @@ def test_drop_log_rotation_keeps_one_generation():
             drop_log._perms_tightened = False
 
 
-# ── a failed rotate never kills the append ───────────────────────────────────
+# a failed rotate never kills the append
 def test_drop_log_failed_rotate_still_appends():
     with tempfile.TemporaryDirectory() as td:
         log = Path(td) / "nyaatriggers.log"
@@ -1007,8 +955,7 @@ def test_drop_log_failed_rotate_still_appends():
             drop_log.log_drop("audit-locked", "still logged", throttle_s=0)
             check("a failed rotate still appends the line",
                   "[audit-locked] still logged" in log.read_text(encoding="utf-8"))
-            # The log stays over the cap while the blockage lasts, so every
-            # later line retries the rename. Those lines must land too.
+            # Keep writing while rotation remains blocked.
             drop_log.log_drop("audit-locked2", "and again", throttle_s=0)
             check("logging keeps working while the blockage stays",
                   "[audit-locked2] and again" in log.read_text(encoding="utf-8"))
@@ -1019,7 +966,7 @@ def test_drop_log_failed_rotate_still_appends():
             drop_log._perms_tightened = False
 
 
-# ── H-4: both installers pin piper-tts ───────────────────────────────────────
+# both installers pin piper-tts
 def test_setup_installers_pin_piper():
     install_src = (REPO_DIR / "install.py").read_text(encoding="utf-8")
     main_src = (REPO_DIR / "main.py").read_text(encoding="utf-8")
@@ -1050,7 +997,7 @@ class _FakeResp:
         return data
 
 
-# ── L-11/L-23: install.py fetches only missing files, caps runaway streams ───
+# install.py fetches only missing files, caps runaway streams
 def test_setup_install_voice_download():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
@@ -1059,8 +1006,7 @@ def test_setup_install_voice_download():
         install.VOICES_DIR = td
         install.VOICE_FILE = td / f"{install.VOICE_STEM}.onnx"
         install.VOICE_FILE.write_bytes(b"keep-me")
-        # Pin the hash to the fixture content, so the pre-existing model passes
-        # the integrity check the skip path runs before keeping it.
+        # Match the existing fixture checksum so the model can be reused.
         install.VOICE_ONNX_SHA256 = install._sha256(install.VOICE_FILE)
         fetched = []
         orig_urlopen = install.open_response
@@ -1085,8 +1031,7 @@ def test_setup_install_voice_download():
                   raised is not None and not cfg.exists()
                   and not list(td.glob("*.part")))
 
-            # A truncated survivor at the final path fails the pinned hash and
-            # is re-downloaded, never skipped on bare existence.
+            # Replace an existing model that fails its checksum.
             install.VOICE_FILE.write_bytes(b"truncated")
             fetched.clear()
             install.open_response = lambda url, timeout, deadline: (fetched.append(url), _FakeResp(b"{}"))[1]
@@ -1102,7 +1047,7 @@ def test_setup_install_voice_download():
              install.VOICE_ONNX_SHA256) = saved
 
 
-# ── L-23: download_kokoro_model honors the ceiling, cleans the .part ──────────
+# download_kokoro_model honors the ceiling, cleans the .part
 def test_setup_kokoro_download_ceiling():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
@@ -1130,19 +1075,14 @@ def test_setup_kokoro_download_ceiling():
              tts._KOKORO_MAX_BYTES) = saved
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# From test_audit_low_fixes.py — _as_bool, compile_user_regex without the
-# bounded engine, the dispatch budget, fflogs 401 retry, the bounded TTS
-# queue, bounded sidecar stderr, _play_wav_file validation, and the WS
-# inbound cap.
-# ═════════════════════════════════════════════════════════════════════════════
+# Input coercion, bounded queues and transport limits.
 
 # Keep DROP lines from the budget/sound tests out of the real nyaatriggers.log.
 LOW_TMP = Path(tempfile.mkdtemp(prefix="nyaa_lowfixes_"))
 drop_log._LOG_FILE = LOW_TMP / "nyaatriggers.log"
 
 
-# ── L5: _as_bool ─────────────────────────────────────────────────────────────
+# _as_bool
 def test_as_bool_truth_table():
     check("bool passthrough True", _as_bool(True, False) is True)
     check("bool passthrough False", _as_bool(False, True) is False)
@@ -1176,7 +1116,7 @@ def test_from_dict_uses_as_bool():
     check("from_dict interrupt missing", Trigger.from_dict({}).interrupt is False)
 
 
-# ── L0a: compile_user_regex refuses without the regex engine ─────────────────
+# L0a: compile_user_regex refuses without the regex engine
 def test_compile_user_regex_refuses_without_regex_module():
     orig = te._HAVE_REGEX
     try:
@@ -1193,7 +1133,7 @@ def test_compile_user_regex_refuses_without_regex_module():
           te.compile_user_regex("Limit Break") is not None)
 
 
-# ── L0b: per-line dispatch budget ────────────────────────────────────────────
+# L0b: per-line dispatch budget
 class _Stub:
     """Duck-typed window for MainWindow._dispatch_log_line (unbound), the same
     approach as the trigger-store window above."""
@@ -1247,7 +1187,7 @@ def test_dispatch_within_budget_matches_normally():
     check("within budget: line tail ran", w.appended == 1)
 
 
-# ── L4: fflogs 401 token refresh ─────────────────────────────────────────────
+# fflogs 401 token refresh
 class _ScriptedHTTP:
     """http_post seam: token endpoint always 200 (a fresh token per call), API
     endpoint 401 the first `failures` times, then 200."""
@@ -1337,7 +1277,7 @@ def test_graphql_401_via_real_transport():
     check("urllib 401: token refetched", calls["token"] == 2 and c._token == "tok2")
 
 
-# ── L11: bounded TTS queue, drop-oldest ──────────────────────────────────────
+# bounded TTS queue, drop-oldest
 def test_tts_enqueue_drops_oldest():
     while True:                      # start from an empty queue
         try:
@@ -1367,7 +1307,7 @@ def test_tts_enqueue_drops_oldest():
                 break
 
 
-# ── N1: sidecar stderr goes through the bounded reader ───────────────────────
+# sidecar stderr goes through the bounded reader
 def test_read_lines_bounded_skips_giant_line():
     from nyaatriggers.triggernometry_bridge import _read_lines_bounded
     big = "x" * (2 << 20)
@@ -1381,7 +1321,7 @@ def test_err_loops_use_bounded_reader():
         check(f"{fname} stderr bounded", "_read_lines_bounded(proc.stderr)" in src)
 
 
-# ── N2: _play_wav_file validation and bounded copy ───────────────────────────
+# _play_wav_file validation and bounded copy
 def _patched_play():
     """Swap tts._play_wav for a recorder (no aplay in tests)."""
     played = []
@@ -1397,8 +1337,7 @@ def test_play_wav_file_refuses_fifo():
     os.mkfifo(fifo)
     played, orig = _patched_play()
     try:
-        # Without the isfile guard, copy2 on a FIFO blocks forever: run on a
-        # thread so a regression shows as a hang, not a stuck suite.
+        # Use a thread so FIFO regression detection cannot block the whole suite.
         t = threading.Thread(target=tts._play_wav_file, args=(str(fifo), 0.5),
                              daemon=True)
         t.start()
@@ -1460,9 +1399,7 @@ def test_play_wav_file_valid_wav_still_plays():
 
 
 def test_play_wav_file_refuses_empty_in_volume_branch():
-    """A zero byte sound at a non native volume goes through the copy path.
-    The empty refusal there must match the native volume branch instead of
-    printing a native level fallback line and playing nothing."""
+    """Empty sound files are rejected at adjusted volume too."""
     empty = LOW_TMP / "empty.wav"
     empty.write_bytes(b"")
     played, orig = _patched_play()
@@ -1474,9 +1411,7 @@ def test_play_wav_file_refuses_empty_in_volume_branch():
 
 
 def test_apply_volume_bytes_unparseable_returns_input():
-    """The bytes twin of _apply_volume must honor its contract of returning
-    the input unchanged for what wave.open cannot parse, the same fallback
-    the file twin takes, so the chime still plays at its native level."""
+    """Unsupported WAV bytes remain unchanged for playback at their original level."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
@@ -1496,7 +1431,7 @@ def test_apply_volume_bytes_unparseable_returns_input():
     check("valid wav still scales", scaled != good and len(scaled) == len(good))
 
 
-# ── L1: WS inbound message cap ───────────────────────────────────────────────
+# WS inbound message cap
 def test_ws_client_caps_incoming_message_size():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
@@ -1508,7 +1443,7 @@ def test_ws_client_caps_incoming_message_size():
           c._ws.maxAllowedIncomingMessageSize() == _MAX_WS_MESSAGE)
 
 
-# ── N1: duplicate folder ids in triggers.local.json can't recurse forever ──
+# duplicate folder ids in triggers.local.json can't recurse forever
 def test_folder_tree_duplicate_folder_ids_terminate():
     from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QApplication, QTreeWidgetItem
@@ -1559,7 +1494,7 @@ def test_delete_folder_duplicate_folder_ids_terminate():
         app_common.QMessageBox = orig_mb
 
 
-# ── N22: the corrupt-settings warning is deferred until after set_locale ────
+# the corrupt-settings warning is deferred until after set_locale
 def test_corrupt_settings_defers_the_warning_dialog():
     d = Path(tempfile.mkdtemp(prefix="nyaa_cfg_"))
     sf = d / "nyaatriggers_settings.json"
@@ -1591,12 +1526,9 @@ def test_corrupt_settings_defers_the_warning_dialog():
         app_common._SETTINGS_FILE, app_common.QMessageBox = orig_file, orig_mb
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 2026-08-15 audit pass: duplicate timeline sync lines re-speaking callouts,
-# Triggernometry unsorted-folder fight tags, the incombat state replay.
-# ═════════════════════════════════════════════════════════════════════════════
+# Repeated timeline syncs, folder tags and combat replay.
 
-# ── a duplicate sync line must not re-speak same-time companion callouts ──
+# a duplicate sync line must not re-speak same-time companion callouts
 def test_timeline_duplicate_sync_keeps_companions_fired():
     import time as _t
     from PyQt6.QtWidgets import QApplication
@@ -1619,14 +1551,13 @@ def test_timeline_duplicate_sync_keeps_companions_fired():
 
     # ACT type 21: ability id at fields[4], non-player source at fields[2].
     line = ["21", "ts", "40001234", "Kefka", "1234", "Stack", "target1"]
-    # The first target's line lands just before the entries, snapping forward.
+    # The first target causes a forward snap.
     eng._t0 = _t.monotonic() - 49.95
     eng.process_line(line)
     eng._tick()          # clock crosses 50.0, the companion speaks
     check("first pass speaks both same-time entries", spoken == ["Stack", "Spread"])
 
-    # The second target's line lands after the clock passed the entry. The
-    # snap back to 50.0 must keep the companion's spoken state.
+    # A late duplicate sync preserves the companion callout's fired state.
     eng._t0 = _t.monotonic() - 50.15
     eng.process_line(line)
     eng._tick()
@@ -1638,7 +1569,7 @@ def test_timeline_duplicate_sync_keeps_companions_fired():
     check("the later entry still speaks once", spoken == ["Stack", "Spread", "Move"])
 
 
-# ── unsorted sharing-channel folders default to Savage like the rest ──────
+# unsorted sharing-channel folders default to Savage like the rest
 def test_convert_tn_unsorted_fight_tag_defaults_savage():
     from nyaatriggers.convert_triggernometry import path_to_fight
     check("unsorted bare phase folder defaults to Savage",
@@ -1647,7 +1578,7 @@ def test_convert_tn_unsorted_fight_tag_defaults_savage():
           path_to_fight("Sharing Channel/Unsorted/M4N/some trigger") == "M4N")
 
 
-# ── replay_state hands the cached incombat state to late sidecars ──────────
+# replay_state hands the cached incombat state to late sidecars
 def test_ws_replay_state_includes_incombat():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
@@ -1664,16 +1595,9 @@ def test_ws_replay_state_includes_incombat():
           any(json.loads(m).get("type", "").lower() == "incombat" for m in got))
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 2026-08-15 audit pass, main_window fixes: teardown steps run isolated so
-# one raise cannot orphan the sidecars, the shared banner only snoozes real
-# update offers, a malformed roster entry no longer aborts the rest, a failed
-# timeline load is not stamped as current, a manual engine update click
-# during the startup run still gets its report, and a piped 26|30 expiry
-# warning stays silent on the loss line.
-# ═════════════════════════════════════════════════════════════════════════════
+# Teardown isolation, banner state and delayed callouts.
 
-# ── MW8: one failed teardown step must not skip the rest ────────────────────
+# one failed teardown step must not skip the rest
 def test_teardown_step_isolates_failures():
     ran = []
 
@@ -1693,7 +1617,7 @@ def test_teardown_step_isolates_failures():
               "self._teardown_step" in body)
 
 
-# ── MW9: dismissing the cactbot banner must not snooze a pending update ─────
+# dismissing the cactbot banner must not snooze a pending update
 def test_cactbot_banner_dismiss_does_not_snooze_update():
     class _Banner:
         def __init__(self):
@@ -1715,7 +1639,7 @@ def test_cactbot_banner_dismiss_does_not_snooze_update():
               (w.snoozed == 1) is expect)
 
 
-# ── MW4: one malformed roster entry must not abort the rest ─────────────────
+# one malformed roster entry must not abort the rest
 def test_party_jobs_one_bad_entry_does_not_abort_roster():
     w = _Stub([])
     w.jobs = []
@@ -1728,7 +1652,7 @@ def test_party_jobs_one_bad_entry_does_not_abort_roster():
     check("chain flush still re-armed after the feed", w.rearmed == 1)
 
 
-# ── MW10: a failed timeline load is not stamped as the current fight ────────
+# a failed timeline load is not stamped as the current fight
 def test_timeline_failed_load_does_not_stamp_fight():
     src = _program_sources()
     body = src.split("def _load_timeline_for_zone", 1)[1].split("\n    def ", 1)[0]
@@ -1738,7 +1662,7 @@ def test_timeline_failed_load_does_not_stamp_fight():
           'fight = ""' in exc_tail[:stamp])
 
 
-# ── MW12: a manual engine update click during the startup run is reported ───
+# a manual engine update click during the startup run is reported
 def test_te_manual_update_click_not_swallowed_by_in_flight_run():
     w = _Stub([])
     w._te_update_running = True
@@ -1761,7 +1685,7 @@ def test_te_manual_update_click_not_swallowed_by_in_flight_run():
           w2._te_update_pending_manual is False)
 
 
-# ── TE3: a piped 26|30 expiry warning stays silent on the loss line ─────────
+# a piped 26|30 expiry warning stays silent on the loss line
 class _StatusStub(_Stub):
     def __init__(self, triggers):
         super().__init__(triggers)
@@ -1789,14 +1713,14 @@ def test_piped_expiry_warn_swallows_loss_line():
     check("line tail still ran", w.appended == 1)
 
 
-# ── MW13: a staged Triggernometry pack never clobbers a same-named one ──────
+# a staged Triggernometry pack never clobbers a same-named one
 def test_tn_pack_staging_disambiguates_colliding_basenames():
     src = _program_sources()
     check("staged pack name gets a counter suffix on collision",
           'f"{src.stem}_{n}{src.suffix}"' in src)
 
 
-# ── a stalled handshake is aborted and retried, never parked forever ───────
+# a stalled handshake is aborted and retried, never parked forever
 def test_ws_stalled_handshake_aborts_and_reopens():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
@@ -1837,7 +1761,7 @@ def test_ws_stalled_handshake_aborts_and_reopens():
     check("a live connection is never churned", c2._ws.calls == [])
 
 
-# ── sidecar stdin queues cap queued bytes, not just item count ─────────────
+# sidecar stdin queues cap queued bytes, not just item count
 def test_bridge_stdin_queue_byte_budget():
     from nyaatriggers.triggevent_bridge import _ByteQueue as _TEVQueue
     from nyaatriggers.triggevent_bridge import _MAX_QUEUE_BYTES as _TEV_CAP
@@ -1873,7 +1797,7 @@ def test_bridge_stdin_queue_byte_budget():
         check("a non-str sentinel always fits", sentinel.qsize() == 1)
 
 
-# ── ws_client: dead combat_data signal removed, raw tee keeps CombatData ────
+# ws_client: dead combat_data signal removed, raw tee keeps CombatData
 def test_ws_combatdata_still_teed_raw():
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
@@ -1892,11 +1816,7 @@ def test_ws_combatdata_still_teed_raw():
           not hasattr(c, "combat_data"))
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# tools/ catalog writes, low audit batch: tmp + rename so an interrupted run
-# can't truncate a shipped file, and utf-8-sig reads so a BOM'd catalog
-# doesn't read as empty.
-# ═════════════════════════════════════════════════════════════════════════════
+# Atomic catalog writes and BOM handling.
 
 def _load_tool(name):
     import importlib.util
@@ -1915,7 +1835,7 @@ def _boom_write(orig_write):
     return boom
 
 
-# ── extract_strings: a BOM'd catalog must not read as empty ─────────────────
+# extract_strings: a BOM'd catalog must not read as empty
 def test_extract_strings_bom_catalog_not_emptied():
     xs = _load_tool("extract_strings")
     tmp = Path(tempfile.mkdtemp())
@@ -1936,7 +1856,7 @@ def test_extract_strings_bom_catalog_not_emptied():
         xs._REPO = orig_repo
 
 
-# ── extract_strings: a failed write keeps the previous good catalog ─────────
+# extract_strings: a failed write keeps the previous good catalog
 def test_extract_strings_failed_write_keeps_previous_catalog():
     xs = _load_tool("extract_strings")
     tmp = Path(tempfile.mkdtemp())
@@ -1962,7 +1882,7 @@ def test_extract_strings_failed_write_keeps_previous_catalog():
         Path.write_text = orig_write
 
 
-# ── build_callouts_ja: output goes through tmp + rename ─────────────────────
+# build_callouts_ja: output goes through tmp + rename
 def test_build_callouts_ja_write_is_atomic():
     bc = _load_tool("build_callouts_ja")
     tmp = Path(tempfile.mkdtemp())
@@ -2004,14 +1924,9 @@ def test_build_callouts_ja_write_is_atomic():
             setattr(bc, k, v)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Triggevent engine update: the jar is gated on a stamp of the HEAD it was
-# built from, not the git behind count alone. A failed or timed-out build
-# leaves HEAD at origin/main with the old jar in place, and behind==0 used
-# to report the engine current forever after.
-# ═════════════════════════════════════════════════════════════════════════════
+# Retry engine builds when the source stamp does not match the jar.
 
-# ── update_engine: behind==0 with a missing or stale jar stamp rebuilds ──────
+# update_engine: behind==0 with a missing or stale jar stamp rebuilds
 def test_te_update_stamp_gate():
     tev = triggevent_bridge
 
@@ -2099,8 +2014,7 @@ def test_te_update_stamp_gate():
         td.cleanup()
         return ok, msg, builds, stamp_text, remotes, ops
 
-    # A build that fails after the merge leaves no stamp, and the next call
-    # at behind==0 must rebuild instead of reporting the engine current.
+    # Retry a failed engine build even when the checkout is already current.
     ok, msg, builds, stamp_text, _r1, _o1 = run_once("3", "aaa111", 1, None)
     check("failed build reports the failure", not ok and "rebuild failed" in msg)
     check("failed build writes no stamp", stamp_text is None)
@@ -2149,8 +2063,7 @@ def test_te_update_stamp_gate():
           clean in ops and merge in ops and ops.index(clean) < ops.index(merge))
     check("a cleaned clone updates and stamps", ok and stamp_text == "ddd444\n")
 
-    # Dirt that survives the clean refuses the build instead of being compiled
-    # into a jar the stamp would certify as pristine.
+    # Refuse to build if cleanup leaves local changes.
     ok, msg, builds, stamp_text, _r7, _o7 = run_once("0", "aaa111", 0, None,
                                                      dirty=True, clean_works=False)
     check("a tree that will not come clean refuses the build",
@@ -2158,8 +2071,7 @@ def test_te_update_stamp_gate():
     check("a refused build never starts", builds == [])
     check("a refused build writes no stamp", stamp_text is None)
 
-    # A current jar leaves the tree alone even when it is dirty. The stamp
-    # already vouches for what was built, the dirt is for standalone builds.
+    # Leave local changes alone when the stamped jar is already current.
     ok, msg, builds, stamp_text, _r8, ops = run_once("0", "aaa111", 0, "aaa111\n",
                                                      dirty=True)
     check("a current jar reports up to date with a dirty tree",
@@ -2182,7 +2094,7 @@ def test_te_update_stamp_gate():
     check("a failed repoint never fetches", not any(op[0] == "fetch" for op in ops))
 
 
-# ── a downloaded prebuilt jar invalidates the build stamp ────────────────────
+# a downloaded prebuilt jar invalidates the build stamp
 def test_te_download_drops_build_stamp():
     tev = triggevent_bridge
     td = tempfile.TemporaryDirectory()
@@ -2212,11 +2124,7 @@ def test_te_download_drops_build_stamp():
         td.cleanup()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 2026-08 audit low fixes, main_window.py: the import gate rejects a
-# "triggers" value that is not a list of dicts instead of blanking the
-# session under a success dialog.
-# ═════════════════════════════════════════════════════════════════════════════
+# Reject imports whose triggers field is not a list of records.
 class _ImportMsgBox:
     """Records both dialogs so a test can tell rejection from success."""
     class StandardButton:
@@ -2292,14 +2200,9 @@ def test_import_triggers_still_accepts_a_real_export():
           "ccc" in [t.id for t in w._triggers])
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2026-08-23 audit low batch, trigger_engine from_dict pipe and whitespace
-# hygiene: a mixed pipe with a chat half drops the phantom ability id, the
-# expiry warning survives only on all-status pipes, and a padded log type is
-# stripped so it can match.
-# ─────────────────────────────────────────────────────────────────────────────
+# Normalize log type alternatives and applicable status fields.
 
-# ── a mixed pipe keeps the id only when every part has an ID field ─────────
+# a mixed pipe keeps the id only when every part has an ID field
 def test_mixed_pipe_drops_phantom_ability_id():
     check("00|21 drops the ability id",
           Trigger.from_dict({"log_type": "00|21", "ability_id": "A55B"}).ability_id == "")
@@ -2310,8 +2213,7 @@ def test_mixed_pipe_drops_phantom_ability_id():
     check("26|30 keeps the effect id",
           Trigger.from_dict({"log_type": "26|30", "ability_id": "1F4"}).ability_id == "1F4")
 
-    # The phantom itself. With the id kept, the 00 half fell back to field 4
-    # and matched chat text against the hex string.
+    # Chat text must not be treated as an ability ID.
     t = Trigger.from_dict({"log_type": "00|21", "ability_id": "A55B",
                            "ability_regex": "RareChatPhrase", "cooldown_s": 0})
     check("chat text at field 4 no longer matches the dropped id",
@@ -2327,7 +2229,7 @@ def test_mixed_pipe_drops_phantom_ability_id():
           t.matches(line) is not None)
 
 
-# ── a mixed pipe keeps the warn only when every part is a status type ──────
+# a mixed pipe keeps the warn only when every part is a status type
 def test_mixed_pipe_drops_expiry_warn():
     check("26|21 drops the expiry warn",
           Trigger.from_dict({"log_type": "26|21", "expiry_warn_s": 5}).expiry_warn_s == 0.0)
@@ -2342,9 +2244,7 @@ def test_mixed_pipe_drops_expiry_warn():
 
 
 def test_mixed_pipe_warn_trigger_fires_on_both_halves():
-    # With the warn dropped at load, a 26|21 trigger is a normal trigger. It
-    # speaks on both its lines instead of arming a warning on the gain and
-    # swallowing the ability line.
+    # Mixed status and ability types match normally after the expiry warning is removed.
     t = Trigger.from_dict({"name": "mixed", "log_type": "26|21",
                            "ability_id": "1F4", "status_scope": "any",
                            "cooldown_s": 0.0, "expiry_warn_s": 5.0})
@@ -2361,7 +2261,7 @@ def test_mixed_pipe_warn_trigger_fires_on_both_halves():
     check("line tails still ran", w.appended == 2)
 
 
-# ── a padded log type is stripped at load ──────────────────────────────────
+# a padded log type is stripped at load
 def test_from_dict_strips_log_type():
     check("padded log type is stripped",
           Trigger.from_dict({"log_type": " 21"}).log_type == "21")
@@ -2374,13 +2274,9 @@ def test_from_dict_strips_log_type():
           Trigger.from_dict({"log_type": " 21|22 ", "ability_id": "A55B"}).ability_id == "A55B")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2026-08-24 hand edited settings shapes: the engine text override and callout
-# edit dicts drop junk entries at load, and the folder list drops entries whose
-# id or name is not a string.
-# ─────────────────────────────────────────────────────────────────────────────
+# Discard malformed settings entries before building controls.
 
-# ── engine text overrides keep only str keys and dicts of str fields ───────
+# engine text overrides keep only str keys and dicts of str fields
 def test_engine_text_overrides_drop_junk_entries():
     raw = {
         "cactbot:Foo": "oops",                                # not a dict
@@ -2395,7 +2291,7 @@ def test_engine_text_overrides_drop_junk_entries():
           mw._as_text_overrides("oops") == {})
 
 
-# ── callout edit dicts keep only str to str entries ────────────────────────
+# callout edit dicts keep only str to str entries
 def test_callout_edits_drop_junk_entries():
     raw = {"t1": "new text", "t2": 123, "t3": None,
            "t4": ["x"], "t5": {"find": "x"}}
@@ -2405,7 +2301,7 @@ def test_callout_edits_drop_junk_entries():
           mw._as_strdict([1, 2]) == {})
 
 
-# ── the __init__ ingestion sites route through the filters ─────────────────
+# the __init__ ingestion sites route through the filters
 def test_settings_ingestion_routes_through_the_filters():
     src = _program_sources()
     check("engine text overrides ingested through the shape filter",
@@ -2416,7 +2312,7 @@ def test_settings_ingestion_routes_through_the_filters():
           '_as_strdict(self._settings.get("triggernometry_callout_edits", {}))' in src)
 
 
-# ── folder entries with non-str ids or names are dropped at load ───────────
+# folder entries with non-str ids or names are dropped at load
 def test_folders_with_junk_types_dropped_at_load():
     _isolate_store()
     write_shipped([Trigger(id="aaa", fight="F1")])
@@ -2434,14 +2330,9 @@ def test_folders_with_junk_types_dropped_at_load():
     check("junk folders do not quarantine the file", w.corrupt == 0)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2026-08-24 pass 4 audit: a whitespace only log type takes the default at
-# load instead of round tripping from dead to live on a later save, and the
-# ability id drop on an unindexed type is drop logged so the broadened match
-# leaves a trace.
-# ─────────────────────────────────────────────────────────────────────────────
+# Normalize blank log types and report discarded ID filters.
 
-# ── a whitespace only log type defaults at load ─────────────────────────────
+# a whitespace only log type defaults at load
 def test_whitespace_log_type_defaults_at_load():
     t = Trigger.from_dict({"log_type": " "})
     check("whitespace only log type takes the default at load",
@@ -2450,7 +2341,7 @@ def test_whitespace_log_type_defaults_at_load():
           Trigger.from_dict(t.to_dict()).log_type == "20")
 
 
-# ── the ability id drop on an unindexed type leaves a drop log line ────────
+# the ability id drop on an unindexed type leaves a drop log line
 def test_unindexed_ability_id_drop_is_logged():
     drops = []
     real = te.log_drop
@@ -2469,12 +2360,7 @@ def test_unindexed_ability_id_drop_is_logged():
         te.log_drop = real
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2026-08-24 audit 5: the GUI import dedup overlaps pipe joined fields per
-# part, matching the CLI merge dedup. An imported 21|22 row collides with an
-# existing plain 21, and a row pinning one id of an A55D|A55E pipe collides
-# with the whole pipe.
-# ─────────────────────────────────────────────────────────────────────────────
+# Detect duplicate imports across overlapping type and ID alternatives.
 
 class _DedupWin:
     """Just enough window for _is_duplicate: the trigger list plus the two
@@ -2531,9 +2417,7 @@ def test_is_duplicate_pipe_overlap():
                                   ability_regex="flare", fight="DSR")) is not None)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Engine chain badge: capped history, exact count, escaped tooltip
-# ─────────────────────────────────────────────────────────────────────────────
+# Engine failure counts and bounded tooltips.
 def test_engine_chain_badge_caps_and_escapes():
     from PyQt6.QtWidgets import QApplication, QLabel
     from nyaatriggers.ui.engines import EnginesMixin
@@ -2574,9 +2458,7 @@ def test_engine_chain_badge_caps_and_escapes():
           not host._engine_chain_lbl.isVisible())
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Feed loss cancels pending local warnings and closes the meter encounter
-# ─────────────────────────────────────────────────────────────────────────────
+# Feed loss cancels pending warnings and closes the encounter.
 def test_feed_loss_cancels_pending_local_warnings():
     import types
     from PyQt6.QtWidgets import QApplication
@@ -2631,7 +2513,6 @@ def test_feed_loss_cancels_pending_local_warnings():
           host2.cleared == [] and host2._dps_meter.calls == [])
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

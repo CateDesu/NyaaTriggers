@@ -1,17 +1,4 @@
-"""Tests for the cross process first-run setup lock, install.setup_lock.
-
-Two app instances running first-run setup at once both passed the pip gate
-and then ran venv create plus pip install into the same venv concurrently,
-which can corrupt it. The lock serializes them, breaks the file a killed
-holder leaves behind once it outlives the longest legitimate hold, and
-fails a waiter with a clear message when the lock cannot be taken.
-
-Each test_* function is both a pytest case and a step of the direct-run
-script.
-
-Run directly:  python -m tests.test_setup_lock   (exit 0 = all pass)
-        or:    python -m pytest tests/test_setup_lock.py -q
-"""
+"""Exclusive environment setup, stale locks and bounded waiting."""
 import os
 import sys
 import tempfile
@@ -41,7 +28,7 @@ def _patched_lock(td):
     return saved
 
 
-# ── acquire and release ───────────────────────────────────────────────────
+# acquire and release
 def test_setup_lock_acquire_release():
     with tempfile.TemporaryDirectory() as td:
         saved = _patched_lock(td)
@@ -55,7 +42,7 @@ def test_setup_lock_acquire_release():
             install._SETUP_LOCK = saved
 
 
-# ── a live holder serializes a waiter ──────────────────────────────────────
+# a live holder serializes a waiter
 def test_setup_lock_serializes_waiter():
     with tempfile.TemporaryDirectory() as td:
         saved = _patched_lock(td)
@@ -92,7 +79,7 @@ def test_setup_lock_serializes_waiter():
             install._SETUP_LOCK = saved
 
 
-# ── a killed holder's leftover lock is broken by age ──────────────────────
+# a killed holder's leftover lock is broken by age
 def test_setup_lock_breaks_stale():
     with tempfile.TemporaryDirectory() as td:
         saved = _patched_lock(td)
@@ -111,13 +98,12 @@ def test_setup_lock_breaks_stale():
             install._SETUP_LOCK = saved
 
 
-# ── a waiter that cannot take the lock bows out with a clear message ──────
+# a waiter that cannot take the lock bows out with a clear message
 def test_setup_lock_bows_out():
     with tempfile.TemporaryDirectory() as td:
         saved = (install._SETUP_LOCK, install._SETUP_WAIT_S)
         install._SETUP_LOCK = Path(td) / "ffxiv.setup.lock"
-        # Shrink the wait so the test does not sit out the real deadline. The
-        # held lock stays fresh, so only the deadline can end the wait.
+        # Use a short deadline while keeping the held lock fresh.
         install._SETUP_WAIT_S = 2
         try:
             with install.setup_lock():
@@ -134,7 +120,7 @@ def test_setup_lock_bows_out():
             install._SETUP_LOCK, install._SETUP_WAIT_S = saved
 
 
-# ── both installers hold the lock around the venv build ────────────────────
+# both installers hold the lock around the venv build
 def test_setup_lock_used_by_both_installers():
     install_src = (REPO_DIR / "install.py").read_text(encoding="utf-8")
     main_src = (REPO_DIR / "main.py").read_text(encoding="utf-8")
@@ -145,7 +131,6 @@ def test_setup_lock_used_by_both_installers():
           "with install.setup_lock():" in worker)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

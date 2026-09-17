@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# LOCAL build/regeneration tool: full reproducible build of the triggernometry-core sidecar FROM A CLEAN CHECKOUT.
-# Clones the Triggernometry engine at a pinned commit, applies the Linux-build fixups,
-# compiles the stub assemblies, restores NuGet, builds the engine + host, and assembles
-# bin/. The output is cross-platform MSIL (.NET Framework 4.6.2): it runs natively on
-# Windows and under Mono on Linux. Requires Mono 6.12+ (mcs/xbuild) + git + curl. NOT run by CI
-# (GitHub runners ship Mono 6.8, too old to compile the engine). The prebuilt bin/ is committed/vendored.
+# Rebuild the committed Triggernometry sidecar from pinned sources. Requires Mono 6.12
+# or newer, a Mono build tool, git and curl. The resulting .NET Framework assemblies run
+# on Windows and through Mono on Linux. This is a local regeneration tool.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ENGINE_DIR="${ENGINE_DIR:-$HERE/.engine}"
@@ -15,12 +12,11 @@ NUGET="${NUGET:-$HERE/.nuget/nuget.exe}"
 for t in mono mcs git curl; do
   command -v "$t" >/dev/null || { echo "ERROR: '$t' not found (apt install mono-complete / pacman -S mono)"; exit 1; }
 done
-# Either build tool works (xbuild is deprecated/absent in newer Mono, msbuild ships with mono-complete).
 if   command -v xbuild  >/dev/null; then BUILDTOOL=xbuild
 elif command -v msbuild >/dev/null; then BUILDTOOL=msbuild
 else echo "ERROR: need xbuild or msbuild (mono-complete)"; exit 1; fi
 
-# 1) clone the engine at the pinned commit (idempotent; reset to a clean tree each run)
+# Reset the engine checkout to the pinned commit.
 if [ ! -d "$ENGINE_DIR/.git" ]; then
   git clone "$ENGINE_REPO" "$ENGINE_DIR"
 fi
@@ -31,46 +27,43 @@ git -C "$ENGINE_DIR" clean -fd Source/Triggernometry/Forms Source/Triggernometry
 
 SRC="$ENGINE_DIR/Source"
 
-# 2) apply the csproj build fixups (System.Text.Json.6.0.3 import removed, System.Speech/WMPLib
-#    stub HintPaths, +System.Net.Http +netstandard; see SPIKE-LOG.md "Phase 0")
+# Apply the engine build fixes and stub references.
 git -C "$ENGINE_DIR" apply "$HERE/engine-fixups.patch"
 
-# 3) case-rename the designer file (Windows-cased ref vs Linux case-sensitivity)
+# Match the designer filename case on Linux.
 if [ -f "$SRC/Triggernometry/Forms/RepositoryListForm.designer.cs" ]; then
   mv -f "$SRC/Triggernometry/Forms/RepositoryListForm.designer.cs" "$SRC/Triggernometry/Forms/RepositoryListForm.Designer.cs"
 fi
 
-# 4) point the netstandard HintPath at THIS machine's Mono facade (patch ships an Arch path)
+# Use this machine's netstandard facade path.
 NETSTD="$(find /usr/lib/mono -name netstandard.dll -path '*Facades*' 2>/dev/null | sort | tail -1)"
 if [ -n "$NETSTD" ]; then
   sed -i "s#<HintPath>/usr/lib/mono/4.5/Facades/netstandard.dll</HintPath>#<HintPath>${NETSTD//\//\\/}</HintPath>#" \
     "$SRC/Triggernometry/TriggernometryPlugin.csproj"
 fi
 
-# 5) compile the no-op stub assemblies (real System.Speech/WMP unused: audio routes via our hooks)
+# Compile audio stubs because playback uses host hooks.
 mkdir -p "$SRC/shims"
 mcs -target:library -out:"$SRC/shims/System.Speech.dll"  "$HERE/shims/src/SystemSpeechStub.cs"
 mcs -target:library -out:"$SRC/shims/Interop.WMPLib.dll" "$HERE/shims/src/WMPLibStub.cs"
 
-# 6) restore NuGet packages (old-style packages.config)
 if [ ! -d "$SRC/packages" ]; then
   mkdir -p "$(dirname "$NUGET")"
   [ -f "$NUGET" ] || curl -sL https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -o "$NUGET"
   mono "$NUGET" restore "$SRC/Triggernometry.sln" -PackagesDirectory "$SRC/packages" -NonInteractive
 fi
 
-# 7) build the engine (only the plugin csproj; the ACT Proxy needs ACT.exe and is skipped)
+# Build the engine only. The separate ACT Proxy requires ACT.exe.
 "$BUILDTOOL" /p:Configuration=Release /verbosity:minimal "$SRC/Triggernometry/TriggernometryPlugin.csproj"
 ENGINE_BIN="$SRC/Triggernometry/bin/Release"
 [ -f "$ENGINE_BIN/TriggernometryPlugin.dll" ] || { echo "ERROR: engine build produced no dll"; exit 1; }
 
-# 8) build the host into the engine output (so its deps colocate)
+# Build the host beside its dependencies.
 ( cd "$ENGINE_BIN" && mcs -target:exe -out:triggernometry-core.exe \
     -r:TriggernometryPlugin.dll -r:System.Windows.Forms.dll -r:System.Drawing.dll \
     -r:System.Xml.dll -r:System.dll -r:System.Core.dll -r:System.Text.Json.dll -r:System.Memory.dll \
     "$HERE/host/Program.cs" "$HERE/host/CombatantBridge.cs" "$HERE/host/ActLogLine.cs" )
 
-# 9) assemble bin/ (exe + every dependency DLL incl. the stubs)
 rm -rf "$HERE/bin"; mkdir -p "$HERE/bin"
 cp -f "$ENGINE_BIN/triggernometry-core.exe" "$HERE/bin/"
 cp -f "$ENGINE_BIN"/*.dll "$HERE/bin/"

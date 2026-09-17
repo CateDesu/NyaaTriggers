@@ -30,10 +30,7 @@ _LOG_TYPES = [
     (N_("Custom..."),                 None),
 ]
 
-# Log types whose field[4] is an effect duration. The duration window
-# matcher only applies to these. Only 26 GainsEffect: a 30 LosesEffect
-# line carries a hardcoded 0.00 placeholder at field 4, never the effect
-# duration, so a duration window on one could never match.
+# Only gain line 26 carries duration. Loss line 30 uses a placeholder.
 _DURATION_TYPES = frozenset({"26"})
 _CUSTOM_IDX = len(_LOG_TYPES) - 1
 
@@ -42,22 +39,17 @@ _SEQ_LOG_TYPES = [("20", N_("20 - Cast")), ("21", N_("21 - Ability")),
 
 
 def _regex_syntax_error(pattern: str) -> bool:
-    # A resource refusal must not invoke the compiler again to explain it.
+    # Do not compile again after a resource guard refuses a pattern.
     if _regex_resource_limit(pattern):
         return False
-    # compile_user_regex returns None both for a malformed pattern and for a
-    # compilable one the ReDoS heuristic refused. A plain compile tells the
-    # two apart so the save refusal can
-    # say which one bit. Diagnose with the same engine compile_user_regex
-    # uses, the regex module accepts syntax stdlib rejects like \p, and catch
-    # broadly like the engine does: a deeply nested pattern raises
-    # RecursionError, not a compile error, and must not escape the dialog.
+    # Use the matching engine to distinguish syntax errors from resource limits. Deep
+    # nesting can also raise RecursionError.
     try:
         if _HAVE_REGEX:
             _regex_mod.compile(pattern)
         else:
             re.compile(pattern)
-    except Exception:  # noqa: BLE001 - same degrade as compile_user_regex
+    except Exception:  # noqa: BLE001
         return True
     return False
 
@@ -84,8 +76,6 @@ class _StepRow(QWidget):
         self._timeout = QDoubleSpinBox()
         self._timeout.setRange(0.5, 120.0)
         self._timeout.setDecimals(1)
-        # Matches the 10s fallback sequential.py uses when a step has no
-        # timeout of its own.
         self._timeout.setValue(10.0)
         self._timeout.setSuffix(" s")
         self._timeout.setMaximumWidth(75)
@@ -103,8 +93,7 @@ class _StepRow(QWidget):
         layout.addWidget(self._timeout)
         layout.addWidget(del_btn)
 
-        # Set when Qt clamped a persisted timeout into the spinbox range, so
-        # accept can warn before OK saves the clamped value over the original.
+        # Remember a loaded value that was clamped so saving can warn about it.
         self._timeout_clamped = None
 
         if data:
@@ -112,29 +101,23 @@ class _StepRow(QWidget):
             idx = next((i for i in range(self._type.count())
                         if self._type.itemData(i) == lt), -1)
             if idx < 0:
-                # A type the combo doesn't list, such as a 26/30/00 step from a
-                # recorded line. Add it transiently so OK round-trips it
-                # instead of rewriting it to "20".
+                # Add custom log types to the combo so they survive editing.
                 self._type.addItem(lt, userData=lt)
                 idx = self._type.count() - 1
             self._type.setCurrentIndex(idx)
-            # Hand-edited packs put ints or junk in these, and setText raises
-            # TypeError on anything but str, bricking the dialog open.
             self._id.setText(_str_or(data.get("ability_id"), ""))
             self._regex.setText(_str_or(data.get("ability_regex"), ""))
             try:
                 timeout = float(data.get("timeout_s", 10.0))
             except (TypeError, ValueError, OverflowError):
                 timeout = 10.0
-            # float() accepts nan and inf literals from hand-edited JSON. The
-            # spinbox just clamps them, so load the 10s default instead.
+            # Use the default for nonfinite timeouts.
             if not math.isfinite(timeout):
                 timeout = 10.0
             self._timeout.setValue(timeout)
             if self._timeout.value() != timeout:
                 self._timeout_clamped = timeout
-                # A later edit replaces the clamped value, so there is
-                # nothing left for accept to warn about.
+                # A user edit clears the warning for the loaded value.
                 self._timeout.valueChanged.connect(self._clear_timeout_clamp)
 
     def _clear_timeout_clamp(self, _=None) -> None:
@@ -209,15 +192,10 @@ class TriggerDialog(QDialog):
         self.setWindowTitle(_("Edit Trigger") if trigger else _("New Trigger"))
         self.setMinimumWidth(520)
         self._current_zone = current_zone
-        # Optional callable returning a chosen fight tag, or None, for the Pick button.
         self._fight_picker = fight_picker
-        # Spinbox loads that Qt clamped during _populate, remembered as
-        # spinbox, label, persisted value tuples, so accept can warn before
-        # a clamped value gets saved over the original.
+        # Keep the original value before the widget clamps it.
         self._clamped = []
         self._build_ui()
-        # New triggers default to the current zone's fight tag. _populate
-        # overwrites it when editing.
         if current_fight and not trigger:
             self._fight.setText(current_fight)
         if trigger:
@@ -238,9 +216,7 @@ class TriggerDialog(QDialog):
         self._type_custom.setPlaceholderText(_("type number"))
         self._type_custom.setVisible(False)
         self._type_combo.currentIndexChanged.connect(self._on_type_changed)
-        # A custom type is typed, not picked, so the status-only rows must
-        # re-evaluate per keystroke or typing "26"/"30" into Custom never
-        # reveals them. The combo signal fired while the box was still empty.
+        # Update applicable fields when a custom log type is typed.
         self._type_custom.textChanged.connect(lambda _=None: self._update_dur_row_visibility())
         self._type_custom.textChanged.connect(lambda _=None: self._update_id_enabled())
         type_row = QWidget()
@@ -266,7 +242,7 @@ class TriggerDialog(QDialog):
         self._regex.textChanged.connect(self._update_regex_dot)
         layout.addRow(_("Ability Regex:"), regex_row)
 
-        # Duration window, shown only for 26/30 types.
+        # Duration filters apply only to status gain lines.
         self._dur_min = QDoubleSpinBox()
         self._dur_max = QDoubleSpinBox()
         for sb in (self._dur_min, self._dur_max):
@@ -285,7 +261,6 @@ class TriggerDialog(QDialog):
         dh.addStretch(1)
         layout.addRow(_("Duration:"), self._dur_row)
 
-        # Stack-count window, shown only for 26/30 types.
         self._count_min = QSpinBox()
         self._count_max = QSpinBox()
         for sb in (self._count_min, self._count_max):
@@ -302,17 +277,12 @@ class TriggerDialog(QDialog):
         ch.addStretch(1)
         layout.addRow(_("Stacks:"), self._count_row)
 
-        # Status scope, 26/30 only. Whose effect fires the trigger, yours,
-        # one you applied, or anyone's.
         self._scope = QComboBox()
         self._scope.addItem(_("You - the effect is on you"), "self")
         self._scope.addItem(_("Target - you applied it (e.g. Death's Design)"), "by_me")
         self._scope.addItem(_("Anyone"), "any")
         layout.addRow(_("Applies to:"), self._scope)
 
-        # Expiry pre-warning, GainsEffect/26 only. > 0 fires the callout this
-        # many seconds before the effect expires instead of on the gain.
-        # Re-arms on each refresh. Cancels if the effect drops early.
         self._warn = QDoubleSpinBox()
         self._warn.setRange(0.0, 60.0)
         self._warn.setDecimals(1)
@@ -383,10 +353,8 @@ class TriggerDialog(QDialog):
         self._zone.textChanged.connect(self._update_zone_dot)
         layout.addRow(_("Zone Regex:"), zone_row)
 
-        # Cooldown stays live for every trigger. For a reapply-warning trigger
-        # it doesn't gate the gain. The timer re-arms on refresh. It sets the
-        # minimum gap between spoken reminders, collapsing the burst when one
-        # AoE lands the effect on a whole pack at once.
+        # Cooldown spaces reminders without blocking timer refreshes. It also combines
+        # bursts from the same AoE.
         self._cooldown = QDoubleSpinBox()
         self._cooldown.setRange(0.0, 3600.0)
         self._cooldown.setDecimals(1)
@@ -394,7 +362,6 @@ class TriggerDialog(QDialog):
         self._cooldown.setValue(5.0)
         layout.addRow(_("Cooldown:"), self._cooldown)
 
-        # Speed
         self._speed = QDoubleSpinBox()
         self._speed.setRange(0.5, 3.0)
         self._speed.setDecimals(1)
@@ -424,10 +391,6 @@ class TriggerDialog(QDialog):
         self._update_id_enabled()
 
     def _update_zone_dot(self, pattern: str) -> None:
-        # Validity and matching go through the same guarded functions the
-        # engine uses, see _update_regex_dot, so a catastrophic intermediate
-        # pattern typed character-by-character can't hang the dialog, and one
-        # the engine rejects shows as invalid here exactly as at runtime.
         if not pattern:
             self._zone_dot.setText("")
             return
@@ -447,9 +410,6 @@ class TriggerDialog(QDialog):
         self._zone_dot.setToolTip(tip)
 
     def _update_regex_dot(self, pattern: str) -> None:
-        # Validity is judged by the same function the engine matches with, so
-        # its length cap and ReDoS heuristic show as invalid here exactly as
-        # they do at runtime, where the trigger would silently never fire.
         if not pattern:
             self._regex_dot.setText("")
             return
@@ -467,10 +427,6 @@ class TriggerDialog(QDialog):
         self._update_id_enabled()
 
     def _update_dur_row_visibility(self) -> None:
-        # Duration shows for 26 only. Stacks and scope show for 26/30, both
-        # still live on a loss line, including piped types like 26|30. The
-        # reapply warning needs the gain's duration, and get_trigger drops
-        # it unless every part is a status type, so hide it there too.
         parts = self._log_type_parts()
         dur_visible = bool(parts & _DURATION_TYPES)
         status_visible = bool(parts & _STATUS_TYPES)
@@ -480,18 +436,14 @@ class TriggerDialog(QDialog):
             self._form.setRowVisible(self._count_row, status_visible)
             self._form.setRowVisible(self._scope, status_visible)
             self._form.setRowVisible(self._warn_row, warn_visible)
-        else:  # Qt < 6.4, can't hide the label, so just toggle the fields
+        else:  # Older Qt versions can hide only the fields.
             self._dur_row.setVisible(dur_visible)
             self._count_row.setVisible(status_visible)
             self._scope.setVisible(status_visible)
             self._warn_row.setVisible(warn_visible)
 
     def _update_id_enabled(self) -> None:
-        # A log type with no _ID_IDX entry, a 00 chat line for one, has no
-        # ID field for the engine to match, so an Ability ID there can never
-        # fire. Same for a mixed pipe like 00|21, whose 00 half has no ID
-        # field, see Trigger.from_dict. Grey the field out instead of
-        # offering a dead matcher.
+        # ID filtering requires an ID field in every selected log type.
         self._ability_id.setEnabled(self._log_type_parts() <= _ID_IDX.keys())
 
     def _browse_sound(self) -> None:
@@ -508,8 +460,6 @@ class TriggerDialog(QDialog):
             from nyaatriggers.tts import play_sound
             play_sound(path)
 
-    # Sample values so tokenised previews are speakable. Unknown {tokens}
-    # just lose their braces.
     _PREVIEW_TOKENS = {"source": "the boss", "target": "you", "count": "2"}
 
     def _test_tts(self) -> None:
@@ -519,8 +469,7 @@ class TriggerDialog(QDialog):
         sub = lambda m: self._PREVIEW_TOKENS.get(m.group(1), m.group(1))
         preview = re.sub(r"\{(\w+)\}", sub, text)
         from nyaatriggers.tts import speak, reading_for
-        # Resolve a kana reading on the unsubstituted template so espeak doesn't
-        # read kanji as "Chinese letter". Substitute the same preview tokens into it.
+        # Resolve the kana reading before substituting tokens.
         reading = reading_for(text)
         spoken = re.sub(r"\{(\w+)\}", sub, reading) if reading else None
         speak(preview, speed=self._speed.value(), reading=spoken)
@@ -529,19 +478,17 @@ class TriggerDialog(QDialog):
         if self._fight_picker is None:
             return
         chosen = self._fight_picker()
-        # "" is a real choice, Uncategorised, and clears the field. Only a
-        # cancelled picker, None, leaves it untouched.
+        # An empty category is intentional. None means the picker was cancelled.
         if chosen is not None:
             self._fight.setText(chosen)
 
     def _load_spin(self, spin, value, label: str) -> None:
-        # Clamp before Qt converts the value to a C++ number.
-        # Keep the original so saving still warns about the adjustment.
+        # Clamp before converting to a C++ integer and keep the original for the save
+        # warning.
         spin.setValue(max(spin.minimum(), min(spin.maximum(), value)))
         if spin.value() != value:
             self._clamped.append((spin, label, value))
-            # Connected after the load, so only a later user edit drops the
-            # record. Once the clamped value is gone there is nothing to warn.
+            # Connect after loading so only user edits clear the warning.
             spin.valueChanged.connect(lambda _=None, s=spin: self._discard_clamp(s))
 
     def _discard_clamp(self, spin) -> None:
@@ -583,29 +530,16 @@ class TriggerDialog(QDialog):
         return _LOG_TYPES[idx][1]
 
     def _log_type_parts(self) -> set:
-        # The engine supports pipe-separated types like "26|30", so test the
-        # parts. A piped status type keeps the status rows and their values.
-        # Empty parts from a stray pipe are dropped the same way from_dict
-        # drops them, so a hand edited "21|" keeps its ID and warn rows
-        # instead of the dialog silently blanking what the engine accepts.
         return {p.strip() for p in self._log_type().split("|") if p.strip()}
 
     def _usable_ability_id(self) -> str:
-        # A greyed out box can still hold an ID typed before the type switch.
-        # Only a log type with an ID field can match one, and on a mixed pipe
-        # like 00|21 the engine drops the ID on load, see Trigger.from_dict,
-        # so for the rest it counts as blank and never reaches a saved
-        # trigger.
+        # Ignore a stale ID filter when the selected types have no ID field.
         if self._log_type_parts() <= _ID_IDX.keys():
             return self._ability_id.text().strip()
         return ""
 
     def _pending_clamps(self) -> list:
-        # Clamped spinbox loads that a save would write back, as label,
-        # original, clamped value entries. Duration persists only for 26,
-        # stacks for 26/30 and the reapply warning only for all-status
-        # types, see get_trigger, so a value a type drops on save has
-        # nothing to warn about.
+        # Warn only about clamped fields that will be saved.
         keep_dur = bool(self._log_type_parts() & _DURATION_TYPES)
         keep_count = bool(self._log_type_parts() & _STATUS_TYPES)
         keep_warn = ("26" in self._log_type_parts()
@@ -622,16 +556,9 @@ class TriggerDialog(QDialog):
         return entries
 
     def accept(self) -> None:
-        # A Custom log type is compared verbatim against each line's type
-        # field, so a typo like "2O" or "2 1", or full width digits, saves a
-        # trigger that can never fire. Blank Custom silently became "20".
-        # Refuse both, same silent death class as the regex guards below.
         if self._type_combo.currentIndex() == _CUSTOM_IDX:
             custom = self._type_custom.text().strip()
-            # [0-9], not \d: \d also matches full-width digits, which the
-            # engine's exact string compare would never see in a log line.
-            # Wire types are exactly 2 digits, so "0" or a leading-zero
-            # "026" can never match a line either.
+            # Wire types use two ASCII digits. Regex \d also accepts other digits.
             if not re.fullmatch(r"[0-9]{2}(\|[0-9]{2})*", custom):
                 QMessageBox.warning(
                     self, _("Invalid log type"),
@@ -639,10 +566,7 @@ class TriggerDialog(QDialog):
                       "several pipe-separated like 21|22. Anything else never "
                       "matches a log line, so this trigger would never fire."))
                 return
-        # A malformed Ability ID, a typo like "A5SB", never matches the hex
-        # the engine compares literally, and it takes priority over a good
-        # regex since the engine checks the ID first. Refuse it like the dead
-        # regex guards below.
+        # The ID filter takes precedence over regex.
         aid = self._usable_ability_id()
         if aid and not re.fullmatch(r"[0-9A-Fa-f]+(\|[0-9A-Fa-f]+)*", aid):
             QMessageBox.warning(
@@ -651,10 +575,7 @@ class TriggerDialog(QDialog):
                   "like A55D|A55E. Anything else never matches a log line, so "
                   "this trigger would never fire."))
             return
-        # With a blank Ability ID the regex is the only matcher, and one the
-        # engine can't compile, compile_user_regex -> None, makes the trigger
-        # silently dead. Refuse to save that. An ID set means the regex is
-        # unused, so it isn't gated then.
+        # Validate regex only when no ID filter is set.
         pattern = self._regex.text().strip()
         if (pattern and not aid
                 and compile_user_regex(pattern) is None):
@@ -664,9 +585,6 @@ class TriggerDialog(QDialog):
                          "Ability ID set this trigger would never fire. Fix "
                          "the regex or enter an Ability ID.")
             else:
-                # Compilable pattern the safety policy refused. Calling it
-                # invalid would send the user hunting for a syntax error
-                # that is not there.
                 title = _("Unsafe regex")
                 body = _("The ability regex was rejected as potentially "
                          "catastrophic, and with no Ability ID set this "
@@ -674,13 +592,7 @@ class TriggerDialog(QDialog):
                          "enter an Ability ID.")
             QMessageBox.warning(self, title, body)
             return
-        # Step ability regexes get the same guard. sequential.py compiles the
-        # step regex on each candidate line and treats a compile failure as
-        # never matching, so a bad one strands the sequence on that step. A
-        # malformed step ID strands it the same way and wins over the regex
-        # at match time, so it is gated first. Like the main matcher, a valid
-        # step ID makes the regex unused, so the regex is only refused when
-        # the step has no ID.
+        # Sequence steps use the same ID first validation.
         for n, row in enumerate(self._sequence._rows, 1):
             step_aid = row._id.text().strip()
             if step_aid and not re.fullmatch(r"[0-9A-Fa-f]+(\|[0-9A-Fa-f]+)*",
@@ -700,7 +612,6 @@ class TriggerDialog(QDialog):
                              "compile, so the sequence could never advance "
                              "past that step. Fix the regex or clear it.")
                 else:
-                    # Same policy refusal distinction as the main regex.
                     title = _("Unsafe regex")
                     body = _("The ability regex for step {n} was rejected as "
                              "potentially catastrophic, so the sequence "
@@ -708,9 +619,7 @@ class TriggerDialog(QDialog):
                              "the regex or clear it.")
                 QMessageBox.warning(self, title, body.format(n=n))
                 return
-        # Same story for the zone regex. It always gates the match, so one
-        # the engine can't compile makes the trigger silently dead. Blank
-        # means any zone, so only a non-blank reject is refused.
+        # A nonempty zone regex always applies.
         zone = self._zone.text().strip()
         if zone and compile_user_regex(zone) is None:
             if _regex_syntax_error(zone):
@@ -719,18 +628,13 @@ class TriggerDialog(QDialog):
                          "would never fire. Fix the regex or leave the zone "
                          "blank.")
             else:
-                # Same policy refusal distinction as the ability regex.
                 title = _("Unsafe regex")
                 body = _("The zone regex was rejected as potentially "
                          "catastrophic, so this trigger would never fire. "
                          "Simplify the regex or leave the zone blank.")
             QMessageBox.warning(self, title, body)
             return
-        # A window whose min tops its max can never match, the engine needs
-        # the line's value inside both bounds. A zero max means no upper
-        # bound, so only a positive max below its min is refused. Same
-        # silent death class as the regex guards. 26 triggers keep the
-        # duration window, 26/30 keep the stacks window, see get_trigger.
+        # Zero leaves the upper bound open.
         parts = self._log_type_parts()
         if parts & _DURATION_TYPES:
             if 0 < self._dur_max.value() < self._dur_min.value():
@@ -748,10 +652,7 @@ class TriggerDialog(QDialog):
                       "trigger would never fire. Fix the window, or set max "
                       "to 0 for no upper bound."))
                 return
-        # Blank Ability ID and blank regex leaves no matcher at all, and the
-        # engine matches every line of the log type then, a spam trigger.
-        # Refuse to save that, ahead of the clamp advisory below, so the
-        # user never dismisses a warning for a save that is then refused.
+        # Require an ID or regex to avoid matching every line.
         if not aid and not pattern:
             QMessageBox.warning(
                 self, _("No matcher"),
@@ -759,9 +660,6 @@ class TriggerDialog(QDialog):
                   "would fire on every line of its log type. Enter an Ability "
                   "ID or a regex."))
             return
-        # The engine honors out of range values the spinboxes can't show, and
-        # Qt clamped them on load. Saving would overwrite the originals with
-        # the clamped values, so warn first and let the user back out.
         clamped = self._pending_clamps()
         if clamped:
             details = "\n".join(f"{label}: {original} → {new}"
@@ -782,11 +680,7 @@ class TriggerDialog(QDialog):
     def get_trigger(self, existing_id: str | None = None) -> Trigger:
         lt = self._log_type()
         parts = self._log_type_parts()
-        # Persist the windows only for types that carry them, so switching a
-        # status trigger to an ability type drops stale values. Duration is
-        # 26 only, a 30 line has no real duration, while stacks and scope
-        # stay live on both. A piped type like 26|30 keeps them for its
-        # status lines.
+        # Save only fields supported by the selected log types.
         has_dur = bool(parts & _DURATION_TYPES)
         has_status = bool(parts & _STATUS_TYPES)
         dmin = self._dur_min.value() if has_dur else 0.0
@@ -794,11 +688,8 @@ class TriggerDialog(QDialog):
         cmin = self._count_min.value() if has_status else 0
         cmax = self._count_max.value() if has_status else 0
         scope = self._scope.currentData() if has_status else "self"
-        # Reapply warning is GainsEffect-only. Drop it for other types so a
-        # stale value can't arm a phantom timer after the type is switched.
-        # A mixed pipe like 26|21 drops it too. With a warn set, the host
-        # swallows every matched line that is not a 26 gain, so the ability
-        # half would stay silent for good. Same rule from_dict loads with.
+        # Expiry requires status types including gain 26. Mixed ability types are not
+        # eligible.
         warn = (self._warn.value()
                 if "26" in parts and parts <= _STATUS_TYPES else 0.0)
         return Trigger(

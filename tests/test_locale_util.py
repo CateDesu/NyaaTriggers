@@ -21,7 +21,7 @@ def check(name, cond):
         FAILS.append(name)
 
 
-# ── has_japanese: the three plan ranges, plus clear negatives ──
+# has_japanese: the three plan ranges, plus clear negatives
 check("kana + kanji is Japanese", has_japanese("フレア来ます"))
 check("hiragana alone is Japanese", has_japanese("たすけて"))
 check("katakana alone is Japanese", has_japanese("スタック"))
@@ -31,7 +31,7 @@ check("plain ASCII is not Japanese", not has_japanese("stack"))
 check("empty string is not Japanese", not has_japanese(""))
 check("digits/punctuation/tokens are not Japanese", not has_japanese("123 !? {target}"))
 
-# ── effective_locale: explicit wins, auto follows the (injected) system ──
+# effective_locale: explicit wins, auto follows the (injected) system
 check("explicit en stays en", effective_locale("en") == "en")
 check("explicit ja stays ja", effective_locale("ja") == "ja")
 check("auto under ja_JP -> ja", effective_locale("auto", system_name="ja_JP") == "ja")
@@ -43,7 +43,7 @@ check("auto under C locale -> en", effective_locale("auto", system_name="C") == 
 check("unknown explicit locale -> en", effective_locale("de") == "en")
 check("truthy non-str setting -> en, never raises", effective_locale(5) == "en")
 
-# ── _(): English passes through, ja translates, misses fall back per key ──
+# _(): English passes through, ja translates, misses fall back per key
 set_locale("en")
 check("en is a pass-through", _("Settings") == "Settings")
 set_locale("ja")
@@ -68,7 +68,7 @@ check("set_locale('en') restores pass-through", _("Settings") == "Settings")
 set_locale("xx")
 check("unsupported set_locale coerces to en", _("Settings") == "Settings")
 
-# ── resilience: a corrupt / missing catalog never crashes, degrades to English ──
+# resilience: a corrupt / missing catalog never crashes, degrades to English
 _orig_dir = locale_util._LANG_DIR
 try:
     tmp = Path(tempfile.mkdtemp())

@@ -1,9 +1,6 @@
-// Minimal System.Speech stub for headless Mono/Linux hosting of Triggernometry.
-// The engine only constructs a SpeechSynthesizer and sets Volume/Rate/SpeakAsync;
-// with cfg.TtsMethod=ACT all real TTS is routed through our TtsPlaybackHook, so a
-// no-op synthesizer is correct. Exists purely so (a) the engine compiles under Mono
-// where the real System.Speech is absent, and (b) `new SpeechSynthesizer()` at
-// RealPlugin.cs:2287 does not throw (which would silently set isInitialized=false).
+// Provide the System.Speech types required to compile and initialize Triggernometry
+// under Mono. TtsMethod=ACT routes speech through the host hook, so these methods need
+// no playback.
 namespace System.Speech.Synthesis
 {
     public class SpeechSynthesizer : System.IDisposable

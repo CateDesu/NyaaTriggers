@@ -1,14 +1,4 @@
-"""Tests for the MainWindow wiring of the Cursed Shriek gaze engine.
-
-Drives the real _umad_gaze_line / _umad_gaze_cast / dispatch / retry and the
-_match_automark_rules suspend guard unbound on a duck-typed window (no
-QApplication), the way test_automark_rules.py drives the compound matcher.
-Confirms the host routes the followup casts and the 26/30 gaze lines, gates
-correctly, marks through the shared transport, retries slot-unknown marks, and
-suppresses the plain 15A7 rule while the gaze toggle owns it.
-
-Run directly:  python -m tests.test_umad_gaze_wiring   (exit 0 = all pass)
-"""
+"""UMAD gaze routing, mode gates, retries and plain rule suppression."""
 import os
 import sys
 import types
@@ -99,7 +89,7 @@ def markmap(w):
     return {a: m for a, m in w.marks}
 
 
-# ── happy path: the labeled pull shape, Inferno fake then Tsunami real ──
+# happy path: the labeled pull shape, Inferno fake then Tsunami real
 w = FakeWindow(slots={A: 1, B: 2, C: 3, D: 4})
 w.cast(INFERNO)
 w.gaze([(A, "60.00"), (B, "60.00")])
@@ -112,7 +102,7 @@ check("inferno wave gets the bind signs (by slot)",
 check("tsunami wave gets the ignore signs (by slot)",
       mm[C] == IGN1 and mm[D] == IGN2)
 
-# ── the second cast id of each element routes too ──
+# the second cast id of each element routes too
 w = FakeWindow()
 w.cast("BB20")
 w.gaze([(A, "60.00"), (B, "60.00")])
@@ -124,12 +114,12 @@ w.gaze([(A, "60.00"), (B, "60.00")])
 check("BB21 Tsunami arms the real kind",
       markmap(w) == {A: IGN1, B: IGN2})
 
-# ── no followup cast, no marks ──
+# no followup cast, no marks
 w = FakeWindow()
 w.gaze([(A, "60.00"), (B, "60.00"), (C, "69.00"), (D, "69.00")])
 check("gains without a followup tell mark nothing", w.marks == [])
 
-# ── gating ──
+# gating
 w = FakeWindow(gaze_on=False)
 w.cast(INFERNO)
 w.gaze([(A, "60.00"), (B, "60.00")])
@@ -157,14 +147,14 @@ w.cast("BA94")                    # Mystery Magic is not a followup id
 w.gaze([(A, "60.00"), (B, "60.00")])
 check("unrelated cast ids arm nothing, the set fails closed", w.marks == [])
 
-# ── a non-numeric duration field is not load-bearing anymore ──
+# a non-numeric duration field is not load-bearing anymore
 w = FakeWindow()
 w.cast(INFERNO)
 w.gaze([(A, "bad"), (B, "60.00")])
 check("an unparseable duration still marks, the tell is the cast",
       markmap(w) == {A: BND1, B: BND2})
 
-# ── slot-unknown marks are queued and retried, not lost ──
+# slot-unknown marks are queued and retried, not lost
 w = FakeWindow(mark_ok=False)
 w.cast(INFERNO)
 w.gaze([(A, "60.00"), (B, "60.00")])
@@ -174,14 +164,14 @@ w._mark_ok = True
 w._retry_umad_gaze_pending()
 check("the party-refresh retry sends the held gaze marks", len(w.marks) == 2)
 
-# ── a loss clears the sign through the transport ──
+# a loss clears the sign through the transport
 w = FakeWindow()
 w.cast(INFERNO)
 w.gaze([(A, "60.00"), (B, "60.00")])
 w.feed("30", CURSED_SHRIEK, A)
 check("losing the gaze clears that player's sign", w.clears == [A])
 
-# ── wipe reset clears outstanding signs ──
+# wipe reset clears outstanding signs
 w = FakeWindow()
 w.cast(INFERNO)
 w.gaze([(A, "60.00"), (B, "60.00")])
@@ -190,7 +180,7 @@ w.gaze([(C, "69.00"), (D, "69.00")])
 w._umad_gaze_reset(clear_marks=True)
 check("wipe/abort clears all four outstanding signs", sorted(w.clears) == [A, B, C, D])
 
-# ── the plain 15A7 rule is suspended while the gaze toggle is on ──
+# the plain 15A7 rule is suspended while the gaze toggle is on
 rule15a7 = [{"fight": "UMAD", "status": "15A7", "marker": "circle",
              "scope": "party", "enabled": True}]
 w = FakeWindow(gaze_on=True, rules=rule15a7)

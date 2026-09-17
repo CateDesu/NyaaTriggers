@@ -1,14 +1,4 @@
-"""Regression tests for the trigger editor's zone-regex guards (M-4/H-3),
-plus step-row round trips, null step log types, and the clamp warning.
-
-The live zone-match dot must compile and search through the engine's
-guarded helpers (compile_user_regex + _safe_search), so a catastrophic
-intermediate pattern typed character-by-character can't hang the dialog,
-and accept() must refuse to save a zone regex the engine rejects (at
-runtime compile_user_regex -> None would make the trigger silently dead).
-
-Run directly:  python -m tests.test_trigger_dialog   (exit 0 = all pass)
-"""
+"""Trigger editor validation, sequence row round trips and clamped value warnings."""
 import os
 import sys
 import time
@@ -41,7 +31,7 @@ def new_dialog(zone=ZONE):
     return dlg
 
 
-# ── the zone dot goes through the engine's guarded compile/search ─────────
+# the zone dot goes through the engine's guarded compile/search
 dlg = new_dialog()
 dlg._zone.setText("")
 check("blank zone pattern shows no dot", dlg._zone_dot.text() == "")
@@ -75,7 +65,7 @@ check("no current zone is grey", GREY in dlg_nozone._zone_dot.text())
 check("no current zone has an empty tooltip",
       dlg_nozone._zone_dot.toolTip() == "")
 
-# ── accept() refuses a zone regex the engine can't compile ────────────────
+# accept() refuses a zone regex the engine can't compile
 class _WarnBox:
     calls = []
 
@@ -121,7 +111,7 @@ try:
 finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
-# ── a step row keeps both ability_id and ability_regex on round trip ──────
+# a step row keeps both ability_id and ability_regex on round trip
 from nyaatriggers.trigger_engine import Trigger
 
 row = trigger_dialog._StepRow(data={"log_type": "21", "ability_id": "A55B",
@@ -130,11 +120,11 @@ d = row.to_dict()
 check("step row keeps both id and regex",
       d.get("ability_id") == "A55B" and d.get("ability_regex") == "Exaflare")
 
-# ── a null step log_type loads as the "20" default, not the text "None" ───
+# a null step log_type loads as the "20" default, not the text "None"
 row = trigger_dialog._StepRow(data={"log_type": None})
 check("null step log_type falls back to 20", row._type.currentData() == "20")
 
-# ── out of range persisted values warn before OK saves them clamped ───────
+# out of range persisted values warn before OK saves them clamped
 class _ClampBox:
     StandardButton = _real_qmessagebox.StandardButton
     answer = None
@@ -191,7 +181,7 @@ try:
 finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
-# ── a piped 26|30 trigger keeps its status fields through the dialog ──────
+# a piped 26|30 trigger keeps its status fields through the dialog
 t = Trigger(name="piped", log_type="26|30", duration_min=1.5, duration_max=12.0,
             count_min=1, count_max=3, status_scope="any", expiry_warn_s=4.5)
 dlg = TriggerDialog(trigger=t)
@@ -205,7 +195,7 @@ check("piped 26|30 keeps the stacks window",
 check("piped 26|30 keeps the scope", out.status_scope == "any")
 check("piped 26|30 keeps the expiry warning", out.expiry_warn_s == 4.5)
 
-# ── editing a clamped spin afterwards clears the pending clamp ────────────
+# editing a clamped spin afterwards clears the pending clamp
 t = Trigger(name="clamp cleared", log_type="21", cooldown_s=7200.0)
 dlg = TriggerDialog(trigger=t)
 check("clamped cooldown load is pending", len(dlg._pending_clamps()) == 1)
@@ -222,7 +212,7 @@ check("editing a clamped step timeout clears the pending clamp",
       dlg._pending_clamps() == []
       and dlg._sequence._rows[0]._timeout_clamped is None)
 
-# ── step timeout default matches the 10s runtime fallback ─────────────────
+# step timeout default matches the 10s runtime fallback
 row = trigger_dialog._StepRow()
 check("new step row defaults to the 10s runtime timeout",
       row._timeout.value() == 10.0)
@@ -230,8 +220,7 @@ row = trigger_dialog._StepRow(data={"log_type": "21"})
 check("step without a saved timeout loads as 10s",
       row._timeout.value() == 10.0)
 
-# nan and inf literals from hand-edited JSON load as the 10s default, not a
-# clamped spinbox value with a pending clamp warning.
+# Nonfinite timeouts use the default without a clamp warning.
 row = trigger_dialog._StepRow(data={"log_type": "21", "timeout_s": "nan"})
 check("nan step timeout loads as 10s",
       row._timeout.value() == 10.0 and row._timeout_clamped is None)
@@ -265,7 +254,7 @@ try:
 finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
-# ── accept() refuses a step ability regex the engine can't compile ────────
+# accept() refuses a step ability regex the engine can't compile
 trigger_dialog.QMessageBox = _WarnBox
 try:
     dlg = new_dialog()
@@ -296,7 +285,7 @@ try:
 finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
-# ── accept() refuses a custom log type the engine can never match ─────────
+# accept() refuses a custom log type the engine can never match
 trigger_dialog.QMessageBox = _WarnBox
 try:
     dlg = new_dialog()
@@ -339,7 +328,7 @@ try:
 finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
-# ── accept() refuses windows whose min tops the max, dead on save ─────────
+# accept() refuses windows whose min tops the max, dead on save
 trigger_dialog.QMessageBox = _WarnBox
 try:
     t = Trigger(name="bad duration window", log_type="26",
@@ -386,7 +375,7 @@ try:
 finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
-# ── accept() refuses a malformed ability id, same silent death class ──────
+# accept() refuses a malformed ability id, same silent death class
 trigger_dialog.QMessageBox = _WarnBox
 try:
     dlg = new_dialog()
@@ -419,7 +408,7 @@ try:
 finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
-# ── accept() refuses a custom type that is not exactly 2 digits ───────────
+# accept() refuses a custom type that is not exactly 2 digits
 trigger_dialog.QMessageBox = _WarnBox
 try:
     for bad in ("0", "026"):
@@ -435,7 +424,7 @@ try:
 finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
-# ── accept() refuses a trigger with no matcher at all, a spam trigger ─────
+# accept() refuses a trigger with no matcher at all, a spam trigger
 trigger_dialog.QMessageBox = _WarnBox
 try:
     dlg = new_dialog()
@@ -461,7 +450,7 @@ try:
 finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
-# ── a stale id in a greyed box never reaches a saved trigger ──────────────
+# a stale id in a greyed box never reaches a saved trigger
 trigger_dialog.QMessageBox = _WarnBox
 try:
     idx_00 = next(i for i, (_lbl, val) in enumerate(trigger_dialog._LOG_TYPES)
@@ -509,7 +498,7 @@ try:
 finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
-# ── a policy-rejected regex is not reported as a syntax error ─────────────
+# a policy-rejected regex is not reported as a syntax error
 trigger_dialog.QMessageBox = _WarnBox
 try:
     dlg = new_dialog()
@@ -575,7 +564,7 @@ try:
 finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
-# ── a mixed pipe with a chat half drops the id like a plain 00 type ───────
+# a mixed pipe with a chat half drops the id like a plain 00 type
 trigger_dialog.QMessageBox = _WarnBox
 try:
     dlg = new_dialog()
@@ -613,7 +602,7 @@ try:
 finally:
     trigger_dialog.QMessageBox = _real_qmessagebox
 
-# ── a mixed 26|21 pipe drops the reapply warning the dialog once saved ────
+# a mixed 26|21 pipe drops the reapply warning the dialog once saved
 t = Trigger(name="mixed pipe", log_type="26|21", ability_id="A55B",
             expiry_warn_s=4.5)
 dlg = TriggerDialog(trigger=t)
@@ -633,24 +622,17 @@ dlg = TriggerDialog(trigger=t)
 check("a clamped warning a 26|30 type keeps stays pending",
       dlg._pending_clamps() == [("Reapply warning", 90.0, 60.0)])
 
-# ── _regex_syntax_error diagnoses with the engine's own compiler ──────────
-# The helper mirrors compile_user_regex's broad catch. A deeply nested
-# pattern over the length cap raises RecursionError in a plain compile,
-# which escaped the helper and aborted the app from the Save path.
+# _regex_syntax_error diagnoses with the engine's own compiler
 check("an oversized pattern stays a resource refusal without another compile",
       trigger_dialog._regex_syntax_error("(" * 500 + "a" + ")" * 500) is False)
 check("a genuinely malformed pattern is a syntax error",
       trigger_dialog._regex_syntax_error("(") is True)
 if trigger_dialog._HAVE_REGEX:
-    # stdlib re rejects syntax the regex module accepts, like \p, so a
-    # policy refusal of one was mislabeled "does not compile".
+    # Use the matching engine to recognize syntax unsupported by standard re.
     check("regex module only syntax is not mislabeled a syntax error",
           trigger_dialog._regex_syntax_error("(?:\\p{L}+)+") is False)
 
-# ── a stray pipe in the log type keeps the id and warn, same as from_dict ──
-# The engine filters empty pipe parts at load, so a hand edited "21|" keeps
-# its ability id. The dialog's parts computation must filter them the same
-# way or editing such a trigger greys the id box and blanks the id on save.
+# Ignore empty pipe alternatives consistently with the trigger loader.
 t = Trigger(name="stray pipe", log_type="21|", ability_id="A55B")
 dlg = TriggerDialog(trigger=t)
 check("a stray pipe keeps the ability id field live",

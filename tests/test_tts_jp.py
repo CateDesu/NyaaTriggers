@@ -1,11 +1,4 @@
-"""Tests for the Japanese-voice routing in tts._system_speak (M1).
-
-Drives _system_speak with _run_speak_proc stubbed to capture the command, and
-platform/shutil monkeypatched to simulate each OS. Verifies the JP voice is
-selected only when auto-route is on AND the text is Japanese, per platform.
-
-Run directly:  python -m tests.test_tts_jp   (exit 0 = all pass)
-"""
+"""Japanese speech routing, phonemizer inputs, volume and interruption behavior."""
 import atexit
 import contextlib
 import io
@@ -43,8 +36,7 @@ def check(name, cond):
         FAILS.append(name)
 
 
-# fix (c): the module default flipped False->True so localized callouts speak in
-# Japanese out of the box. Asserted at import, before any set_jp_auto call.
+# Japanese auto routing is enabled before any settings call.
 check("_jp_auto module default is True (fix c)", tts._jp_auto is True)
 
 
@@ -72,21 +64,20 @@ _orig_proc, _orig_sys, _orig_which = tts._run_speak_proc, tts.platform.system, s
 _orig_auto = tts._jp_auto            # restore the module default, not force it False
 tts._run_speak_proc = _fake_proc
 try:
-    # ── Linux spd-say ──
+    # Linux spd-say
     cmd = speak_via("Linux", JP, jp_auto=True, avail=("spd-say",))
     check("linux spd-say: JP -> -l ja", "-l" in cmd and cmd[cmd.index("-l") + 1] == "ja")
     cmd = speak_via("Linux", EN, jp_auto=True, avail=("spd-say",))
     check("linux spd-say: English not routed", "-l" not in cmd)
 
-    # ── Linux espeak (no spd-say) ──
+    # Linux espeak (no spd-say)
     cmd = speak_via("Linux", JP, jp_auto=True, avail=("espeak",))
     check("linux espeak: JP -> -v ja", cmd and cmd[0] == "espeak" and "-v" in cmd and cmd[cmd.index("-v") + 1] == "ja")
     cmd = speak_via("Linux", EN, jp_auto=True, avail=("espeak",))
     check("linux espeak: English not routed", "-v" not in cmd)
 
-    # ── Linux with neither backend: JP reports handled (silent) so it does NOT drop
-    #    to the English-only Piper model. English stays unhandled so Piper (the correct
-    #    voice for English) still runs. ──
+    # Without a Japanese backend, suppress the Japanese fallback to an English voice.
+    # English can still use Piper.
     tts.platform.system = lambda: "Linux"
     shutil.which = lambda n: None
     tts.set_jp_auto(True)
@@ -95,7 +86,7 @@ try:
     check("linux none: English with no backend -> False (falls to Piper)",
           tts._system_speak(EN, 1.0, 1.0) is False)
 
-    # ── Windows PowerShell ──
+    # Windows PowerShell
     cmd = speak_via("Windows", JP, jp_auto=True, jp_voice="Microsoft Haruka Desktop")
     ps = cmd[-1] if cmd else ""
     check("win: explicit voice -> SelectVoice(...)", "SelectVoice('Microsoft Haruka Desktop')" in ps)
@@ -113,9 +104,7 @@ try:
     ps = cmd[-1] if cmd else ""
     check("win: single-quote in voice name is PS-escaped", "SelectVoice('O''Brien JP')" in ps)
 
-    # ── reading= reaches espeak as KANA (not the kanji display), and unknown kanji
-    #    with no reading is stripped, so espeak never announces "Chinese letter". This
-    #    is the whole point of the reading pipeline. Assert the actual spoken text. ──
+    # Speech receives kana readings and strips unknown kanji.
     tts.platform.system = lambda: "Linux"
     shutil.which = lambda n: ("/usr/bin/" + n) if n == "espeak" else None
     tts.set_jp_auto(True); tts.set_jp_voice("")
@@ -130,8 +119,7 @@ try:
     check("win: SAPI receives the kanji display (it reads kanji natively)",
           "全体攻撃" in (CAP.get("text") or ""))
 
-    # ── master volume past 100%: espeak and spd-say have native headroom and
-    #    honor the slider's 200% ceiling. SAPI caps at 100. ──
+    # Linux speech supports amplified volume. SAPI caps at full volume.
     tts.set_master_volume(2.0)
     cmd = speak_via("Linux", EN, jp_auto=True, avail=("espeak",))
     check("linux espeak: 200% master volume -> -a 200",
@@ -154,9 +142,7 @@ finally:
     tts.set_jp_auto(_orig_auto)
     tts.set_jp_voice("")
 
-# ── a backend spawn failure must leave a diagnostic. JP callouts go silent on
-#    this path, handled instead of garbled, so without a log line they would
-#    vanish without a trace. ──
+# Report backend startup failures even when speech is suppressed.
 def _raising_proc(*a, **k):
     raise OSError("spawn blew up")
 
@@ -183,17 +169,13 @@ finally:
     shutil.which = _orig_which
     tts.set_jp_auto(_orig_auto)
 
-# ── fix (b): _run_speak_proc reports the child's real exit status, so a failed
-#    synth falls back instead of going silent. Uses sys.executable exit codes
-#    (always present, unlike /bin/true|false). ──
+# Use Python child exit codes to verify synthesis failure reporting.
 check("exit 0 -> True (handled/spoke)",
       tts._run_speak_proc([_PY, "-c", "import sys;sys.exit(0)"], "", stdin_text=False) is True)
 check("nonzero exit -> False (caller falls back)",
       tts._run_speak_proc([_PY, "-c", "import sys;sys.exit(1)"], "", stdin_text=False) is False)
 
-# ── fix (b) regression guard: an interrupt()-terminated proc exits nonzero too,
-#    but that is intentional. It must return True so _pipeline does NOT replay the
-#    cut-off callout through Piper. ──
+# An interrupted process counts as handled so Piper cannot replay the cancelled callout.
 _res = {}
 _th = threading.Thread(
     target=lambda: _res.__setitem__(
@@ -207,8 +189,7 @@ tts.interrupt()             # terminates it -> nonzero exit, but intentional
 _th.join(timeout=5)
 check("interrupt-terminated proc returns True (no Piper replay)", _res.get("r") is True)
 
-# ── fix (b) contract via _pipeline: system handled -> skip Piper. System failed
-#    -> fall back to Piper. Engine forced to 'system' so _system_speak is invoked. ──
+# Fall back to Piper only when system speech fails.
 _o_ss, _o_lp, _o_pw, _o_eng = tts._system_speak, tts._load_piper, tts._play_wav, tts._engine
 _calls = []
 try:
@@ -234,10 +215,7 @@ finally:
     tts._system_speak, tts._load_piper, tts._play_wav = _o_ss, _o_lp, _o_pw
     tts._engine, tts._piper_voice = _o_eng, None
 
-# ── M1 route: Japanese text uses the system voice even under the Piper engine
-#    (the `_jp_auto and has_japanese` clause), while English under Piper does not.
-#    Guards the second clause of the _pipeline route, which the tests above (all
-#    engine="system") never exercised. ──
+# Japanese auto routing also applies while Piper is selected.
 _o_ss2, _o_lp2, _o_pw2, _o_eng2, _o_auto2 = (
     tts._system_speak, tts._load_piper, tts._play_wav, tts._engine, tts._jp_auto)
 _routed: list = []
@@ -266,20 +244,14 @@ finally:
         _o_ss2, _o_lp2, _o_pw2, _o_eng2, _o_auto2)
     tts._piper_voice = None
 
-# ── fix (a), stdin half: the stdin_text path must encode JP as UTF-8 onto the child's
-#    stdin (a non-JP Windows locale can't encode it in the ANSI default). Every
-#    _system_speak test stubs _run_speak_proc, so drive the REAL function and assert
-#    the Japanese round-trips to the child intact. ──
+# The real subprocess path writes Japanese stdin as UTF-8.
 _reader = [_PY, "-c",
            "import sys; sys.stdin.reconfigure(encoding='utf-8'); "
            "sys.exit(0 if sys.stdin.read() == 'フレア来ます' else 7)"]
 check("stdin_text: Japanese round-trips as UTF-8 to the child",
       tts._run_speak_proc(_reader, "フレア来ます", stdin_text=True) is True)
 
-# ── TTS3: the native-volume notification path must refuse a FIFO the same way
-#    _play_wav_file does. Without the isfile guard aplay would park the daemon
-#    thread and its chime slot for the 60 s timeout. _play_wav_detached is
-#    stubbed, so a regression shows as a recorded play, not a stuck suite. ──
+# Reject FIFO sounds before playback. Stub the player so failure cannot hang the suite.
 if hasattr(os, "mkfifo"):
     import tempfile
     _dir = tempfile.mkdtemp()
@@ -289,8 +261,7 @@ if hasattr(os, "mkfifo"):
     _o_detached = tts._play_wav_detached
     tts._play_wav_detached = lambda p: _played.append(p)
     try:
-        # The worker releases a chime slot in finally, so take one first or the
-        # bounded semaphore raises on the extra release.
+        # Acquire the chime slot that the worker releases in finally.
         tts._notification_slots.acquire()
         _t = threading.Thread(target=tts._notification_worker, args=(_fifo, 1.0), daemon=True)
         _t.start()
@@ -305,10 +276,7 @@ if hasattr(os, "mkfifo"):
     finally:
         tts._play_wav_detached = _o_detached
 
-# ── piper speed goes through SynthesisConfig. piper 1.4 dropped the
-#    length_scale kwarg from synthesize_wav, so a Speed other than 1.0 raised
-#    TypeError and the callout died in the worker loop. piper is not
-#    importable here, so stub piper.config in sys.modules. ──
+# Pass Piper speed through SynthesisConfig using a stub config module.
 _o_lp3, _o_pw3, _o_eng3 = tts._load_piper, tts._play_wav, tts._engine
 _prior = {k: sys.modules.get(k) for k in ("piper", "piper.config")}
 _seen: dict = {}
@@ -347,7 +315,7 @@ finally:
             sys.modules[_k] = _v
     tts._piper_voice = None
 
-# ── kokoro loader tests share a pair of dummy model files. ──
+# kokoro loader tests share a pair of dummy model files.
 _tmpdir = tempfile.mkdtemp()
 _kmodel = os.path.join(_tmpdir, "kokoro-v1.0.onnx")
 _kvoices = os.path.join(_tmpdir, "voices-v1.0.bin")
@@ -368,8 +336,7 @@ def _restore_kokoro():
         sys.modules["kokoro_onnx"] = _prior_kokoro_mod
 
 
-# ── a purge-broken kokoro import, set_venv_path sweeping sys.modules while the
-#    worker imports, is retried once and must not stick the failed marker. ──
+# Retry an import interrupted by environment module cleanup.
 _attempts = {"n": 0}
 _purges = {"n": 0}
 
@@ -409,8 +376,8 @@ finally:
     tts._purge_stale_venv_modules = _o_purge
     _restore_kokoro()
 
-# ── a wedged kokoro model load is capped by _SYNTH_TIMEOUT_S instead of
-#    blocking the single TTS worker forever. ──
+# a wedged kokoro model load is capped by _SYNTH_TIMEOUT_S instead of blocking the
+# single TTS worker forever.
 class _WedgedKokoro:
     def __init__(self, model, voices):
         time.sleep(30)   # stands in for a native hang, abandoned when the cap fires
@@ -434,9 +401,7 @@ finally:
     tts._SYNTH_TIMEOUT_S = _o_timeout
     _restore_kokoro()
 
-# ── a set_jp_neural off landing mid build keeps the in-flight build from
-#    publishing the session that call just dropped. The fake constructor plays
-#    the GUI thread and bumps the epoch while the build is inside _synth_call. ──
+# A setting change during construction prevents publication of the old session.
 class _EpochBumpKokoro:
     def __init__(self, model, voices):
         tts.set_jp_neural(False)
@@ -460,9 +425,7 @@ finally:
     tts._kokoro_epoch = _e0
     _restore_kokoro()
 
-# ── a failed kokoro_onnx import sticks in kokoro_ready, so broken deps do not
-#    re-run the heavy import on every check. None in sys.modules makes the
-#    import raise, no real kokoro install needed. ──
+# Cache failed Kokoro imports until setup changes.
 try:
     sys.modules["kokoro_onnx"] = None
     tts._KOKORO_MODEL, tts._KOKORO_VOICES = Path(_kmodel), Path(_kvoices)
@@ -478,9 +441,7 @@ finally:
     tts._kokoro_import_failed = False
     _restore_kokoro()
 
-# ── the piper session build gets the same cap. Stub the piper and onnxruntime
-#    imports, which are not importable here, the same way the syn_config test
-#    stubs piper.config. ──
+# Check the Piper session limit with stub dependencies.
 _pmodel = os.path.join(_tmpdir, "voice.onnx")
 open(_pmodel, "wb").close()
 with open(_pmodel + ".json", "w", encoding="utf-8") as _f:
@@ -555,9 +516,7 @@ finally:
         else:
             sys.modules[_k2] = _v2
 
-# ── _wav_seconds falls back to the RIFF chunks for wavs the wave module
-#    refuses, IEEE float and extensible formats, so their runtime still bounds
-#    the playback kill instead of collapsing to the 60 s floor. ──
+# Read durations from RIFF chunks for formats unsupported by wave.
 def _wav_blob(tag, sr=8000, channels=1, bits=32, frames=4000):
     block = channels * bits // 8
     data = b"\x00" * (frames * block)
@@ -596,8 +555,7 @@ check("a junk wav still reads as 0", tts._wav_seconds(b"RIFF\x00\x00\x00\x00WAVE
 check("a missing wav still reads as 0",
       tts._wav_seconds(os.path.join(_tmpdir, "nope.wav")) == 0.0)
 
-# ── a transient kokoro build failure, an AV lock or out of memory mid session
-#    build, sticks the failed marker but keeps the ~330 MB model files. ──
+# Keep model files after a transient constructor failure.
 class _LockFailKokoro:
     def __init__(self, model, voices):
         raise MemoryError("stands in for a transient build failure")
@@ -619,8 +577,7 @@ try:
 finally:
     _restore_kokoro()
 
-# ── the download flow over existing model files fetches nothing and clears
-#    both failed markers, the recovery path the kept files rely on. ──
+# Retry setup using existing models and clear failure state.
 _o_urls = tts._KOKORO_URLS
 _o_kif = tts._kokoro_import_failed
 _o_mdir = tts._MODEL_DIR
@@ -639,7 +596,7 @@ finally:
     tts._MODEL_DIR = _o_mdir
     tts._kokoro_failed, tts._kokoro_import_failed = _o_kf, _o_kif
 
-# ── the notification worker enforces the same 32 MiB cap as the TTS worker. ──
+# the notification worker enforces the same 32 MiB cap as the TTS worker.
 _big = os.path.join(_tmpdir, "big.wav")
 with open(_big, "wb") as _f:
     _f.truncate(tts._MAX_SOUND_BYTES + 1)
@@ -663,8 +620,7 @@ try:
 finally:
     tts._play_wav_detached, tts.log_drop, tts._master_volume = _o_pwd, _o_ld, _o_mv
 
-# ── the purge scans a snapshot of the stale set. A live iteration would let a
-#    GUI thread set_venv_path break it with a set-changed-size RuntimeError. ──
+# Iterate a snapshot so concurrent stale module updates cannot interrupt cleanup.
 class _IterBomb(set):
     def __iter__(self):
         raise RuntimeError("iterated the live stale set")
@@ -688,8 +644,8 @@ finally:
     tts._stale_venv_sps = _o_stale
     sys.modules.pop("zz_stale_probe", None)
 
-# ── a configured venv with no interpreter fails the deps install instead of
-#    pip installing kokoro-onnx into the app interpreter. ──
+# A voice environment without an interpreter cannot install into the program
+# interpreter.
 _o_venv = tts._FFXIV_VENV
 try:
     _bogus = Path(_tmpdir) / "bogus_venv"
@@ -709,9 +665,7 @@ try:
 finally:
     tts._FFXIV_VENV = _o_venv
 
-# ── a transient kokoro constructor failure keeps the model files, and the
-#    drop log names both recoveries, the Download button for a transient
-#    failure and manual deletion for a file that went bad on disk. ──
+# Keep model files after transient constructor failure and report recovery options.
 class _TransientFailKokoro:
     def __init__(self, model, voices):
         raise MemoryError("session build OOM")
@@ -738,11 +692,7 @@ finally:
     tts.log_drop = _o_log_drop
     _restore_kokoro()
 
-# ── the interrupt generation vetoes. An interrupt must stop not just the
-#    queue and the tracked proc but any callout already past the queue. Each
-#    spawn and playback site rechecks the stamp under _proc_lock right before
-#    it starts, and the piper path rechecks after synthesis. Stub Popen so a
-#    regression shows as a recorded spawn, not real audio. ──
+# Stub process creation to verify interruption checks before synthesis and playback.
 _spawned: list = []
 
 
@@ -783,9 +733,7 @@ finally:
     tts._generation = 0
     tts._current_proc = None
 
-#    an interrupt landing while piper synthesizes drops the callout at the
-#    post synthesis check instead of playing stale audio late. The fake voice
-#    plays the interrupter and bumps the generation mid synthesis.
+# Interrupt during synthesis and check that stale audio is discarded.
 class _InterruptingVoice:
     def synthesize_wav(self, text, wf, **kw):
         tts._generation += 1
@@ -807,9 +755,7 @@ finally:
     tts._load_piper, tts._play_wav, tts._engine = _o_lp4, _o_pw4, _o_eng4
     tts._jp_neural = False
 
-# ── the enqueue stamp. Items carry the generation at enqueue time, so an
-#    interrupt between queue and dispatch vetoes the callout, and a callout
-#    queued after the interrupt carries the new stamp. ──
+# Queued speech keeps the generation from enqueue time.
 while not tts._queue.empty():
     tts._queue.get_nowait()
 tts._generation = 100
@@ -826,7 +772,7 @@ tts._enqueue(("tts", "z", 1.0, 1.0, None))
 check("a post interrupt enqueue carries the new stamp",
       tts._queue.get_nowait().gen == 101)
 
-# ── set_readings filters junk instead of poisoning the reading map. ──
+# Ignore invalid reading entries.
 tts.set_readings({"全体攻撃": "ぜんたいこうげき", "bad": 5, 7: "x", "empty": "",
                   "k": None, ("t",): "y"})
 check("set_readings keeps only str keys with non empty str values",
@@ -835,8 +781,7 @@ check("reading_for resolves a known display",
       tts.reading_for("全体攻撃") == "ぜんたいこうげき")
 tts.set_readings({})
 
-# ── a muted master volume skips synthesis entirely. The quietest backend
-#    settings are still audible, so muted must never reach a voice. ──
+# Mute prevents synthesis because minimum backend volume can still be audible.
 _o_mv2 = tts._master_volume
 _fired: list = []
 try:
@@ -848,15 +793,13 @@ finally:
     tts._master_volume = _o_mv2
     tts._load_piper = _o_lp4
 
-# ── a missing notification path no-ops without eating a chime slot. ──
+# a missing notification path no-ops without eating a chime slot.
 _slots_before = tts._notification_slots._value
 tts.play_notification(os.path.join(_tmpdir, "no-such-chime.wav"))
 check("a missing notification path no-ops and leaks no slot",
       tts._notification_slots._value == _slots_before)
 
-# ── numpy and the pure Python fallback must scale PCM identically, or the
-#    same trigger sounds different depending on whether numpy is importable.
-#    Skipped without numpy, it is an optional dependency by design. ──
+# NumPy and pure Python PCM scaling agree. Skip when NumPy is unavailable.
 if tts._np is None:
     print("SKIP  scale_pcm parity needs numpy")
 else:
@@ -884,10 +827,7 @@ else:
           tts._scale_pcm(b"\x01\x02\x03", 2, 1.0)
           == tts._scale_pcm(b"\x01\x02", 2, 1.0))
 
-# ── kokoro synthesis output shape. Speed is clamped into kokoro's 0.5 to 2.0
-#    window before create, the trigger dialog allows 0.5 to 3.0, and the wav
-#    container is 16-bit mono at the model's rate with symmetric clipping.
-#    Needs numpy, kokoro's float path, so it skips without it. ──
+# Clamp Kokoro speed and write clipped mono PCM at the model rate. Requires NumPy.
 try:
     import numpy as _npmod   # noqa: F401
     _have_np = True

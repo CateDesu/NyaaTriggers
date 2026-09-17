@@ -1,21 +1,4 @@
-"""Git-install update refreshes pip requirements after a pull.
-
-A git checkout updates with `git pull --ff-only --tags`, which brings new code but
-never the new or re-pinned dependencies that code needs (the plugin link's
-websockets only entered requirements.txt after many checkouts existed, and
-those envs reported the overlay link broken through every later update).
-After any successful pull, apply_git installs requirements with the running
-interpreter. A pip failure leaves the update incomplete and a retry installs
-dependencies even if the code is already current.
-
-A pull blocked by untracked cactbot timeline downloads left over from before
-the repo tracked those files self heals instead: the stale files are deleted
-and the pull retried once, only when every conflicting path is one of those
-timeline names. The pull runs under LC_ALL=C so the conflict parse works
-whatever locale git speaks.
-
-Run directly:  python3 -m tests.test_updater_git   (exit 0 = all pass)
-"""
+"""Git update dependency refresh and recovery from old timeline download conflicts."""
 import os
 import sys
 import tempfile
@@ -156,9 +139,7 @@ check("missing requirements.txt skips pip without a word",
       ok and pip_calls == [] and "dependencies" not in msg)
 tmp.cleanup()
 
-# The pull asks for tags too, so a maintainer checkout's git describe
-# version follows the rolling tags its own pushes are cut from. Plain
-# pulls never fetch tags for commits the checkout already has.
+# Fetch rolling tags even for commits already present locally.
 seen = []
 tmp = tempfile.TemporaryDirectory()
 
@@ -179,9 +160,7 @@ check("pull pins English output so the conflict parse survives any locale",
       pull_kw[0].get("env", {}).get("LC_ALL") == "C")
 tmp.cleanup()
 
-# A pull blocked by untracked cactbot timeline downloads from before the repo
-# tracked those files deletes them and retries once. The merge brings fresh
-# copies of the same timelines, so nothing is lost.
+# Preserve conflicting old timeline downloads and retry the pull once.
 CONFLICT_ERR = """\
 error: The following untracked working tree files would be overwritten by merge:
 	timelines/castrum_abania.cactbot.txt
@@ -260,8 +239,7 @@ check("mixed conflicts never retry the pull",
       len([c for c in calls if "pull" in c]) == 1)
 tmp.cleanup()
 
-# Newer git prefixes the advice lines with hint:. The parse stops there just
-# the same.
+# Accept git advice prefixed with hint:.
 HINT_ERR = CONFLICT_ERR.replace(
     "Please move or remove them before you merge.",
     "hint: Please move or remove them before you merge.")

@@ -1,15 +1,4 @@
-"""The cactbot ultimate stem table must resolve every live stem to a
-NyaaTriggers fight tag, the trial stem table must cover every live stem whose
-plain derivation misses the shipped tag, and cached cactbot rows must dedupe
-against the offline base instead of doubling a fight in the picker.
-
-A stale stem key falls through to the _titleize fallback and derives a name
-the offline base never has, so the merge keeps both rows and the extra one
-points at a folder no trigger fight tag uses. Live stems verified against
-the cactbot tree 2026-08.
-
-Run directly:  python -m tests.test_fight_catalog   (exit 0 = all pass)
-"""
+"""Cactbot fight names and cached catalog deduplication."""
 import json
 import os
 import sys
@@ -80,8 +69,7 @@ with tempfile.TemporaryDirectory() as td:
     check("no duplicate ultimate rows after merge", len(ult) == len(set(ult)))
     check("all seven ultimates present", len(ult) == 7)
 
-    # the merge dedupe keys on difficulty and name. A cache row naming an
-    # offline fight drops even with a different folder, a fresh name survives
+    # Deduplicate cached fights by difficulty and name even when folder names differ.
     cache.write_text(json.dumps([
         {"difficulty": "Ultimate", "expansion": "Dawntrail",
          "name": "Futures Rewritten", "folder_name": "bogus", "has_triggers": False},
@@ -165,8 +153,7 @@ trial_stems = {p.rsplit("/", 1)[1][:-3] for p in LIVE_TRIAL_PATHS}
 check("every mapped trial stem is a live stem",
       set(fc._TRIAL_STEM_TO_TAG) <= trial_stems)
 
-# every shipped extreme fight must come out of the live derivation under its
-# shipped tag as both name and folder, a miss doubles the picker row
+# Derived extreme fight names and folders must match shipped tags.
 online_trials = fc.parse_cactbot_paths(LIVE_TRIAL_PATHS)
 check("every shipped extreme fight survives derivation",
       EX_TAGS <= {e["name"] for e in online_trials})

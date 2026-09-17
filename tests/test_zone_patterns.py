@@ -1,14 +1,4 @@
-"""Every shipped zone_regex must match a real zone, and localized clients must
-still fire Local triggers.
-
-A zone pattern that matches no zone in the game is a whole fight's worth of
-triggers that can never fire, with nothing to see in the UI: the rows are there,
-the toggle is on, and the callout simply never comes. Six of them shipped at
-once (Queen EX, Enuo EX, Zelenia EX, Doomtrain EX, Zeromus EX, Ridorana), so
-this guards the class rather than the instances.
-
-Run directly:  python -m tests.test_zone_patterns   (exit 0 = all pass)
-"""
+"""Shipped zone patterns and local trigger matching in other client languages."""
 import json
 import os
 import re
@@ -33,7 +23,7 @@ TRIGGERS = json.loads((HERE / "assets" / "triggers.json").read_text(encoding="ut
 
 check("zone_names.json carries a full zone table", len(ZONES) > 500)
 
-# ── every shipped zone pattern hits at least one real zone ─────────────────
+# every shipped zone pattern hits at least one real zone
 names = list(ZONES.values())
 dead, uncompilable = [], []
 patterns = sorted({t["zone_regex"] for t in TRIGGERS if t.get("zone_regex")})
@@ -56,7 +46,7 @@ check("every shipped zone_regex matches a real zone", not dead)
 for d in dead:
     print("        DEAD: " + d)
 
-# ── one pattern per fight. A stray variant is how dead ones creep in ───────
+# one pattern per fight. A stray variant is how dead ones creep in
 by_fight = {}
 for t in TRIGGERS:
     if t.get("fight") and t.get("zone_regex"):
@@ -66,7 +56,7 @@ check("each fight tag uses a single zone pattern", not split)
 for f, p in split.items():
     print(f"        {f}: {p}")
 
-# ── a localized client still fires Local triggers ──────────────────────────
+# a localized client still fires Local triggers
 from nyaatriggers import main_window as mw
 
 check("canonical_zone_name resolves a known id",
@@ -122,7 +112,7 @@ meter.set_zone_metadata("Next instance")
 check("the next zone transition clears the old roster",
       meter._me_id is None)
 
-# ── the six fights that were dead now point at their real zones ───────────
+# the six fights that were dead now point at their real zones
 EXPECTED = {
     "Queen EX":                "The Minstrel's Ballad: Sphene's Burden",
     "Enuo EX":                 "The Unmaking (Extreme)",

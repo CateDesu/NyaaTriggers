@@ -1,8 +1,4 @@
-"""DPS meter tab. Live table, encounter recording and the FFLogs
-comparison UI. The parsing and aggregation live in dps_meter.py and
-dps_store.py, this is the tab page. Mixin for MainWindow, all state rides
-on self.
-"""
+"""Live meter, encounter recording and FFLogs controls for MainWindow."""
 
 from datetime import datetime
 from pathlib import Path
@@ -25,13 +21,9 @@ from nyaatriggers import app_common as ac
 
 class DpsTabMixin:
     def _init_dps(self) -> None:
-        # Live DPS meter. Parses the same combat log lines the triggers consume
-        # through an additive tap in _dispatch_log_line. Writes the recorded
-        # snapshot files itself. Always on.
+        # Feed the meter independently of trigger mode.
         self._dps_meter = DpsMeter()
-        # Resolve the persisted timeout against the combo's offered set so a
-        # hand-edited value cannot run in the meter while the combo shows a
-        # different entry. The combo init in _build_ui reuses this value.
+        # Use the same supported timeout value in the meter and selector.
         try:
             self._dps_idle_timeout = int(self._settings.get("dps_idle_timeout", 120))
         except (TypeError, ValueError):
@@ -41,17 +33,12 @@ class DpsTabMixin:
         self._dps_meter.set_idle_timeout(self._dps_idle_timeout)
         self._dps_meter.on_encounter_end = self._on_meter_encounter_end
         self._fflogs_last_title = ""           # last finalized encounter, for the FFLogs refresh button
-        # Monotonic stamp of the last finalize. The wipe branch re-asserts
-        # the overlay's end frame only when a pull just closed.
+        # Track the last finalization so a wipe can restore the final overlay frame.
         self._dps_last_end = 0.0
-        # In app session pull history, newest first, the entry being reviewed,
-        # None means the live main feed, and whether the live pull currently
-        # has damage so a new pull's first strike can reclaim the main feed.
         self._dps_history: list[dict] = []
         self._dps_selected_idx: "int | None" = None
         self._dps_live_active: bool = False
         self._dps_overlay_live = False
-        # Track every snapshot writer so quit can wait for pending saves.
         self._dps_write_threads: list[threading.Thread] = []
 
     def _dps_dir(self) -> Path:
@@ -76,8 +63,6 @@ class DpsTabMixin:
         prog_tab = getattr(self, "_prog_tab", None)
         if prog_tab is not None:
             prog_tab.tick()
-        # While a fight runs, push the meter to the in-game overlay once a
-        # second. The encounter-end handler sends the hide frame.
         if self._plugin_link.is_connected():
             snap = self._dps_meter.snapshot()
             if snap["isActive"]:
@@ -107,7 +92,7 @@ class DpsTabMixin:
 
     @staticmethod
     def _fmt_maxhit(value) -> str:
-        """ACT's "skill-12345" shape becomes "skill 12,345" for the table cell."""
+        """Format numeric skill placeholders for display."""
         s = str(value or "")
         if "-" not in s:
             return s
@@ -129,8 +114,7 @@ class DpsTabMixin:
             table.setItem(r, off + 2, cell)
 
     def _populate_dps_table(self, table, snap) -> None:
-        """Fill the live table from a snapshot, live or a reviewed pull. Both
-        shapes come from DpsMeter._snapshot so the keys match."""
+        """Display a live or recorded meter snapshot."""
         rows = sorted(snap["Combatant"].values(),
                       key=lambda c: c.get("encdps", 0.0), reverse=True)
         table.setRowCount(len(rows))
@@ -146,7 +130,6 @@ class DpsTabMixin:
                                 str(c.get("deaths", 0))])
 
     def _refresh_dps_history_list(self) -> None:
-        """Rebuild the recent-pulls list, newest first, from _dps_history."""
         lst = getattr(self, "_dps_history_list", None)
         if lst is None:
             return
@@ -172,10 +155,9 @@ class DpsTabMixin:
         self._update_live_dps()
 
     def _on_meter_encounter_end(self, snapshot: dict) -> None:
-        """Meter finalized an encounter. Hide the overlay meter, write the
-        snapshot file when recording, kick off FFLogs, and record the pull in
-        the in-app history, newest first. The live table keeps showing the
-        final numbers as the last-pull view."""
+        """Finish encounter display and recording, preserving final values in the table and
+        starting any FFLogs lookup.
+        """
         self._plugin_link.send_dps(None, [], show=False)
         self._dps_overlay_live = False
         self._dps_last_end = time.monotonic()
@@ -186,17 +168,12 @@ class DpsTabMixin:
         if self._settings.get("dps_enabled", False):
             self._write_dps_snapshot(snapshot)
         self._maybe_fetch_fflogs(title)
-        # Reset the cross-source dedup so a claim from the pull just ended, or a
-        # deferred guest still waiting, can't drop a callout in the next pull.
+        # Clear deduplication state between pulls.
         self._clear_callout_dedup()
-        # Clear per-trigger cooldown state. Entity ids churn per pull so ability
-        # cooldowns never carried over, but status effect ids are constant. A
-        # status trigger without expiry_warn_s could otherwise stay suppressed
-        # across a fast re-pull.
+        # Reset cooldowns because status effect IDs remain the same across pulls.
         for t in self._triggers:
             t._last_fired.clear()
-        # In-app session history, newest first. Bounded so a long session
-        # doesn't grow forever. The live feed stays on the just-ended pull.
+        # Keep bounded session history with the newest pull first.
         self._dps_history.insert(0, {"snapshot": snapshot,
                                      "when": datetime.now().strftime("%H:%M:%S")})
         del self._dps_history[80:]
@@ -204,21 +181,13 @@ class DpsTabMixin:
         self._refresh_dps_history_list()
 
     def _write_dps_snapshot(self, snapshot: dict) -> None:
-        """Append one finalized encounter to the active pull log in dps_logs/.
-        JSONL, one line per pull, fights mixed like ACT's log files.
-        dps_store owns roll-over and retention. A log is full after 25 pulls
-        of one fight or 5 distinct fights, and the oldest full logs are
-        culled past 5. Keys stay compatible with the old per-pull files,
-        title/zone/duration/encdps/started/updated/combatants with name,
-        job, dps, hps, damage_pct, plus damage, encdps, crit_pct, dh_pct,
-        cdh_pct, maxhit, deaths. There is no in-app viewer. The log is for
-        external review."""
+        """Append a finalized encounter to the rolling DPS log. dps_store manages rotation
+        and retention.
+        """
         enc = snapshot.get("Encounter") or {}
         title = (enc.get("title") or "").strip() or "Unknown"
         try:
-            # The writer only runs at encounter end, so a bare now() records
-            # the pull's END time. The meter stamps wall_start, epoch seconds,
-            # at pull begin. Fall back to now() for snapshots without it.
+            # Use the recorded start time because this writer runs at encounter end.
             wall = enc.get("wall_start")
             if isinstance(wall, (int, float)) and math.isfinite(wall):
                 stamp = datetime.fromtimestamp(wall).strftime("%Y-%m-%d_%H-%M-%S")
@@ -255,11 +224,8 @@ class DpsTabMixin:
         except (OSError, ValueError, TypeError) as exc:
             ac.log_drop("dps-snapshot", f"write failed: {exc!r}")
             return
-        # Off the GUI thread. write_pull re-reads the full log and runs
-        # retention on every pull end, too slow for the encounter-end path.
-        # Same fire-and-forget shape as _maybe_fetch_fflogs. The thread is
-        # tracked so _finalize_live_encounter can join it at quit, process
-        # teardown would kill the daemon mid-write and lose the final pull.
+        # Write logs outside the GUI thread and track workers so quitting can wait for
+        # pending saves.
         log_dir = str(self._dps_dir())
 
         def work() -> None:
@@ -279,15 +245,15 @@ class DpsTabMixin:
                     and self._settings.get("fflogs_server"))
 
     def _maybe_fetch_fflogs(self, title: str) -> None:
-        """Fire-and-forget FFLogs lookup for the just-ended fight, off the GUI
-        thread. The result lands via _fflogs_signal. Silently does nothing
-        unless the user filled in the FFLogs settings."""
+        """Fetch configured FFLogs comparisons in the background and deliver through
+        _fflogs_signal.
+        """
         lbl = getattr(self, "_fflogs_lbl", None)
         if not title or lbl is None or not self._fflogs_configured():
             return
         name = self._settings.get("fflogs_name")
         if not isinstance(name, str):
-            name = ""   # a hand-edited non-string reads as absent
+            name = ""
         char = (name or self._me_name or "").strip()
         if not char:
             lbl.setText(_("FFLogs: no data"))
@@ -297,9 +263,7 @@ class DpsTabMixin:
         server = self._settings.get("fflogs_server")
         region = self._settings.get("fflogs_region", "NA")
         lbl.setText(_("FFLogs: fetching…"))
-        # One client per credential pair, so its OAuth token cache survives
-        # between fetches. A fresh client per fetch minted a new token at
-        # every encounter end.
+        # Reuse the client for each credential pair to preserve its token cache.
         creds = (cid, secret)
         if getattr(self, "_fflogs_client_creds", None) != creds:
             self._fflogs_client = FflogsClient(cid, secret)
@@ -351,10 +315,8 @@ class DpsTabMixin:
         row.addStretch(1)
         layout.addLayout(row)
 
-        # The best parse comparison on the DPS tab. It stays hidden until all
-        # of id, secret and server are filled. The character name falls back
-        # to the My character field under Connection, so it is not asked for
-        # again here.
+        # Show comparisons once credentials and server are set. Reuse the connection
+        # character name by default.
         cmp_note = QLabel(
             _("Show your FFLogs best next to the meter after a fight. Needs a "
               "personal API client from your fflogs.com profile page."))
@@ -395,9 +357,7 @@ class DpsTabMixin:
         layout.addLayout(srv_row)
 
     def _on_fflogs_credentials_changed(self) -> None:
-        """Save the FFLogs fields on focus-out and apply right away. The DPS
-        tab comparison appears once id, secret and server are all filled,
-        and hides again when one is cleared."""
+        """Save FFLogs fields and update comparison visibility."""
         region_raw = self._fflogs_region_edit.text().strip()
         region = region_raw.upper()
         if region != region_raw:
@@ -413,27 +373,22 @@ class DpsTabMixin:
                     self._settings[key] = val
                     changed = True
             elif key in self._settings:
-                # An emptied field drops the key, so a blank id reads as
-                # unconfigured and a blank region falls back to the NA default.
                 del self._settings[key]
                 changed = True
         if not changed:
-            return   # a bare focus-out saves nothing
+            return
         self._save_settings()
         self._update_fflogs_visibility()
 
     def _finalize_live_encounter(self) -> None:
-        """Finalize an in-progress meter encounter so quitting mid-fight
-        still records it, when Record encounters is on."""
+        """Finalize the active encounter before quitting so recording can save it."""
         finish_activity = getattr(self, "_finish_activity", None)
         if finish_activity is not None:
             finish_activity()
         if self._dps_meter.current is not None:
             self._dps_meter.finalize("program-closed")
-        # Every caller here is a quit path, closeEvent and the two restart
-        # teardowns. The snapshot write rides a fire-and-forget daemon thread
-        # that interpreter teardown would interrupt. Wait for all writers
-        # under one deadline so a wedged disk cannot hang quit.
+        # Wait for writers under one deadline so quitting preserves the final pull
+        # without waiting indefinitely.
         deadline = time.monotonic() + 5.0
         for worker in self._dps_write_threads:
             worker.join(timeout=max(0.0, deadline - time.monotonic()))

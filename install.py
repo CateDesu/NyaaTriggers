@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
-"""
-NyaaTriggers installer. Run once before launching the app.
-
-  python install.py
-
-Downloads the en_US-arctic-medium voice model into voices/ and creates
-~/.venv/ffxiv with piper-tts installed. Roughly 77 MB, CC0. Linux, Windows.
+"""Install the CC0 en_US-arctic-medium voice and piper-tts environment before launching
+NyaaTriggers. Run with python install.py.
 """
 
 import contextlib
@@ -26,38 +21,29 @@ VENV_DIR     = Path.home() / ".venv" / "ffxiv"
 VOICE_STEM   = "en_US-arctic-medium"
 VOICE_FILE   = VOICES_DIR / f"{VOICE_STEM}.onnx"
 
-# Official Piper voice, CC0. Must match the app default in tts.py and main.py.
+# Official CC0 Piper voice, matching the defaults in tts.py and main.py.
 VOICE_BASE = (
     "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0"
     "/en/en_US/arctic/medium"
 )
 
-# Pinned SHA-256 of the v1.0.0 onnx model, 76,766,385 bytes. Mirrors the check
-# the release pipeline runs in release.yml. A truncated or MITM'd download is
-# rejected before onnxruntime ever parses the file. The .json config has no
-# upstream-pinned hash, so only the model is verified.
+# Existing checksum for the pinned model release, also used by the release workflow.
 VOICE_ONNX_SHA256 = (
     "483303e294947a3ec2f910ea96093d876e1640f5772e9d89e511d6c82c667286"
 )
 
-# Hard ceiling on one download. The model is ~77 MB, so a stream running past
-# 1 GiB has a lying Content-Length or no end at all and would otherwise be
-# written until the disk fills.
+# Limit download size even when Content-Length is missing or incorrect.
 _MAX_DOWNLOAD_BYTES = 1 << 30
-# Watchdog timing for the read loop below. The loop runs on a daemon helper
-# while the calling thread enforces a stall window and a total deadline from
-# outside the read, the same guard main.py runs for the same files. The per
-# read socket timeout resets on every received byte, so it alone can never
-# cut off a peer that trickles one byte at a time.
+# Enforce stall and total deadlines outside the read because socket timeouts reset on
+# each received byte.
 _READ_STALL_S = 60
 _DOWNLOAD_DEADLINE_S = 3600
 
 
 def _unblock_reader(resp) -> None:
-    """Shut the underlying socket down so a read parked in another thread
-    wakes at once. A plain resp.close from this side would block on the
-    buffer lock the parked read still holds. Best effort, the reader is a
-    daemon thread either way."""
+    """Try to shut down the socket without waiting for the reader to release its buffer
+    lock.
+    """
     try:
         resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
     except Exception:  # noqa: BLE001
@@ -73,9 +59,7 @@ def _sha256(path: Path) -> str:
 
 
 def _voice_model_ok(path: Path) -> bool:
-    """True when a pre-existing model matches the pinned hash. The skip checks
-    below used to key on existence alone, so a truncated file left by a hard
-    kill mid download was kept forever and the hash check never ran on it."""
+    """Check an existing model against the pinned checksum before reusing it."""
     try:
         return path.exists() and _sha256(path) == VOICE_ONNX_SHA256
     except OSError:
@@ -84,16 +68,14 @@ def _voice_model_ok(path: Path) -> bool:
 
 def _run(args: list[str], timeout: int) -> None:
     print(f"  $ {' '.join(str(a) for a in args)}")
-    # Bounded like the same steps in main.py. A wedged child otherwise hangs
-    # the installer forever. TimeoutExpired propagates with a readable message.
+    # Bound child processes so a stalled setup cannot wait indefinitely.
     subprocess.run(args, check=True, timeout=timeout)
 
 
 def download_voice() -> None:
     VOICES_DIR.mkdir(exist_ok=True)
-    # A hard kill mid download leaks its .part, unique per pid so nothing
-    # sweeps it later. Remove stale ones. The age guard keeps a concurrent
-    # second installer's in-flight download untouched.
+    # Remove abandoned partial downloads. The age limit preserves other running
+    # installers' files.
     for stale in VOICES_DIR.glob(f"{VOICE_STEM}.*.part"):
         try:
             if stale.stat().st_mtime < time.time() - 3600:
@@ -117,40 +99,29 @@ def download_voice() -> None:
             print(f"\r  {pct}% ", end="", flush=True)
             last_pct[0] = pct
 
-    # piper needs both the .onnx model and its .onnx.json config.
     for ext, label in ((".onnx", "model (~77 MB)"), (".onnx.json", "config")):
         dest = VOICES_DIR / f"{VOICE_STEM}{ext}"
         url  = f"{VOICE_BASE}/{VOICE_STEM}{ext}"
         if dest.exists():
             if ext != ".onnx" or _voice_model_ok(dest):
-                # Fetch only what is missing. The early-out above needs both
-                # files, so a lone missing .json must not re-download the 77 MB
-                # model. A pre-existing model is hashed before it is skipped,
-                # a truncated survivor of a hard kill is replaced, not kept.
+                # Fetch only missing files. Verify an existing model before reusing it.
                 print(f"Already present: {dest}")
                 continue
             print(f"Existing {dest.name} failed the pinned checksum; re-downloading.")
         print(f"Downloading {VOICE_STEM}{ext} {label} ...")
         print(f"  Source: {url}")
         last_pct[0] = -1
-        # Write to a .part and rename on success, so a hard kill mid download
-        # never leaves a truncated file at the final path for the existence
-        # checks above to keep. Unique per process, two runs at once can't
-        # truncate each other's write. Same pattern as updater.download.
+        # Write to a temporary file unique to this process and rename after completion.
         part = dest.with_name(f"{dest.name}.{os.getpid()}.part")
         deadline = time.monotonic() + _DOWNLOAD_DEADLINE_S
         try:
             with open_response(url, 30, min(deadline, time.monotonic() + _READ_STALL_S)) as resp, open(part, "wb") as f:
-                # A junk length from a proxy reads as unknown. The byte cap
-                # below still bounds the download.
+                # Treat invalid lengths as unknown. The byte limit still applies.
                 try:
                     total = int(resp.headers.get("Content-Length", 0) or 0)
                 except ValueError:
                     total = 0
-                # Read loop on a daemon helper, watchdog here. The stall
-                # window and the total deadline are enforced from outside the
-                # read because a trickling peer can hold one resp.read open
-                # forever. Same guard main.py runs for the same files.
+                # Read in a helper so the caller can enforce both deadlines.
                 done = threading.Event()
                 progress = [0]
                 reader_error = [None]
@@ -179,15 +150,10 @@ def download_voice() -> None:
                 while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
                     now = time.monotonic()
                     if progress[0] == last_seen or now > deadline:
-                        # Shut the connection down so the parked reader wakes
-                        # instead of leaking. A plain resp.close here would
-                        # block on the lock the parked read still holds.
+                        # Shut down the socket to wake the reader without waiting for
+                        # its read lock.
                         _unblock_reader(resp)
-                        # Say which bound cut the read off. The stall line
-                        # only fits when the whole stall window really
-                        # passed with no byte. Near the deadline the wait is
-                        # clamped short, so a wake there after less than a
-                        # full window of quiet is the deadline, not a stall.
+                        # Report a stall only after the full quiet window has elapsed.
                         if now - last_change >= _READ_STALL_S:
                             raise OSError(
                                 f"download stalled, no new bytes for {_READ_STALL_S} seconds: {url}")
@@ -198,8 +164,8 @@ def download_voice() -> None:
                 if reader_error[0]:
                     raise reader_error[0]
                 got = progress[0]
-            # A clean early close is a short read with no exception. urlretrieve
-            # raised ContentTooShortError for it, so keep the length check.
+            # A connection can close early without raising, so check the expected
+            # length.
             if total and got < total:
                 raise OSError(
                     f"Download incomplete: received {got} of {total} bytes")
@@ -212,8 +178,6 @@ def download_voice() -> None:
                         "Refusing to install a tampered or truncated model.")
             os.replace(part, dest)
         except BaseException:
-            # The partial download never lands at the final path, so the
-            # "already present" check next run can't mistake it for complete.
             try:
                 part.unlink()
             except OSError:
@@ -223,29 +187,20 @@ def download_voice() -> None:
         print(f"  Saved to {dest}")
 
 
-# Cross process setup lock, taken around venv create plus pip install. Two
-# app instances in first run setup at once both pass the pip gate below and
-# then build the same venv concurrently, which can corrupt it. The kokoro
-# install in main_window has the same hazard guarded, but only per process.
+# Serialize environment creation and pip installation across program instances.
 _SETUP_LOCK = VENV_DIR.parent / "ffxiv.setup.lock"
-# Longest legitimate hold is one venv create at 120 s plus one pip install
-# at 600 s. A lock file older than this outlived its holder, a hard kill
-# never runs the release, so the next waiter breaks it.
+# Allow for the maximum environment creation and pip install time before treating a lock
+# as stale.
 _SETUP_LOCK_S = 900
-# A waiter gives up after the same window. The stale check runs first, so a
-# dead holder's lock is broken at this mark instead of failing.
 _SETUP_WAIT_S = 900
 
 
 @contextlib.contextmanager
 def setup_lock():
-    """Hold a cross process lock around venv create plus pip install.
-
-    The file create with O_EXCL is the atomic acquire on POSIX and Windows.
-    A holder killed mid setup leaves the file behind, so a lock older than
-    the longest legitimate hold is broken as stale. Age is the check, pid
-    liveness is not portable, os.kill signal 0 terminates the target on
-    Windows. Raises RuntimeError when the wait outlasts one full setup."""
+    """Lock environment setup through exclusive file creation. Remove stale locks by age
+    because PID liveness checks are not portable. Raise RuntimeError if waiting exceeds
+    one full setup window.
+    """
     _SETUP_LOCK.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + _SETUP_WAIT_S
     while True:
@@ -265,7 +220,7 @@ def setup_lock():
                 "Another NyaaTriggers setup is already running. "
                 "Wait for it to finish, then retry.")
         time.sleep(1)
-    # The pid inside is diagnostic only, staleness is judged by file age.
+    # The PID is diagnostic. Lock age determines staleness.
     try:
         os.write(fd, str(os.getpid()).encode())
     except OSError:
@@ -285,10 +240,8 @@ def setup_venv() -> None:
         "pip.exe" if platform.system() == "Windows" else "pip")
     try:
         with setup_lock():
-            # A killed venv create leaves the directory behind with no pip
-            # inside. Gate on pip itself so a partial venv gets recreated.
-            # The gate sits inside the lock so two setups at once cannot
-            # both pass it and then build the same venv concurrently.
+            # Check for pip under the lock because interrupted environment creation can
+            # leave an incomplete directory.
             if not pip.exists():
                 print(f"\nCreating piper venv at {VENV_DIR} ...")
                 _run([sys.executable, "-m", "venv", str(VENV_DIR)], timeout=120)
@@ -296,10 +249,9 @@ def setup_venv() -> None:
                 print(f"\nPiper venv already exists: {VENV_DIR}")
 
             print("Installing / upgrading piper-tts ...")
-            # Pinned like requirements.txt so source runs are reproducible. Bump when you mean it.
+            # Keep the dependency pin in sync with requirements.txt.
             _run([str(pip), "install", "--upgrade", "piper-tts==1.4.2"], timeout=600)
     except RuntimeError as e:
-        # The lock could not be taken. Bow out with the message, no traceback.
         raise SystemExit(str(e))
 
 

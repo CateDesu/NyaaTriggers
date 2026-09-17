@@ -1,14 +1,4 @@
-"""Regression tests for convert_event_trigger's field pattern and repo gating.
-
-The declaration pattern used to demand the @NpcCastCallout annotation and the
-ModifiableCallout field on adjacent lines with a single-level generic, so a
-same-line declaration, an intervening second annotation, or a nested generic
-like ModifiableCallout<List<...>> dropped the trigger silently. An unmapped
-@CalloutRepo also returned [] without a word, so upstream adding a repo
-shrank the converted set quietly.
-
-Run directly:  python -m tests.test_convert_event_trigger   (exit 0 = all pass)
-"""
+"""Java callout declarations, repository mapping and conversion."""
 import contextlib
 import io
 import json
@@ -45,7 +35,7 @@ def convert(src: str):
 _HEADER = 'package test;\n\n@CalloutRepo(name = "M1S")\npublic class Fixture {\n'
 _FOOTER = '\n}\n'
 
-# ── the classic adjacent-line form still converts ─────────────────────────
+# the classic adjacent-line form still converts
 res, _ = convert(_HEADER + '''
     @NpcCastCallout(0x8C01)
     private final ModifiableCallout<DurationBasedCallout> a =
@@ -55,14 +45,14 @@ check("classic adjacent-line form converts",
       len(res) == 1 and res[0]["tts_text"] == "Stack"
       and res[0]["ability_id"] == "8C01" and res[0]["fight"] == "M1S")
 
-# ── same-line declaration, used to drop silently ──────────────────────────
+# Same line declaration.
 res, _ = convert(_HEADER + '''
     @NpcCastCallout(0x8C02) private final ModifiableCallout<DurationBasedCallout> b = ModifiableCallout.durationBasedCall("Spread Label", "Spread");
 ''' + _FOOTER)
 check("same-line declaration converts",
       len(res) == 1 and res[0]["tts_text"] == "Spread")
 
-# ── a second annotation between the two, used to drop silently ────────────
+# An intervening annotation.
 res, _ = convert(_HEADER + '''
     @NpcCastCallout(0x8C03)
     @SuppressWarnings("unchecked")
@@ -71,7 +61,7 @@ res, _ = convert(_HEADER + '''
 check("intervening annotation converts",
       len(res) == 1 and res[0]["tts_text"] == "Out")
 
-# ── a trailing line comment after the annotation still converts ───────────
+# a trailing line comment after the annotation still converts
 res, _ = convert(_HEADER + '''
     @NpcCastCallout(0x8C05) // some note
     private final ModifiableCallout<DurationBasedCallout> e = ModifiableCallout.durationBasedCall("Knockback Label", "Knockback");
@@ -101,7 +91,7 @@ with tempfile.TemporaryDirectory() as td:
     except subprocess.TimeoutExpired:
         check("slash comments with no field finish within the deadline", False)
 
-# ── one level of nested generics, used to drop silently ───────────────────
+# Nested generic arguments.
 res, _ = convert(_HEADER + '''
     @NpcCastCallout(0x8C04)
     private final ModifiableCallout<List<DurationBasedCallout>> d = ModifiableCallout.durationBasedCall("In Label", "In");
@@ -109,7 +99,7 @@ res, _ = convert(_HEADER + '''
 check("nested generic converts",
       len(res) == 1 and res[0]["tts_text"] == "In")
 
-# ── the constructor RHS form still converts ───────────────────────────────
+# the constructor RHS form still converts
 res, _ = convert(_HEADER + '''
     @NpcCastCallout(0x8C06)
     private final ModifiableCallout<DurationBasedCallout> f = new ModifiableCallout<>("Draw Label", "Draw In");
@@ -117,7 +107,7 @@ res, _ = convert(_HEADER + '''
 check("constructor RHS form converts",
       len(res) == 1 and res[0]["tts_text"] == "Draw In")
 
-# ── the next trigger's annotation is never eaten by the gap scan ──────────
+# the next trigger's annotation is never eaten by the gap scan
 res, _ = convert(_HEADER + '''
     @NpcCastCallout(0x8C07)
     private final ModifiableCallout<DurationBasedCallout> g = ModifiableCallout.durationBasedCall("First", "First");
@@ -127,14 +117,14 @@ res, _ = convert(_HEADER + '''
 check("back to back triggers both convert with their own ids",
       [t["ability_id"] for t in res] == ["8C07", "8C08"])
 
-# ── an unmapped repo warns instead of vanishing ───────────────────────────
+# an unmapped repo warns instead of vanishing
 res, err = convert('package test;\n\n@CalloutRepo(name = "Brand New Repo")\n'
                    'public class Unknown {\n}\n')
 check("unmapped repo converts nothing", res == [])
 check("unmapped repo warns with the repo name",
       "Brand New Repo" in err and "WARN" in err)
 
-# ── a mapped-but-empty repo skips silently, it is skipped on purpose ──────
+# An empty repository mapping is deliberately skipped.
 res, err = convert('package test;\n\n@CalloutRepo(name = "Titan Gaols")\n'
                    'public class Jails {\n}\n')
 check("intentional skip converts nothing", res == [])
@@ -143,7 +133,7 @@ check("skip entries are mapped empty",
       REPO_TO_FIGHT.get("Titan Gaols") == ""
       and REPO_TO_FIGHT.get("Dummy (/e c:testcall)") == "")
 
-# ── overlapping id sets in one file collapse to the first ─────────────────
+# overlapping id sets in one file collapse to the first
 res, err = convert(_HEADER + '''
     @NpcCastCallout(0x8C01)
     private final ModifiableCallout<DurationBasedCallout> a =
@@ -160,7 +150,7 @@ check("subset superset and reordered id sets collapse to the first",
 check("each in file dedup drop warns",
       err.count("WARN") == 2 and "8C01|8C02" in err and "8C02|8C01" in err)
 
-# ── disjoint ids in one file still all convert ────────────────────────────
+# disjoint ids in one file still all convert
 res, err = convert(_HEADER + '''
     @NpcCastCallout(0x8C01, 0x8C02)
     private final ModifiableCallout<DurationBasedCallout> a =
@@ -173,9 +163,7 @@ check("disjoint id sets all convert",
       [t["ability_id"] for t in res] == ["8C01|8C02", "8C03"]
       and "WARN" not in err)
 
-# ── two files sharing one repo name warn and drop the duplicate ───────────
-# The seen set used to reset per file, so a second file with the same
-# @CalloutRepo and ability emitted a second row with an identical id.
+# two files sharing one repo name warn and drop the duplicate
 with tempfile.TemporaryDirectory() as td:
     _src = _HEADER + '''
     @NpcCastCallout(0x99FF)
@@ -197,7 +185,7 @@ with tempfile.TemporaryDirectory() as td:
     check("cross-file duplicate drops the second file's row", len(_rows) == 1)
     check("cross-file duplicate warns", "duplicate callout" in _err.getvalue())
 
-# ── a non-list shipped triggers.json warns instead of crashing main ───────
+# a non-list shipped triggers.json warns instead of crashing main
 with tempfile.TemporaryDirectory() as td:
     _bad = Path(td) / "triggers.json"
     _old_json = convert_event_trigger.EXISTING_JSON

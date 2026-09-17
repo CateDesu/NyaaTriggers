@@ -1,6 +1,4 @@
-"""Settings pages and persistence, the language helpers and the
-character name identity. Mixin for MainWindow, all state rides on self.
-"""
+"""Settings persistence, language controls and player identity for MainWindow."""
 
 from pathlib import Path
 import json
@@ -39,39 +37,28 @@ class SettingsTabMixin:
                 self._settings = {}
                 bad = bad or "not a settings object"
             if bad:
-                # A truncated or corrupt file, power loss mid-write, must not be
-                # silently replaced with defaults on the next save. Keep a copy
-                # for recovery and tell the user. Rotated .bad, .bad.1 and so on
-                # so a second corruption doesn't overwrite the first copy.
+                # Keep rotated recovery copies of unreadable settings and warn before
+                # defaults can be saved.
                 backup = _next_bad_name(ac._SETTINGS_FILE)
                 try:
                     shutil.copy2(ac._SETTINGS_FILE, backup)
                 except OSError:
                     backup = None
-                # __init__ shows the warning once set_locale has run. The
-                # locale comes from these settings, so the load cannot wait,
-                # but the dialog should still speak the user's language.
+                # Show the warning after applying the language loaded from these
+                # settings.
                 self._settings_load_warning = (bad, backup)
-            # Upgrade migration. Local triggers used to be always-on. A non-empty
-            # settings file without `local_enabled` is an upgrader, so keep their
-            # triggers on instead of silently going quiet. Fresh installs stay off.
+            # Preserve enabled local triggers for older settings that predate the
+            # switch.
             if self._settings and "local_enabled" not in self._settings:
                 self._settings["local_enabled"] = True
-            # The hidden easter-egg alert sound was removed. Anyone who had it
-            # selected persisted overlay_sound_file="__egg_sound__". Without this
-            # it resolves to no file and alerts go silent, so coerce it back.
+            # Replace the removed sound selection with a working default.
             if self._settings.get("overlay_sound_file") == "__egg_sound__":
                 self._settings["overlay_sound_file"] = "ding.wav"
-            # Migrate the old localhost default. Windows 11 with IPv6 resolves
-            # localhost to ::1, where OverlayPlugin, bound to 127.0.0.1, is
-            # unreachable, so the WS never connects. Only the exact old default
-            # is rewritten. Custom URLs are kept as the user left them.
+            # Migrate only the old localhost default to IPv4 because OverlayPlugin does
+            # not listen on IPv6.
             if self._settings.get("ws_url") == "ws://localhost:10501/ws":
                 self._settings["ws_url"] = "ws://127.0.0.1:10501/ws"
-            # The Stable/Master/Rust update-channel choice was removed. Everyone
-            # is on Stable now. Rewrite a stored "master" or "rust" so the stale
-            # preference can't steer anything. Persisted on the next settings
-            # save, like the other migrations above.
+            # Migrate removed update channels to stable.
             if self._settings.get("update_channel") in ("master", "rust"):
                 self._settings["update_channel"] = "stable"
 
@@ -84,12 +71,11 @@ class SettingsTabMixin:
             return False
 
     def _save_settings_debounced(self) -> None:
-        """Coalesce rapid-fire settings writes, slider drags, into one save."""
+        """Combine rapid settings edits into one save."""
         self._settings_save_timer.start()
 
     def _warn_save_failed(self, what: str, exc: Exception) -> None:
-        """Surface the first failed save once per session, say a read-only
-        install dir. The UI shows edits that will silently vanish on restart."""
+        """Report the first failed save in a session."""
         print(f"[NyaaTriggers] could not save {what}: {exc}", file=sys.stderr)
         if self._save_warned:
             return
@@ -102,8 +88,6 @@ class SettingsTabMixin:
 
     def _build_plugin_link_settings(self, layout) -> None:
         self._settings_header(layout, _("In-Game Overlay"))
-        # Always on and auto-detected. No toggles here, just whether the game
-        # plugin is talking to us right now, and where to get it.
         self._plugin_link_status_lbl = QLabel(_("● Off"))
         self._plugin_link_status_lbl.setStyleSheet("color:#8f8f9a; font-weight:bold;")
         layout.addWidget(self._plugin_link_status_lbl)
@@ -112,8 +96,7 @@ class SettingsTabMixin:
             'github.com/CateDesu/NyaaTriggers-Overlay</a>')
         repo_lbl.setOpenExternalLinks(True)
         layout.addWidget(repo_lbl)
-        # Dual client setups move the second client's plugin off the default
-        # port, this field points the app at it. Everyone else leaves it be.
+        # Support a second game client using another overlay port.
         port_row = QHBoxLayout()
         port_row.addWidget(QLabel(_("Port:")))
         saved_port = parse_port(self._settings.get("plugin_port"))
@@ -127,12 +110,9 @@ class SettingsTabMixin:
         port_note.setStyleSheet("color:#8f8f9a;")
         port_row.addWidget(port_note, stretch=1)
         layout.addLayout(port_row)
-        # Reflect the link's state as of Settings opening. Updates arrive via
-        # status_changed from then on.
         self._update_plugin_link_status_label(*self._plugin_link.last_status())
 
     def _settings_header(self, layout, title: str) -> None:
-        """Add a coral, hairline-underlined Settings section header."""
         lbl = QLabel(title)
         lbl.setStyleSheet(
             "color:#ff8399; font-weight:bold; font-size:13px; "
@@ -140,8 +120,8 @@ class SettingsTabMixin:
         layout.addWidget(lbl)
 
     def _set_me_name(self, name: str) -> None:
-        """Update the tracked local-player name, persist it, and reflect it in
-        the Settings field. Called both from the 02 log line and manual edits."""
+        """Save the player name and update its field from either the feed or manual edits.
+        """
         name = name.strip()
         self._me_name = name
         self._settings["char_name"] = name
@@ -155,19 +135,18 @@ class SettingsTabMixin:
     def _on_ui_language_changed(self, _idx: int) -> None:
         lang = self._ui_lang_combo.currentData() or "auto"
         if lang == self._settings.get("ui_language", "auto"):
-            return                              # no real change, no spurious prompt
+            return
         self._settings["ui_language"] = lang
-        self._save_settings()                   # MUST persist before the restart reads it
+        self._save_settings()                   # Save before restarting.
         if ac.QMessageBox.question(
                 self, _("Restart NyaaTriggers"),
                 _("The interface language changed. Restart NyaaTriggers now to apply it?"),
         ) == ac.QMessageBox.StandardButton.Yes:
-            self._restart_for_update()          # os.execv never returns, nothing after it
+            self._restart_for_update()
 
     def _save_raw_log(self) -> None:
-        """Write the captured raw WS feed to a text file. Uses the complete
-        capture, not the filtered Easy-to-Read log, so effects you apply are
-        included."""
+        """Export the complete captured feed, including lines hidden by display filters.
+        """
         lines = list(self._raw_capture)
         if not lines:
             ac.QMessageBox.information(
@@ -177,14 +156,13 @@ class SettingsTabMixin:
         dlg = ac.QFileDialog(self, _("Save Log"), "nyaa_log.txt",
                           _("Text files (*.txt);;All files (*)"))
         dlg.setAcceptMode(ac.QFileDialog.AcceptMode.AcceptSave)
-        dlg.setDefaultSuffix("txt")   # see _export_triggers
+        dlg.setDefaultSuffix("txt")
         if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.selectedFiles():
             return
         path = dlg.selectedFiles()[0]
         try:
-            # Sibling tmp plus rename, like _atomic_write_json. An
-            # interrupted write must not leave a truncated log the user
-            # assumes is complete.
+            # Export through a sibling temporary file to preserve the previous log if
+            # interrupted.
             dest = Path(path)
             tmp = dest.with_suffix(dest.suffix + ".tmp")
             try:
@@ -222,13 +200,9 @@ class SettingsTabMixin:
         self._ability_log.ensureCursorVisible()
 
     def _localize_text(self, text: str) -> str:
-        """Translate a free-form callout by exact text. Used for engine
-        callouts, Triggevent, cactbot, Triggernometry, which have no
-        trigger id, so only the text-keyed phrase map applies. Gated by
-        callouts_localized. English fallback so an unmatched or custom
-        callout stays as-is. Dynamic {token} keys, the engine substitutes
-        Groovy before we see the text, fall through to compiled regex
-        patterns."""
+        """Translate engine callouts by exact text, then tokenized phrase patterns.
+        Preserve unmatched text and respect the localization switch.
+        """
         if not text or not self._settings.get("callouts_localized", active_locale() == "ja"):
             return text
         ja = self._callouts_phrases_ja.get(text)
@@ -240,20 +214,15 @@ class SettingsTabMixin:
         return text
 
     def _reading_for(self, text: str) -> str:
-        """Kana reading of a localized callout, for TTS. Offline voices,
-        espeak, and even some system voices can't read kanji and announce
-        it as "Chinese letter", so speak the hiragana or katakana reading
-        instead. Maps a Japanese display string to its reading. English
-        and names, not in the map, pass through."""
+        """Return a kana reading for Japanese speech, preserving text without a known
+        reading.
+        """
         return self._callouts_readings.get(text) or text
 
     def _localized_name(self, t: Trigger) -> str:
-        """Trigger NAME in the active locale, for display, table and
-        dialogs. Display only, never spoken, so kanji needs no reading.
-        Same gate as callouts. English fallback covers user copies and
-        renames with no map entry. Engine triggers, Triggevent and
-        Triggernometry, use Groovy classpath ids the id map doesn't hold,
-        so fall through to a text-keyed, english name to ja, map."""
+        """Translate a trigger name for display using its ID, then its current wording.
+        Preserve names without a translation.
+        """
         if not self._settings.get("callouts_localized", active_locale() == "ja"):
             return t.name
         return (self._callouts_names_ja.get(t.id)
@@ -261,8 +230,7 @@ class SettingsTabMixin:
                 or t.name)
 
     def _flush_pending_settings_save(self) -> None:
-        """A debounced settings save still pending dies with the process.
-        Flush it so the last slider position survives."""
+        """Flush pending settings before the process exits."""
         if self._settings_save_timer.isActive():
             self._settings_save_timer.stop()
             self._save_settings()

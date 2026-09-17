@@ -1,10 +1,5 @@
-"""WebSocket client for the IINACT/ACT combat feed.
-
-Parses LogLine / ChangeZone / ChangePrimaryPlayer / PartyChanged events,
-drives NyaaTriggers' own engine and DPS logging off the log lines, and
-forwards the raw message stream to the Triggevent and Triggernometry
-sidecars. CombatData is subscribed only so that tee forwards it, DPS comes
-from the log lines via dps_meter, not from CombatData.
+"""Read IINACT combat events for local triggers and the meter, and forward raw messages to
+engine sidecars. The meter uses log lines rather than CombatData summaries.
 """
 
 import json
@@ -15,18 +10,13 @@ from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
 from PyQt6.QtNetwork import QAbstractSocket
 from PyQt6.QtWebSockets import QWebSocket
 
-# LogLine drives the local engine and DPS logging. The rest are subscribed
-# for the raw_message tee, triggevent-core needs the state events for
-# player/zone/party sync, and they are also consumed locally, player id,
-# party-type map and zone, for the triggernometry-core combatant feed.
+# Subscribe to combat logs and world state for local processing and sidecar replay.
 _SUBSCRIBE = json.dumps({"call": "subscribe", "events": [
     "LogLine", "CombatData", "ChangePrimaryPlayer", "ChangeZone", "PartyChanged",
     "InCombat",
 ]})
 
-# Inbound text frames go straight to json.loads. Cap them so a hostile or buggy
-# peer can't make the GUI thread parse and hold a giant message. Real ACT
-# frames are kilobytes.
+# Bound message size before JSON parsing on the GUI thread.
 _MAX_WS_MESSAGE = 4 << 20
 _PING_INTERVAL_MS = 15000
 _PONG_TIMEOUT_MS = 10000
@@ -40,8 +30,6 @@ class WSClient(QObject):
     primary_player = pyqtSignal(int, str)   # charID and charName from ChangePrimaryPlayer
     raw_message = pyqtSignal(str)       # every raw WS text msg, verbatim, teed to the sidecar
     status_changed = pyqtSignal(bool, str)  # connected and message
-    # inACTCombat and inGameCombat from InCombat. Combat state transitions,
-    # needed for timeline InCombat syncs and leave-combat detection.
     in_combat = pyqtSignal(bool, bool)
 
     def __init__(self, parent=None) -> None:
@@ -51,14 +39,9 @@ class WSClient(QObject):
         self._reopen_on_disconnect = False   # connect_to over a live socket means reopen once closed
         self._player_id = 0             # tracked from ChangePrimaryPlayer, for combatant "me"
         self._party_types: dict = {}    # combatant_id -> 1 party, 2 alliance, from PartyChanged
-        # Set when _on_error already reported an error-driven drop, so the
-        # disconnected signal that Qt fires right after does not emit a second
-        # status_changed with different text and flicker the status label.
+        # Avoid a second status update when Qt emits disconnected after an error.
         self._error_reported = False
-        # Last zone/player/party messages. IINACT sends these ONCE, on subscribe.
-        # The Triggevent Engine boots ~10s after we connect, so its feed dropped
-        # them and it never learns the zone. Kept here so replay_state can hand
-        # them to the engine when it comes up. Fixes callouts on a mid-instance start.
+        # Cache subscription state for sidecars that start after these events arrive.
         self._state_cache: dict = {}    # msgtype -> raw_msg
 
         self._ws = QWebSocket(parent=self)
@@ -92,10 +75,8 @@ class WSClient(QObject):
         self._refresh_timer.setInterval(20)
         self._refresh_timer.timeout.connect(self._flush_combatant_requests)
 
-    # ------------------------------------------------------------------
     def connect_to(self, url: str) -> None:
-        # Only ws/wss are accepted. A pasted file://, http:// or junk URL would
-        # otherwise be handed to Qt and surface as a confusing connection error.
+        # Validate WebSocket schemes before passing the address to Qt.
         if url:
             scheme = QUrl(url).scheme().lower()
             if scheme not in ("ws", "wss"):
@@ -105,15 +86,11 @@ class WSClient(QObject):
         self._url = url
         self._auto_reconnect = True
         self._reconnect_timer.stop()
-        # A user-initiated reconnect starts from the base delay. Otherwise a
-        # prior long backoff, up to 60s, makes the first failed retry wait a
-        # full minute even though ACT may now be reachable.
+        # Reset backoff for a user-requested reconnect.
         self._reconnect_delay = 5000
         if self._ws.state() != QAbstractSocket.SocketState.UnconnectedState:
-            # close is asynchronous. Opening immediately would race the
-            # deferred disconnect, whose handler then armed a reconnect that
-            # later re-opened over the fresh connection and aborted it.
-            # Reopen from the disconnected handler instead.
+            # Wait for asynchronous close before reopening so its disconnect callback
+            # cannot abort a new connection.
             self._reopen_on_disconnect = True
             self._stop_heartbeat()
             self._ws.close()
@@ -127,32 +104,24 @@ class WSClient(QObject):
         self._stop_heartbeat()
         self._ws.close()
 
-    # ------------------------------------------------------------------
     def _open(self) -> None:
         if not self._url:
             return
-        # Never open over a live or connecting socket. It aborts the healthy
-        # connection. A stray reconnect timer armed by a transient errorOccurred
-        # could otherwise churn the link every 5 s.
+        # Ignore stale reconnect timers while a socket is connected or connecting.
         state = self._ws.state()
         if state == QAbstractSocket.SocketState.ConnectedState:
             return
         if state == QAbstractSocket.SocketState.ConnectingState:
-            # QWebSocket has no handshake timeout, and a host that accepts
-            # TCP then goes silent mid handshake never raises an OS error.
-            # The timer firing means this attempt already had a full backoff
-            # interval, so cut it loose and fall through to a fresh open
-            # instead of parking the retry loop on the stuck socket forever.
+            # Abort a handshake that outlived its attempt deadline before starting
+            # another.
             self._ws.abort()
         self._ws.open(QUrl(self._url))
-        # Watchdog for the fresh attempt. The timer that fired to start it is
-        # spent, and a stalled handshake emits no signal that would arm a new
-        # one. _on_connected cancels it on success.
+        # Arm a deadline for this handshake. Successful connection cancels it.
         self._schedule_reconnect()
 
     def _on_connected(self) -> None:
-        self._reconnect_timer.stop()   # a pending reconnect must not fire now
-        self._reconnect_delay = 5000   # backoff resets after a good connect
+        self._reconnect_timer.stop()
+        self._reconnect_delay = 5000
         self._error_reported = False
         self._pending_ping = None
         self._heartbeat_timer.start(_PING_INTERVAL_MS)
@@ -168,23 +137,18 @@ class WSClient(QObject):
         self._refresh_ids.clear()
         self._refresh_all = False
         self._stop_heartbeat()
-        # Player/party identity may change while we're down. Both are relearned
-        # from the ChangePrimaryPlayer/PartyChanged burst IINACT sends on the
-        # resubscribe, so drop the stale mapping rather than carry it over.
+        # Discard identity mappings on feed loss. Subscription replay repopulates them.
         self._player_id = 0
         self._party_types = {}
         self._state_cache.clear()
         if self._error_reported:
-            # _on_error already told the UI about this drop with the real
-            # error text. A second emit here would just relabel it Disconnected.
             self._error_reported = False
         else:
             self.status_changed.emit(False, "Disconnected")
         if self._reopen_on_disconnect:
             self._reopen_on_disconnect = False
-            self._open()               # user-requested reconnect, no wait
-        # Always arm the retry timer too. If the immediate reopen above bailed
-        # or its attempt fails, the timer retries. _on_connected stops it.
+            self._open()
+        # Retain a retry timer if immediate reopening fails.
         self._schedule_reconnect()
 
     def _stop_heartbeat(self) -> None:
@@ -220,9 +184,8 @@ class WSClient(QObject):
         self._pending_ping = None
         self._heartbeat_timer.start(_PING_INTERVAL_MS)
 
-    # ------------------------------------------------------------------
     def set_combatant_polling(self, enabled: bool) -> None:
-        """Toggle the getCombatants poll. Safe to call anytime. Only polls while connected."""
+        """Poll combatants while connected and requested by an engine."""
         self._poll_enabled = bool(enabled)
         self._update_combatant_polling()
 
@@ -233,7 +196,7 @@ class WSClient(QObject):
     def _update_combatant_polling(self) -> None:
         enabled = self._poll_enabled or self._engine_poll_enabled
         if enabled and self._ws.isValid():
-            self._request_combatants()   # one immediately so ${_me} populates fast
+            self._request_combatants()
             self._poll_timer.start()
         elif not enabled:
             self._poll_timer.stop()
@@ -261,19 +224,13 @@ class WSClient(QObject):
         self._refresh_all = False
 
     def request_combatants_once(self) -> None:
-        """One-off getCombatants regardless of the polling toggle. The reply
-        comes via `combatants`. Backfills party jobs when the app starts
-        mid-instance and the 03 AddedCombatant burst is long gone."""
+        """Request one combatant snapshot to fill jobs missed before subscription."""
         self._request_combatants()
 
     def replay_state(self) -> None:
-        """Re-tee the cached zone, player, party and combat state messages to
-        sidecar listeners and re-request combatants. IINACT sends the world
-        state once on subscribe, but
-        the Triggevent Engine boots ~10s later, so it missed the zone and stays
-        disarmed on a mid-instance start. Called when the engine comes up so it
-        learns the current zone with no reconnect or zone change needed. No-op if
-        nothing cached yet. The engine then gets state live once it is active."""
+        """Replay cached identity and combat state to newly started sidecars, then request
+        current combatants.
+        """
         for msg in self.state_snapshot():
             self.raw_message.emit(msg)
         self._request_combatants()
@@ -286,20 +243,18 @@ class WSClient(QObject):
 
     def _on_error(self, _err) -> None:
         if self._ws.isValid():
-            return   # transient error on a live socket, a real drop fires disconnected
-        self._error_reported = True   # _on_disconnected follows, let it stay quiet
+            return   # Wait for disconnected before treating a transient socket error as feed loss.
+        self._error_reported = True
         self.status_changed.emit(False, self._ws.errorString())
         self._schedule_reconnect()
 
     def _on_message(self, msg: str) -> None:
-        # Tee the raw message verbatim to the sidecar listeners before parsing.
         self.raw_message.emit(msg)
         try:
             data = json.loads(msg)
         except (ValueError, RecursionError):
-            # RecursionError: a hostile frame nested past CPython's limit fits
-            # under the 4 MiB cap, and it derives from RuntimeError, not
-            # ValueError, so it needs naming to land here.
+            # Catch excessive JSON nesting separately because RecursionError is not a
+            # ValueError.
             raw = msg.strip()
             if raw:
                 self.log_line.emit(raw)
@@ -313,14 +268,11 @@ class WSClient(QObject):
 
         mtype = str(data.get("type", "")).lower()
 
-        # Keep the one-shot world-state messages so replay_state can re-feed a
-        # sidecar that started after this one arrived.
         if mtype in ("changezone", "changeprimaryplayer", "partychanged", "incombat"):
             self._state_cache[mtype] = msg
 
         if mtype == "incombat":
-            # ACT keeps its own combat notion next to the game's. The timeline
-            # cares about the game one, but syncs may match either field.
+            # Preserve both combat flags because sync rules can match either.
             self.in_combat.emit(bool(data.get("inACTCombat")), bool(data.get("inGameCombat")))
             return
 
@@ -328,8 +280,7 @@ class WSClient(QObject):
             try:
                 self._player_id = int(data.get("charID") or data.get("charId") or 0)
             except (TypeError, ValueError, OverflowError):
-                # Reset, not keep. Pairing the new name with the previous
-                # character's id would skew combatants "me" as well.
+                # Do not pair a new player name with the previous player's ID.
                 self._player_id = 0
             self.primary_player.emit(self._player_id,
                                      str(data.get("charName") or data.get("charname") or ""))
@@ -344,10 +295,8 @@ class WSClient(QObject):
             return
 
         if mtype == "partychanged":
-            # getCombatants reports PartyType=0 on Linux/IINACT, so derive
-            # party/alliance membership from the PartyChanged roster. It also
-            # carries each member's ClassJob, a decimal int. Tee that out so
-            # role-aware features get jobs even when the 03 burst was missed.
+            # Use PartyChanged for party membership because IINACT may report PartyType
+            # as zero. Forward roster jobs for connections that missed spawn lines.
             pt: dict = {}
             jobs: dict = {}
             party = data.get("party")
@@ -388,24 +337,19 @@ class WSClient(QObject):
             self._reconnect_delay = min(self._reconnect_delay * 2, 60000)
 
 
-# ----------------------------------------------------------------------
 def _extract_raw(data: dict) -> str:
-    """Extract a raw pipe-delimited log line from a parsed IINACT/OverlayPlugin
-    WebSocket message. Returns "" for non-LogLine messages."""
+    """Extract a raw ACT log line, or an empty string for unrelated messages."""
     t = data.get("type", "")
 
-    # the standard OverlayPlugin / IINACT layout
     if str(t).lower() == "logline":
         line = data.get("line")
         raw = data.get("rawLine") or data.get("raw_line")
         if raw:
-            # rawLine is not guaranteed to be a str, and the pyqtSignal(str)
-            # it feeds raises TypeError on anything else. Coerce like the
-            # broadcast path below.
+            # Coerce rawLine to the string required by its Qt signal.
             return str(raw)
         return "|".join(str(f) for f in line) if isinstance(line, list) else ""
 
-    # broadcast wrapper some IINACT versions use
+    # Some IINACT versions use a broadcast wrapper.
     if str(t).lower() == "broadcast" and str(data.get("msgtype", "")).lower() == "logline":
         return str(data.get("msg", "")).strip()
 
@@ -413,8 +357,7 @@ def _extract_raw(data: dict) -> str:
 
 
 def _ci(v) -> int:
-    # OverflowError rides along with the ValueError pair. json accepts 1e999
-    # and Infinity, and int on the resulting float raises it, not ValueError.
+    # Integer conversion can overflow on nonfinite JSON numbers.
     try:
         return int(v)
     except (TypeError, ValueError, OverflowError):
@@ -429,18 +372,14 @@ def _cf(v) -> float:
         f = float(v)
     except (TypeError, ValueError, OverflowError):
         return 0.0
-    # inf and nan must not reach the sidecar feed. json.dumps would emit the
-    # non standard Infinity or NaN tokens, which the strict .NET JSON parser
-    # on the other end rejects, dropping the whole combatant snapshot.
+    # Replace nonfinite values before sending strict JSON to the sidecar.
     return f if math.isfinite(f) else 0.0
 
 
 def _map_combatants(combs: list, party_types: dict = None) -> list:
-    """Map getCombatants entries, PascalCase FFXIV_ACT_Plugin model with
-    camelCase fallbacks, to the triggernometry-core schema, numeric values and
-    lowercase keys. party_types, id -> 1 or 2 from PartyChanged, supplies
-    membership since IINACT reports PartyType=0. Exact key casing unverified
-    against live IINACT."""
+    """Normalize combatant field casing and numeric values for Triggernometry. Use
+    PartyChanged membership when available.
+    """
     party_types = party_types or {}
     out: list = []
     for c in combs:
@@ -472,7 +411,7 @@ def _map_combatants(combs: list, party_types: dict = None) -> list:
             "bnpcnameid": _ci(g("BNpcNameID", "bNpcNameID", default=0)),
             "worldid": _ci(g("WorldID", "worldID", default=0)),
             "worldname": str(g("WorldName", "worldName", default="") or ""),
-            # cast/distance fields ParseCombatant reads, may come back 0 from IINACT memory
+            # Cast and distance fields may be unavailable in IINACT memory.
             "castid": _ci(g("CastBuffID", "castBuffID", "castid", default=0)),
             "casttargetid": _ci(g("CastTargetID", "castTargetID", default=0)),
             "casttime": _cf(g("CastDurationCurrent", "castDurationCurrent", default=0)),

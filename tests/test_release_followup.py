@@ -1,4 +1,4 @@
-"""Challenge recovery and error handling after the first release audit fixes."""
+"""Release recovery and error handling regressions."""
 
 import io
 import os

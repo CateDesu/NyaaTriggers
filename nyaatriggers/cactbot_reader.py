@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""Read live cactbot callouts into NyaaTriggers.
-
-Runs the real cactbot raidboss in a headless QtWebEngine page that subscribes
-to IINACT itself via the OVERLAY_WS url param and harvests callouts over a
-QWebChannel. Nothing is reimplemented, cactbot runs its own JS and state.
-
-Two capture points, both outside cactbot's module scope so they survive
-cactbot updates.
-  1. MutationObserver on #popup-text-container gives the on-screen text plus
-     the severity tier, info/alert/alarm.
-  2. Hook on WebSocket.prototype.send catches the cactbotSay TTS message,
-     plus the initial subscribe which confirms it connected.
-
-PyQt6-WebEngine is optional, so call is_available first. Only QtCore is
-imported at module load. The heavy imports wait until start.
+"""Capture live cactbot callouts from a headless QtWebEngine page. A DOM observer captures
+display text and severity. A WebSocket send hook captures cactbotSay speech. WebEngine
+is optional and imported only when starting the reader.
 """
 
 from __future__ import annotations
@@ -28,7 +16,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from nyaatriggers.drop_log import log_drop
 from nyaatriggers.trigger_engine import compile_user_regex, _safe_sub
 
-# Hosted cactbot raidboss build. The "Cactbot URL" setting can point at a local one.
+# The Cactbot URL setting can override this hosted build.
 DEFAULT_CACTBOT_URL = "https://overlayplugin.github.io/cactbot/ui/raidboss/raidboss.html"
 
 
@@ -42,7 +30,7 @@ def is_available() -> bool:
         return False
 
 
-# JS injected into cactbot's page, MainWorld, at document creation.
+# Inject into MainWorld before cactbot loads.
 _HARVEST_JS = r"""
 (function () {
   'use strict';
@@ -50,13 +38,11 @@ _HARVEST_JS = r"""
   var queue = [];
   function report(kind, payload) {
     if (bridge) { try { bridge.fromCactbot(kind, payload); } catch (e) {} }
-    // Bounded so a transport that never appears can't pile every harvested
-    // event into the queue for the whole session.
+    // Bound queued events while waiting for the bridge.
     else if (queue.length < 200) { queue.push([kind, payload]); }
   }
 
-  // Connect the QWebChannel bridge (retry until the transport is injected,
-  // backing off so a transport that never appears doesn't busy-poll forever).
+  // Back off while waiting for the injected transport.
   var connectDelay = 50;
   function connect() {
     if (typeof qt === 'undefined' || !qt.webChannelTransport) {
@@ -75,8 +61,7 @@ _HARVEST_JS = r"""
   }
   connect();
 
-  // (2) Hook outgoing websocket sends BEFORE cactbot opens its socket.
-  //     Catches the exact cactbotSay TTS text and the initial subscribe.
+  // Hook sends before cactbot connects to capture speech and subscriptions.
   try {
     var origSend = WebSocket.prototype.send;
     WebSocket.prototype.send = function (data) {
@@ -96,7 +81,6 @@ _HARVEST_JS = r"""
     report('status', JSON.stringify({ event: 'ws-hook-failed', err: String(e) }));
   }
 
-  // (1) Observe the raidboss popup container for on-screen callouts + tier.
   function tierFromClass(cls) {
     cls = cls || '';
     if (cls.indexOf('alarm') !== -1) return 'alarm';
@@ -115,8 +99,7 @@ _HARVEST_JS = r"""
   var attachTries = 0;
   function attach() {
     var container = document.getElementById('popup-text-container');
-    // Give up after ~30s and say so. A page that never renders the container
-    // must not re-poll for the whole session with no signal to the host.
+    // Report failure if the popup container does not appear within 30 seconds.
     if (!container) {
       attachTries++;
       if (attachTries < 100) { setTimeout(attach, 300); }
@@ -132,11 +115,8 @@ _HARVEST_JS = r"""
   }
   attach();
 
-  // (3) Best-effort: apply per-trigger disables + enumerate loaded triggers.
-  //     cactbot suppresses a trigger whose id is in Options.DisabledTriggers.
-  //     Neither the options object nor the trigger list are reliably exposed on
-  //     raidboss.html, so this polls for them and silently gives up if absent
-  //     (the host hides the per-trigger UI unless an enumeration arrives).
+  // Look for optional trigger enumeration and suppression controls.
+  // The host keeps the checklist hidden if enumeration is unavailable.
   function findOptions() {
     var cands = [window.Options, window.gOptions, window.options];
     for (var i = 0; i < cands.length; i++) {
@@ -151,7 +131,7 @@ _HARVEST_JS = r"""
     var o = findOptions();
     if (o) {
       o.DisabledTriggers = o.DisabledTriggers || {};
-      // read fresh each tick, a live toggle replaces the whole map
+      // Reread the map because live toggles replace it.
       var disabled = (window.__nyaaDisabledTriggers || {});
       for (var k in disabled) { if (disabled[k]) o.DisabledTriggers[k] = true; }
       if (!enumerated) {
@@ -161,8 +141,7 @@ _HARVEST_JS = r"""
             return {
               id: t.id || '',
               name: t.id || '',
-              // best-effort owning zone for grouping; prefer a readable name over
-              // the numeric zoneId. Any of these may be absent.
+              // Prefer a zone name for grouping, falling back to its ID.
               zone: (t.zoneName || t.__zone || (t.zoneId != null ? String(t.zoneId) : '')),
             };
           }).filter(function (t) { return t.id; });
@@ -170,7 +149,7 @@ _HARVEST_JS = r"""
         }
       }
     }
-    if (tries < 40) setTimeout(applyAndEnumerate, 500);   // ~20s of polling
+    if (tries < 40) setTimeout(applyAndEnumerate, 500);
   }
   applyAndEnumerate();
 })();
@@ -188,8 +167,8 @@ class _Bridge(QObject):
 
 
 class CactbotReader(QObject):
-    """Headless cactbot raidboss harvester. Mirrors the TriggeventBridge signal
-    interface. start takes the IINACT ws url."""
+    """Capture headless cactbot callouts through the TriggeventBridge signal interface.
+    """
 
     callout = pyqtSignal(str, str)   # text, severity in {info, alert, alarm}
     tts     = pyqtSignal(str)        # exact spoken cactbotSay text
@@ -204,10 +183,9 @@ class CactbotReader(QObject):
         self._channel = None
         self._bridge = None
         self._active = False
-        # find->replace overrides applied before emit. Atomic list swap, no locks.
+        # Replace the rule list atomically so readers need no lock.
         self._replacements: list[dict] = []
         self._seen: dict[str, None] = {}      # ordered set of observed phrases
-        # Live disabled-trigger set. Pushed into the running page without a reload.
         self._disabled: set[str] = set()
 
     @staticmethod
@@ -217,21 +195,16 @@ class CactbotReader(QObject):
     def is_active(self) -> bool:
         return self._active
 
-    # ------------------------------------------------------------------
     def start(self, ws_url: str, cactbot_url: str = DEFAULT_CACTBOT_URL,
               disabled_triggers=None) -> None:
-        """Load cactbot headlessly and begin harvesting. Idempotent.
-
-        `disabled_triggers` is cactbot trigger ids to suppress, best
-        effort, seeded into Options.DisabledTriggers on load. Raises if
-        PyQt6-WebEngine is unavailable. Guard with is_available.
+        """Start cactbot with the IINACT URL and disabled trigger IDs. Requires WebEngine.
+        Repeated starts while active do nothing.
         """
         if self._active:
             return
 
-        # A custom cactbot URL on a remote host runs its JS in our page with
-        # AllowRunningInsecureContent on, load-bearing for the ws://127.0.0.1
-        # IINACT feed, see below. Warn but load it. The URL is user config.
+        # Custom URLs share the mixed content allowance needed for the local IINACT
+        # feed. Warn for remote hosts and load the configured URL.
         if cactbot_url != DEFAULT_CACTBOT_URL:
             host = (urllib.parse.urlparse(cactbot_url).hostname or "").lower()
             if host and host not in ("localhost", "127.0.0.1", "::1"):
@@ -239,14 +212,13 @@ class CactbotReader(QObject):
                       f"remote host {host!r} with insecure content allowed; "
                       f"only point this at hosts you trust", file=sys.stderr)
 
-        # Deferred imports so the app runs without PyQt6-WebEngine installed.
+        # Defer imports so the program can run without WebEngine.
         from PyQt6.QtCore import QFile, QIODevice, QUrl
         from PyQt6.QtWebChannel import QWebChannel
         from PyQt6.QtWebEngineCore import (
             QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineSettings,
         )
 
-        # Qt's bundled qwebchannel.js.
         f = QFile(":/qtwebchannel/qwebchannel.js")
         if not f.open(QIODevice.OpenModeFlag.ReadOnly):
             raise RuntimeError("could not load :/qtwebchannel/qwebchannel.js")
@@ -255,13 +227,11 @@ class CactbotReader(QObject):
         finally:
             f.close()
 
-        # Off-the-record profile + viewless page = headless. DOM, JS, and
-        # WebSocket run with no window or GL surface.
+        # Use an off the record profile and a page without a view.
         self._profile = QWebEngineProfile(self)
         self._page = QWebEnginePage(self._profile, self)
-        # Load-bearing, not a leftover. The hosted cactbot page is https but it
-        # subscribes to IINACT over ws://127.0.0.1. Mixed content Chromium
-        # blocks by default, which would kill the whole feed.
+        # The hosted HTTPS page needs mixed content enabled to reach IINACT over
+        # ws://127.0.0.1.
         self._page.settings().setAttribute(
             QWebEngineSettings.WebAttribute.AllowRunningInsecureContent, True)
 
@@ -271,8 +241,7 @@ class CactbotReader(QObject):
         self._channel.registerObject("harvester", self._bridge)
         self._page.setWebChannel(self._channel)   # transport -> MainWorld
 
-        # The prelude runs before cactbot and seeds the disable set the
-        # harvest script merges into Options.DisabledTriggers.
+        # Seed disabled triggers before cactbot loads.
         self._disabled = {str(t) for t in (disabled_triggers or [])}
         disabled_map = {t: True for t in self._disabled}
         prelude = f"window.__nyaaDisabledTriggers = {json.dumps(disabled_map)};\n"
@@ -302,18 +271,14 @@ class CactbotReader(QObject):
         self.status.emit(False, "Off")
 
     def _teardown(self) -> None:
-        """Mark inactive and destroy the page/channel/bridge/profile. Shared by
-        stop, the load-failure path and the renderer-crash path. A failed load
-        must not leave _active set, since start early-returns while it is and
-        a later toggle could never retry the load."""
+        """Clear active state and delete the browser objects so a later start can retry.
+        """
         self._active = False
-        # Forget observed phrases with the session. A phrase seen by a previous
-        # cactbot instance must re-emit phrase_seen on the next one.
+        # Clear observed phrases so a new session can emit them again.
         self._seen.clear()
         if self._page is not None:
-            # Disconnect before deleteLater, or a stop/start cycle over a URL
-            # change lets the dying page's queued signals land on the slots
-            # while the fresh page is already up.
+            # Disconnect before deletion so queued signals from the old page cannot
+            # reach the new session.
             try:
                 self._page.loadFinished.disconnect(self._on_load_finished)
             except TypeError:
@@ -328,12 +293,8 @@ class CactbotReader(QObject):
             except Exception:  # noqa: BLE001
                 pass
             self._page.deleteLater()
-        # The profile and bridge are parented to this long-lived reader, so
-        # nulling the Python references alone kept the C++ objects and the
-        # profile's browser-engine resources alive for the life of the app.
-        # One leaked off-the-record profile per start/stop cycle. deleteLater
-        # order matters. The page's delete event is queued first, so the
-        # profile still outlives its page.
+        # Delete the page before its profile. Both need explicit deletion because their
+        # parent reader remains alive.
         if self._bridge is not None:
             try:
                 self._bridge.relay.disconnect(self._on_message)
@@ -347,11 +308,9 @@ class CactbotReader(QObject):
         self._bridge = None
         self._profile = None
 
-    # ------------------------------------------------------------------
     def set_disabled_triggers(self, ids) -> None:
-        """Update suppressed cactbot trigger ids mid-session, no reload. cactbot
-        re-reads Options.DisabledTriggers on every trigger evaluation, so a live
-        push applies immediately. The caller owns persistence."""
+        """Update disabled trigger IDs without reloading. The caller saves the setting.
+        """
         new = {str(t) for t in (ids or [])}
         self._disabled = new
         if not self._active or self._page is None:
@@ -369,12 +328,13 @@ class CactbotReader(QObject):
         )
         try:
             self._page.runJavaScript(js, QWebEngineScript.ScriptWorldId.MainWorld)
-        except Exception:  # noqa: BLE001 - never let a UI toggle brick the app
+        except Exception:  # noqa: BLE001
             pass
 
     def set_replacements(self, rules: list) -> None:
-        """Set find->replace overrides, dicts of find, replace, regex,
-        enabled. An empty result silences the callout. Atomic list swap."""
+        """Replace find and replace rules atomically. An empty replacement result silences
+        the callout.
+        """
         self._replacements = list(rules or [])
 
     def seen_phrases(self) -> list:
@@ -383,14 +343,12 @@ class CactbotReader(QObject):
     def _apply_replacements(self, s: str) -> str:
         rules = self._replacements
         if not rules or not s:
-            return s.strip()   # same whitespace handling as the rules path
+            return s.strip()
         out = s
         for r in rules:
             if not r.get("enabled", True):
                 continue
-            # A hand edited settings entry can hold values that are not
-            # strings. Coerce so one bad rule cannot raise in this Qt slot
-            # and mute every callout while it is installed.
+            # Coerce saved values so a malformed rule cannot interrupt callouts.
             find = r.get("find") or ""
             if not isinstance(find, str):
                 find = str(find)
@@ -403,9 +361,7 @@ class CactbotReader(QObject):
             rx = compile_user_regex(pat, re.IGNORECASE)
             if rx is None:
                 continue
-            # A bad backreference, \1 to a group that doesn't exist, or a
-            # catastrophic pattern that timed out leaves the callout text
-            # unchanged rather than dropping the whole callout from the Qt slot.
+            # Leave text unchanged when a regex times out or has invalid backreferences.
             out = _safe_sub(rx, repl, out)
         return out.strip()
 
@@ -416,29 +372,24 @@ class CactbotReader(QObject):
                 self._seen.pop(next(iter(self._seen)))
             self.phrase_seen.emit(phrase)
 
-    # ------------------------------------------------------------------
     def _on_load_finished(self, ok: bool) -> None:
         if not self._active:
             return
         if ok:
             self.status.emit(True, "Reading cactbot")
-            # Re-assert the live disabled set so a reload can't revert it to the
-            # start-time seed in the prelude.
+            # Restore the current disabled set after a reload.
             self.set_disabled_triggers(self._disabled)
         else:
-            # Tear down as stop does so a later toggle re-runs start
-            # instead of hitting its "already active" early-out, and report
-            # with the reader marked inactive so the app can undo the mute it
-            # applied when start returned.
+            # Clear active state before reporting failure so the program can unmute
+            # callouts and a later start can retry.
             self._teardown()
             self.status.emit(False, "Failed to load cactbot (check the URL / connection)")
 
     def _on_render_process_terminated(self, status, exit_code) -> None:
         if not self._active:
             return
-        # A dead renderer kills every callout while the page still looks
-        # loaded. Tear down and report as the load-failure path does, so a
-        # later toggle re-runs start and the app undoes the callout mute.
+        # A renderer crash leaves the page loaded but unable to call out. Tear it down
+        # as for a failed load.
         self._teardown()
         self.status.emit(False, "Cactbot renderer crashed, local callouts are back")
 
@@ -447,8 +398,7 @@ class CactbotReader(QObject):
             data = json.loads(payload)
         except (json.JSONDecodeError, ValueError):
             return
-        # 'triggers' is the only list payload. Guard non-dicts so .get can't
-        # raise in this Qt slot.
+        # Only the triggers message accepts a list payload.
         if kind == "triggers":
             if isinstance(data, list) and data:
                 self.triggers_enumerated.emit(payload)
@@ -456,8 +406,7 @@ class CactbotReader(QObject):
         if not isinstance(data, dict):
             return
         if kind == "popup":
-            # A page on a custom cactbot_url can call the bridge with any
-            # JSON. A truthy non-string text would raise in this Qt slot.
+            # Custom pages can send arbitrary JSON through the bridge.
             text = data.get("text")
             raw = text.strip() if isinstance(text, str) else ""
             if raw:
@@ -478,7 +427,4 @@ class CactbotReader(QObject):
             if data.get("event") == "subscribe":
                 self.status.emit(True, "Connected to IINACT")
             else:
-                # Lifecycle noise from the injected JS, bridge ready, hook
-                # results, observer state. Goes to the drop log instead of
-                # printing on every status event.
                 log_drop("cactbot", f"status event: {data}")

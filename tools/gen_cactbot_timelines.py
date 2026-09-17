@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
-"""Regenerate cactbot_timelines.json (zone id -> cactbot timeline) from cactbot.
-
-cactbot ships a .txt timeline for hundreds of fights, but builds its own
-zone -> timeline manifest at build time (webpack manifest-loader), so there
-is no ready-made index to download. This walks the GitHub tree of
-ui/raidboss/data, parses every trigger .ts for zoneId / zoneRegex /
-timelineFile (the same declarations the webpack build reads), and resolves
-ZoneId constants via resources/zone_id.ts and zoneRegex patterns against
-the English names in resources/zone_info.ts. Keyed on the numeric zone id
-so the runtime lookup works whatever language the client reports.
-
-Run:  python tools/gen_cactbot_timelines.py
-Writes assets/cactbot_timelines.json.
+"""Build assets/cactbot_timelines.json from cactbot raidboss declarations. Resolve zone
+constants and English zone patterns into numeric IDs so runtime lookup works across
+client languages. Run python tools/gen_cactbot_timelines.py.
 """
 import concurrent.futures
 import json
@@ -32,8 +22,7 @@ OUT = Path(__file__).resolve().parent.parent / "assets" / "cactbot_timelines.jso
 
 _UA = {"User-Agent": "NyaaTriggers"}
 
-# Bounds a single response. The repo tree listing is the largest fetch by
-# far, everything else is trigger source files well under 1 MiB.
+# Bound tree listings and source responses.
 _MAX_FETCH = 64 << 20
 
 
@@ -43,15 +32,14 @@ def _fetch(url: str) -> bytes:
 
 
 def _zone_id_consts() -> dict:
-    """'ThePraetorium' -> 1044, from resources/zone_id.ts."""
+    """Read zone constants from cactbot zone_id.ts."""
     src = _fetch(RAW + "resources/zone_id.ts").decode("utf-8")
     return {m.group(1): int(m.group(2))
             for m in re.finditer(r"^\s*'([A-Za-z0-9_]+)': (\d+),?$", src, re.M)}
 
 
 def _zone_names_en() -> dict:
-    """zone id -> English name, from resources/zone_info.ts (same parse as
-    tools/gen_zone_names.py)."""
+    """Read English names by zone ID from zone_info.ts."""
     src = _fetch(RAW + "resources/zone_info.ts").decode("utf-8")
     names = {}
     for m in re.finditer(r"^  (\d+): \{(.*?)^  \},", src, re.S | re.M):
@@ -62,13 +50,12 @@ def _zone_names_en() -> dict:
 
 
 def _js_regex(lit: str, flags: str) -> "re.Pattern":
-    """Compile a JS regex literal body the way cactbot's .test() would."""
+    """Compile a cactbot JavaScript regex body."""
     return re.compile(lit.replace("\\/", "/"), re.I if "i" in flags else 0)
 
 
 def _zone_ids_for(src: str, consts: dict, names_en: dict, rel: str) -> list:
-    """Numeric zone ids a trigger file declares, via zoneId (const, list or
-    literal) or a zoneRegex matched against every English zone name."""
+    """Resolve declared zone IDs and zone patterns to numeric IDs."""
     m = re.search(r"zoneId:\s*ZoneId\.([A-Za-z0-9_]+)", src)
     if m:
         z = consts.get(m.group(1))
@@ -80,8 +67,7 @@ def _zone_ids_for(src: str, consts: dict, names_en: dict, rel: str) -> list:
     m = re.search(r"zoneId:\s*(\d+)", src)
     if m:
         return [int(m.group(1))]
-    # zoneRegex: bare literal or a locale object. cactbot .test()s the zone
-    # name, so match the English pattern against every known zone name.
+    # Match zoneRegex declarations against known English zone names.
     m = (re.search(r"zoneRegex:\s*\{[^}]*?en:\s*/((?:[^/\\]|\\.)*)/([a-z]*)", src, re.S)
          or re.search(r"zoneRegex:\s*/((?:[^/\\]|\\.)*)/([a-z]*)", src))
     if m:
@@ -119,9 +105,8 @@ def main() -> None:
         rel = path[len(DATA_PREFIX):]
         tl = re.search(r"timelineFile:\s*'([^']+)'", src)
         if not tl:
-            continue                      # no timeline: triggers-only file
-        # cactbot resolves timelineFile against the trigger file's directory
-        # (popup-text.ts) and loads nothing when it is absent.
+            continue
+        # Resolve timelineFile relative to the trigger source directory.
         txt = str(PurePosixPath(rel).parent / tl.group(1))
         if txt not in txt_set:
             print(f"  warn: {rel} names missing timeline {txt}")
@@ -139,18 +124,18 @@ def main() -> None:
                 continue
             index[z] = {"tag": PurePosixPath(txt).stem, "txt_path": txt}
 
-    if len(index) < 250:            # a parse that silently degraded
+    if len(index) < 250:
         raise SystemExit(f"only {len(index)} timelines mapped - refusing to write")
     if skipped:
         print(f"  ({skipped} files skipped, see warnings)")
 
-    # One entry per line, numerically sorted. Readable diffs when a patch lands.
+    # Sort entries by numeric ID for readable diffs.
     body = ",\n".join(
         f'  "{z}": {{"tag": {json.dumps(e["tag"])}, '
         f'"txt_path": {json.dumps(e["txt_path"])}}}'
         for z, e in sorted(index.items()))
-    # Sibling tmp + rename, so an interrupted run can't leave a truncated
-    # file in place of the previous good output. Same idiom as the converters.
+    # Replace through a sibling temporary file to preserve previous output if
+    # interrupted.
     tmp = OUT.with_name(OUT.name + ".tmp")
     tmp.write_text("{\n" + body + "\n}\n", encoding="utf-8")
     os.replace(tmp, OUT)

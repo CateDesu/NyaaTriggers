@@ -1,13 +1,4 @@
-"""Tests for the UMAD P4 Cursed Shriek gaze-pairing engine (umad_chains.py).
-
-Two Grand Cross waves each deal a pair of Cursed Shriek 15A7, 15s apart, and
-each wave's Inferno or Tsunami followup cast tells whether its pair is the
-fake look-at gaze or the real look-away one. Inferno arms fake, Tsunami arms
-real. The pair marks the moment its second gain lands, fail-closed when the
-followup never arrived.
-
-Run directly:  python -m tests.test_cursed_shriek   (exit 0 = all pass)
-"""
+"""UMAD gaze pairing from followup casts and status gains."""
 import os
 import sys
 
@@ -27,8 +18,8 @@ def check(name, cond):
         FAILS.append(name)
 
 
-# Set 1 carriers A/B, set 2 carriers C/D. Durations read from the logs,
-# 60s on set 1, 69s on set 2, but carry no real or fake meaning.
+# A and B carry the first wave, C and D the second. Their durations do not identify
+# polarity.
 A, B, C, D = "10000001", "10000002", "10000003", "10000004"
 SET1, SET2 = 60.0, 69.0
 INFERNO, TSUNAMI = "BB1E", "BB1F"
@@ -60,7 +51,7 @@ def marks(acts):
     return {a[1]: a[2] for a in acts if a[0] == "mark"}
 
 
-# ── the labeled pull shape: Inferno fake first, Tsunami real second ──
+# the labeled pull shape: Inferno fake first, Tsunami real second
 e = eng()
 m = marks(wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
           + wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0))
@@ -82,14 +73,14 @@ check("swapped pulls mark the other way, tsunami real first",
 check("BB20 is a fake followup and BB21 a real one",
       "BB20" in FAKE_FOLLOWUP_IDS and "BB21" in REAL_FOLLOWUP_IDS)
 
-# ── nothing fires before the pair completes ──
+# nothing fires before the pair completes
 e = eng()
 half = e.on_followup(INFERNO, 6.0) + gain(e, A, SET1, 10.0) + gain(e, A, SET1, 10.0)
 check("one gain and a duplicate mark nothing", half == [])
 last = gain(e, B, SET1, 10.0)
 check("the partner gain completes the assignment", marks(last) == {A: BND1, B: BND2})
 
-# ── fail-closed: no followup, no marks ──
+# fail-closed: no followup, no marks
 e = eng()
 check("a pair whose wave's followup never arrived marks nothing",
       wave(e, [A, B], SET1, 10.0) == [])
@@ -116,8 +107,7 @@ check("a fresh tell after expiry still marks the correct kind",
       marks(wave(e, [C, D], SET2, 130.0, followup=TSUNAMI, t_fu=126.0))
       == {C: IGN1, D: IGN2})
 
-# ── party-slot ordering wins over actor id ──
-# Slots reversed vs id order: B is slot 1, A slot 2, so B must get the 1 sign.
+# Party slot ordering takes precedence over actor IDs.
 slots = {A: 2, B: 1, C: 4, D: 3}
 e = eng(slot_of=lambda a: slots.get(a))
 m = marks(wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
@@ -133,7 +123,7 @@ m = marks(wave(e, [A, B], SET1, 10.0, followup=TSUNAMI, t_fu=6.0))
 check("a slot-known player sorts ahead of a slot-unknown partner",
       m[A] == IGN1 and m[B] == IGN2)
 
-# ── incomplete sets ──
+# incomplete sets
 e = eng()
 acts = e.on_followup(INFERNO, 6.0) + gain(e, A, SET1, 10.0)
 check("a lone first gain marks nothing", acts == [])
@@ -152,9 +142,7 @@ e.flush(10.0 + BURST_GAP_S + 1)
 check("flush after the burst gap discards the orphaned set",
       e._set == [] and e._polarity is None)
 
-# ── the next wave's tell survives an orphaned set's discard ──
-# Wave 1's partner 26 never came, wave 2's followup armed cleanly. The
-# discard of wave 1's leftover must not eat wave 2's armed tell.
+# Discarding an incomplete wave preserves the next wave's armed tell.
 e = eng()
 e.on_followup(INFERNO, 6.0)
 gain(e, A, SET1, 10.0)               # orphaned
@@ -182,7 +170,7 @@ acts = gain(e, C, SET2, 25.0) + gain(e, D, SET2, 25.1)
 check("an orphaned wave's own tell dies with it, no bleed",
       marks(acts) == {})
 
-# ── a stray pair between waves marks nothing, the real wave self-heals ──
+# a stray pair between waves marks nothing, the real wave self-heals
 e = eng()
 wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
 acts = gain(e, C, SET1, 11.0) + gain(e, D, SET1, 11.1)
@@ -192,7 +180,7 @@ m = marks(wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0))
 check("the real wave after the strays re-arms and assigns",
       m == {C: IGN1, D: IGN2})
 
-# ── loss clears that player's sign, per set ──
+# loss clears that player's sign, per set
 e = eng()
 wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
 loss = e.on_loss(CURSED_SHRIEK, A, 20.0)
@@ -201,14 +189,14 @@ check("cleared player drops out of outstanding", set(e.outstanding()) == {B})
 check("a second loss for the same player is a no-op",
       e.on_loss(CURSED_SHRIEK, A, 20.1) == [])
 
-# ── refresh keeps the assignment ──
+# refresh keeps the assignment
 e = eng()
 wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
 refire = gain(e, A, SET1, 11.0)
 check("a re-gain after assignment does not re-fire or wipe marks",
       refire == [] and set(e.outstanding()) == {A, B})
 
-# ── a fully resolved phase resets quietly, the next phase assigns ──
+# a fully resolved phase resets quietly, the next phase assigns
 e = eng()
 wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
 wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0)
@@ -220,7 +208,7 @@ m = marks(wave(e, [A, B], SET1, 100.0, followup=TSUNAMI, t_fu=96.0)
 check("the next phase after full resolution assigns again",
       m == {A: IGN1, B: IGN2, C: BND1, D: BND2})
 
-# ── both sets dealt with the 30s missed: a new gain starts clean ──
+# both sets dealt with the 30s missed: a new gain starts clean
 e = eng()
 wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
 wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0)
@@ -241,7 +229,7 @@ check("a glued deal with no fresh tell clears the signs and marks nothing",
       marks(acts) == {}
       and [a for a in acts if a[0] == "clear"] == [("clear", a) for a in (A, B, C, D)])
 
-# ── staleness: an event long after the last one is a new phase ──
+# staleness: an event long after the last one is a new phase
 e = eng()
 wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
 late = wave(e, [C, D], SET2, 10.0 + STALE_S + 5, followup=TSUNAMI,
@@ -258,7 +246,7 @@ check("a stale followup clears the dead signs and arms the new phase",
       acts == [("clear", A), ("clear", B)]
       and e._sets_done == 0 and e._polarity == "away1")
 
-# ── misc ──
+# misc
 check("a non-gaze status id is ignored",
       eng().on_gain("644", A, 20.0, 10.0) == [])
 check("a non-followup cast id is ignored",

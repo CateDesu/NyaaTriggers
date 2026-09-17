@@ -1,10 +1,7 @@
 #!/bin/sh
 # nyaa-linux-recovery: 1
-# NyaaTriggers launcher. Runs the pre boot recovery the frozen exe cannot run
-# itself. A hard kill in the middle of an update can leave no _internal next
-# to the exe, and without it the exe cannot load Python, so no in app code
-# ever gets the chance to repair the install. If the update backup survived,
-# put it back, then start the real binary.
+# Restore a missing runtime from an update backup before starting the program.
+# The frozen executable cannot run Python recovery without that runtime.
 set -u
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -71,11 +68,8 @@ if [ "$internal_ok" -eq 0 ]; then
         echo "NyaaTriggers: runtime recovery needs flock and access to the install lock." >&2
         exit 1
     fi
-    # The pid in a backup name is not zero padded, so glob order is not age
-    # order: _internal.1000.nyaa-old sorts before _internal.999.nyaa-old. ls -t
-    # puts the newest backup first by mtime, and splitting its output on
-    # newlines only keeps a space in the path from breaking a name. Stop only
-    # once a backup actually moves back, a failed mv tries the next one.
+    # Try backups from newest to oldest. Split only on newlines to preserve spaces in
+    # paths and continue if a restore fails.
     ifs=$IFS
     IFS='
 '
@@ -95,8 +89,6 @@ if [ "$internal_ok" -eq 0 ]; then
 fi
 
 if [ ! -x "$exe" ]; then
-    # The one failure this script cannot recover from. Say what happened and
-    # where to reinstall from instead of dying on exec with a bare 127.
     echo "NyaaTriggers: the program binary is missing: $exe" >&2
     echo "Reinstall from https://github.com/CateDesu/NyaaTriggers/releases" >&2
     exit 1

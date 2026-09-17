@@ -1,14 +1,4 @@
-"""Regression test for the ja callout builder's hand-edit tolerance.
-
-tools/build_callouts_ja.py reads triggers.json and the phrase/name maps
-assuming dicts of strings. A hand edited file with a truthy non-string
-field crashed the build with AttributeError instead of dropping the junk
-entry, and a non-dict or non-list top level crashed it outright. The
-builder now coerces junk fields to empty and degrades bad top levels to
-empty maps.
-
-Run directly:  python -m tests.test_build_callouts_ja   (exit 0 = all pass)
-"""
+"""Japanese callout generation with malformed input fields."""
 import json
 import os
 import sys

@@ -1,18 +1,7 @@
-"""Generate a per-callout translation stub from the shipped triggers.
-
-Reads assets/triggers.json (a flat list of triggers, each with a stable `id` and an
-English `tts_text` template) and emits a callouts_<loc>.template.json overlay:
-
-    { "schema": 1, "app_version": "<_VERSION>", "locale": "<loc>",
-      "callouts": { "<trigger-id>": "<english tts_text>" } }
-
-Translators copy the template to assets/callouts_<loc>.json and replace each value with
-the localized template, keeping the {source}/{target}/{count} tokens intact. The
-map is keyed by trigger id (not English text) so wording changes never break it.
-Triggers with an empty tts_text are skipped (nothing to speak, nothing to
-translate). Repo tooling only, not shipped in the build.
-
-Run:  python tools/gen_callout_stub.py [--locale ja] [--out PATH]
+"""Generate a callout translation template from shipped trigger IDs and English text.
+Translate its values while preserving source, target and count tokens. Skip silent
+triggers. Run python tools/gen_callout_stub.py with optional --locale and --out
+arguments.
 """
 from __future__ import annotations
 
@@ -30,7 +19,7 @@ _MAIN = _REPO / "nyaatriggers/app_common.py"
 
 
 def _app_version() -> str:
-    """Base _VERSION string from app_common.py (matches the release scheme)."""
+    """Read the source version from app_common.py."""
     m = re.search(r'^_VERSION\s*=\s*"([^"]+)"', _MAIN.read_text(encoding="utf-8"), re.M)
     return m.group(1) if m else "0.0.0"
 
@@ -39,7 +28,6 @@ def build_stub(triggers: list[dict], locale: str) -> dict:
     callouts: dict[str, str] = {}
     for t in triggers:
         if not isinstance(t, dict):
-            # A hand edited triggers.json can park a bare string in the list.
             continue
         tid, text = t.get("id"), t.get("tts_text")
         if isinstance(tid, str) and tid and isinstance(text, str) and text.strip():

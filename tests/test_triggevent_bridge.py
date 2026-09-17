@@ -1,29 +1,4 @@
-"""Regression tests for triggevent_bridge.py.
-
-Covers the engine build timeout kill: a timed out Maven build must die with
-its whole tree. On POSIX the build runs in its own process group and killpg
-reaches everything. On Windows build.bat runs through cmd.exe, and a plain
-proc.kill is TerminateProcess on that wrapper only, which orphaned Maven and
-the java compilers on the shared event-trigger tree. The Windows branch runs
-taskkill /T.
-
-Also covers the callout seq gap mark being scoped to one sidecar generation:
-the jar numbers callouts from 1 each generation, so a high-water mark shared
-across generations, which survived a spontaneous exit plus the reconcile
-restart because stop() early-returns once the reader-exit path cleared the
-state, muted real gap reports below the old mark. The mark now rides the
-generation via the reader thread args, same as proc and wq.
-
-Also covers the sidecar generation gate. start and stop bump a generation id
-that reader threads carry in their args like proc and wq, every UI bound
-emit is stamped with it and dropped at dispatch once the generation dies,
-and the UI slots re-check the token since Qt queued delivery can land a pre
-restart signal after the restart. The stderr chain watch is gated the same
-way: a never started or stopped bridge does not emit, and neither does a
-previous generation's still draining pipe.
-
-Run directly:  python -m tests.test_triggevent_bridge   (exit 0 = all pass)
-"""
+"""Triggevent process cleanup, sequence tracking and generation checks."""
 import io
 import os
 import queue
@@ -100,12 +75,7 @@ check("windows kill taskkills the whole tree",
       runs == [["taskkill", "/F", "/T", "/PID", "4242"]] and not p.killed)
 
 
-# ── the callout seq gap mark is scoped to one sidecar generation ──────────────
-# Two generations, each with its own seq_state the way start() binds them via
-# the reader thread args. Gaps inside a generation must report. A new
-# generation numbering from 1 must not trip over the old generation's mark,
-# and a late write from the old generation's still draining reader must not
-# poison the new one.
+# the callout seq gap mark is scoped to one sidecar generation
 drops = []
 _o_drop = tb.log_drop
 tb.log_drop = lambda site, detail, *a, **k: drops.append((site, detail))
@@ -144,9 +114,7 @@ check("start binds a fresh seq state to the reader thread args",
       'seq_state: dict = {"last": None}' in src.split("def start", 1)[1].split("def stop", 1)[0])
 
 
-# ── a full boot with the fake sidecar: the reader must run to its EOF exit ────
-# Catches an arity mistake in the reader thread args, which would die silently
-# inside the daemon thread and leave _active stuck on.
+# a full boot with the fake sidecar: the reader must run to its EOF exit
 class _FakeSidecar:
     def __init__(self):
         self.pid = 4711
@@ -178,12 +146,7 @@ with mock.patch.object(tb, "_find_java", return_value="/usr/bin/java"), \
 check("stop after a spontaneous exit is a clean no-op", tv2._proc is None)
 
 
-# ── the stderr chain watch is gated to the live sidecar generation ────────────
-# The chain failure line only ever appears on the sidecar stderr stream, never
-# in the callout stream. The watch must log_drop every line but fire
-# chain_failure only for the live generation. Lines buffered in a dead proc's
-# pipe, the JVM teardown flush during stop, and a previous generation's still
-# draining stderr after a restart must not reach the badge.
+# the stderr chain watch is gated to the live sidecar generation
 drops = []
 _o_drop = tb.log_drop
 tb.log_drop = lambda site, detail, *a, **k: drops.append((site, detail))
@@ -244,11 +207,7 @@ finally:
     tb.log_drop = _o_drop
 
 
-# ── a previous generation's reader cannot fire into the live session ──────────
-# stop+start swaps _proc and bumps the generation while the old reader is
-# still draining its buffered stdout. The old reader's callouts must die at
-# dispatch, and the generation token riding each emit must fail the UI slot's
-# re-check when queued delivery lands after the restart.
+# a previous generation's reader cannot fire into the live session
 fired = []
 tv4 = tb.TriggeventBridge()
 tv4.callout.connect(lambda text, sev, gen: fired.append(("callout", text, gen)))
@@ -272,8 +231,7 @@ class _OldProc:
 
 _CALLOUT_LINE = '{"t":"callout","seq":1,"tts":"old gen","text":"old gen","severity":"alert"}\n'
 
-# generation 1 was live, then stop+start installed the replacement and bumped
-# the generation past it while the old reader still held a buffered callout
+# Discard buffered callouts after their engine generation is replaced.
 old_proc = _OldProc(_CALLOUT_LINE)
 tv4._active = True
 tv4._proc = _OldProc("")        # the replacement generation's proc
@@ -292,8 +250,7 @@ check("the live generation's callout is emitted with its generation",
 check("the live generation's exit status is emitted with its generation",
       ("status", "Sidecar exited", 3) in fired)
 
-# the slot half, a stale emit that slipped out before the restart must be
-# dropped when queued delivery lands after it
+# Reject stale signals delivered after a restart.
 from nyaatriggers.ui.engines import EnginesMixin
 
 

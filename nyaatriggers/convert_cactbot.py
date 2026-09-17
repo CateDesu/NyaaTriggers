@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-"""
-Convert cactbot .ts trigger files to NyaaTriggers JSON format.
-
-Usage.
-    python3 -m nyaatriggers.convert_cactbot /path/to/cactbot              # prints JSON to stdout
-    python3 -m nyaatriggers.convert_cactbot /path/to/cactbot out.json     # writes to a file
+"""Convert cactbot TypeScript triggers to local JSON. Run python3 -m
+nyaatriggers.convert_cactbot with the cactbot checkout path and an optional output file.
+Omit the file to write to stdout.
 """
 
 import json
@@ -17,15 +14,12 @@ from pathlib import Path
 from nyaatriggers.paths import bundle_root
 
 
-# Fixed uuid5 namespace, shared by all three converters. Reruns give the same
-# id for the same trigger key, so references to converted triggers survive a
-# re-merge.
+# Share a fixed UUID namespace across converters so repeated imports preserve trigger
+# IDs.
 _ID_NS = uuid.UUID('c6a2b8e4-9d31-4f75-a0b8-5e2c7d94f1a6')
 
 
-# cactbot type → our log_type. cactbot's 'Ability' matcher covers both
-# NetworkAbility, line 21, and NetworkAOEAbility, line 22. Raidwides usually
-# land as 22, so it maps to the pipe form Trigger.matches understands.
+# Cactbot Ability covers both single target line 21 and AoE line 22.
 TYPE_MAP = {
     'StartsUsing': '20',
     'Ability':     '21|22',
@@ -33,10 +27,7 @@ TYPE_MAP = {
     'LosesEffect': '30',
 }
 
-# Responses.XXX calls → English callout. Keys are the function names in
-# cactbot's resources/responses.ts, checked against main. Target-sensitive
-# responses map to their generic text, same as tankBuster always did. Names
-# that exist only as Outputs strings live in OUTPUTS below, not here.
+# English text for Responses calls. Target specific responses use generic wording.
 RESPONSES = {
     'aoe':             'Raidwide',
     'bigAoe':          'Large Raidwide',
@@ -113,10 +104,7 @@ RESPONSES = {
     'stunOrInterruptIfPossible': 'Stun or Interrupt',
 }
 
-# Outputs.XXX key → English text, also used for bare output.KEY! calls. Keys
-# that exist only as Outputs strings, never as Responses calls, live here.
-# Spellings follow cactbot's resources/outputs.ts, note sharedTankbuster's
-# lowercase b.
+# English text for Outputs keys and output.KEY lookups.
 OUTPUTS = {**RESPONSES, **{
     'sharedTankbuster': 'Shared Tank Buster',
     'preyOnYou':       'Prey on you',
@@ -134,7 +122,6 @@ OUTPUTS = {**RESPONSES, **{
 }}
 
 
-# ── Files to process, relative path inside data/ plus fight tag ───────────────
 TARGETS = [
     ('00-misc/general.ts',                               ''),
     # DT raids, 7.0 through 7.2
@@ -156,22 +143,18 @@ TARGETS = [
     ('07-dt/trial/arkveld-ex.ts',      'Arkveld EX'),
     ('07-dt/trial/zelenia-ex.ts',      'Zelenia EX'),
 ]
-# ─────────────────────────────────────────────────────────────────────────────
 
 
-# A `/` can only open a regex literal after one of these, or a keyword, or at
-# the start of input. After a value it is division. Standard JS lexer look-behind.
+# A slash after a value means division. These tokens allow a regex literal instead.
 _REGEX_PRECEDERS = set('=([{,;:!&|?+-*%~^<>')
 _REGEX_KEYWORDS = {'return', 'typeof', 'case', 'in', 'of', 'new', 'delete',
                    'void', 'instanceof', 'do', 'else', 'yield', 'await', 'throw'}
 
 
 def _regex_can_start(out: str | list, i: int | None = None) -> bool:
-    """True if a `/` at position `i` of `out` opens a regex literal rather than
-    division, judged from the text before it. `i` defaults to the end of `out`,
-    the strip_js_comments case where `out` is the text scanned so far. Passing
-    the index lets the block scanners avoid a text[:i] copy per `/`, quadratic
-    on several-hundred-KB files."""
+    """Decide whether a slash opens a regex using the preceding text. Passing an index
+    avoids copying the prefix during block scans.
+    """
     k = (len(out) if i is None else i) - 1
     while k >= 0 and out[k] in ' \t\r\n':
         k -= 1
@@ -184,9 +167,9 @@ def _regex_can_start(out: str | list, i: int | None = None) -> bool:
 
 
 def _regex_end(text: str, i: int) -> int:
-    """Index just past the regex literal whose opening `/` sits at text[i].
-    Ends at the first unescaped `/` outside a [...] class. A newline or the
-    end of text first means it was not a regex after all."""
+    """Return the end of a regex literal, respecting escapes and character classes. Stop at
+    a newline if no closing slash is found.
+    """
     i += 1
     in_class = False
     while i < len(text):
@@ -207,12 +190,9 @@ def _regex_end(text: str, i: int) -> int:
 
 
 def strip_js_comments(text: str) -> str:
-    """Remove // and /* */ comments, respecting string AND regex literals.
-    Without the string tracking, an apostrophe in a comment like "it's" reads as
-    an open string and the brace tracker merges adjacent triggers, attaching the
-    wrong callout, or drops them. Without the regex tracking, a literal like
-    /\\/\\// reads as a line comment and silently eats the rest of the line.
-    Comment bodies are replaced with spaces so offsets stay printable."""
+    """Replace JavaScript comments with spaces while preserving newlines, string literals
+    and regex literals.
+    """
     out: list[str] = []
     i, n = 0, len(text)
     in_str, sc = False, ''
@@ -241,15 +221,13 @@ def strip_js_comments(text: str) -> str:
             end = text.find('*/', i + 2)
             j = n if end < 0 else end + 2
             out.append(' ')
-            # keep newlines so any line-oriented regexes still see the structure
+            # Keep newlines so later scans retain the line structure.
             out.extend(ch for ch in text[i:j] if ch == '\n')
             i = j
             continue
         if c == '/' and _regex_can_start(out):
-            # Regex literal. Copy verbatim so `//`, `/*`, quotes or braces
-            # inside it can't be misread. Ends at the first unescaped `/`
-            # outside a [...] class. Hitting a newline first means it wasn't a
-            # regex after all, and everything consumed was copied through as-is.
+            # Copy regex literals unchanged, including comment markers inside them. An
+            # unescaped slash outside a character class ends the literal.
             out.append(c)
             i += 1
             in_class = False
@@ -273,7 +251,7 @@ def strip_js_comments(text: str) -> str:
 
 
 def extract_top_blocks(text: str) -> list[str]:
-    """Extract top-level {...} blocks, the individual triggers, from a JS/TS array body."""
+    """Extract trigger objects from a JavaScript array body."""
     blocks: list[str] = []
     depth, start, i = 0, -1, 0
     in_str, sc = False, ''
@@ -293,19 +271,15 @@ def extract_top_blocks(text: str) -> list[str]:
                     start = i
                 depth += 1
             elif c == '}':
-                # Clamp at zero. One stray closer in a malformed file would
-                # push depth negative, and the next trigger's outer brace
-                # then fails the depth == 0 check, so its nested netRegex
-                # block is recorded as a top level trigger and the real one
-                # is silently dropped.
+                # Clamp depth at zero so a stray closing brace cannot corrupt the next
+                # trigger block.
                 if depth > 0:
                     depth -= 1
                     if depth == 0 and start >= 0:
                         blocks.append(text[start: i + 1])
                         start = -1
             elif c == '/' and _regex_can_start(text, i):
-                # Regex literal. Skip over it so a brace or bracket inside,
-                # say /hit \{ now/, can't corrupt the depth count.
+                # Skip regex literals so their braces do not affect depth.
                 i = _regex_end(text, i)
                 continue
         i += 1
@@ -313,7 +287,7 @@ def extract_top_blocks(text: str) -> list[str]:
 
 
 def find_sub_block(text: str, keyword: str) -> str:
-    """Return the {...} block that immediately follows a `keyword` entry in text."""
+    """Return the object block immediately following a keyword."""
     m = re.search(re.escape(keyword) + r'\s*:\s*\{', text)
     if not m:
         return ''
@@ -321,9 +295,9 @@ def find_sub_block(text: str, keyword: str) -> str:
 
 
 def _block_at(text: str, open_idx: int) -> str:
-    """Return the balanced {...} block whose opening brace sits at open_idx,
-    strings, escapes and regex literals honored. '' when the brace never
-    closes."""
+    """Return a balanced object block, respecting strings and regexes. Return an empty
+    string if it is unclosed.
+    """
     depth, i, in_str, sc = 0, open_idx, False, ''
     while i < len(text):
         c = text[i]
@@ -343,16 +317,16 @@ def _block_at(text: str, open_idx: int) -> str:
                 if depth == 0:
                     return text[open_idx: i + 1]
             elif c == '/' and _regex_can_start(text, i):
-                i = _regex_end(text, i)   # regex literal, skip it
+                i = _regex_end(text, i)
                 continue
         i += 1
     return ''
 
 
 def _array_at(text: str, open_idx: int) -> str:
-    """Return the balanced [...] array whose opening bracket sits at open_idx,
-    strings, escapes and regex literals honored. '' when the bracket never
-    closes."""
+    """Return a balanced array, respecting strings and regexes. Return an empty string if
+    it is unclosed.
+    """
     depth, i, in_str, sc = 0, open_idx, False, ''
     while i < len(text):
         c = text[i]
@@ -372,38 +346,31 @@ def _array_at(text: str, open_idx: int) -> str:
                 if depth == 0:
                     return text[open_idx: i + 1]
             elif c == '/' and _regex_can_start(text, i):
-                i = _regex_end(text, i)   # regex literal, skip it
+                i = _regex_end(text, i)
                 continue
         i += 1
     return ''
 
 
-# A single- or double-quoted JS string literal, honoring backslash escapes so
-# an apostrophe inside a single-quoted string, en 'Boss\'s Right', doesn't
-# terminate the match early and leave a trailing backslash in the callout.
-# The two branches are disjoint. A backslash is consumed ONLY by `\\.`, never
-# by the `[^\\]` branch, so the quantifier can't backtrack exponentially on a
-# long run of backslashes. A linear match, no ReDoS on malformed input.
+# The string branches consume backslash escapes separately from other characters.
+# Keeping them disjoint avoids excessive backtracking on malformed input.
 _QSTR = r"(?P<q>['\"])(?P<v>(?:\\.|(?!(?P=q))[^\\])*)(?P=q)"
 
 
 def _unescape_js(s: str) -> str:
-    r"""Resolve JS string escapes in an extracted callout. \uXXXX and \xXX
-    become their char, \' \" \\ become the bare char, and \n \t \r become a
-    space. cactbot en strings occasionally embed them. One left to right pass,
-    so \\ wins before the u and x forms get a look and an escaped backslash
-    keeps the text behind it literal."""
+    """Decode JavaScript escapes in one pass and replace escaped whitespace with spaces.
+    Escaped backslashes keep the following text literal.
+    """
 
     def _sub(m):
         esc = m.group(1)
-        if len(esc) > 1:     # the uXXXX and xXX forms
+        if len(esc) > 1:
             return chr(int(esc[1:], 16))
         return ' ' if esc in 'ntr' else esc
 
     s = re.sub(r'\\(u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|.)', _sub, s)
-    # An escaped astral char lands as two surrogate code points. Recombine the
-    # well-formed pairs and drop malformed leftovers, a leftover surrogate
-    # raises on any later UTF-8 encode.
+    # Combine valid surrogate pairs and drop lone surrogates that cannot encode as
+    # UTF-8.
     s = re.sub(r'[\ud800-\udbff][\udc00-\udfff]',
                lambda m: chr(0x10000 + ((ord(m.group(0)[0]) - 0xd800) << 10)
                              + (ord(m.group(0)[1]) - 0xdc00)), s)
@@ -411,29 +378,24 @@ def _unescape_js(s: str) -> str:
 
 
 def _clean_callout(s: str | None) -> str | None:
-    """Unescape a raw extracted string and drop it if it carries no speakable
-    content, say a structural helper key like 'separator' whose en value is
-    ' => ', grabbed by the output.KEY! fallback from a dynamic infoText."""
+    """Decode an extracted string and reject values with no speakable content."""
     if not s:
         return None
     s = _unescape_js(s).strip()
-    if not re.search(r'\w', s, re.UNICODE):     # needs at least one letter or digit
+    if not re.search(r'\w', s, re.UNICODE):
         return None
     return s
 
 
 def resolve_output_key(key: str, os_block: str) -> str | None:
     """Look up the English string for `key` inside an outputStrings block."""
-    # The left boundary keeps a short key like text from matching inside a
-    # longer one like context. Quoted and bare keys both still match.
-    # key holds an object whose en field is the text
+    # Require a key boundary so text cannot match context.
     m = re.search(
         r'(?<![\w$])[\'"]?' + re.escape(key) + r'[\'"]?\s*:\s*\{[^}]*en\s*:\s*' + _QSTR,
         os_block, re.DOTALL,
     )
     if m:
         return m.group('v')
-    # key points at Outputs.xxx
     m = re.search(r'(?<![\w$])[\'"]?' + re.escape(key) + r'[\'"]?\s*:\s*Outputs\.(\w+)', os_block)
     if m:
         return OUTPUTS.get(m.group(1))
@@ -442,8 +404,6 @@ def resolve_output_key(key: str, os_block: str) -> str | None:
 
 def get_callout(block: str) -> str | None:
     """Extract a simple English callout string from a trigger block."""
-    # 1. Responses.xxx call. A name missing from RESPONSES cleans to nothing
-    # and falls through, same rule as the text fields below.
     m = re.search(r'\bresponse\s*:\s*Responses\.(\w+)\(', block)
     if m:
         callout = _clean_callout(RESPONSES.get(m.group(1)))
@@ -452,17 +412,14 @@ def get_callout(block: str) -> str | None:
 
     os_block = find_sub_block(block, 'outputStrings')
 
-    # 2. alarmText / alertText / infoText. A field that cleans to nothing, an
-    # unknown output key or a structural string, must not sink the whole block
-    # when a later field carries a usable callout.
+    # Try later text fields if an earlier one has no usable callout.
     for fld in ('alarmText', 'alertText', 'infoText'):
         m = re.search(fld + r'\s*:\s*' + _QSTR, block)
         if m:
             callout = _clean_callout(m.group('v'))
         else:
-            # Arrow form, an output.KEY! lookup. The scan must stay inside the
-            # field's own text. An unbounded scan crosses into a lower field
-            # and steals its output key.
+            # Keep output lookups inside this field so they cannot take a later field's
+            # key.
             m = re.search(fld + r'(?:(?!(?:alarmText|alertText|infoText|outputStrings)\s*:).)*?'
                           r'output\.(\w+)!\(\)', block, re.DOTALL)
             if not m:
@@ -477,12 +434,10 @@ def get_callout(block: str) -> str | None:
 
 
 def parse_netregex_ids(block: str) -> list[str]:
-    """Return list of uppercase hex ability/effect IDs from the netRegex block.
-    Both keys support the scalar, 'XXXX', and array, ['XXXX', 'YYYY'], forms."""
+    """Extract uppercase hex IDs from scalar or array netRegex fields."""
     nr = find_sub_block(block, 'netRegex')
     if not nr:
-        # Call form, netRegex comes as NetRegex.ability wrapping a { ... } object.
-        # The id object is the argument of that call, not the value itself.
+        # NetRegex calls wrap the ID object in their argument list.
         m = re.search(r'\bnetRegex\s*:\s*NetRegex\.\w+\s*\(\s*\{', block)
         if m:
             nr = _block_at(block, m.end() - 1)
@@ -506,10 +461,8 @@ EXISTING_JSON = bundle_root() / 'assets' / 'triggers.json'
 
 
 def _dedup_keys(log_type: str, ability_id: str) -> set[tuple[str, str]]:
-    """One key per log type / id pair. Both fields may be pipe-joined,
-    "21|22" or "A55D|A55E". Comparing them whole would let a file that pins
-    A55D alone slip past an existing "A55D|A55E" trigger and double-call
-    the same cast."""
+    """Expand pipe alternatives into individual log type and ID pairs for deduplication.
+    """
     lts = [p.strip() for p in str(log_type).split('|') if p.strip()]
     ids = [p.strip().upper() for p in str(ability_id).split('|') if p.strip()]
     return {(lt, aid) for lt in lts for aid in ids}
@@ -525,9 +478,7 @@ def convert_file(ts_path: Path, fight_tag: str) -> list[dict]:
     m = re.search(r'\btriggers\s*:\s*\[', text)
     if not m:
         return []
-    # Bound the scan to the triggers array. Running to EOF lets post-array
-    # literals, timelineReplace blocks or helpers, leak in as candidates, and
-    # any trigger-shaped one would convert as if it were a real trigger.
+    # Limit scanning to the triggers array so helper objects cannot become triggers.
     blocks = extract_top_blocks(_array_at(text, m.end() - 1))
 
     results: list[dict] = []
@@ -535,22 +486,16 @@ def convert_file(ts_path: Path, fight_tag: str) -> list[dict]:
     skipped = 0
 
     for block in blocks:
-        # delaySeconds/condition/promise/preRun/suppressSeconds are never
-        # translated. Converting one would turn a delayed or state-gated
-        # trigger into an immediate unconditional callout. Skip, do not
-        # mistranslate. disabled: true means cactbot ignores the trigger
-        # completely, so it gets the same treatment. Match true explicitly,
-        # skipping on the bare key would also drop disabled: false triggers.
+        # Skip delayed or conditional triggers whose behavior cannot be preserved
+        # locally. Only an explicit disabled: true suppresses conversion.
         if (re.search(r'\b(?:delaySeconds|condition|promise|preRun|suppressSeconds)\s*:',
                       block)
                 or re.search(r'\bdisabled\s*:\s*true\b', block)):
             skipped += 1
             continue
 
-        # cactbot's `id` doubles as the display name. Only the block's first
-        # field may name it. Blocks from extract_top_blocks begin with `{`,
-        # and a line-start id deeper in, say inside netRegex, belongs to a
-        # nested block. No first-field id means skip, never misname.
+        # Use only the first field as the trigger name. Nested ID fields belong to other
+        # objects.
         nm = re.match(r"\{\s*id\s*:\s*" + _QSTR, block)
         if not nm:
             continue
@@ -569,10 +514,7 @@ def convert_file(ts_path: Path, fight_tag: str) -> list[dict]:
 
         callout = get_callout(block)
         if not callout or '${' in callout:
-            # A response-only trigger whose Responses name is missing from the
-            # map drops here with no other trace. Name it, silent drops are
-            # how a mapped fight goes quietly stale when cactbot renames or
-            # adds a response.
+            # Report unmapped responses so upstream changes are visible.
             resp = re.search(r'\bresponse\s*:\s*Responses\.(\w+)\(', block)
             if resp and resp.group(1) not in RESPONSES:
                 print(f'  WARN: {ts_path.name}: dropping {trig_name!r}, '
@@ -582,8 +524,8 @@ def convert_file(ts_path: Path, fight_tag: str) -> list[dict]:
 
         ability_id = '|'.join(ids)
         dedup = (ability_id, fight_tag, log_type)
-        # Dedup per concrete log type / id key, not on the joined string.
-        # A trigger pinning A55D alone must not slip past one pinning A55D|A55E.
+        # Compare individual type and ID pairs so overlapping alternatives cannot
+        # duplicate callouts.
         keys = _dedup_keys(log_type, ability_id)
         if keys & seen:
             continue
@@ -622,20 +564,16 @@ def main() -> None:
         sys.exit(1)
 
     if out_path is not None and out_path.resolve() == EXISTING_JSON.resolve():
-        # This tool writes only its own batch, no merge, so that command line
-        # would replace the whole trigger database with just the cactbot set.
+        # Writing here would replace the trigger database with this converter's batch.
         print(f'ERROR: {out_path} is the live trigger database; pick another output',
               file=sys.stderr)
         sys.exit(1)
 
-    # Keys the shipped triggers.json already claims. Re-conversion must not
-    # reintroduce them. Flag any overlap for the maintainer reviewing a merge.
+    # Report overlaps with the shipped database before merging.
     existing_keys: set[tuple] = set()
     try:
         existing = json.loads(EXISTING_JSON.read_text(encoding='utf-8'))
         if not isinstance(existing, list):
-            # A scalar or object top level parses fine but is not a trigger
-            # list. Route it to the same WARN as any other unreadable file.
             raise ValueError('top level is not a JSON array of triggers')
         for t in existing:
             if not isinstance(t, dict):
@@ -649,8 +587,7 @@ def main() -> None:
     for rel, tag in TARGETS:
         ts = data_dir / rel
         if not ts.exists():
-            # Upstream moves or retires files. A silent skip converts a moved
-            # tree into a quietly incomplete trigger set, so say every miss.
+            # Report missing files so upstream moves cannot silently shrink the output.
             print(f'  WARN: target not found: {rel}', file=sys.stderr)
             missing += 1
             continue
@@ -672,13 +609,12 @@ def main() -> None:
     out = json.dumps(all_triggers, indent=2)
     if out_path:
         if not all_triggers:
-            # Zero triggers means the source tree moved or the extraction
-            # broke. Never atomically overwrite a previous good output with it.
+            # Keep the previous output when extraction produces no triggers.
             print(f'ERROR: 0 triggers extracted, refusing to overwrite {out_path}',
                   file=sys.stderr)
             sys.exit(1)
-        # Sibling tmp + rename, so an interrupted run can't leave a truncated
-        # file in place of the previous good output.
+        # Replace through a sibling temporary file to preserve the previous output if
+        # interrupted.
         tmp_path = out_path.with_name(out_path.name + '.tmp')
         tmp_path.write_text(out, encoding='utf-8')
         os.replace(tmp_path, out_path)

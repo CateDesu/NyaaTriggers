@@ -1,22 +1,5 @@
-"""Watchdog tests for the six network read sites.
-
-Each site reads an HTTP body in a loop and used to check its total deadline
-only after resp.read returned. A peer trickling one byte per window keeps
-the per recv socket timeout alive forever, so the deadline never fired and
-the UI latch behind the site stayed set. Every site now runs its read loop
-on a daemon helper thread while the calling thread enforces a stall window
-and the total deadline from outside the read, the same guard main.py runs.
-
-These tests stand up a raw socket server on 127.0.0.1 that sends a large
-Content-Length and then trickles one byte per interval, parks after a
-partial body, or drips whole chunks. Against it each site must be cut off
-by its watchdog in well under its real deadline. A normal local server
-serving the full body proves healthy transfers still succeed, and the
-drip mode proves a slow link with flowing bytes is left alone until the
-total deadline itself overruns. No real network.
-
-Run directly:  python -m tests.test_download_deadline   (exit 0 = all pass)
-        or:    python -m pytest tests/test_download_deadline.py -q
+"""Download watchdogs against local HTTP servers with healthy, stalled and trickling
+responses.
 """
 import hashlib
 import http.server
@@ -39,9 +22,7 @@ from nyaatriggers import tts
 from nyaatriggers import updater
 from nyaatriggers.http_fetch import fetch_bytes
 
-# Stall window used by the cutoff tests. Small enough to keep the suite at
-# a few seconds, large enough that scheduling jitter cannot trip it on a
-# healthy transfer.
+# Allow scheduling jitter while keeping watchdog tests short.
 _STALL = 0.3
 
 
@@ -55,15 +36,9 @@ def _wait_for(cond, timeout=10.0):
 
 
 class _TrickleServer:
-    """Raw socket HTTP server for the stall cases. Sends a big Content-Length
-    and then one of:
-      trickle - one byte per interval, forever. Bytes keep arriving inside
-                every recv window, so the client socket timeout never fires.
-      park    - a partial body, then nothing. The read sits parked.
-      drip    - one whole chunk per interval, so the transfer keeps making
-                progress and only a total deadline may cut it.
-    `connections` counts live client sockets, so a test can prove the
-    watchdog really closed its side instead of leaking the reader."""
+    """Local HTTP server that trickles bytes, parks after a partial body or drips whole
+    chunks. Track live connections to verify watchdog cleanup.
+    """
 
     def __init__(self, mode="trickle", interval=0.05, chunk=65536,
                  partial=0, content_length=1 << 20, body=None):
@@ -72,8 +47,7 @@ class _TrickleServer:
         self.interval = interval
         self.chunk = chunk
         self.partial = partial
-        # A drip with an explicit body serves those exact bytes, so a test
-        # can compare what the client saved. Otherwise filler bytes.
+        # Use the supplied drip body when the test needs to compare saved bytes.
         self.body = body
         if body is not None:
             content_length = len(body)
@@ -121,8 +95,8 @@ class _TrickleServer:
             if self.partial:
                 conn.sendall(b"A" * self.partial)
             if self.mode == "park":
-                # Hold the rest of the body back. The recv notices the client
-                # going away, so the connection count drops on a cutoff.
+                # Wait for the client to close so the server can track connection
+                # cleanup.
                 while not self._stop.is_set():
                     try:
                         conn.settimeout(0.5)
@@ -201,7 +175,7 @@ class _HealthyServer:
         self._srv.server_close()
 
 
-# ── Watchdog cutoffs, one per site, each against trickle and park ─────────
+# Watchdog cutoffs, one per site, each against trickle and park
 
 def test_fetch_latest_release_cut():
     for mode in ("trickle", "park"):
@@ -244,8 +218,6 @@ def test_download_cut():
                 assert raised is not None and reason in str(raised), mode
                 assert elapsed < 10, mode
                 assert not dest.exists() and not list(Path(td).glob("*.part")), mode
-                # The watchdog closed the response, so the server sees the
-                # connection die instead of serving a leaked reader thread.
                 assert _wait_for(lambda: srv.connections == 0), mode
             finally:
                 updater._READ_STALL_S, updater._DOWNLOAD_DEADLINE_S = saved
@@ -350,7 +322,7 @@ def test_fflogs_cut():
             srv.close()
 
 
-# ── The deadline still fires while bytes flow, and only then ──────────────
+# The deadline still fires while bytes flow, and only then
 
 def test_download_deadline_fires_mid_flow():
     # Drip whole chunks so progress never stalls. The stall window must not
@@ -378,9 +350,7 @@ def test_download_deadline_fires_mid_flow():
 
 
 def test_download_quiet_inside_final_window_says_deadline():
-    # The stall window is clamped short near the total deadline. A transfer
-    # that went quiet less than one full stall window before the deadline
-    # must report the deadline, not claim a stall that never fully elapsed.
+    # A deadline reached before the full quiet window must be reported as a deadline.
     srv = _TrickleServer(mode="park", partial=100)
     saved = (updater._READ_STALL_S, updater._DOWNLOAD_DEADLINE_S)
     updater._READ_STALL_S = 30
@@ -427,8 +397,7 @@ def test_install_voice_quiet_inside_final_window_says_deadline():
 
 
 def test_fflogs_quiet_inside_final_window_says_deadline():
-    # Same label rule at the fflogs response site, stall 15 s under a 60 s
-    # deadline, so a parked response near the deadline reports the deadline.
+    # FFLogs reports the deadline when the quiet window has not elapsed.
     import io
     import contextlib
     srv = _TrickleServer(mode="park", partial=100)
@@ -472,8 +441,7 @@ def test_fight_catalog_quiet_inside_final_window_says_deadline():
 
 
 def test_tts_kokoro_quiet_inside_final_window_says_deadline():
-    # Same label rule at the kokoro model download site. The failure path
-    # prints to stderr and returns False, so capture stderr for the label.
+    # Capture the Kokoro failure label from stderr.
     import io
     import contextlib
     with tempfile.TemporaryDirectory() as td:
@@ -531,8 +499,7 @@ def test_small_data_fetch_deadline_stall_and_size_cap():
 
 
 def test_download_slow_but_flowing_succeeds():
-    # The other half of the contract. A slow link with bytes moving inside
-    # every stall window is fine and the transfer completes.
+    # Progress within the stall window allows a slow transfer to complete.
     body = b"z" * (5 * 65536)
     srv = _TrickleServer(mode="drip", interval=0.05, chunk=65536, body=body)
     saved = (updater._READ_STALL_S, updater._DOWNLOAD_DEADLINE_S)
@@ -548,7 +515,7 @@ def test_download_slow_but_flowing_succeeds():
         srv.close()
 
 
-# ── Healthy fast transfers still succeed through every site ───────────────
+# Healthy fast transfers still succeed through every site
 
 def test_fetch_latest_release_healthy():
     payload = json.dumps({
@@ -639,8 +606,7 @@ def test_install_voice_healthy():
         install.VOICES_DIR = td
         install.VOICE_FILE = td / f"{install.VOICE_STEM}.onnx"
         install.VOICE_FILE.write_bytes(b"keep-me")
-        # Pin the hash to the fixture content, same as the regression suite,
-        # so the pre-existing model passes the integrity check and is kept.
+        # Match the existing fixture checksum so the model can be reused.
         install.VOICE_ONNX_SHA256 = install._sha256(install.VOICE_FILE)
         install.VOICE_BASE = srv.base
         try:

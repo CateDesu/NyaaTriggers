@@ -1,18 +1,4 @@
-"""Tests for the 30 s self-heal tick: zone/fight re-detect and trigger
-hot-reload (MainWindow._poll_zone_and_triggers and friends).
-
-(a) _redetect_zone_fight calls the timeline loader exactly once when the
-    resolved fight changes and not while it stays the same.
-(b) a rename-swapped triggers.json produces exactly one merged reload with
-    the startup merge semantics intact (local full-copy override survives,
-    slim toggle survives, a removed shipped trigger disappears, a custom
-    local trigger survives).
-(c) no crash on "" zone, missing trigger files, or a torn (half-saved) file.
-
-Drives the real methods unbound on duck-typed windows (no QApplication, no
-event loop), the way test_umad_gaze_wiring.py and test_zone_patterns.py do.
-
-Run directly:  python -m tests.test_zone_redetect   (exit 0 = all pass)
+"""Periodic zone resolution and trigger reloads, including missing or incomplete files.
 """
 import json
 import os
@@ -36,7 +22,7 @@ def check(name, cond):
         FAILS.append(name)
 
 
-# ── isolate the trigger/timeline stores in a temp dir ─────────────────────
+# isolate the trigger/timeline stores in a temp dir
 TMP = Path(tempfile.mkdtemp(prefix="nyaa_redetect_"))
 SHIPPED = TMP / "triggers.json"
 LOCAL = TMP / "triggers.local.json"
@@ -169,7 +155,7 @@ class _FightWin:
         self._timeline_fight = ""
 
 
-# ── (a) re-detect reloads once per change, never while unchanged ───────────
+# re-detect reloads once per change, never while unchanged
 z = _ZoneWin()
 z._triggers = [Trigger(fight="F1", zone_regex="Zone One")]
 z._match_zone = "Zone One"
@@ -199,7 +185,7 @@ check("lost resolution clears once", len(z.loads) == 3 and z._timeline_fight == 
 z._redetect_zone_fight()
 check("staying unresolved is a no-op", len(z.loads) == 3)
 
-# ── (a2) the real loader records _timeline_fight and pushes once ───────────
+# the real loader records _timeline_fight and pushes once
 fw = _FightWin()
 fw._triggers = [Trigger(fight="ZZTestFight", zone_regex="ZZ Test Zone")]
 app_common.TIMELINES_DIR.mkdir(parents=True, exist_ok=True)
@@ -217,7 +203,7 @@ fw._triggers = [Trigger(fight="ZZTestFight", zone_regex="ZZ Test Zone")]
 fw._load_timeline_for_zone("")
 check('"" zone records empty fight', fw._timeline_fight == "")
 
-# ── (a3) the zone-id cactbot index is the primary timeline source ──────────
+# the zone-id cactbot index is the primary timeline source
 app_common.CACTBOT_TIMELINES_FILE.write_text(json.dumps({
     "4242": {"tag": "cb_index_fight", "txt_path": "06-ew/raid/p9s.txt"},
     "4243": {"tag": "cb_nocache", "txt_path": "06-ew/raid/p10s.txt"},
@@ -275,8 +261,7 @@ pushes = iw2._plugin_link.pushes
 iw2._redetect_zone_fight()
 check("redetect stays quiet after recovery", iw2._plugin_link.pushes == pushes)
 
-# Cache missing but a local custom <Fight>.txt exists (UMAD pre-upstream):
-# the local file serves while the download runs.
+# Serve a local timeline while the cactbot cache downloads.
 iw3 = _IndexWin()
 iw3._current_zone_id = 4244
 iw3._triggers = [Trigger(fight="LocalCustom", zone_regex="Custom Zone")]
@@ -287,8 +272,7 @@ check("local custom file does not block the fetch",
       iw3.fetches == [("cb_localfirst", "06-ew/raid/p11s.txt")])
 check("recorded tag is the index tag", iw3._timeline_fight == "cb_localfirst")
 
-# A late-arriving zone id re-resolves through the redetect tick, and the
-# cached fight tag never takes the index tag (UMAD rules key on the local one).
+# A late zone ID updates the timeline while preserving the locally resolved fight tag.
 iw4 = _IndexWin()
 iw4._match_zone = "Zone With No Local Triggers"
 iw4._redetect_zone_fight()
@@ -302,8 +286,7 @@ check("cached fight tag stays the local one", iw4._current_fight_tag == "")
 iw4._redetect_zone_fight()
 check("steady state after the late id", iw4._plugin_link.pushes == 1)
 
-# Cactbot off: the index is ignored and an unmapped zone falls back to the
-# name-regex resolution exactly as before.
+# With Cactbot off, use local name matching and ignore its index.
 iw5 = _IndexWin()
 iw5._cactbot_mode = False
 iw5._current_zone_id = 4242
@@ -311,7 +294,7 @@ iw5._load_timeline_for_zone("Zone With No Local Triggers")
 check("cactbot off ignores the index",
       iw5._timeline_fight == "" and iw5.fetches == [])
 
-# ── (a5) the bundled copy is the read-only fallback, the cache wins ────────
+# the bundled copy is the read-only fallback, the cache wins
 BUNDLE = app_common._BUNDLE_TIMELINES_DIR
 BUNDLE.mkdir(parents=True, exist_ok=True)
 
@@ -334,8 +317,7 @@ iw7._load_timeline_for_zone("Zone With No Local Triggers")
 check("cache wins over the bundled copy", bool(iw7._timeline.entries))
 check("cache win records the index tag", iw7._timeline_fight == "cb_cachewins")
 
-# A local fight whose file only exists in the bundle: the shipped copy
-# serves, the UMAD.txt on a frozen build case.
+# Load a local timeline available only in the bundle.
 fw4 = _FightWin()
 fw4._triggers = [Trigger(fight="ZZBundleLocal", zone_regex="ZZ Bundle Local Zone")]
 (BUNDLE / "ZZBundleLocal.txt").write_text('6.0 "Bundle Local Beeg"\n', encoding="utf-8")
@@ -343,10 +325,7 @@ fw4._load_timeline_for_zone("ZZ Bundle Local Zone")
 check("bundled local timeline serves", bool(fw4._timeline.entries))
 check("bundled local records the fight", fw4._timeline_fight == "ZZBundleLocal")
 
-# ── (a4) a separator-bearing fight tag loads empty once, then stays steady ─
-# Imported triggers carry whatever the file said. The loader blanks such a
-# tag before any path is built, so the re-detect comparison must blank it
-# the same way, or the tick would reload, reset and re-push every 30 s.
+# Normalize invalid fight tags consistently so detection cannot reload them every tick.
 class _SepWin(_FightWin):
     _redetect_zone_fight = mw.MainWindow._redetect_zone_fight
 
@@ -367,7 +346,7 @@ sw._redetect_zone_fight()
 check("separator tag stays steady, no 30 s reload loop",
       sw._plugin_link.pushes == 1 and sw._timeline_fight == "")
 
-# ── (a5) an unreadable timeline clears, stays unstamped, and is logged ─────
+# an unreadable timeline clears, stays unstamped, and is logged
 drops = []
 real_log_drop = app_common.log_drop
 app_common.log_drop = lambda site, detail, *a, **k: drops.append((site, detail))
@@ -383,7 +362,7 @@ try:
 finally:
     app_common.log_drop = real_log_drop
 
-# ── (b) rename-swap -> exactly one merged reload, merge semantics intact ───
+# rename-swap -> exactly one merged reload, merge semantics intact
 ship_a = Trigger(id="aaa", fight="F1", zone_regex="Zone One", tts_text="shipped A")
 ship_b = Trigger(id="bbb", fight="F1", zone_regex="Zone One", tts_text="shipped B")
 ship_d = Trigger(id="ddd", fight="F1", zone_regex="Zone One", tts_text="shipped D")
@@ -403,7 +382,7 @@ check("initial refresh ran once", w.refreshes == 1)
 w._maybe_reload_triggers()
 check("no on-disk change -> no reload", w.refreshes == 1)
 
-# The fix lands while the app runs: B is withdrawn upstream.
+# Withdraw B during the running session.
 swap_shipped([ship_a, ship_d])
 w._maybe_reload_triggers()
 check("rename-swap triggers exactly one reload", w.refreshes == 2)
@@ -418,7 +397,7 @@ check("custom local trigger survives", "ccc" in ids)
 w._maybe_reload_triggers()
 check("reload re-baselines: a second poll does nothing", w.refreshes == 2)
 
-# ── (b2) the full tick: a zone_regex fix self-heals without a zone change ──
+# the full tick: a zone_regex fix self-heals without a zone change
 p = _PollWin()
 p._match_zone = "Zone One"
 ship_a2 = Trigger.from_dict(ship_a.to_dict())
@@ -438,7 +417,7 @@ check("fight tag self-healed", p._current_fight_tag == "F1")
 p._poll_zone_and_triggers()
 check("steady state: no reload, no re-detect", p.refreshes == 2 and len(p.loads) == 1)
 
-# ── (c) edge cases: "" zone, missing files, torn write ─────────────────────
+# edge cases: "" zone, missing files, torn write
 z2 = _ZoneWin()
 z2._redetect_zone_fight()                 # "" zone, nothing loaded
 check('"" zone with nothing loaded is a no-op', z2.loads == [])
@@ -476,16 +455,13 @@ w2._maybe_reload_triggers()
 check("torn write skips the reload", w2.refreshes == 4)
 check("live set untouched by the torn write",
       [t.id for t in w2._triggers] == before)
-# Recover with content of a DIFFERENT size than the pre-torn baseline. The
-# hot-reload stamp is (mtime_ns, size), and on filesystems with coarse mtime
-# granularity the rewrite can share the baseline's timestamp; identical bytes
-# would then produce the baseline stamp and the poll would (correctly) see no
-# change. CI runners have hit exactly that.
+# Change file size during repair so the test also detects it on filesystems with coarse
+# timestamps.
 swap_shipped([ship_a])
 w2._maybe_reload_triggers()
 check("recovers once the file is whole again", w2.refreshes == 5)
 
-# ── (d) the WS zone event lets _apply_zone own the id ──────────────────────
+# the WS zone event lets _apply_zone own the id
 class _WSZoneWin:
     _on_ws_zone_changed = mw.MainWindow._on_ws_zone_changed
 
@@ -505,9 +481,7 @@ zw._on_ws_zone_changed(333, "")
 check("nameless WS zone event still retains the id for the sidecar replay",
       zw._current_zone_id == 333 and len(zw.applied) == 1)
 
-# ── (a6) a UTF-8 BOM does not eat the first timeline line ───────────────────
-# A BOM survives strip under plain utf-8, and the parser's anchored entry
-# regex then misses the first line. The loader reads with utf-8-sig instead.
+# a UTF-8 BOM does not eat the first timeline line
 fw3 = _FightWin()
 fw3._triggers = [Trigger(fight="ZZBom", zone_regex="ZZ Bom Zone")]
 (app_common.TIMELINES_DIR / "ZZBom.txt").write_bytes(b'\xef\xbb\xbf10.0 "Bom Beeg"\n')

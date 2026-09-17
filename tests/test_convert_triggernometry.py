@@ -1,18 +1,4 @@
-"""path_to_fight word boundary tests for convert_triggernometry.
-
-The Hunts, Party Finder, BA, TOP and job category checks used plain
-substring matching, so a trial folder like "The Hunt Line" filed into
-Hunts 6.3 and a DESKTOP share mistagged as TOP. The checks are
-word-bounded now, same idiom as the unsorted raid tag scan, and the
-legitimate folder names still file where they always did.
-
-Also covers the repeat-count guard: Python 3.11 raises ValueError on an
-int string past 4300 digits, so a corrupt XML carrying a repeat count
-that long must not abort the whole scan.
-
-Run directly:  python -m tests.test_convert_triggernometry   (exit 0 = all pass)
-        or:    python -m pytest tests/test_convert_triggernometry.py -q
-"""
+"""Triggernometry folder mapping, ID expansion and input limits."""
 import os
 import sys
 import tempfile
@@ -31,12 +17,11 @@ def check(name, cond):
     print(("PASS  " if cond else "FAIL  ") + name)
     if not cond:
         FAILS.append(name)
-        # Under pytest this fails the calling test; the direct-run loop below
-        # catches it and moves on to the next test function.
+        # Fail this pytest case, or let the direct runner continue to the next group.
         raise AssertionError(name)
 
 
-# ── Hunts, the word boundary keeps trial folders out ────────────────────
+# Hunts, the word boundary keeps trial folders out
 def test_hunts_boundary_keeps_trials_out():
     check("trial folder named The Hunt Line stays a trial",
           path_to_fight("Trials/6.3/The Hunt Line/some trigger") == "The Hunt Line")
@@ -53,7 +38,7 @@ def test_hunts_legit_paths_unchanged():
           path_to_fight("Downloads/Hunts 6.0/Some Mark/some trigger") == "Hunts 6.0")
 
 
-# ── Trials run after Party Finder, so the boundary matters there too ────
+# Trials run after Party Finder, so the boundary matters there too
 def test_party_finder_boundary():
     check("trial folder named Partywide Mechanics stays a trial",
           path_to_fight("Trials/6.3/Partywide Mechanics/some trigger") == "Partywide Mechanics")
@@ -63,7 +48,7 @@ def test_party_finder_boundary():
           path_to_fight("Downloads/Party Finder/some trigger") == "Party Finder")
 
 
-# ── sharing channel TOP, STOP and DESKTOP can't mistag ──────────────────
+# sharing channel TOP, STOP and DESKTOP can't mistag
 def test_top_boundary():
     check("TOP share still tags TOP",
           path_to_fight("Sharing Channel/Ultimate/TOP/some trigger") == "TOP")
@@ -73,7 +58,7 @@ def test_top_boundary():
           path_to_fight("Sharing Channel/Ultimate/DESKTOP Icons/some trigger") == "")
 
 
-# ── sharing channel job category, a name like Edwards stays out ─────────
+# sharing channel job category, a name like Edwards stays out
 def test_job_category_boundary():
     check("disciples of war category still finds the job",
           path_to_fight("Sharing Channel/Disciples of War/WHM/some trigger") == "WHM")
@@ -83,7 +68,7 @@ def test_job_category_boundary():
           path_to_fight("Sharing Channel/Edwards Stuff/Some Fight") == "Some Fight")
 
 
-# ── Eureka BA, uppercase words like ZABAN can't mistag ──────────────────
+# Eureka BA, uppercase words like ZABAN can't mistag
 def test_ba_boundary():
     check("BA folder still tags BA",
           path_to_fight("Eureka-Like/BA/some trigger") == "BA")
@@ -93,7 +78,7 @@ def test_ba_boundary():
           path_to_fight("Eureka-Like/ZABAN/some trigger") == "ZABAN")
 
 
-# ── snake_case folders file like their spaced forms ─────────────────────
+# snake_case folders file like their spaced forms
 def test_word_bounds_treat_underscore_as_separator():
     check("snake_case job category finds the job",
           path_to_fight("Sharing Channel/disciples_of_war/1 - WHM/stuff") == "WHM")
@@ -106,7 +91,7 @@ def test_word_bounds_treat_underscore_as_separator():
           and path_to_fight("Eureka-Like/BA Raid/thing") == "BA")
 
 
-# ── a repeat count past 4300 digits must not kill the scan ───────────────
+# a repeat count past 4300 digits must not kill the scan
 _GIANT_RX = r'^21\|(?:[^|]*\|){' + '9' * 5000 + r'}8B5F\|'
 
 
@@ -133,12 +118,12 @@ def test_sane_repeat_counts_expand_as_before():
           extract_ids(r'^21\|(?:[^|]*\|){11}8B5F\|') == [])
 
 
-# ── non scalar fight or zone rows are skipped, the map still builds ──────
+# non scalar fight or zone rows are skipped, the map still builds
 def test_load_zone_map_skips_non_scalar_rows():
     existing = [
         {"fight": "DSR", "zone_regex": " Dragonsong"},
-        {"fight": ["DSR"], "zone_regex": " Dragonsong"},   # list fight, junk
-        {"fight": "TOP", "zone_regex": 42},                # int zone, junk
+        {"fight": ["DSR"], "zone_regex": " Dragonsong"},   # Invalid fight type.
+        {"fight": "TOP", "zone_regex": 42},                # Invalid zone type.
         "not a dict",
         {"fight": "", "zone_regex": "x"},                  # empty fight ignored
     ]
@@ -146,7 +131,7 @@ def test_load_zone_map_skips_non_scalar_rows():
           load_zone_map(existing) == {"DSR": " Dragonsong"})
 
 
-# ── every enclosing group form strips before the id expands ──────────────
+# every enclosing group form strips before the id expands
 def test_named_group_forms_strip_in_expand():
     check(".NET single quote named group strips",
           expand_id_expr("(?'id'8B5F)") == ["8B5F"])
@@ -159,7 +144,6 @@ def test_named_group_forms_strip_in_expand():
           and expand_id_expr("(8B5F)") == ["8B5F"])
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):

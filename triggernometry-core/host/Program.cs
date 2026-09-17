@@ -1,14 +1,8 @@
-// triggernometry-core - Strategy-A Mono stub host for NyaaTriggers.
-//
-// Hosts Triggernometry under Mono and Xvfb and streams resolved callouts as JSON.
-// The engine handles conditions, variables, delayed actions and C# scripts.
-//
-// SERVER mode (the real sidecar):   xvfb-run -a mono triggernometry-core.exe <cfgDir> --serve [packPath...]
-//   stdin : one JSON object per line  {"t":"log","line":"21|..."} | {"t":"zone","id":N,"name":".."}
-//                                     | {"t":"combatants","me":ID,"list":[{combatant}...]}
-//   stdout: one JSON object per line  {"t":"callout","tts":".."} | {"t":"sound",..} | {"t":"status","active":bool}
-//
-// TEST mode (regression):           xvfb-run -a mono triggernometry-core.exe <cfgDir> <packPath.xml> [testLogLine]
+// Host Triggernometry for NyaaTriggers and stream callouts as JSON. On Linux, run
+// through Mono and Xvfb. Serve mode reads log, zone and combatant messages on stdin and
+// writes callouts, sounds and status on stdout. Pass the configuration directory and
+// --serve followed by pack paths. Test mode takes the configuration directory, pack
+// path and an optional log line.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -27,8 +21,7 @@ static class Program
     static RealPlugin plug;
     static string currentZone = "";
 
-    // Callout inventory + per-callout edit/disable. Maps a stable id (triggerGuid#ttsIndex) to the LIVE
-    // UseTTS Action object the engine fires; editing/disabling rewrites that action's text in place.
+    // Map stable callout IDs to live UseTTS actions for editing and suppression.
     static readonly Dictionary<string, Triggernometry.Action> _calloutActions = new Dictionary<string, Triggernometry.Action>();
     static readonly Dictionary<string, string> _calloutOriginal = new Dictionary<string, string>();
     static readonly Dictionary<string, string> _calloutOverride = new Dictionary<string, string>();
@@ -40,12 +33,11 @@ static class Program
     {
         AppDomain.CurrentDomain.UnhandledException += (s, e) => { crashed = true; crashMsg = Convert.ToString(e.ExceptionObject); Err("[FATAL] " + crashMsg); };
         Application.ThreadException += (s, e) => { crashed = true; crashMsg = Convert.ToString(e.Exception); Err("[FATAL/UI] " + crashMsg); };
-        // Pin stdio to UTF-8 so non-ASCII FFXIV text (combatant/zone names) round-trips regardless of locale.
+        // Use UTF-8 for game text regardless of the system locale.
         try { var u8 = new System.Text.UTF8Encoding(false); Console.InputEncoding = u8; Console.OutputEncoding = u8; }
         catch (Exception ex) { Err("[host] set UTF-8 console: " + ex.Message); }
         try { Application.EnableVisualStyles(); } catch (Exception ex) { Err("[host] EnableVisualStyles: " + ex.Message); }
 
-        // ---- arg parsing ----
         string cfgDir = (args.Length > 0 && args[0].Length > 0) ? args[0] : Path.Combine(Path.GetTempPath(), "tnc");
         bool serve = Array.IndexOf(args, "--serve") >= 0;
         var packPaths = new List<string>();
@@ -63,7 +55,7 @@ static class Program
 
         BuildConfig(Path.Combine(cfgDir, pluginName + ".config.xml"), packPaths);
 
-        // ---- hidden mainform + hosted TabPage with forced handles ----
+        // Create window handles required by the hosted engine.
         Form mainform = new Form { ShowInTaskbar = false, FormBorderStyle = FormBorderStyle.None };
         mainform.Load += (s, e) => ((Form)s).Visible = false;
         var _h = mainform.Handle; mainform.CreateControl();
@@ -72,7 +64,6 @@ static class Program
         TabPage tp = new TabPage("Triggernometry"); tc.TabPages.Add(tp);
         var _h2 = tabHost.Handle; tabHost.CreateControl();
 
-        // ---- bring up the engine ----
         RealPlugin.ResetPlugin();
         plug = RealPlugin.plug;
         plug.mainform = mainform;
@@ -119,13 +110,12 @@ static class Program
             Environment.Exit(2);
         }
         EmitStatus(true, "ready");
-        BuildAndEmitInventory();   // report the editable callouts (UseTTS) to NyaaTriggers
+        BuildAndEmitInventory();
 
         if (serve) RunServer();
         else RunTest(packPaths.Count > 0, testLine);
     }
 
-    // ---------------- SERVER MODE ----------------
     static void RunServer()
     {
         var reader = new Thread(() =>
@@ -143,9 +133,8 @@ static class Program
             catch (Exception ex) { Err("[host] stdin loop ended: " + ex.Message); }
             finally
             {
-                // The engine's worker threads are FOREGROUND (RealPlugin.cs:2353-2361), so Main returning
-                // would NOT end the process -> mono+Xvfb orphan. Force exit on stdin EOF. This also covers
-                // the EOF-before-Application.Run startup race.
+                // Exit explicitly on stdin EOF because foreground engine threads would
+                // keep the host alive. This also covers EOF before Application.Run.
                 FlushEngineErrors();
                 EmitStatus(false, "stopped");
                 try { Application.Exit(); } catch { }
@@ -170,16 +159,17 @@ static class Program
                     {
                         string raw = el.GetString() ?? "";
                         if (raw.Length == 0) return;
-                        if (raw.StartsWith("01|"))   // ChangeZone: 01|ts|<zoneId hex>|<zoneName>|hash
+                        if (raw.StartsWith("01|"))
                         {
-                            var f = raw.Split(new[] { '|' });   // char[] overload: Split(char,opts) is Mono/.NET-Core only and throws MissingMethodException on .NET Framework (Windows)
+                            // Use the array overload for .NET Framework compatibility.
+                            var f = raw.Split(new[] { '|' });
                             if (f.Length > 3)
                             {
                                 currentZone = f[3];
                                 uint zoneId;
                                 uint.TryParse(f[2], System.Globalization.NumberStyles.HexNumber,
                                               System.Globalization.CultureInfo.InvariantCulture, out zoneId);
-                                CombatantBridge.RaiseZoneChanged(zoneId, currentZone);   // drives ${_ffxivzoneid} + name filters
+                                CombatantBridge.RaiseZoneChanged(zoneId, currentZone);
                             }
                         }
                         FeedLog(raw, currentZone);
@@ -200,7 +190,7 @@ static class Program
                     if (root.TryGetProperty("body", out el) && el.ValueKind == JsonValueKind.String)
                         plug.EndpointReceive(el.GetString());
                     break;
-                case "set_callout":   // edit one callout's spoken text live (id, text); text=null reverts to default
+                case "set_callout":   // Null text restores the default.
                     {
                         string id = root.TryGetProperty("id", out el) ? el.GetString() : null;
                         if (id != null)
@@ -211,7 +201,7 @@ static class Program
                         }
                     }
                     break;
-                case "set_disabled":  // the full set of callout ids to suppress (rest re-enabled)
+                case "set_disabled":  // Replace the full disabled set.
                     {
                         var ids = new HashSet<string>();
                         if (root.TryGetProperty("ids", out el) && el.ValueKind == JsonValueKind.Array)
@@ -240,8 +230,7 @@ static class Program
     static byte JB(JsonElement c, string k) { return (byte)Math.Min(JU(c, k), 255u); }
     static string JS(JsonElement c, string k) { JsonElement v; return c.TryGetProperty(k, out v) ? (v.GetString() ?? "") : ""; }
 
-    // Walk the LIVE registered triggers, register each UseTTS callout (id = triggerGuid#ttsIndex -> Action),
-    // and emit the inventory so NyaaTriggers can list / edit / toggle them.
+    // Publish live UseTTS actions with stable IDs for the trigger table.
     static void BuildAndEmitInventory()
     {
         var sb = new System.Text.StringBuilder();
@@ -279,7 +268,6 @@ static class Program
         Out(sb.ToString());
     }
 
-    // Re-apply the current edit/disable state to one callout's live Action text.
     static void ApplyCallout(string id)
     {
         Triggernometry.Action a; string val;
@@ -308,7 +296,6 @@ static class Program
         };
     }
 
-    // ---------------- TEST MODE ----------------
     static void RunTest(bool feed, string testLine)
     {
         if (feed)
@@ -333,7 +320,6 @@ static class Program
         Environment.Exit(calloutCount > 0 && !crashed ? 0 : 1);
     }
 
-    // ---------------- helpers ----------------
     static void FlushEngineErrors()
     {
         try
@@ -422,8 +408,8 @@ static class Program
             foreach (var child in folder.Folders) RouteTelestoRequests(child, relay);
     }
 
-    // ExecuteScript actions default _ExecScriptAssembliesExpression="" -> Interpreter.Evaluate does AddReferences("")
-    // -> ArgumentException, script never runs. Give empty ones a valid loaded assembly (keeps the engine unpatched).
+    // Supply a loaded assembly when script references are empty. The interpreter
+    // rejects an empty reference string.
     static int FixupExecuteScriptAssemblies(Folder f)
     {
         if (f == null) return 0;

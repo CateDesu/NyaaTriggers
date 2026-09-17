@@ -1,7 +1,7 @@
 import os, sys
-TEST_DIR = os.path.dirname(os.path.abspath(__file__))      # .../triggernometry-core/test
-CORE = os.path.dirname(TEST_DIR)                            # .../triggernometry-core
-NYAA = os.path.dirname(CORE)                                # .../NyaaTriggers
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+CORE = os.path.dirname(TEST_DIR)
+NYAA = os.path.dirname(CORE)
 os.environ["NYAA_TRIGGERNOMETRY_PACKS"] = os.path.join(TEST_DIR, "packs")
 os.environ["NYAA_TRIGGERNOMETRY_EXE"] = os.path.join(CORE, "bin", "triggernometry-core.exe")
 sys.path.insert(0, NYAA)

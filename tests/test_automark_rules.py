@@ -1,11 +1,4 @@
-"""Tests for MainWindow._match_automark_rules (compound automark rules).
-
-Drives the real matcher unbound on a duck-typed window (no QApplication, no
-settings file), mirroring the _on_log_line wiring. Pair tracker fed first,
-then the 26-line match.
-
-Run directly:  python -m tests.test_automark_rules   (exit 0 = all pass)
-"""
+"""Compound automarker matching and shared status tracking."""
 import os
 import sys
 import time
@@ -91,7 +84,7 @@ class FakeWindow:
             mw.MainWindow._match_automark_unmark(self, fields)
 
 
-# ── Compound pair fires exactly once, either arrival order ──
+# Compound pair fires exactly once, either arrival order
 w = FakeWindow()
 w.feed("26", "BBC", P1)
 check("in-Line alone marks nothing", w.marks == [])
@@ -104,7 +97,7 @@ n = len(w.marks)
 w.feed("26", "644", P1)        # refresh while the pair is still held
 check("compound cooldown blocks a same-pair double fire", len(w.marks) == n)
 
-# ── Losses break the pair. A fresh application re-fires ──
+# Losses break the pair. A fresh application re-fires
 w.feed("30", "644", P1)
 w.feed("30", "BBC", P1)
 w._automark_cooldowns.clear()
@@ -112,7 +105,7 @@ w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
 check("re-fires after losses (next black hole)", w.marks[-1] == (P1, "attack1"))
 
-# ── Guards ──
+# Guards
 w = FakeWindow(chains_on=True)
 w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
@@ -135,21 +128,21 @@ w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
 check("unassigned compound rules are inert", w.marks == [])
 
-# ── Non-preset compound rules are tracked from the loaded rules ──
+# Non-preset compound rules are tracked from the loaded rules
 w = FakeWindow(rules=[{"fight": "", "status": "8D1+8D2", "marker": "circle",
                        "scope": "party", "enabled": True}])
 w.feed("26", "8D1", P2)
 w.feed("26", "8D2", P2)
 check("hand-added compound rule fires", w.marks == [(P2, "circle")])
 
-# ── Exact-name rules containing '+' stay on the name-match path ──
+# Exact-name rules containing '+' stay on the name-match path
 w = FakeWindow(rules=[{"fight": "", "status": "Damage Up+", "marker": "cross",
                        "scope": "party", "enabled": True}])
 w.feed("26", "FFF", P1, name="Damage Up+")
 check("name rule with '+' fires via name match, not as a dead compound",
       w.marks == [(P1, "cross")])
 
-# ── Clear-on-loss: a rule sign falls with the debuff that placed it ──
+# Clear-on-loss: a rule sign falls with the debuff that placed it
 w = FakeWindow()
 w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
@@ -165,7 +158,7 @@ check("the rest of the burst does not re-clear", w.clears == [P1])
 w.feed("30", "644", P2)
 check("the second carrier clears on their own cleanse", w.clears == [P1, P2])
 
-# ── Toggle off: losses leave signs alone ──
+# Toggle off: losses leave signs alone
 w = FakeWindow()
 w._automark_clear_on_loss = False
 w.feed("26", "BBC", P1)
@@ -173,7 +166,7 @@ w.feed("26", "644", P1)
 w.feed("30", "644", P1)
 check("clear-on-loss off leaves the sign up", w.clears == [])
 
-# ── An engine mark (chains/gaze) invalidates the rule's placed-by entry ──
+# An engine mark (chains/gaze) invalidates the rule's placed-by entry
 w = FakeWindow()
 w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
@@ -183,7 +176,7 @@ w.feed("30", "644", P1)
 check("a chain sign on the same player is not cleared by the rule's loss",
       w.clears == [])
 
-# ── Lower-case feed ids: the rule path normalizes like the engines ──
+# Lower-case feed ids: the rule path normalizes like the engines
 P1L = P1.lower()
 w = FakeWindow()
 w.feed("26", "BBC", P1L)
@@ -203,7 +196,7 @@ w.feed("30", "644", P1L)
 check("lower-case feed: clear-on-loss still finds the placed sign",
       w.clears == [P1])
 
-# ── A loss with nothing placed purges the queued retry for that debuff ──
+# A loss with nothing placed purges the queued retry for that debuff
 w = FakeWindow(mark_ok=False)
 w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
@@ -217,7 +210,7 @@ w._mark_ok = True
 mw.MainWindow._retry_automark_pending(w)
 check("the 10s retry can no longer place the stale mark", w.marks == [])
 
-# ── Zone change tears down the placed-by bookkeeping too ──
+# Zone change tears down the placed-by bookkeeping too
 class ZoneWin:
     """Just enough of MainWindow for _apply_zone: zone state, the automark
     bookkeeping, and stubbed UI and plugin link."""

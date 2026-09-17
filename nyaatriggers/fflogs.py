@@ -1,18 +1,6 @@
-"""Optional FFLogs v2 comparison for the DPS meter.
-
-After an encounter ends, the meter can line its numbers up against the
-player's FFLogs best for that zone. FFLogs v2 is a GraphQL API behind
-client credentials OAuth. This wraps exactly the two calls we need, the
-zone list and character zoneRankings, using stdlib urllib only so the
-feature stays dependency free. Everything fails soft. Any network, auth
-or data problem returns None and the UI just shows "no data". A meter
-must never break because a comparison site is down.
-
-The HTTP layer is injectable, `http_post` takes url, headers, body and a
-timeout and hands back status plus bytes, so tests run without the
-network. Tokens are cached until a minute before expiry. The zone list
-is cached per process on the class, so repeated fetches across
-encounters cost one zone lookup per program run.
+"""Optional FFLogs v2 comparisons for the DPS meter using OAuth and GraphQL. Failures
+return None. The injectable HTTP transport returns a status and response bytes. Tokens
+expire from cache a minute early, and the zone list is shared across instances.
 """
 
 from __future__ import annotations
@@ -32,24 +20,18 @@ from nyaatriggers.http_fetch import open_response
 TOKEN_URL = "https://www.fflogs.com/oauth/token"
 API_URL = "https://www.fflogs.com/api/v2/client"
 
-# Cap on one response body. The payloads are KBs of JSON and the socket
-# timeout is per read, not total, so an unbounded read lets a trickling peer
-# grow memory without limit.
+# Bound response size to limit memory use.
 _MAX_RESPONSE_BYTES = 8 << 20
-# Watchdog timing for one response. The read runs on a daemon helper while
-# the calling thread enforces a stall window and a total deadline from
-# outside the read. The socket timeout passed to urlopen is per recv and
-# resets on every received byte, so a trickling peer would otherwise hold
-# the read open forever.
+# Enforce stall and total deadlines outside the read because socket timeouts reset on
+# each received byte.
 _READ_STALL_S = 15
 _RESPONSE_DEADLINE_S = 60
 
 
 def _unblock_reader(resp) -> None:
-    """Shut the underlying socket down so a read parked in another thread
-    wakes at once. A plain resp.close from this side would block on the
-    buffer lock the parked read still holds. Best effort, the reader is a
-    daemon thread either way."""
+    """Try to shut down the socket without waiting for the reader to release its buffer
+    lock.
+    """
     try:
         resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
     except Exception:  # noqa: BLE001
@@ -64,7 +46,7 @@ _RANKINGS_QUERY = (
 
 
 class FflogsClient:
-    """Minimal FFLogs v2 reader. Best parse for one character in one zone."""
+    """Fetch a character's best parse for one zone."""
 
     _zones_cache: "list[dict] | None" = None   # process-wide, per class
     _zones_lock = threading.Lock()
@@ -85,11 +67,8 @@ class FflogsClient:
         deadline = time.monotonic() + _RESPONSE_DEADLINE_S
         headers_deadline = min(deadline, time.monotonic() + _READ_STALL_S)
         with open_response(req, timeout, headers_deadline) as resp:
-            # Read loop on a daemon helper, watchdog here. One flat read of
-            # the whole cap would park with no way to fail it from this side,
-            # so the helper reads in chunks and reports progress. The stall
-            # window and the total deadline are enforced from outside the
-            # read. Same guard main.py runs for its downloads.
+            # Read in a helper that reports progress so the caller can enforce both
+            # deadlines.
             done = threading.Event()
             progress = [0]
             reader_error = [None]
@@ -119,14 +98,10 @@ class FflogsClient:
             while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
                 now = time.monotonic()
                 if progress[0] == last_seen or now > deadline:
-                    # Shut the connection down so the parked reader wakes
-                    # instead of leaking. A plain resp.close here would
-                    # block on the lock the parked read still holds.
+                    # Shut down the socket to wake the reader without waiting for its
+                    # read lock.
                     _unblock_reader(resp)
-                    # Same label rule as updater and install: the stall
-                    # line only fits when the whole stall window really
-                    # passed with no byte. A wake near the deadline after
-                    # less than a full window of quiet is the deadline.
+                    # Report a stall only after the full quiet window has elapsed.
                     if now - last_change >= _READ_STALL_S:
                         raise TimeoutError(
                             f"fflogs response stalled, no new bytes for {_READ_STALL_S} seconds")
@@ -138,7 +113,6 @@ class FflogsClient:
             data = bytes(buf)
         return resp.status, data
 
-    # ------------------------------------------------------------------
     def _get_token(self) -> "str | None":
         if self._token and time.time() < self._token_expiry - 60.0:
             return self._token
@@ -163,20 +137,18 @@ class FflogsClient:
                 self._token_expiry = time.time() + 3600.0
             return self._token
         except urllib.error.HTTPError as exc:
-            # The error is a response object, close it before moving on,
-            # same as _graphql below.
+            # HTTPError is also a response object and needs closing.
             exc.close()
             log_drop("fflogs-token", f"token request failed (status {exc.code})")
             return None
-        except Exception as exc:  # noqa: BLE001 - network/auth/JSON all fail soft
+        except Exception as exc:  # noqa: BLE001
             log_drop("fflogs-token", f"token request error: {exc}")
             return None
 
     def _graphql(self, query: str, variables: "dict | None" = None) -> "dict | None":
-        """One GraphQL call. The `data` object, or None on any failure. A 401
-        means the cached token is dead, revoked or expired server-side early.
-        Drop it and retry once, so fetches recover instead of failing until
-        the token's nominal expiry."""
+        """Return GraphQL data or None on failure. Retry once with a fresh token after a
+        401.
+        """
         try:
             body = json.dumps({"query": query,
                                "variables": variables or {}}).encode()
@@ -194,9 +166,8 @@ class FflogsClient:
                     body, 15.0)
                 payload = json.loads(data.decode("utf-8"))
             except urllib.error.HTTPError as exc:
-                # urllib raises on non-2xx. Keep the status so the 401 handling
-                # below applies to the real transport, not just injected ones.
-                # The error is a response object, close it before moving on.
+                # Preserve HTTP error status for token refresh handling and close the
+                # response.
                 exc.close()
                 status, payload = exc.code, None
             except Exception as exc:  # noqa: BLE001
@@ -214,11 +185,8 @@ class FflogsClient:
             return result if isinstance(result, dict) else None
         return None
 
-    # ------------------------------------------------------------------
     def _zone_id(self, zone_name: str) -> "tuple[int, str] | None":
-        """The id and canonical name of the zone best matching `zone_name`.
-        Exact case-insensitive match first, then substring, then a token
-        superset for per-floor game names against tier level zones."""
+        """Find the closest zone by exact name, substring, then token superset."""
         with FflogsClient._zones_lock:
             if FflogsClient._zones_cache is None:
                 data = self._graphql(_ZONES_QUERY)
@@ -243,12 +211,8 @@ class FflogsClient:
         for z in zones:
             if wanted in z["name"].casefold():
                 return z["id"], z["name"]
-        # FFLogs serves one zone per raid tier while the game reports the
-        # per-floor name, "AAC Cruiserweight M4 (Savage)" against zone
-        # "AAC Cruiserweight (Savage)". Neither is a substring of the other,
-        # the floor token sits inside the tier name. Fall back to a token
-        # superset match and take the most tokens, so a savage floor can't
-        # land on the tier's normal zone.
+        # Game zone names include floor numbers inside the FFLogs tier name. Match token
+        # supersets and prefer the most specific zone to preserve the difficulty.
         wanted_tokens = set(re.findall(r"[a-z0-9]+", wanted))
         best, best_len = None, 0
         for z in zones:
@@ -268,10 +232,9 @@ class FflogsClient:
 
     def fetch_best(self, char_name: str, server_slug: str, region: str,
                    zone_name: str) -> "dict | None":
-        """Best recorded performance for `char_name` in `zone_name`, as
-        {"percent": float|None, "amount": float|None, "zone": str}, or None
-        on any failure, network, auth, unknown character or zone. Never
-        raises. The caller is a fire-and-forget UI update."""
+        """Return percent, amount and zone for the character's best performance, or None if
+        unavailable.
+        """
         with self._fetch_lock:
             return self._fetch_best(char_name, server_slug, region, zone_name)
 
@@ -293,7 +256,7 @@ class FflogsClient:
                 return None
             rankings = character.get("zoneRankings")
             if isinstance(rankings, str):      # JSON-over-JSON, some proxies
-                try:                           # return the blob unparsed
+                try:
                     rankings = json.loads(rankings)
                 except ValueError:
                     rankings = None
@@ -308,9 +271,7 @@ class FflogsClient:
                 for entry in entries:
                     if not isinstance(entry, dict):
                         continue
-                    # A truthy non-dict encounter reads as no name. One bad
-                    # entry must not abort the fetch and take every good
-                    # entry down with it.
+                    # Skip malformed entries without discarding other encounters.
                     encounter = entry.get("encounter")
                     if not isinstance(encounter, dict):
                         encounter = {}
@@ -337,6 +298,6 @@ class FflogsClient:
             if percent is None and amount is None:
                 return None
             return {"percent": percent, "amount": amount, "zone": zone_label}
-        except Exception as exc:  # noqa: BLE001 - last-resort guard, never raise
+        except Exception as exc:  # noqa: BLE001
             log_drop("fflogs", f"fetch_best failed: {exc}")
             return None
