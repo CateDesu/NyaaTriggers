@@ -34,271 +34,188 @@ Windows and Linux release builds bundle the Python dependencies and English Pipe
 | PyQt6 | `sudo pacman -S python-pyqt6` / `sudo apt install python3-pyqt6 python3-pyqt6.qtwebsockets` / `pip install PyQt6`. Debian splits the WebSockets binding into its own package and the program needs it for the game feed. |
 | piper-tts | Installed automatically on first launch into `~/.venv/ffxiv` |
 | Audio backend | `aplay` via `alsa-utils` |
-| PyQt6-WebEngine | **Optional** on source installs, only for the cactbot source in **Settings - Cactbot**. `sudo pacman -S python-pyqt6-webengine` or `pip install PyQt6-WebEngine`. The rest of the program works without it. The packaged release builds bundle it. |
+| PyQt6-WebEngine | Optional for cactbot in source runs. Use `sudo pacman -S python-pyqt6-webengine` or `pip install PyQt6-WebEngine`. Releases bundle it. |
 
 ---
 
 ## Voice
 
-Pick the backend in **Settings - Voice - Engine**:
+Choose an engine in **Settings - Voice**:
 
-- **System** - Windows SAPI, or `spd-say` / `espeak` when installed on Linux. **Default on Windows.** English falls back to Piper if no system voice backend is available on Linux.
-- **Piper** - fully offline neural TTS via [Piper](https://github.com/OHF-Voice/piper1-gpl). **Default on Linux.** Release builds include the `en_US-arctic-medium` model. Source runs download it automatically on first launch into `voices/`.
+- **System** uses Windows SAPI or Linux's `spd-say` / `espeak`. It is the Windows default. On Linux, English falls back to Piper if no system backend is available.
+- **Piper** provides [offline neural speech](https://github.com/OHF-Voice/piper1-gpl) and is the Linux default. Releases bundle `en_US-arctic-medium`; source runs download it to `voices/` on first launch.
 
-**Adding Piper voices:** browse the [voice samples](https://rhasspy.github.io/piper-samples/), download a `.onnx` model and its matching `.onnx.json` config, and drop both in the `voices/` folder. **Settings - Voice - Open voices folder** opens it. Pick the voice under **Model**, and hit **Refresh list** or restart if you added it while open. Medium voices are ~65 MB, low ~30 MB.
+To add a Piper voice, choose one from the [samples](https://rhasspy.github.io/piper-samples/) and put its `.onnx` model and matching `.onnx.json` config in **Open voices folder**. Use **Refresh list** or restart, then select it under **Model**. Medium voices are about 65 MB; low voices are about 30 MB.
 
-**Japanese voices:** the **Model** dropdown also lists the neural Japanese voices Alpha and Kumo next to the English one. Pick one and callouts are spoken in Japanese. The program downloads the voice and sets it up on first pick, about 330 MB, and it reads kanji. Until it is ready Japanese falls back to espeak.
+The Japanese voices **Alpha** and **Kumo** also appear under **Model**. First selection downloads about 330 MB. They read kanji, with espeak as the fallback while setup finishes.
 
-**Test TTS** speaks a sample with the current voice. On Linux source installs, **Piper venv** sets the path to the venv holding piper-tts, default `~/.venv/ffxiv`.
+**Test TTS** previews the selected voice. On Linux source installs, **Piper venv** points to the piper-tts environment, normally `~/.venv/ffxiv`.
 
-**Master volume and mute.** The sidebar slider controls program audio from 0% to 200%. Click the speaker button to mute or unmute. Right-click it for **Mute for 5 minutes**, **Mute for 15 minutes**, **Mute until next zone**, or **Unmute**. These mute audio while the combat feed, recordings, and visual callouts continue.
+The sidebar volume slider controls audio from 0% to 200%. Click the speaker to mute or unmute. Its right-click menu offers **Mute for 5 minutes**, **Mute for 15 minutes**, **Mute until next zone**, and **Unmute**. The combat feed, recordings, and visual callouts continue while muted.
 
 ---
 
 ## Triggers tab
 
-The trigger editor and your trigger set, bundled plus custom. The live combat log is a separate **Current Instance** tab.
+Edit bundled and custom triggers here. The live log is in **Current Instance**.
 
-**Callout modes.** With **Cactbot** off, the program runs your editable **Local**, **Triggevent**, and imported **Triggernometry** callouts according to their row checkboxes. Enabling **Settings - Cactbot** switches those callouts off and runs cactbot instead. Turning Cactbot off restores editable callout mode. The same Cactbot switch controls its timelines: on, and the current fight uses cactbot's `.txt` files alongside its callouts. Dungeon timelines ship with the program, and the others download and cache on demand. With Cactbot off, local timelines are used.
+**Callout modes.** With **Cactbot** off, Local, Triggevent, and Triggernometry callouts follow their checkboxes. **Settings - Cactbot** switches those off and enables cactbot callouts and timelines. Dungeon timelines are bundled; others download and cache on demand. Turning Cactbot off restores editable callouts and local timelines.
 
-**Callout choices.** Engine callouts are enabled unless you mute them, including newly discovered callouts. Local rows keep their own saved on/off choices. Local triggers use their zone restrictions to decide where they can fire. Check the row and per-fight controls when choosing your setup.
+Engine callouts start enabled, including newly discovered ones. Local rows keep their saved choices and zone restrictions.
 
-**Sidebar tree**, grouped by content type, then expansion, then fight:
+**Sidebar tree.** Fights are grouped by content type, expansion, and fight. Special folders are:
 
-- **General** - fires in any zone, like tank invulns and personal mitigations
-- **By content type** - Ultimates, Savage Raids, Extreme Trials, Deep Dungeons, Field Operations, Normal Raids, Normal Trials, Alliance Raids, each split by expansion then fight: Dawntrail, Endwalker, Shadowbringers, Stormblood, Heavensward, A Realm Reborn. Ultimates: FRU, UMAD, TOP, DSR, TEA, UwU, UCoB.
-- **TBD** - bundled triggers whose fight has no curated slot yet
-- **Unsorted** - your custom triggers with no zone lock. A custom trigger with a Zone Regex auto-files under its fight instead, or under TBD if that fight isn't in the tree.
+- **General** for callouts that work in any zone, such as personal mitigations.
+- **TBD** for fights without a curated tree entry.
+- **Unsorted** for custom triggers without a zone restriction. A Zone Regex files a custom trigger under its fight, or TBD if the fight has no entry.
 
-Click a fight or folder to filter the table. Click a header to expand or collapse it.
+Select a fight or folder to filter the table. Headers expand or collapse groups. The table's **General**, **DoT**, **Local**, **Triggevent**, and **Triggernometry** groups start collapsed. DoT contains reapply reminders. Search shows matching rows across all fights in one list.
 
-**Source groups** in the table: **General**, **DoT** for reapply-warning timers, **Local**, **Triggevent**, **Triggernometry**. All start collapsed, and typing in the search box flattens them into one list.
+**Toggles.** **Global - Local On/Off** and **Global - Triggevent On/Off** affect every fight. Global Local also controls local timelines. Selecting one fight shows **Local** and **Triggevent** checkboxes for its rows. A box is checked when all its rows are enabled. Enabling a group expands it; disabling it collapses it. Overlapping sources can produce duplicate calls.
 
-**Toggles.** **Global - Local On/Off** and **Global - Triggevent On/Off** flip a whole source on or off across every fight. Selecting a single fight adds a bar with **Local** and **Triggevent** checkboxes. A box is ticked when that source is fully on for the fight, and toggling it changes only that source. A global toggle lights the matching boxes, and a single-row change re-derives them. Turning a box or a global button on expands the affected sections, and turning it off collapses them. You *can* run both at once, but they will double up on any fight they both cover, so usually pick one per fight.
+**Zone column.** A green dot means the trigger matches your current zone, red means it is excluded, and no dot means the zone is unknown or disconnected.
 
-**Zone column** shows a live dot per trigger: **green** means the trigger matches your current zone and can fire, **red** means locked out, **none** means not connected or no zone detected yet.
+**Row menu.** Right-click for Edit, Duplicate, Test Fire, Enable / Disable, Delete, Move to Folder, and Reset to Default. Moving changes the fight tag. Reset restores a modified bundled trigger's values.
 
-**Right-click a row** for Edit, Duplicate, Test Fire, Enable / Disable, Delete, Move to Folder, and Reset to Default. Move to Folder changes the fight tag, and Reset to Default restores a modified bundled trigger.
+**Tree menu.** Right-click to create, rename, or delete Unsorted folders and subfolders. **New folder for a fight...** opens a searchable Savage, Ultimate, and Extreme picker. Deletion confirms how many triggers it will remove, including subfolders.
 
-**Right-click a tree node** to manage Unsorted folders: New Folder, New Subfolder, **New folder for a fight...** with a searchable Savage / Ultimate / Extreme picker, Rename, and Delete Folder. Delete asks for the count first and removes the folder, its subfolders, and the triggers inside.
-
-The **toolbar** mirrors the row actions plus the two **Global** toggles and **Reset to Default**, which unchecks every trigger everywhere. Reset only clears the on/off marks. It never removes a trigger or restores edited values.
+The toolbar has row actions, global toggles, and **Reset to Default**. This reset only clears all trigger checkmarks; definitions and edited values are preserved.
 
 ---
 
 ## Engine triggers
 
-Engine triggers appear right in the **Triggers** list under their fight, tinted and tagged in the Type column, and fire by default:
+Engine rows appear under their fight, tinted and tagged by source. Changes apply immediately and persist across restarts.
 
-- **Uncheck a row** to silence that callout, and check it again to bring it back. New triggers fire the first time they're seen, nothing is muted just for being new. Cactbot suppresses disabled callouts at source via `DisabledTriggers`. Triggevent and Triggernometry drop the disabled ids. All apply live with no restart.
-- **Double-click** a Triggevent callout to change its wording, or right-click and pick **Edit spoken text**. Tokens like `{event.target}` still substitute, and **Reset to default** restores it. Edits persist and re-apply each time the engine starts.
-- **Triggernometry** callouts list as editable rows too. Edit the spoken text or toggle them per trigger, the same as Triggevent. See [Triggernometry engine](#triggernometry-engine-wip).
-- **Test TTS** from the right-click menu or the ▶ button in the edit dialog speaks a callout with sample token values.
-- **Cactbot** callouts can't be edited at the engine. Uncheck the row to silence one, and check it again to bring it back. Cactbot's on/off, per-trigger overrides, and the page **URL** live in **Settings - Cactbot**. The URL defaults to the hosted raidboss build, so point it at a local build only if you bundle one. Cactbot needs PyQt6-WebEngine. The packaged release builds bundle it, and source installs need the package from the Requirements table.
+- Uncheck a row to mute it, or check it to restore the callout.
+- Double-click Triggevent or Triggernometry rows, or choose **Edit spoken text**, to change their wording. Triggevent tokens such as `{event.target}` and Triggernometry tokens such as `${_me.x}` still resolve. **Reset to default** restores the original text.
+- **Test TTS** in the row menu or the editor's ▶ button previews speech with sample token values.
+- Cactbot rows support muting only. Its switch, overrides, and page **URL** are in **Settings - Cactbot**. The default URL uses hosted raidboss; a local build can replace it. Source installs need PyQt6-WebEngine from [Requirements](#requirements).
 
-Simple cast-based engine triggers are bundled as editable Local triggers instead. The complex imperative and Groovy ones stay in the engine and show here.
+Simple cast-based engine triggers are bundled as editable Local rows. Complex imperative and Groovy triggers remain in the engine.
 
 ---
 
 ## Triggevent Engine
 
-Triggevent runs against the same IINACT feed and speaks its enabled callouts: built-in, EasyTriggers, and your Groovy scripts in `~/.triggevent`, including the code-based ones that cannot become Local triggers. Its callouts run with Cactbot off and follow the row, per-fight, and global Triggevent controls.
+Triggevent runs built-in callouts, EasyTriggers, and Groovy scripts from `~/.triggevent` against the IINACT feed. With Cactbot off, it follows the row, fight, and global Triggevent controls.
 
-It runs Triggevent's engine ([`xpdota/event-trigger`](https://github.com/xpdota/event-trigger), GPL-3.0) as a side process. **Release builds bundle the engine and a Java 17 runtime.** A source checkout builds the sidecar once with **JDK 17 + Maven**:
+Release builds bundle the engine and Java 17. For source runs, install Java 17 and use **Settings - Program - Update Triggevent Engine** to download the prebuilt jar. Developers rebuilding the engine need JDK 17 and Maven:
 
-| OS | JDK 17 + Maven | Build |
-|----|----------------|-------|
-| **Linux** (Arch/CachyOS) | `sudo pacman -S jdk17-openjdk maven` | `cd triggevent-core && ./build.sh` |
-| **Bazzite / Fedora** | `brew install openjdk@17 maven` | `cd triggevent-core && ./build.sh` |
-| **Windows** | `winget install EclipseAdoptium.Temurin.17.JDK Apache.Maven` | `cd triggevent-core && build.bat` |
+| OS | JDK 17 and Maven | Build |
+|---|---|---|
+| Arch / CachyOS | `sudo pacman -S jdk17-openjdk maven` | `cd triggevent-core && ./build.sh` |
+| Bazzite / Fedora | `brew install openjdk@17 maven` | `cd triggevent-core && ./build.sh` |
+| Windows | `winget install EclipseAdoptium.Temurin.17.JDK Apache.Maven` | `cd triggevent-core && build.bat` |
 
-That produces `triggevent-core/target/triggevent-core.jar`, which NyaaTriggers auto-detects, falling back to a bundled or system Java. Or skip the build entirely. **Settings - Program - Update Triggevent Engine** downloads the same prebuilt jar the packaged builds ship, no git or Maven needed. See `triggevent-core/README.md` for the full design.
+NyaaTriggers detects `triggevent-core/target/triggevent-core.jar` and uses bundled or system Java. See the [engine README](../triggevent-core/README.md) for build details.
 
-Some engine components build a Swing overlay as they load, so the sidecar runs the engine against a display you never see. On Linux that is a throwaway **Xvfb** when installed, otherwise your session display. Install it with `sudo pacman -S xorg-server-xvfb` if you are on a headless or pure-Wayland box. Triggevent's own overlays render off-screen. You only get what NyaaTriggers speaks and what the optional companion overlay plugin draws.
+Some engine components construct Swing windows. On Linux, Xvfb supplies a hidden display; otherwise the engine uses your session's X display. Install the [Linux dependencies](../README.md#linux-system-dependencies) for headless or pure Wayland sessions. The companion overlay handles the in-game display.
 
 ---
 
 ## Triggernometry engine (WIP)
 
-> **Note.** Triggernometry support is still being validated in-game.
+Triggernometry runs conditions, shared variables, delayed actions, trigger chains, and C# `ExecuteScript` actions from imported XML packs. It starts when a pack is available and Cactbot is off. Live fight validation is still pending.
 
-Triggernometry runs its **real engine** to preserve conditions, shared variables, delayed actions, trigger chains and C# `ExecuteScript` actions. These need the original XML pack because the simple converter cannot represent their logic. The engine starts once a pack has been imported and Cactbot is off. Turning Cactbot on stops it.
+**Import a pack** through **Settings - Data - Import Triggernometry**. Its triggers appear as editable Triggernometry rows. Without the engine, the importer converts only simple ability matches with plain speech to Local rows.
 
-**Importing a pack.** Point **Settings - Data - Import Triggernometry** at a Triggernometry `.xml` export. The whole pack runs through the engine and lists under its own **Triggernometry** section as editable rows. Edit the spoken text or toggle them per trigger, just like Triggevent. On a build without the engine the simple triggers, a literal ability ID plus a plain text-to-speech line, fall back to editable **Local** rows instead.
+**Update or remove a pack** while the program is closed by replacing or moving its XML in the [pack folder](../README.md#updating-and-saved-data), then restarting. Importing the same filename adds another copy.
 
-**Updating or removing a pack.** Importing another file with the same name keeps a separate copy. To replace an earlier version, close the program and replace its XML in the imported pack folder. To remove a pack, move its XML out of that folder, then restart. See [saved data locations](../README.md#updating-and-saved-data).
+**Compatibility.** FFXIVNetwork triggers receive raw network logs; Log triggers receive formatted ACT logs. Replays cover TOP player markers and wipe resets, Zelenia's Bloom sequence from the [Paissa packs](https://github.com/paissaheavyindustries/Triggernometry-Triggers/tree/main/Repositories), and a delayed callout's C# calculation. These checks cover selected mechanics. Legacy auras, direct game-memory reads from scripts, and ACT combat-state or encounter-duration hooks are unsupported.
 
-**Pack compatibility.** Network triggers receive raw FFXIV logs and ACT log triggers receive the corresponding formatted logs. Replay tests cover TOP's player markers and wipe reset, Zelenia's Bloom callout sequence from the [Paissa sharing-channel pack](https://github.com/paissaheavyindustries/Triggernometry-Triggers/tree/main/Repositories), and a C# calculation used by a delayed callout. This does not validate every trigger in those packs. Legacy Triggernometry auras and scripts that read game memory directly are still unsupported.
+**Telesto.** Set **Telesto URL** in Automarkers to use pack memory subscriptions and drawings. Callback setup is automatic for local connections. These features run with Triggernometry; game commands and macros additionally require **Enable automarkers**. Stopping the engine removes its subscriptions and drawings, and stale callbacks are ignored. TOP Party Synergy and Pantokrator are covered by replays. Telesto performs the memory reads and drawing, so pack offsets must match the game version.
 
-**Telesto callbacks and drawings.** With [Telesto](https://github.com/paissaheavyindustries/Telesto) running in the game, imported packs can subscribe to memory changes and draw lines, circles, beams and other Telesto doodles. The program uses **Telesto URL** in the Automarkers tab and sets up the callback address automatically. These features run with Triggernometry in editable callout mode. The Automarkers switch separately gates pack actions that send game commands or macros. No extra listener settings or administrator setup are needed for a local Telesto connection.
-
-TOP's Party Synergy weapon calls and Pantokrator circles and beams are covered by replays through this integration. Subscriptions and drawings belong to one engine run and are cleaned up when it stops. Late notifications from retired subscriptions or replaced drawings are ignored. Telesto performs the memory reads and renders the drawings inside the game. Pack memory offsets still need to match the game version.
-
-**How it runs.** A headless .NET sidecar (`triggernometry-core`) hosts the real engine and routes its callouts to NyaaTriggers' voice and the optional companion overlay plugin. It's cross-platform .NET Framework 4.6.2. **Windows runs it natively**, and **Linux runs it under Mono** with `sudo pacman -S mono`. Release builds bundle the prebuilt sidecar, so there's nothing to build to use it.
-
-**Building from source.** The sidecar's prebuilt binaries are vendored in `triggernometry-core/bin/` and used as-is, so a normal source run needs no build step. Linux still needs the [system dependencies](../README.md#linux-system-dependencies). To rebuild it, only needed if you change the host or bump the pinned engine, run `triggernometry-core/build-all.sh` with **Mono 6.12+** installed. It clones the engine at a pinned commit, applies the shims, and rebuilds `bin/`. See `triggernometry-core/README.md` for the design.
+**Runtime and builds.** The prebuilt .NET Framework 4.6.2 host is included in releases and source checkouts. Windows runs it natively; Linux needs [Mono and its system dependencies](../README.md#linux-system-dependencies). Rebuild only after changing the host or engine pin: run `triggernometry-core/build-all.sh` with Mono 6.12+. See the [engine README](../triggernometry-core/README.md).
 
 ---
 
 ## Current Instance tab
 
-A live combat log for the current zone, with a **Filter** box.
+The live zone log has a text filter and checkboxes for players, enemies, casts, abilities, cancels, and statuses. Player actions are green, enemies and NPCs orange, and zone changes purple.
 
-- **Easy-to-Read Log** - human-readable ability feed colored by actor, **green** for player action and **orange** for enemies and NPCs, each line ending with the hex ability ID like `Boss begins casting Tankbuster [A55B]`. Zone changes show as purple banners. Use the checkboxes to show or hide players, enemies, casts, abilities, cancels, and statuses. Right-click a line to open a trigger dialog pre-filled with its ability ID, name, log type, fight tag, and zone regex. Ability IDs are the most reliable way to match a trigger since they survive patches and are language-independent.
+Each line ends with a hex ability ID, such as `Boss begins casting Tankbuster [A55B]`. Right-click to create a trigger with its ID, name, log type, fight tag, and zone regex filled in. IDs avoid language-dependent ability names.
 
 ---
 
 ## DPS tab
 
-A live damage meter parsed by the program itself straight from the combat log. Per player it shows DPS, damage share, HPS, crit and direct hit rates, max hit and deaths, updating every second, with the encounter title, duration and party DPS on top. Pets and summons are merged into their owners like ACT does. A fight starts on the in-combat flag and ends on the flag dropping, a wipe, or a zone change. The meter is always on.
+The meter updates every second from the combat log. It shows per-player DPS, damage share, HPS, crit and direct hit rates, max hit, and deaths, plus encounter duration and party DPS. Pets merge into their owners. Combat flags start and end pulls; wipes and zone changes also end them.
 
-- The on-screen meter pauses after a stretch of no damage, **Reset display after** 15s to 10m with a 2m default, holds its numbers, and starts a fresh segment when damage resumes. The recorded log always keeps the whole pull, downtime included.
-- A finished pull stays frozen on screen until the next one starts.
-- **Recent pulls** lists this session's pulls newest first. Click one to review its numbers. The feed goes back to live on its own when the next pull starts, or hit **<- Back to live**.
-- **Record encounters**, off by default, appends each finished pull to a JSONL log in `dps_logs/`, one line per pull, fights mixed like ACT's log files. A log rolls over at 25 pulls of one fight or 5 distinct fights, and once 5 full logs sit in the folder the oldest are culled.
-- With the companion overlay plugin connected the live meter is also drawn in the game, up to 24 players plus party DPS, once a second while a fight runs. The plugin controls its appearance and whether the last encounter stays visible after combat ends.
+- **Reset display after** pauses the display after no damage and starts a new segment when damage resumes. Options range from 15 seconds to 10 minutes, defaulting to 2 minutes. Recorded pulls include all downtime.
+- Finished pulls stay visible until the next starts. **Recent pulls** lists this run's attempts newest first. Select one to review it, then use **<- Back to live** or wait for the next pull.
+- **Record encounters**, off by default, saves one JSONL record per pull in `dps_logs/`. Logs roll over after 25 pulls of one fight or 5 distinct fights. The newest five completed logs are retained.
+- The companion overlay receives live DPS once a second for up to 24 players. Its settings control appearance and whether the last encounter remains visible.
 
 ---
 
 ## Death Recap tab
 
-A separate page for reviewing the 15 seconds before a player's death. Select a
-death on the left to see observed damage, healing, status gains and losses, and
-the statuses still observed at death. Self-heals and reflected damage follow
-their actual recipient. Instant-death effects have their own label.
+Select a death to review the previous 15 seconds of observed damage, healing, status changes, and statuses remaining at death. Self-heals and reflected damage follow their actual recipient. Instant-death effects have a separate label.
 
-The recent view keeps the latest 80 deaths in memory until the program closes. Zone changes
-and disconnects clear the live observation buffers, while completed recaps remain
-available. Wipe events keep the buffers until the next pull so deaths arriving
-just after the wipe can still be reviewed. Buffs and healing observed between
-pulls remain available for the next pull's recap.
+The recent view retains 80 deaths until the program closes. Zone changes and disconnects clear live observation buffers but preserve completed recaps. Wipes retain buffers until the next pull to capture late deaths. Observed buffs and healing between pulls also carry into the next recap.
 
-Pulls collected by a Prog session also save their death recaps locally. In Prog,
-select a pull and press **View death recaps** to open just that attempt's deaths,
-including after a restart. The heading identifies the session, pull number, and
-duty. **Back to Prog** returns to the selected pull and its notes. **Recent deaths**
-returns to the live history. New deaths from another pull do not change a saved
-pull being reviewed.
+From Prog, **View death recaps** opens only the selected pull's saved deaths, identified by session, pull, and duty. **Back to Prog** returns to that pull and its notes; **Recent deaths** returns to live history. New deaths do not replace a saved view. Saved recaps survive restarts and are independent of the recent view's limit. Missing, older, or unreadable records show an explanation, and unreadable files are preserved.
 
-Saved recaps are independent of the recent view's 80-death limit. Older pulls
-recorded before this feature have no saved recaps, and the page says so. A pull
-with no recaps shows an empty view. Unreadable or missing records and save errors
-are reported without replacing the files.
-
-This is a record of the feed, not a reconstruction of exact HP. Healing includes
-overheal, some damage and healing are reported as aggregate ticks, and statuses
-that were already active before connection may be missing. Ability events may
-precede their effects resolving. These limitations follow the
-[combat log format](https://github.com/OverlayPlugin/cactbot/blob/main/docs/LogGuide.md).
+Recaps describe the feed and cannot reconstruct exact HP. Healing includes overheal, some ticks are aggregated, and statuses active before connection may be missing. Ability events may arrive before their effects resolve. See the [combat log format](https://github.com/OverlayPlugin/cactbot/blob/main/docs/LogGuide.md).
 
 ## Prog tab
 
-**Start session** begins a named session for the current duty. It becomes
-available after connection, duty identification, and the first combat-state
-message. If combat is already running, collection waits for a new full pull.
+**Start session** begins a named duty session after connection, duty identification, and the first combat-state message. Starting during combat waits for the next full pull.
 
-Each pull adds its start time, duration, ending, and recorded death count. The
-summary shows complete and interrupted attempts separately, the longest complete
-pull, total observed combat time, and session elapsed time. The duration chart
-selects a pull when clicked. Add a bookmark or a note below the table, and edit
-the session name above it.
+Each pull records its start, duration, ending, and deaths. The summary separates complete and interrupted attempts and shows the longest complete pull, total observed combat time, and session elapsed time. Click the duration chart to select a pull. Edit the session name above the table and add bookmarks or notes below it.
 
-**Furthest phase** and **Phase confirmations** show saved phase observations
-when available. Confirmation times measure the first observed confirming event
-after pull start. An earlier phase established by a later observation has no
-invented confirmation time. Interrupted recordings retain their observations.
+**Furthest phase** and **Phase confirmations** display saved observations. Times identify the first confirming event after pull start. Earlier phases established by later evidence have no invented time. Interrupted recordings retain their observations. Automatic UMAD tracking awaits verified recordings, so new UMAD pulls show **Not recorded** with an explanation. Older pulls also show **Not recorded**; unsupported duties show **Not supported**. Unreadable phase data does not hide notes or recaps.
 
-Automatic UMAD phase tracking is awaiting verified combat recordings. New UMAD
-pulls currently show **Not recorded** with that explanation. Older pulls also
-show **Not recorded**, and duties without phase support show **Not supported**.
-If phase data cannot be read, notes and death recaps remain available.
+**View death recaps** opens the selected attempt in Death Recap. Deaths save as they arrive, including during interrupted pulls. Late deaths can attach for two seconds after combat ends or a wipe. A new pull, disconnect, duty change, or session end closes that window. Starting midcombat skips the partial attempt and its recaps. An empty meter encounter with observed deaths remains reviewable as interrupted.
 
-**View death recaps** opens the selected pull's observed deaths in Death Recap.
-Recaps save as deaths arrive, so they remain available for an interrupted pull
-after a crash. Death messages received within two seconds after combat ends or
-a wipe can still attach to that pull. A new pull, disconnect, duty change, or
-session end closes that association. Starting a session during combat does not
-save recaps from the partial attempt being skipped.
+**End session** or leaving the duty ends collection. Wipes and breaks stay in the session. A disconnect preserves the observed pull as interrupted and waits for a fresh pull after reconnecting. Interrupted attempts do not count toward longest complete pull. **Combat ended** does not establish a clear. Session controls leave the live meter and callouts running.
 
-**End session** stops collection without resetting the live meter or callouts.
-Leaving the duty ends the session too. Wipes and breaks stay in the same session.
-A disconnect preserves the observed attempt as interrupted and waits for the
-next full pull after reconnecting. Interrupted attempts stay visible but do not
-count toward the longest complete pull. **Combat ended** does not mean a clear.
+Sessions save in `prog_sessions/`, independently of DPS recording and log rotation. Notes save after a typing pause and flush on shutdown. Active progress and elapsed time also save every 15 seconds. The session picker opens previous sessions after restart. Crash recovery retains the last successful save and marks unfinished sessions interrupted. Unreadable files are preserved and errors are shown.
 
-Sessions save to `prog_sessions/` in the program's writable data directory,
-independently of the DPS recording switch. Notes save after a short typing pause
-and flush on shutdown. Active sessions also save elapsed time and observed pull
-progress every 15 seconds between other saves. Crash recovery retains progress
-through the last successful save. The session picker opens previous sessions after restart.
-An unfinished session from a crash is marked interrupted. Files that cannot be
-read are preserved and the page shows the error. Session history does not follow
-the DPS log rotation limits.
-
-Each death recap has its own file under `prog_sessions/recaps/`, grouped by the
-session and pull IDs. Recaps do not enlarge the session summary file or follow
-DPS log rotation. Failed writes are retried when session changes are flushed.
-The retry queue retains the latest 256 unsaved recaps and reports any losses if
-storage remains unavailable beyond that limit. Storage must recover before those records can
-survive closing the program. A death without observed damage remains reviewable
-as an interrupted attempt if the meter reports an empty encounter, including a
-death received within two seconds after combat ends or a wipe.
+Recaps save separately under `prog_sessions/recaps/`, grouped by session and pull IDs. Failed writes retry when session changes flush. The queue holds the latest 256 unsaved recaps and reports any dropped records. Storage must recover before queued records can survive closing the program.
 
 ## Profiles
 
-Open **Profiles** at the bottom of the Triggers tab to save and restore named
-setups for jobs, groups, or strategies. **Default** starts selected and represents
-your normal saved setup. Edits made while Default is active are kept through the
-normal trigger editor. Apply a named profile to use a different setup, then
-select **Default** and press **Apply** to return to your normal choices.
+Expand **Profiles** below the trigger list to save setups for jobs, groups, or strategies.
 
-**Save new** captures the current local trigger
-toggles and spoken text, engine callout toggles, and editable Triggevent and
-Triggernometry wording. **Update** replaces the selected snapshot
-with the current setup.
+| Control | Effect |
+|---|---|
+| **Save new** | Capture Local toggles and speech, engine toggles, and editable Triggevent and Triggernometry wording. |
+| **Apply** | Activate the selected setup between pulls. Selecting or saving alone does not activate it. |
+| **Update** | Replace the selected named snapshot with current choices. Later edits reach that snapshot only through Update. |
+| **Delete** | Remove a named profile after confirmation. Deleting the active profile restores Default and requires combat to end. |
+| **Default** | Your normal saved setup. Apply it to restore those choices. It cannot be deleted or overwritten with Update. |
 
-**Delete** removes the selected named profile after confirmation. Deleting the
-active profile returns to Default, so it must wait until combat ends. Default
-cannot be deleted or overwritten with **Update**. The last applied profile and
-your separate Default setup survive restarting the program. Selecting a name
-or saving a new profile does not change the active setup until you press **Apply**.
-
-Select a profile and press **Apply** between pulls. Existing trigger
-definitions, folders, and newly added triggers are preserved. Applying a profile
-does not switch the Cactbot mode, voice, or automarkers. Deleted local triggers
-are not recreated. Changes made afterward use the normal trigger editor and are
-only copied back into the profile when you update it. Profiles are stored in
-`trigger_profiles/` alongside the program's other writable data.
+The active profile and separate Default setup survive restarts. Applying preserves definitions, folders, and newly added triggers, but does not recreate deleted triggers or change Cactbot mode, voice, or automarkers. Profiles are stored in `trigger_profiles/` beside other writable program data.
 
 ## Automarkers tab
 
-Places FFXIV head-sign markers like attack, bind, ignore, and shapes through the [Telesto](https://github.com/paissaheavyindustries/Telesto) Dalamud plugin's local HTTP API. Rules are fight + debuff -> marker, marking either **me** or **whoever gets the debuff** by party slot. Marking another player needs a live party, and an unknown slot is skipped rather than guessed.
+Place party signs through [Telesto](https://github.com/paissaheavyindustries/Telesto). Each rule maps a fight and debuff to a marker for **me** or **whoever gets the debuff**. Marking another player requires a known party slot.
 
-- **Connection** - the Telesto URL, default `http://localhost:45678/`, **Enable automarkers**, and **Test mark (on me)** to prove the pipeline before enabling anything.
-- **Rules** - rules seed with **no marker assigned** and never fire that way. Pick a rule, choose a sign next to **Marker**, and it is armed. Pick *(unassigned)* again to disarm. **Load UMAD preset** seeds rules for every known Dancing Mad Ultimate player debuff, **Clear all party marks** sends a full clear, and **Remove the mark when the debuff falls off**, the auto-cleanse option on by default, drops each sign the moment its debuff is cleansed or expires.
-- **UMAD** - two dedicated toggles that run their own sequencers rather than plain rules. The **black-hole chains** give one roaming sign per cleanse queue in P3, DPS, supports, and the Accretion pair, each with its own marker picker. The **Cursed Shriek gaze pairs** split P4's look-away and look-at signs by debuff timer. Both suspend the overlapping plain rules while on so two systems never fight over one sign. Debuff IDs and the reasoning behind each rule: [UMAD-DEBUFFS.md](UMAD-DEBUFFS.md).
+- **Connection:** set **Telesto URL**, default `http://localhost:45678/`, use **Test mark (on me)**, then select **Enable automarkers**.
+- **Rules:** unassigned rules do not fire. Select a rule and choose its **Marker**, or choose *(unassigned)* to disable it. **Load UMAD preset** adds the selected Dancing Mad Ultimate rules. **Remove the mark when the debuff falls off** is on by default. **Clear all party marks** clears every sign.
+- **UMAD sequences:** **black-hole chains** assign roaming signs to the P3 DPS, support, and Accretion cleanse queues, each with its own picker. **Cursed Shriek gaze pairs** assign P4 look-at and look-away signs using the wave's follow-up cast. Both suspend overlapping plain rules. See [UMAD debuff rules and evidence](UMAD-DEBUFFS.md).
 
 ---
 
 ## Alert sound
 
-Under **Settings - Alert Sound**, play a sound when an alert fires. Three built-in sounds; Ding, Alert, and Coin, or **Import SFX** to add your own `.wav` as a named reusable sound. Imported files copy into a user sounds folder, so they work on frozen installs and survive updates. You can also point at any `.wav` directly. Each has its own **Volume**, a choice of every alert vs urgent only, and a **Test** button. The Volume slider is perceptual, so 100% is full, 50% is about -20 dB, 0% is silent, default 50%, then scaled by the master volume. It plays on its own channel alongside the spoken callout.
+In **Settings - Alert Sound**, choose Ding, Alert, Coin, or **Import SFX** to copy a `.wav` into the user sounds folder. Imported sounds survive updates. **Custom file...** selects a file elsewhere.
+
+Choose every alert or urgent only, set **Volume**, and use **Test**. Volume defaults to 50%, about -20 dB; 100% is full volume and 0% is silent. Master volume applies afterward. Sounds play alongside speech on a separate channel.
 
 ---
 
 ## In-game display
 
-Timeline bars and callouts are drawn inside the game by a separate Dalamud plugin, [NyaaTriggers Overlay](https://github.com/CateDesu/NyaaTriggers-Overlay). NyaaTriggers still does the thinking and speaking, and the plugin only draws what it is told. It is optional, and callouts are spoken with or without it.
+The optional [NyaaTriggers Overlay](https://github.com/CateDesu/NyaaTriggers-Overlay) Dalamud plugin draws timeline bars, callouts, and DPS inside the game. NyaaTriggers handles the trigger logic and speech.
 
-**Setting it up:**
+1. Follow the plugin's README to install its Dalamud repository.
+2. Type `/nyaa` in game to position the windows, then select **Lock**.
+3. Check for **Connected** in **Settings - In-Game Overlay**.
 
-1. Install the plugin. Its README has the repository link you paste into Dalamud.
-2. In the game, type `/nyaa` to place the boxes, then tick **Lock**.
-3. In NyaaTriggers, **Settings - In-Game Overlay** should show *Connected*.
-
-The two connect over a loopback socket and can start in either order, so it does not matter whether you launch the game or the program first. The link is always on. When the plugin is not there yet **Settings - In-Game Overlay** reads *Waiting for the game plugin*, and it connects on its own the moment the game comes up.
-
-NyaaTriggers used to draw its own overlay window: a transparent Qt window composited by gamescope on Linux, an always-on-top window on Windows. Both were ways around the fact that a separate process cannot draw inside the game, and neither worked the same way twice. Dalamud can, on every platform, with no compositor setup.
+The local connection is automatic and ports must match. Start the game and program in either order. **Waiting for the game plugin** means the plugin has not connected yet. Speech works without the plugin.
 
 ---
 
@@ -306,12 +223,12 @@ NyaaTriggers used to draw its own overlay window: a transparent Qt window compos
 
 | Field | Description |
 |---|---|
-| Log Type | ACT network event type: `20` = cast start, fires the moment the cast bar appears and gives the earliest warning. `21` = single-target ability, `22` = AoE ability, `23` = cancelled cast, `26` = status effect gained (GainsEffect), `30` = status effect lost (LosesEffect), `00` = chat/dialogue line, match it with Ability Regex. |
-| Ability ID | Hex ID from ACT field [4]. Pipe-separate multiple: `9494\|9495`. Takes priority over regex. |
+| Log Type | `20`: cast start. `21`: single-target ability. `22`: AoE ability. `23`: cancelled cast. `26`: status gained. `30`: status lost. `00`: chat or dialogue, matched with Ability Regex. |
+| Ability ID | Hex ability or status ID. Separate alternatives with a pipe: `9494\|9495`. Takes priority over regex. |
 | Ability Regex | Pattern matched against the ability name when no ID is set. |
 | TTS Text | Spoken callout. Use `{source}`, `{target}`, or `{count}` for the status stack count. The ▶ button speaks a preview. |
-| Applies to | For status effects, types 26/30, whose effect fires the trigger. **You** = the debuff is on you, boss to you, the default. **Target - you applied it** = a debuff/DoT/buff *you* keep up on the enemy, e.g. Reaper's Death's Design, with `{target}` as the enemy. **Anyone** = no source or target filter. |
-| Reapply warning | For **GainsEffect (26)** only: speak this many seconds *before* the effect runs out instead of when it lands, a reapply soon reminder. It reads the effect's own duration, re-arms each time you refresh it, and cancels if it drops early, you change zone, or the instance resets. `0` = speak immediately on apply. When set the **Cooldown** becomes the minimum gap between reminders, so an AoE DoT landing on a whole pack at once still calls out just once instead of once per enemy. |
+| Applies to | For types 26 and 30. **You**, the default, matches effects on you. **Target - you applied it** matches effects you applied, such as Death's Design, with `{target}` naming the recipient. **Anyone** removes the source and target filter. |
+| Reapply warning | For **GainsEffect (26)**, seconds before expiry to speak. Refreshing the effect re-arms the reminder. Early loss, zone changes, and instance resets cancel it. `0` speaks on application. **Cooldown** sets the minimum gap between reminders across targets, preventing repeated calls for an AoE DoT. |
 | Stacks | For status effects, types 26/30: fire only when the stack count is within a min/max window. Pairs with `{count}`. |
 | Alert Sound | Path to a `.wav` file played on trigger. Can be used alongside or instead of TTS. Place sounds in the `sounds/` folder. |
 | Cooldown | Minimum seconds between firings per source entity. |
@@ -325,35 +242,33 @@ NyaaTriggers used to draw its own overlay window: a transparent Qt window compos
 
 ## Settings
 
-Most features live in their own **Settings** sections.
-
-- **Program** - **Check for Updates** and a startup auto-check, see [Updating](#updating). **Update Triggevent Engine** downloads the prebuilt engine jar on source installs. Links to **GitHub** and **Discord**. **Language** picks **Automatic** which follows your OS, English, or 日本語, and takes effect on restart. Under a Japanese UI the trigger editor, the Current Instance tab, the Automarkers tab, and the built-in callouts are translated, and the trigger list shows Japanese names and callouts with search matching either language. Translations are machine-assisted and a work in progress, and untranslated text falls back to English.
-- **Connection** - **Auto-connect on startup**, and **My character**, used to scope status triggers. Those set to **You** fire only when the effect is on you, and **Target - you applied it** only for effects *you* cast like Death's Design. It auto-fills from the game as soon as you connect and again on login or zone-in. Edit it if it's wrong.
+- **Program:** check for updates, enable the startup check, download the prebuilt Triggevent engine for source installs, and open GitHub or Discord. **Language** offers Automatic, English, and 日本語 and applies after restart. Automatic follows the OS. Japanese translates the interface, trigger names, and built-in callouts; search accepts either language. Translations are machine-assisted and incomplete, with English fallback.
+- **Connection:** **Auto-connect on startup** and **My character**. The character name fills from the game on connection, login, and zone entry. Correct it if needed. Status triggers use it to match effects on **You** or effects you applied with **Target - you applied it**.
 
 ---
 
 ## Personal triggers
 
-Your additions, edits, and deletions live in `triggers.local.json`, and the bundled `assets/triggers.json` stays read-only. Your local file is gitignored, so updates never remove yours and your local set merges back automatically on startup.
+Additions, edits, and deletions save to the gitignored `triggers.local.json` and merge on startup. Bundled definitions remain in `assets/triggers.json`.
 
 Under **Settings - Data**:
 
-- **Update Triggers** - pull a fresh bundled `assets/triggers.json` from GitHub for new fight coverage, no effect on your local set
-- **Restore from Repo** - re-download the bundled set if it gets out of shape. Your custom and edited triggers are kept
-- **Save log…** - export the full captured combat feed to a text file for debugging
-- **Export** / **Import** - save your local triggers and folders to a file, or load them back. Import replaces your current local set
+- **Update Triggers** refreshes bundled definitions from GitHub while preserving local changes.
+- **Restore from Repo** downloads the bundled set again for repair.
+- **Save log…** exports the captured combat feed for debugging.
+- **Export** / **Import** transfers local triggers and folders. Import replaces the current local set.
 
 ---
 
 ## Updating
 
-NyaaTriggers can update itself. It quietly checks GitHub for a newer release on startup, toggle in **Settings - Program**, or press **Check for Updates** any time. When one exists, a banner offers **Install**, **Release notes**, and dismiss. Nothing downloads until you click Install and confirm. The program restarts when done, and your personal triggers and settings are never overwritten.
+The optional startup check and **Settings - Program - Check for Updates** look for releases from main. The banner offers installation and release notes. Downloads begin after **Install** and confirmation. Updates preserve saved data and restart the program.
 
-Updates come from the main channel.
+| Installation | Update behavior |
+|---|---|
+| Git clone | Run `git pull --ff-only --tags`, install requirements with the program's Python, then restart. Tags keep the version label current. Blocking local edits are reported for manual resolution. |
+| Source copy without Git | **Download** opens the releases page for manual installation. |
+| Linux `.tar.gz` | Replace program files in place and restart, preserving settings, local triggers, and timelines. |
+| Windows `.zip` | A staged copy replaces files after exit, with a backup and automatic rollback if startup fails. |
 
-How the install is applied depends on how you run it:
-
-- **Git clone** - runs `git pull --ff-only --tags` (tags too, so the version label follows the rolling tag the checkout sits on), then installs any pip requirements the pull brought in with `pip install -r requirements.txt` using the same Python that runs the program, then restarts. Clones are told about every rolling release, one per commit to main. A successful install or dismissing the banner snoozes that release until a newer one appears. Local edits to tracked files that block the pull are reported so you can update manually.
-- **Source copy without git** - can't update itself in place, so the banner's button is **Download**, opening the releases page. These copies are told about every rolling release, one per commit to main, and dismissing the banner or clicking Download snoozes that release until a newer one appears.
-- **Linux release**, the `.tar.gz` - downloads the new build and swaps the program files in place, preserving settings, local triggers, and timelines beside the program, then restarts.
-- **Windows**, the `.zip` - downloads and installs the update, then closes and reopens to finish. Because Windows locks a running program's own files, a staged fresh copy completes the swap, with a full backup and an automatic rollback if the new build won't start.
+Git clones and source copies are notified of each rolling release. Installing, choosing Download, or dismissing a banner snoozes that release until a newer one appears.

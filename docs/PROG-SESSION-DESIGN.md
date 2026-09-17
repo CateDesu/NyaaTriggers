@@ -4,101 +4,52 @@ Implementation notes for the first version.
 
 ## First version
 
-The separate **Prog** tab reviews a raid session. The player starts a
-session, the program collects its pulls automatically, and the player ends it
-when finished. Store the history locally so it remains available after a restart.
-
-Death Recap has its own tab. **View death recaps** opens the selected prog pull's
-saved observations there and keeps that view separate from recent live deaths.
+The **Prog** tab records named duty sessions and saves them locally. The player starts collection, pulls are added automatically, and **End session** stops it. **View death recaps** opens the selected pull's saved observations in Death Recap, separately from recent live deaths.
 
 The page contains:
 
-- A session picker with the current session and saved sessions by date and fight.
-- **Start session** and **End session** controls, with an editable session name.
-- A summary showing pull count, longest pull, total combat time, and session elapsed time.
-- A pull table with pull number, start time, duration, ending, recorded deaths, bookmark, and note.
-- A simple duration chart by pull number. Clicking a bar selects its table row.
+- A picker for current and saved sessions by date and fight.
+- Start and end controls and an editable session name.
+- Pull count, longest pull, total combat time, and session elapsed time.
+- Pull number, start, duration, ending, deaths, bookmark, and note.
+- A duration chart whose bars select the corresponding pulls.
 
-Use **Longest pull**, not **Best pull**. A longer attempt does not necessarily
-mean more progress. Bookmarks let the player mark the attempts they care about
-without the program guessing which were good.
+Label the duration statistic **Longest pull**. Duration alone does not establish progress; bookmarks let players identify meaningful attempts.
 
 ## Session boundaries
 
-- **Start session** arms collection for the next full pull in the current duty.
-  Starting during combat waits for the next pull so a partial capture does not
-  become a misleading first attempt.
-- Use the numeric territory ID for the fight identity and keep the readable zone
-  name for display. A session belongs to one duty.
-- Wipes and short breaks stay in the same session. Do not split sessions after
-  an arbitrary inactivity timeout.
-- Leaving the duty ends the session. Re-entering starts a new session only when
-  the player chooses **Start session** again.
-- Ending a session during a pull stops collection and keeps the observed portion
-  as an interrupted attempt. It does not stop or reset the DPS meter or triggers.
-- A lost feed marks the open attempt as interrupted and pauses collection. After
-  reconnecting, wait for a fresh pull boundary. Do not count the remainder of the
-  same fight as another complete pull.
-- Closing the program ends the session. If the program crashes, show the saved
-  session as interrupted on next launch and retain its completed pulls and notes.
+- **Start session** collects the next full pull. Starting during combat skips the partial attempt.
+- Each session belongs to one numeric territory ID, with the readable zone name for display.
+- Wipes and breaks stay in the session without an inactivity timeout.
+- Leaving the duty ends collection. Re-entry requires another explicit start.
+- Ending during a pull preserves the observed portion as interrupted without resetting the meter or triggers.
+- Feed loss interrupts the pull and pauses collection until a fresh pull after reconnecting.
+- Closing ends the session. After a crash, retain saved pulls and notes and mark the unfinished session interrupted.
 
-Keep interrupted attempts visible with their recorded durations, but exclude
-them from longest-pull and completed-pull statistics. Show their count separately
-so the summary agrees with the table.
+Show interrupted attempts and their count separately. Exclude them from completed-pull and longest-pull statistics.
 
 ## Pull data and timing
 
-The existing meter already maintains a full encounter separately from its live
-display. `DpsMeter.finalize` emits the full snapshot through
-`on_encounter_end`. That snapshot contains the pull start time, duration, zone,
-and total deaths. The display's idle timeout can reset its visible segment
-without changing that full encounter.
+`DpsMeter.finalize` emits the full encounter through `on_encounter_end`, including start, duration, zone, and deaths. Use that record independently of live display resets, the DPS **Record encounters** switch, and callout settings.
 
-Use those finalized records for the first version. Session tracking must not
-depend on the DPS **Record encounters** checkbox, which controls a different
-log. It must also work with callouts disabled.
+Keep the existing DPS callback and add isolated pull-start and pull-finish observers. Snapshots carry a stable pull ID and an ending reason such as combat ended, wipe, duty left, feed lost, or program closed. The connection supplies numeric territory ID and zone name. Completeness follows the observed ending, with a fresh pull required after midcombat starts or reconnects.
 
-The meter keeps its existing DPS callback and adds isolated pull-start and
-pull-finish observers. Their snapshots provide lifecycle information:
+**Combat ended** does not establish a clear. A wipe received within two seconds after combat ends updates the same pull instead of adding another.
 
-- A stable pull ID and a start notification for each new full encounter.
-- The session stores the numeric territory ID and readable zone supplied by the connection.
-- An end reason such as combat ended, wipe signal, duty left, feed lost, or program closed.
-- The session marks completeness from the observed ending and waits for a fresh
-  pull after collection begins during combat or the feed reconnects.
-
-A combat flag dropping is not proof of a clear. The page shows **Combat ended**
-when that is all the feed establishes. Clear detection is not part of this
-version. A wipe received within two seconds after combat ends updates the same
-pull ID instead of inserting another pull.
-
-Keep the meter's current duration convention explicit: finalized duration ends
-at the last observed combat action and includes downtime within the pull. Use
-that full duration for pull lengths and total combat time. Use a monotonic clock
-for session elapsed time and wall-clock timestamps for dates and start times.
+Finalized duration ends at the last observed combat action and includes downtime within the pull. Use it for pull lengths and total combat time. Session elapsed time uses a monotonic clock; dates and start labels use wall-clock timestamps.
 
 ## Local storage
 
-Store one versioned JSON file per session in `prog_sessions/` under the writable
-program data directory. Use UUIDs for session and pull IDs, with no character
-names in filenames. The session summary only needs aggregate pull data, bookmarks,
-notes, and an observed recap count, not another copy of the raw combat log.
+Store one versioned JSON file per session in `prog_sessions/` under writable program data. Use UUIDs for session and pull IDs without character names in filenames. Store aggregate pull data, bookmarks, notes, and recap counts.
 
 Each session stores its name, duty ID and name, start and end timestamps, elapsed
 seconds, state, and pulls. Each pull stores its ID, number, start timestamp,
 duration, ending, completeness, death count, bookmark, and note. Calculate the
 summary from the pulls so edits or interrupted attempts cannot leave stale totals.
 
-Save on session start, pull start, pull end, and session end. Debounce note edits
-and flush them on shutdown. A pull-start record leaves evidence of an interrupted
-attempt if the program crashes before its final snapshot arrives. Write through
-a temporary sibling and atomic replace, following the existing data helpers.
-Writes run in order at session boundaries and after debounced edits so an older
-save cannot overwrite a newer note.
+Save at session and pull boundaries. Debounce notes and flush on shutdown. A pull-start record preserves the attempt if its final snapshot never arrives. Use ordered writes through a temporary sibling and atomic replace so older saves cannot overwrite newer notes.
 
-Keep session files separate from DPS log rotation. Do not silently delete a
-player's bookmarked sessions when the DPS logs reach their retention limit.
-Show load or save failures in the Prog page and preserve unreadable files.
+Session files are independent of DPS log rotation. Report load and save failures in Prog and preserve unreadable files.
 
 Save each observed death as a separate versioned record under
 `prog_sessions/recaps/<session ID>/<pull ID>/<recap ID>.json`. Save on each death,
@@ -125,25 +76,13 @@ reviewable. Old summaries without a recap count load unchanged.
 - `nyaatriggers/dps_meter.py`: additive encounter lifecycle metadata while preserving the live meter's behavior.
 - `nyaatriggers/ui/session_tracking.py`: route lifecycle events to the session tracker and handle feed and duty changes.
 
-Keep the session state out of `nyaatriggers/ui/dps_tab.py`. Both pages can consume the same
-encounter events without making either page own the other. The session tracker
-never resets combat tracking when its own controls are used.
+Keep session state outside `nyaatriggers/ui/dps_tab.py`. Both pages consume encounter events independently; session controls never reset combat tracking.
 
 ## Later additions
 
-The next phase is specified in [Prog phase tracking and session
-comparisons](PROG-PHASE-DESIGN.md). That proposal covers UMAD first, including
-logical pull boundaries across verified transitions and comparison eligibility.
-Phase details and the storage and boundary infrastructure are implemented.
-UMAD detection remains inactive while its combat evidence is unverified.
+[Phase tracking and comparisons](PROG-PHASE-DESIGN.md) specifies verified milestones, confirmed reach rates, logical pull boundaries, and comparisons within a duty. Phase details, storage, and boundary handling are implemented. UMAD detection awaits verified recordings.
 
-- Fight-specific phase and mechanic milestones based on verified combat events.
-- Furthest confirmed milestone and the percentage of attempts reaching it.
-- Comparison with previous sessions for the same fight.
-
-Phase progress needs its own event rules. Do not infer phases from elapsed time
-alone because downtime and checkpoints change the relationship. This tracking
-does not need to load cactbot timelines or change the existing Cactbot switch.
+Phase rules require combat evidence. Elapsed time alone is insufficient, and tracking must not load cactbot timelines or alter the Cactbot switch.
 
 ## Validation
 

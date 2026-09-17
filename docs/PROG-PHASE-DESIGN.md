@@ -1,16 +1,10 @@
 # Prog phase tracking and session comparisons
 
-Design proposal for the next two additions to the Prog tab. This describes
-planned behavior. The existing session and saved recap behavior is documented
-in [Prog session overview](PROG-SESSION-DESIGN.md).
+Planned phase tracking and session comparisons. Existing session and recap behavior is documented in [Prog session overview](PROG-SESSION-DESIGN.md).
 
 ## Implementation status
 
-The first implementation adds the Furthest phase column, confirmation details,
-optional saved phase data, and a logical attempt coordinator. Synthetic rules
-exercise all of these through the real feed dispatch and Prog page. The live
-definition registry is empty. UMAD candidates remain inactive and the page
-explains that verified combat recordings are still needed.
+Implemented: Furthest phase, confirmation details, optional saved phase data, and a logical attempt coordinator, tested with synthetic rules through feed dispatch and Prog. The live registry is empty. UMAD remains inactive pending verified recordings.
 
 The coordinator supports transition evidence received before a combat drop,
 followed by a new meter encounter and the expected phase confirmation. A
@@ -33,26 +27,16 @@ before UMAD activation.
 2. Add phase observations, persistence, and pull details for UMAD.
 3. Add comparisons between sessions in the same duty.
 
-The first phase release covers P1 through P5. It requires verified rules for
-all five phases and their intervening boundaries before enabling the UMAD
-definition. The program can implement and test the model while evidence is
-being collected. Unverified candidates must not become live detection rules.
+The first release requires verified rules for P1 through P5 and every intervening boundary before enabling UMAD. Model development and testing can proceed while evidence is collected.
 
 Mechanic milestones, automatic clear detection, manual phase corrections,
 exports, and comparisons across more than two sessions remain later work.
 
 ## Prog tab layout
 
-Keep the session picker, capture controls, name, and existing summary at the
-top. Add a compact **Phase progress** summary below it. For example:
-**P3 confirmed on 6 of 20 eligible pulls · 3 interrupted pulls excluded**.
-Use the furthest phase among eligible pulls for this summary. If none has
-phase evidence, show No confirmations with the eligible pull count.
+Below the existing session controls and summary, add **Phase progress** using the furthest phase among eligible pulls: **P3 confirmed on 6 of 20 eligible pulls · 3 interrupted pulls excluded**. Without evidence, show No confirmations and the eligible count.
 
-Add **Furthest phase** between Duration and Ending in the pull table. Keep
-the duration chart above the table. Its bar heights continue to mean duration.
-Add the furthest phase to its tooltip, with an interruption label when needed.
-Selecting a bar continues to select the corresponding pull.
+Add **Furthest phase** between Duration and Ending. Keep the duration chart above the table, with phase and interruption details in tooltips. Bar heights still show duration, and clicking selects the pull.
 
 Below the table, add a compact **Phase confirmations** table for the selected
 pull, followed by the existing bookmark, recap button, and notes. Example
@@ -66,10 +50,7 @@ values below illustrate the display only:
 | P4 | — | No confirmation |
 | P5 | — | No confirmation |
 
-The label below this table explains that times are measured from pull start
-to the first observed confirming event. They are not exact transition times.
-Do not label missing confirmation as a wipe in that phase. Keep the ending
-reason separate, including **Combat ended**, which does not establish a clear.
+Explain that times measure the first confirming event after pull start. They are not exact transition times. Missing evidence does not establish a wipe, and **Combat ended** does not establish a clear.
 
 Use these distinct display states:
 
@@ -83,12 +64,7 @@ Use these distinct display states:
 | Duty without rules | Not supported |
 | Unreadable or unknown phase format | Phase data unavailable |
 
-Tracking starts with session capture and works while another tab is selected.
-Changing the viewed session never changes the session being recorded. Refresh
-phase cells and summaries without moving the selected row, taking keyboard
-focus, or overwriting notes being edited. Flush notes before navigation as the
-existing page does. Use text labels as well as any color, and translate all
-new user-facing strings through the existing catalog.
+Tracking follows session capture independently of the viewed tab or session. Refresh without moving selection, taking focus, or overwriting notes. Flush notes before navigation. Pair colors with text and translate new interface strings through the catalog.
 
 ## Phase definitions and evidence
 
@@ -101,11 +77,7 @@ current local timelines identify UMAD as territory 1363. Each rule specifies:
 - The phase it confirms and a stable rule ID for the saved observation.
 - A captured example, a negative example, and the source of verification.
 
-Runtime actor instance IDs can associate events with known actors, but must
-not be hardcoded across attempts. Resolve actor base IDs from the feed when
-needed. Localized actor names, timeline positions, and trigger names must not
-decide progress. Actor presence alone needs evidence that it establishes the
-phase, since an actor can exist before becoming active.
+Use runtime actor IDs only within their attempt and resolve base IDs from the feed. Localized names, timeline positions, and trigger names cannot establish progress. Actor presence requires evidence that it confirms a phase, since actors can appear before activation.
 
 The following are investigation candidates from [the local UMAD
 timeline](../timelines/UMAD.txt), not approved detection rules:
@@ -123,10 +95,7 @@ route and network-log notes. Its timing and labels alone cannot establish a
 safe detector. In particular, verify the apparent duty-ending routes around
 P2 before treating an ending message as an attempt boundary.
 
-Each phase can have several verified confirming events. Deduplicate by phase
-within the logical pull and retain the first accepted confirmation. A missing
-opener can then be confirmed by a later event in that same phase. The reported
-time remains the time of that later observation.
+A phase may have several verified confirming events. Keep the first accepted observation per phase and logical pull. A later event can confirm a missed opener, using that later event's time.
 
 Furthest phase only advances. A unique later-phase event may advance it even
 if an earlier event was absent. Earlier phase reach can be established from
@@ -144,11 +113,7 @@ The meter currently finalizes an encounter when either combat flag falls.
 Its idle display reset already preserves the full encounter. UMAD evidence
 must establish whether phase transitions produce additional combat edges.
 
-Prog owns the logical attempt boundary for supported phase tracking. Its
-first meter encounter ID remains the pull ID, so recaps, notes, and bookmarks
-have one stable destination. If a verified transition spans meter encounters,
-associate the later encounter IDs with that same logical pull. Route their
-updates through this association. Do not rewrite the live meter's lifecycle.
+Prog owns logical attempt boundaries for supported tracking. Keep the first meter encounter ID as the pull ID for recaps, notes, and bookmarks. Map later encounters to it only across verified transitions, leaving the live meter lifecycle unchanged.
 
 | Signal | Prog behavior |
 | --- | --- |
@@ -185,10 +150,7 @@ empty. Without a verified ending they remain interrupted or uncertain.
 
 ## Event order and clocks
 
-Use one ordered passive feed path for combat flags, log events, lifecycle
-notifications, duty changes, and connection changes. Capture a monotonic
-receipt time once per incoming event. Pass that time to the detector and
-session coordinator so callback order cannot move a marker into another pull.
+Route combat flags, logs, lifecycle, duty, and connection changes through one ordered passive feed. Capture each event's monotonic receipt time once and share it with the detector and coordinator to preserve pull attribution.
 
 The current dispatcher invokes meter callbacks before the passive log tap.
 The implementation must collect the incoming event's meter notifications,
@@ -215,12 +177,7 @@ existing recap-count floor for the logical pull's death total.
 
 ## Saved data and compatibility
 
-Keep the existing version 1 session envelope. Add an optional, separately
-versioned `phase_tracking` object to new supported pulls with these fields:
-
-The initial implementation writes null for new pulls without active rules.
-An absent field identifies older pulls. This distinguishes unrecorded history
-from currently unavailable tracking without changing the session envelope.
+Keep the version 1 session envelope and add an optional, versioned `phase_tracking` object. New pulls without active rules use null; an absent field identifies older pulls.
 
 | Field | Meaning |
 | --- | --- |
@@ -232,10 +189,7 @@ from currently unavailable tracking without changing the session envelope.
 | transition | Expected transition ID while awaiting continuation, otherwise null |
 | observations | Direct phase ID, elapsed seconds, and rule ID entries |
 
-Pin the definition for a recording session. Never reinterpret saved
-observations under changed rules. Compute furthest phase and statistics from
-the observations rather than storing totals that can become stale. The
-session's numeric duty ID supplies fight identity.
+Pin the definition per recording session and never reinterpret saved observations under changed rules. Derive furthest phase and statistics from observations. The numeric duty ID identifies the fight.
 
 Save the new observation, current duration, and coverage atomically in the
 same session write. Persist logical transition state as well, so a crash
@@ -279,9 +233,7 @@ comparison selection when new sessions arrive.
 Changing the selected duty clears an incompatible comparison choice. Show
 No other sessions for this duty when there is no candidate.
 
-The selected session may still be recording. Its comparison uses finished
-pulls only and updates as pulls finish. Identify both sessions by name and
-date. Closing the comparison leaves the selected pull and its notes intact.
+An active session's comparison uses finished pulls and updates as they finish. Identify both sessions by name and date. Closing preserves pull selection and notes.
 
 The comparison table includes finished pull count, eligible phase pull count,
 furthest phase among eligible pulls, longest finished pull, and one row per
@@ -292,12 +244,7 @@ from the comparison session in percentage points. For example:
 | --- | --- | --- | --- |
 | P3 | 6/20 · 30% | 3/15 · 20% | +10 percentage points |
 
-Calculate changes from unrounded rates. Show sample sizes next to each rate
-and do not describe a small sample as a trend or attach performance grades.
-Use the same eligibility calculation in the session summary and comparison.
-An interrupted pull can appear as P4 in its details while the eligible
-session summary reaches only P3: the exclusion explanation must make that
-difference visible.
+Calculate changes from unrounded rates and show sample sizes without grades or unsupported trend claims. Use identical eligibility rules in summaries and comparisons. Explain exclusions when an interrupted pull reaches P4 but the eligible summary reaches only P3.
 
 Initially, phase comparisons require identical definition IDs and revisions.
 Historical sessions with different rules remain selectable for ordinary pull
@@ -306,9 +253,7 @@ Duration comparisons also require matching duration conventions. Older
 sessions retain their ordinary summaries and show Not recorded for phases.
 Do not silently compare a subset of revisions in a mixed imported session.
 
-Confirmation times stay in pull details for this release. Comparing their
-averages would mix early and fallback confirmation events and could imply
-that one group transitioned faster without evidence for that conclusion.
+Keep confirmation times in pull details. Averaging early and fallback events would not establish which group transitioned faster.
 
 ## Implementation boundaries
 

@@ -1,4 +1,2 @@
-Retired 2026-09-05. The engine guards these patches carried now live as real
-commits on the guards branch of CateDesu/event-trigger, and build.sh no longer
-applies anything from this directory. Kept for one release as a rollback
-reference, then delete.
+Retired 2026-09-05. These guards now live in CateDesu/event-trigger on main.
+The build no longer applies these patches. They remain as a rollback reference.
