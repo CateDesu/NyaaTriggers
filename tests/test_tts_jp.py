@@ -660,7 +660,7 @@ try:
     check("a real interpreter in the configured venv is used",
           tts._venv_python() == str(_bogus / "bin" / "python"))
     tts._FFXIV_VENV = None
-    check("no configured venv still falls back to the app python",
+    check("no configured venv falls back to the program Python",
           tts._venv_python() == sys.executable)
 finally:
     tts._FFXIV_VENV = _o_venv

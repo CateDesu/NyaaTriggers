@@ -10,8 +10,7 @@ from PyQt6.QtGui import QBrush, QColor, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLineEdit, QLabel
 
 from nyaatriggers.trigger_engine import Trigger
-from nyaatriggers.tts import speak
-from nyaatriggers.locale_util import _, set_locale, active_locale
+from nyaatriggers.locale_util import _, active_locale
 from nyaatriggers.plugin_link import DEFAULT_PORT, parse_port
 
 from nyaatriggers import app_common as ac
@@ -58,9 +57,8 @@ class SettingsTabMixin:
             # not listen on IPv6.
             if self._settings.get("ws_url") == "ws://localhost:10501/ws":
                 self._settings["ws_url"] = "ws://127.0.0.1:10501/ws"
-            # Migrate removed update channels to stable.
-            if self._settings.get("update_channel") in ("master", "rust"):
-                self._settings["update_channel"] = "stable"
+            for key in ("triggers_enabled", "triggevent_enabled", "update_channel"):
+                self._settings.pop(key, None)
 
     def _save_settings(self) -> bool:
         try:
@@ -82,9 +80,8 @@ class SettingsTabMixin:
         self._save_warned = True
         ac.QMessageBox.warning(
             self, _("Save Failed"),
-            _("Your {what} could not be written to disk, so changes will be "
-              "lost when the app closes:\n{err}\n\nCheck that the folder is "
-              "writable.").format(what=what, err=str(exc)))
+            _("Could not save {what}. Changes will be lost when the program closes.\n"
+              "{err}\n\nCheck that the folder is writable.").format(what=what, err=str(exc)))
 
     def _build_plugin_link_settings(self, layout) -> None:
         self._settings_header(layout, _("In-Game Overlay"))

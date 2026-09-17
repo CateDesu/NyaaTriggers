@@ -635,7 +635,7 @@ with tempfile.TemporaryDirectory() as base:
     updater._drop_recover_note(inst, bak, EXE)
     note = (inst / "RECOVER.txt").read_text()
     check("note names the backup", bak.name in note)
-    check("note says to delete RECOVER.txt once the app starts",
+    check("note says to delete RECOVER.txt after the program starts",
           "delete this RECOVER.txt" in note)
 
 

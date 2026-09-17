@@ -477,37 +477,6 @@ def reading_for(text: str) -> "str | None":
 
 
 
-def list_jp_voices() -> list[tuple[str, str]]:
-    """List installed Japanese system voices as display labels and tokens. Return an empty
-    list when enumeration fails.
-    """
-    try:
-        system = platform.system()
-        if system == "Windows":
-            # Use UTF-8 for voice names and tolerate a console BOM when reading results.
-            ps = (
-                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
-                "Add-Type -AssemblyName System.Speech;"
-                "(New-Object System.Speech.Synthesis.SpeechSynthesizer)."
-                "GetInstalledVoices()|%{$i=$_.VoiceInfo;"
-                "if($i.Culture.Name -like 'ja*'){$i.Name}}"
-            )
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-                capture_output=True, text=True, encoding="utf-8-sig", timeout=15,
-                creationflags=0x08000000, env=proc_env.child_env()).stdout
-            return [(n.strip(), n.strip()) for n in out.splitlines() if n.strip()]
-        import shutil
-        out = []
-        if shutil.which("spd-say"):
-            out.append(("speech-dispatcher (Japanese)", "spd:ja"))
-        if shutil.which("espeak"):
-            out.append(("espeak (Japanese)", "espeak:ja"))
-        return out
-    except Exception:
-        return []
-
-
 class _StampedItem(tuple):
     """Capture the interrupt generation at enqueue time. Retain tuple equality for existing
     callers.
@@ -566,23 +535,6 @@ def play_notification(path: str, volume: float = 1.0) -> None:
         return
     try:
         threading.Thread(target=_notification_worker, args=(path, volume),
-                         daemon=True).start()
-    except Exception:
-        _notification_slots.release()
-        raise
-
-
-def play_notification_bytes(wav_bytes: bytes, volume: float = 1.0) -> None:
-    """Play WAV bytes on a separate thread. Windows uses its single winsound channel, so
-    this interrupts existing audio rather than mixing with it.
-    """
-    if not wav_bytes:
-        return
-    if not _notification_slots.acquire(blocking=False):
-        log_drop("tts-notify", "notification chime dropped; too many plays in flight")
-        return
-    try:
-        threading.Thread(target=_notification_bytes_worker, args=(wav_bytes, volume),
                          daemon=True).start()
     except Exception:
         _notification_slots.release()
@@ -1288,64 +1240,6 @@ def _notification_worker(path: str, volume: float) -> None:
                 Path(tmp_path).unlink(missing_ok=True)
             except OSError:
                 pass
-
-
-def _apply_volume_bytes(wav_bytes: bytes, volume: float) -> bytes:
-    """Scale supported PCM WAV bytes. Return the original input for unsupported or damaged
-    formats.
-    """
-    try:
-        with wave.open(io.BytesIO(wav_bytes), 'rb') as r:
-            params = r.getparams()
-            frames = r.readframes(params.nframes)
-    except (wave.Error, EOFError):
-        return wav_bytes
-    scaled = _scale_pcm(frames, params.sampwidth, volume)
-    if scaled is None:
-        return wav_bytes
-    out = io.BytesIO()
-    with wave.open(out, 'wb') as w:
-        w.setparams(params)
-        w.writeframes(scaled)
-    return out.getvalue()
-
-
-def _play_wav_bytes_detached(wav_bytes: bytes) -> None:
-    """Play bytes through winsound memory playback or aplay stdin."""
-    system = platform.system()
-    if system == "Windows":
-        import winsound
-        _play_winsound(wav_bytes, winsound.SND_MEMORY | winsound.SND_NODEFAULT)
-    else:
-        try:
-            result = subprocess.run(["aplay", "-q", "-"], input=wav_bytes,
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                                    timeout=max(60.0, _wav_seconds(wav_bytes) * 1.5 + 5),
-                                    env=proc_env.child_env())
-            _log_notification_result(result)
-        except FileNotFoundError:
-            _aplay_missing()
-        except subprocess.TimeoutExpired:
-            print("[tts] notification playback timed out; killed aplay",
-                  file=sys.stderr)
-
-
-def _notification_bytes_worker(wav_bytes: bytes, volume: float) -> None:
-    """Apply notification volume in memory, play the result and release the notification
-    slot.
-    """
-    try:
-        effective = max(0.0, min(2.0, volume * _master_volume))
-        if effective <= 0.0:
-            return
-        data = wav_bytes
-        if abs(effective - 1.0) > 0.01:
-            data = _apply_volume_bytes(wav_bytes, effective)
-        _play_wav_bytes_detached(data)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[tts] notification (memory) failed: {exc!r}", file=sys.stderr)
-    finally:
-        _notification_slots.release()
 
 
 def _log_notification_result(result) -> None:

@@ -235,7 +235,7 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
     """
     if getattr(sys, "frozen", False):
         if not manual:
-            return (False, "frozen build: the engine ships with the app")
+            return (False, "The engine is bundled with the program")
         return _download_engine("stable")
     # Use the prebuilt jar when source or build tools are missing. POSIX source builds
     # also require bash.
@@ -364,7 +364,7 @@ def _download_engine(channel: str) -> "tuple[bool, str]":
         return (False, f"Couldn't check for an engine update: {e}")
     url = rel.assets.get("triggevent-core.jar")
     if not url:
-        return (False, "The latest release has no downloadable engine yet - update the app instead")
+        return (False, "No separate engine download is available. Update NyaaTriggers.")
     tmp = jar.parent / "triggevent-core.jar.new"
     # Remove old temporary jar downloads left by interrupted processes.
     for stale in jar.parent.glob("triggevent-core.jar.new.*.part"):
@@ -931,7 +931,7 @@ class TriggeventBridge(QObject):
                 if last is not None and seq > last + 1:
                     log_drop("engine-seq",
                              f"callout seq gap {last} -> {seq}, "
-                             f"{seq - last - 1} lost between engine and app", 0)
+                             f"{seq - last - 1} lost between engine and program", 0)
             # Reject old generation output before dispatch. UI slots also recheck queued
             # signals.
             if not self._gen_live(gen):

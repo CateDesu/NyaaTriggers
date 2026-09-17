@@ -4,17 +4,16 @@ import math
 import re
 import time
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSlot
+from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QBrush, QColor, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import QMenu
 
 from nyaatriggers.trigger_engine import Trigger, compile_user_regex, _safe_search
-from nyaatriggers.tts import speak
 from nyaatriggers.locale_util import _
 from nyaatriggers.sequential import SequentialRunner
 from nyaatriggers.status_timer import StatusTimerRunner
 from nyaatriggers.telesto_client import _actor_int
-from nyaatriggers.dps_meter import DpsMeter, METER_LOG_TYPES
+from nyaatriggers.dps_meter import METER_LOG_TYPES
 
 from nyaatriggers import app_common as ac
 from nyaatriggers.app_common import (

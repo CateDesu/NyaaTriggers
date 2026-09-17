@@ -61,6 +61,19 @@ class PersistenceRecoveryTests(unittest.TestCase):
         self.assertNotEqual(*backups)
         self.assertEqual(ac._SETTINGS_FILE.read_text(), self.deep)
 
+    def test_obsolete_settings_are_removed_without_changing_active_choices(self):
+        self.patch_paths()
+        active = {"cactbot_enabled": True, "local_enabled": False,
+                  "triggevent_disabled_triggers": ["muted"], "ui_language": "ja"}
+        saved = active | {"triggers_enabled": True, "triggevent_enabled": True,
+                          "update_channel": "master"}
+        ac._SETTINGS_FILE.write_text(json.dumps(saved))
+        host = SimpleNamespace(_settings={})
+        SettingsTabMixin._load_settings(host)
+        self.assertEqual(host._settings, active)
+        self.assertTrue(SettingsTabMixin._save_settings(host))
+        self.assertEqual(json.loads(ac._SETTINGS_FILE.read_text()), active)
+
     def test_deep_official_override_falls_back_to_bundle(self):
         self.patch_paths()
         ac._REPO_TRIGGERS_FILE.write_text(self.deep)

@@ -426,9 +426,9 @@ class PluginLink(QObject):
         if not isinstance(hello, dict) or hello.get("protocol") != PROTOCOL_VERSION:
             ws.close()
             raise RuntimeError(
-                f"plugin speaks protocol "
+                "Plugin protocol "
                 f"{hello.get('protocol') if isinstance(hello, dict) else hello!r}, "
-                f"this app speaks {PROTOCOL_VERSION}")
+                f"program requires {PROTOCOL_VERSION}")
         return ws, str(hello.get("plugin") or "")
 
     @staticmethod

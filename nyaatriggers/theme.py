@@ -4,13 +4,9 @@
 BASE     = "#0a0a0c"   # window background
 PANEL    = "#101013"   # Sidebar and list backgrounds
 MANTLE   = "#18181d"   # Inputs and hovered controls
-CRUST    = BASE        # Compatibility alias
-SURFACE0 = MANTLE
-SURFACE1 = MANTLE
 SURFACE2 = "#26262e"   # Raised surfaces and borders
 EDGE     = "#26262e"
 OVERLAY0 = "#3a3a44"   # Muted hover colour
-OVERLAY1 = "#8f8f9a"
 
 # Accents
 ACCENT    = "#ff8399"
@@ -26,19 +22,7 @@ SUBTEXT_SOFT = "#b0b0be"   # Inactive navigation, kana and version labels
 # Status colours
 OK       = "#a6e3a1"
 ERR      = "#f38ba8"
-YELLOW   = "#f9e2af"
-BLUE     = "#89b4fa"
-GREEN    = OK
-RED      = ERR
-PEACH    = "#fab387"
 MAUVE    = "#cba6f7"
-PINK     = "#f5c2e7"
-LAVENDER = MAUVE
-SAPPHIRE = "#74c7ec"
-
-# Retain the older colour names for existing callers.
-GOLD     = ACCENT
-GOLD_LT  = ACCENT
 
 # Brand gradient
 GRAD_FROM = ACCENT

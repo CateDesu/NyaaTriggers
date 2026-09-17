@@ -21,10 +21,9 @@ class DeathRecapTabMixin:
         title = QLabel(_("Death Recap"))
         title.setStyleSheet(f"color: {theme.ACCENT}; font-size: 16pt; font-weight: bold;")
         layout.addWidget(title)
-        hint = QLabel(_("The last 15 seconds of observed damage, healing, and statuses. "
-                        "Recent history keeps up to 80 deaths until the program closes. "
-                        "Prog pulls save their recaps for later review. Healing includes overheal. "
-                        "Missing events and unobserved statuses cannot be reconstructed."))
+        hint = QLabel(_("Observed damage, healing and statuses from the last 15 seconds. "
+                        "Keeps 80 deaths until close. Prog recaps are saved. "
+                        "Healing includes overheal. Missing events and statuses cannot be recovered."))
         hint.setWordWrap(True)
         layout.addWidget(hint)
         controls = QHBoxLayout()

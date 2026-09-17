@@ -1,6 +1,5 @@
 """Automarker controls, UMAD routing and Telesto retry queues for MainWindow."""
 
-import re
 import time
 import urllib.parse
 

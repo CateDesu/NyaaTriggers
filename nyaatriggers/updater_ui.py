@@ -3,12 +3,8 @@ in updater.py.
 """
 
 import json
-import math
-import os
-import re
 import sys
 import threading
-import time
 import urllib.request
 
 from nyaatriggers.http_fetch import fetch_bytes
@@ -102,6 +98,14 @@ class UpdaterUiMixin:
         if lbl is None:
             return
         link = getattr(self, "_plugin_link", None)
+        if connected:
+            version = link.plugin_version() if link is not None else ""
+            msg = (_("Connected to plugin {version}").format(version=version)
+                   if version else _("Connected"))
+        elif msg == "Off":
+            msg = _("Off")
+        elif msg == "Waiting for the game plugin":
+            msg = _("Waiting for the game plugin")
         if (connected and link is not None
                 and not plugin_supports_dps(link.plugin_version())):
             # Older protocol 1 plugins can connect without meter support. Show that
@@ -230,7 +234,7 @@ class UpdaterUiMixin:
         row.setSpacing(8)
 
         self._upd_msg = QLabel("")
-        self._upd_msg.setStyleSheet(f"color: {theme.GOLD_LT}; font-weight: bold;")
+        self._upd_msg.setStyleSheet(f"color: {theme.ACCENT}; font-weight: bold;")
         row.addWidget(self._upd_msg)
 
         self._upd_progress = QProgressBar()

@@ -259,7 +259,7 @@ def main() -> None:
     print("=== NyaaTriggers Setup ===\n")
     download_voice()
     setup_venv()
-    print("\nDone. Launch the app with:  python main.py")
+    print("\nDone. Start the program with: python main.py")
 
 
 if __name__ == "__main__":

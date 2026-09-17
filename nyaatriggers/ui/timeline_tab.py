@@ -1,7 +1,6 @@
 """Timeline loading, plugin schedules and sequence handling for MainWindow."""
 
 import os
-import re
 import sys
 import threading
 import time
@@ -9,7 +8,6 @@ import urllib.request
 
 from nyaatriggers.http_fetch import fetch_bytes
 
-from nyaatriggers.tts import speak
 from nyaatriggers.sequential import SequentialRunner
 from nyaatriggers import timeline_parser
 

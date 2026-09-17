@@ -3,11 +3,8 @@
 from pathlib import Path
 import html
 import json
-import re
 import shutil
 import sys
-import time
-import uuid
 from collections import deque
 
 from PyQt6.QtCore import Qt, QTimer
@@ -50,7 +47,7 @@ from nyaatriggers.app_common import (
 
 class EnginesMixin:
     def _init_engines(self) -> None:
-        self._engine_inventory: list[dict] = []          # read-only cactbot/triggevent rows
+        self._engine_inventory: list[dict] = []
         # Discard malformed override entries before building the table.
         self._engine_text_overrides: dict = _as_text_overrides(self._settings.get("engine_text_overrides", {}))
         # Saved Triggevent text edits are applied live and replayed on sidecar startup.
@@ -59,7 +56,6 @@ class EnginesMixin:
         # effect.
         self._shipped_callout_defaults: dict = self._load_callout_defaults()
         self._triggevent_disabled: set[str] = _as_strset(self._settings.get("triggevent_disabled_triggers", []))
-        # Start Triggernometry under the master Triggers switch once a pack is imported.
         self._triggernometry: "TriggernometryBridge | None" = None
         self._triggernometry_mode: bool = False
         self._triggernometry_last_spoken: dict[str, float] = {}
@@ -184,7 +180,7 @@ class EnginesMixin:
             self._cactbot_teardown = False
 
     def _set_cactbot_enabled(self, enabled: bool) -> None:
-        """Start or stop cactbot, excluding the master Triggers mode."""
+        """Start or stop cactbot and reload timelines when its mode changes."""
         prev_mode = self._cactbot_mode
         if enabled:
             try:
@@ -271,14 +267,10 @@ class EnginesMixin:
         """
         if enabled and not TriggeventBridge.is_available():
             self._triggevent_mode = False
-            self._settings["triggevent_enabled"] = False
-            self._save_settings()
             print("[triggevent] unavailable (need Java 17 + triggevent-core.jar)",
                   file=sys.stderr)
             return
         self._triggevent_mode = bool(enabled)
-        self._settings["triggevent_enabled"] = self._triggevent_mode
-        self._save_settings()
         self._reconcile_triggevent_engine()
 
     def _on_engine_sidecar_status(self, src: str, active: bool, msg: str,
@@ -332,7 +324,7 @@ class EnginesMixin:
         if TriggeventBridge.is_available():
             return
         if not _te_has_jar():
-            msg = _("engine not installed - Settings > Update Triggevent Engine")
+            msg = _("Engine not installed. Open Settings > Program > Update Triggevent Engine.")
         elif not _te_has_java():
             msg = _("engine needs Java (Arch: sudo pacman -S jre-openjdk)")
         else:
@@ -388,9 +380,7 @@ class EnginesMixin:
         return self._triggernometry
 
     def _set_triggernometry_enabled(self, enabled: bool) -> None:
-        """Run imported packs under the master Triggers switch when Triggernometry is
-        available.
-        """
+        """Start or stop the engine for imported Triggernometry packs."""
         if enabled:
             if (TriggernometryBridge is None or not TriggernometryBridge.is_available()
                     or not self._has_triggernometry_packs()):
@@ -1132,13 +1122,14 @@ class EnginesMixin:
         if staged:
             if engine_running:
                 verb = _("is now running")
+            elif engine_available and not self._triggers_enabled:
+                verb = _("will run when you turn Cactbot off")
             elif engine_available:
-                verb = _("will run when you turn the master Triggers switch on")
+                verb = _("was imported, but the engine could not start")
             else:
                 verb = _("will run once the Triggernometry engine is available")
-            parts.append(_("The pack was added to the Triggernometry engine and {verb}. Its "
-                           "triggers list under their own Triggernometry section in the Triggers tab, "
-                           "disabled by default and kept separate from Local.").format(verb=verb))
+            parts.append(_("The pack {verb}. Find it under Triggernometry in the Triggers tab. "
+                           "New engine triggers are enabled by default.").format(verb=verb))
         if added:
             skipped = len(converted) - len(added)
             parts.append(_("{count} simple trigger(s) were imported into Local, disabled by default"

@@ -2,10 +2,8 @@
 
 from collections import Counter
 from pathlib import Path
-import json
 import math
 import os
-import re
 import shutil
 import tempfile
 import threading
@@ -381,11 +379,9 @@ class VoiceTabMixin:
                 _("Could not download the voice model. Check your connection and try again."))
         else:
             ac.QMessageBox.warning(self, _("Neural Japanese voice"),
-                _("The app could not install the voice dependencies "
-                  "(pip install kokoro-onnx). Check your internet connection, "
-                  "that the app folder is writable, and that the disk has free "
-                  "space, then click Download again. Callouts keep using espeak "
-                  "until then.")
+                _("Could not install voice dependencies. Check your connection, folder "
+                  "permissions and free disk space, then click Download to retry. "
+                  "Callouts keep using espeak.")
                 + ("\n\n" + status[8:] if status.startswith("no-deps:") and status[8:] else ""))
 
     def _on_venv_changed(self) -> None:

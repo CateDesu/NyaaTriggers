@@ -1,8 +1,6 @@
 """Main window construction and signal wiring."""
 
-import json
 import math
-import re
 import sys
 import threading
 import time
@@ -10,15 +8,10 @@ from collections import deque
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
-    QApplication,
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFrame,
-    QListWidget, QListWidgetItem,
-    QMainWindow, QMenu, QProgressBar, QScrollArea, QSlider,
-    QButtonGroup, QStackedWidget, QWidget,
-    QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
-    QHeaderView, QLineEdit, QLabel, QPlainTextEdit, QSplitter,
-    QTreeWidget, QTreeWidgetItem, QTreeWidgetItemIterator, QAbstractItemView,
-    QStyle, QStyleOptionButton, QStylePainter,
+    QCheckBox, QComboBox, QFrame, QListWidget, QMainWindow, QScrollArea, QSlider, QButtonGroup,
+    QStackedWidget, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
+    QTableWidgetItem, QHeaderView, QLineEdit, QLabel, QPlainTextEdit, QSplitter, QTreeWidget,
+    QAbstractItemView, QStyle, QStyleOptionButton, QStylePainter,
 )
 from PyQt6.QtCore import Qt, QSize, QTimer, QUrl, QPointF, QRectF, QEvent, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import (
@@ -29,18 +22,20 @@ from PyQt6.QtGui import (
 from nyaatriggers.trigger_engine import Trigger
 from nyaatriggers.ws_client import WSClient
 from nyaatriggers.pull_capture import PullCapture
-from nyaatriggers.tts import speak, play_sound, interrupt as tts_interrupt, set_model, set_venv_path, set_master_volume, set_engine, default_engine, set_jp_voice, set_jp_auto, set_jp_neural, kokoro_ready, _ensure_worker, _load_piper
+from nyaatriggers.tts import (
+    speak, play_sound, interrupt as tts_interrupt, set_venv_path, set_master_volume, set_engine,
+    default_engine, set_jp_voice, set_jp_auto, set_jp_neural, kokoro_ready, _ensure_worker,
+    _load_piper,
+)
 from nyaatriggers.locale_util import _, effective_locale, set_locale, active_locale
 from nyaatriggers.sequential import SequentialRunner
 from nyaatriggers.status_timer import StatusTimerRunner
 from nyaatriggers.timeline_engine import TimelineEngine
 from nyaatriggers.cactbot_reader import CactbotReader
-from nyaatriggers.triggevent_bridge import TriggeventBridge, _log as _te_log, has_java as _te_has_java, has_jar as _te_has_jar
-from nyaatriggers.telesto_client import MARKER_TOKENS as TELESTO_MARKER_TOKENS, _actor_int
+from nyaatriggers.triggevent_bridge import TriggeventBridge
+from nyaatriggers.telesto_client import _actor_int
 from nyaatriggers.plugin_link import DEFAULT_PORT, PluginLink, parse_port
-from nyaatriggers.umad_chains import StatusPairs, parse_compound as _parse_compound, canon_status_key as _canon_status, \
-    CursedShriekPairs, GAZE_FOLLOWUP_IDS as _UMAD_GAZE_FOLLOWUP_IDS
-from nyaatriggers.dps_meter import DpsMeter
+from nyaatriggers.umad_chains import parse_compound as _parse_compound
 from nyaatriggers import theme
 from nyaatriggers.ui.ambient_fx import AmbientFxMixin
 from nyaatriggers import app_common as ac
@@ -62,25 +57,11 @@ from nyaatriggers.ui.engines import EnginesMixin
 from nyaatriggers.ui.triggers_tab import TriggersTabMixin
 
 from nyaatriggers.app_common import (
-    CACTBOT_TIMELINES_FILE, CALLOUT_DEFAULTS_FILE, DEFAULT_TELESTO_URI, FIGHT_TO_CACTBOT_TXT,
-    MAX_ABILITY_LINES, MAX_RAW_CAPTURE, RETIRED_FILE, TIMELINES_DIR, TRIGGERS_FILE,
-    TRIGGERS_LOCAL_FILE, ZONE_NAMES_FILE, _ABILITY_TYPES, _AbilityData, _BARE_HEX_RE, _BUNDLE_DIR,
-    _CACTBOT_DATA_RAW, _CACTBOT_TIMELINE_TTL_S, _CALLOUTS_JA_BUNDLE, _CALLOUTS_JA_CACHE,
-    _CALLOUTS_JA_MAX_BYTES, _CALLOUT_CLAIM_S, _C_EN, _C_FIGHT, _C_NAME, _C_RE, _C_TTS, _C_TYPE,
-    _C_ZONE, _DATA_DIR, _DISCORD_URL, _DISPATCH_BUDGET_S, _DISPLAY_VERSION, _DOT_GREEN,
-    _DOT_GREY, _DOT_RED, _FIGHT_TREE, _GENERAL_TAB, _GITHUB_URL, _GUEST_CALLOUT_DEFER_MS,
-    _GUEST_SEVERITY_RANK, _HEADERS, _ITEM_ID_ROLE, _ITEM_TYPE_ROLE, _JP_NEURAL_VOICES,
-    _PIPER_VOICES_URL, _REPO_JSON_MAX_BYTES, _REPO_RETIRED_FILE, _REPO_TRIGGERS_BRANCH,
-    _REPO_TRIGGERS_FILE, _REPO_TRIGGERS_VERSION, _SECTION_ROLE, _SETTINGS_FILE,
-    _TIMELINE_MAX_BYTES, _TREE_FIGHTS, _TRIGGERNOMETRY_INVENTORY_CACHE,
-    _TRIGGEVENT_INVENTORY_CACHE, _TRIGGEVENT_INVENTORY_SEED, _TV_PREVIEW_TOKENS,
-    _UMAD_AUTOMARK_PRESET, _UMAD_FIGHT_TAG, _UMAD_FIGHT_TAG_CF, _UMAD_STATUS_LABELS,
-    _UNKNOWN_NAME_RE, _USER_SOUNDS_DIR, _USER_VOICES_DIR, _VERSION, _VOICE_LANG_TAGS, _as_dict,
-    _as_str, _as_strdict, _as_strset, _as_text_overrides, _atomic_write_json, _bare_fight_tag,
-    _clean_ability_name, _compile_phrase_patterns, _engine_preview_text, _fsync_file, _hex_id,
-    _next_bad_name, _prefill_name_tts, _repo_download_version,
-    _sweep_stale_update_parts, _voice_display, _watched_trigger_files,
-    cactbot_timeline_for_zone, canonical_zone_name,
+    MAX_ABILITY_LINES, MAX_RAW_CAPTURE, _CALLOUT_CLAIM_S, _C_EN, _C_FIGHT, _C_NAME, _C_RE,
+    _C_TTS, _C_TYPE, _C_ZONE, _DATA_DIR, _DISCORD_URL, _DISPLAY_VERSION, _GITHUB_URL, _HEADERS,
+    _PIPER_VOICES_URL, _UMAD_AUTOMARK_PRESET, _VERSION, _as_strdict, _as_strset,
+    _as_text_overrides, _compile_phrase_patterns, _next_bad_name, _sweep_stale_update_parts,
+    canonical_zone_name,
 )
 
 class _SidebarFrame(QFrame):
@@ -796,9 +777,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         voice_row.addStretch()
         settings_layout.addLayout(voice_row)
         neural_hint = QLabel(_(
-            "Pick a Japanese voice to speak callouts in Japanese. Neural voices run inside "
-            "the app; the first time you pick one it downloads (~330 MB) with its phonemizer, "
-            "or click Download to retry. Japanese uses espeak until it is ready."))
+            "Select a Japanese voice to download it, about 330 MB. "
+            "Callouts use espeak until it is ready. Click Download to retry."))
         neural_hint.setWordWrap(True)
         neural_hint.setStyleSheet("color:#8f8f9a; font-size:11px;")
         settings_layout.addWidget(neural_hint)
@@ -806,10 +786,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         settings_layout.addSpacing(6)
 
         lib_lbl = QLabel(
-            _('To add more voices, download a Piper voice model '
-              '<b>and</b> its matching <code>.onnx.json</code> config from '
-              '<a href="{url}">{link}</a>, then drop both '
-              'files into your voices folder. They appear in the Model dropdown above.').format(
+            _('Download a Piper model and its matching <code>.onnx.json</code> from '
+              '<a href="{url}">{link}</a>. Put both in your voices folder, then refresh the list.').format(
                 url=_PIPER_VOICES_URL,
                 link=_("the Piper voice samples page"))
         )

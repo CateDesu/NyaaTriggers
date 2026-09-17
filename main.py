@@ -9,12 +9,12 @@ if sys.platform == "linux":
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 import glob
+import json
 import platform
 import subprocess
 import threading
 import time
 import traceback
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -116,10 +116,10 @@ except ImportError:
     sys.exit(1)
 
 import install
+from nyaatriggers.locale_util import _, effective_locale, set_locale
 from nyaatriggers.theme import STYLESHEET
 
 _FFXIV_VENV = Path.home() / ".venv" / "ffxiv"
-_BUNDLE_DIR = bundle_root()
 _VOICES_DIR = default_voice_dir()
 _VOICE_STEM  = "en_US-arctic-medium"
 _VOICE_FILE  = _VOICES_DIR / f"{_VOICE_STEM}.onnx"
@@ -147,6 +147,19 @@ def _piper_installed() -> bool:
 
 def _needs_setup() -> bool:
     return not _voice_present() or not _piper_installed()
+
+
+def _set_setup_locale() -> None:
+    settings = {}
+    try:
+        with (data_root() / "nyaatriggers_settings.json").open("rb") as fh:
+            data = fh.read((4 << 20) + 1)
+        if len(data) <= 4 << 20:
+            settings = json.loads(data.decode("utf-8"))
+    except (OSError, ValueError, RecursionError):
+        pass
+    language = settings.get("ui_language", "auto") if isinstance(settings, dict) else "auto"
+    set_locale(effective_locale(language))
 
 
 # Bound downloads independently of Content-Length. Keep this limit consistent with
@@ -227,12 +240,12 @@ class _SetupWorker(QThread):
             t_couch  = 0.200 if frozen else 0.371   # ~7s frozen, ~13s source
 
             for v in range(0, 30):
-                self.progress.emit(v, "Staging the litterbox...")
+                self.progress.emit(v, _("Staging the litterbox..."))
                 time.sleep(t_litter)
             self._cur = 29
 
             for v in range(30, 65):
-                self.progress.emit(v, "Cat-proofing the couch...")
+                self.progress.emit(v, _("Cat-proofing the couch..."))
                 time.sleep(t_couch)
             self._cur = 64
 
@@ -243,7 +256,7 @@ class _SetupWorker(QThread):
 
             # Only source installs may run this executable as Python.
             if needs_piper and not frozen:
-                self.progress.emit(-1, "Installing piper-tts - this can take a few minutes...")
+                self.progress.emit(-1, _("Installing piper-tts. This may take a few minutes..."))
                 pip = _FFXIV_VENV / (
                     "Scripts" if platform.system() == "Windows" else "bin"
                 ) / ("pip.exe" if platform.system() == "Windows" else "pip")
@@ -267,11 +280,11 @@ class _SetupWorker(QThread):
                     )
 
             for v in range(65, 91):
-                self.progress.emit(v, "Making sure no cats are stuck in the pipes...")
+                self.progress.emit(v, _("Making sure no cats are stuck in the pipes..."))
                 time.sleep(0.073)
             self._cur = 90
 
-            self._fill_to(100, "Setup complete.")
+            self._fill_to(100, _("Setup complete."))
             self.done.emit(True, "")
         except subprocess.CalledProcessError as e:
             # Include command output because the exception alone contains only its exit
@@ -285,7 +298,7 @@ class _SetupWorker(QThread):
 class _SetupDialog(QDialog):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("NyaaTriggers - First Run Setup")
+        self.setWindowTitle(_("NyaaTriggers - First Run Setup"))
         self.setFixedWidth(440)
         self.setModal(True)
 
@@ -294,8 +307,7 @@ class _SetupDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
 
         self._label = QLabel(
-            "Setting up NyaaTriggers for the first time.\n"
-            "This only happens once and takes about a minute."
+            _("Setting up NyaaTriggers for the first time.\nThis takes about a minute.")
         )
         self._label.setWordWrap(True)
         layout.addWidget(self._label)
@@ -304,12 +316,12 @@ class _SetupDialog(QDialog):
         self._bar.setRange(0, 100)
         layout.addWidget(self._bar)
 
-        self._retry_btn = QPushButton("Retry")
+        self._retry_btn = QPushButton(_("Retry"))
         self._retry_btn.setVisible(False)
         self._retry_btn.clicked.connect(self._on_retry)
         layout.addWidget(self._retry_btn)
 
-        self._close_btn = QPushButton("Close")
+        self._close_btn = QPushButton(_("Close"))
         self._close_btn.setVisible(False)
         self._close_btn.clicked.connect(self.reject)
         layout.addWidget(self._close_btn)
@@ -342,7 +354,7 @@ class _SetupDialog(QDialog):
         self._bar.setVisible(True)
         self._bar.setRange(0, 100)
         self._bar.setValue(0)
-        self._label.setText("Retrying setup...")
+        self._label.setText(_("Retrying setup..."))
         self._start_worker()
 
     def _on_progress(self, pct: int, msg: str) -> None:
@@ -362,8 +374,7 @@ class _SetupDialog(QDialog):
             self.accept()
         else:
             self._label.setText(
-                f"Setup failed:\n{err}\n\n"
-                "You can run  python install.py  manually and then relaunch."
+                _("Setup failed:\n{err}\n\nRun python install.py manually, then relaunch.").format(err=err)
             )
             self._bar.setVisible(False)
             self._retry_btn.setVisible(True)
@@ -383,6 +394,7 @@ def main() -> None:
     app.setStyleSheet(STYLESHEET)
 
     if _needs_setup():
+        _set_setup_locale()
         dlg = _SetupDialog()
         if dlg.exec() != QDialog.DialogCode.Accepted:
             sys.exit(0)

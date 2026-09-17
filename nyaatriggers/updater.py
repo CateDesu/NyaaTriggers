@@ -960,9 +960,8 @@ def apply_frozen_windows(zip_path: Path, dest_dir: Path | None = None,
                 if rc == 0:
                     # The staged updater exited normally and logged why it refused the
                     # handoff.
-                    return False, (f"The staged updater refused the update, see "
-                                   f"{_UPDATE_LOG_NAME} next to the app for why. "
-                                   "Please use the manual download.")
+                    return False, (f"Update refused. See {_UPDATE_LOG_NAME} in the "
+                                   "program folder. Download the update manually.")
                 return False, ("The staged updater was blocked from starting "
                                "(antivirus may have quarantined it). Please use the "
                                "manual download.")
@@ -1155,19 +1154,18 @@ def _drop_recover_note(dest_dir: Path, backup: Path, target: str) -> None:
     kind = "folder" if target == "_internal" else "file"
     try:
         (Path(dest_dir) / "RECOVER.txt").write_text(
-            "A NyaaTriggers update failed and the automatic rollback could not\n"
-            "restore the previous version. This install is broken: the\n"
-            f"{target} {kind} is missing or incomplete, so the app will not start.\n"
+            "The update and rollback failed. NyaaTriggers cannot start because\n"
+            f"the {target} {kind} is missing or incomplete.\n"
             "\n"
-            "To recover by hand, in this folder rename\n"
+            "In this folder, rename\n"
             f"    {backup.name}\n"
             "to\n"
             f"    {target}\n"
-            f"and start the app again. If that {kind} is gone, reinstall from\n"
+            f"and restart NyaaTriggers. If the backup {kind} is gone, reinstall from\n"
             f"{RELEASES_URL}\n"
             "\n"
-            "Once the app starts, delete this RECOVER.txt. While it exists\n"
-            "the old backup cleanup stays disabled and backups pile up.\n",
+            "After a successful start, delete this RECOVER.txt to allow old\n"
+            "backups to be cleaned up.\n",
             encoding="utf-8")
     except Exception:  # noqa: BLE001
         pass

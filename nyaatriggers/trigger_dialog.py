@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QDialogButtonBox, QLabel, QLineEdit, QMessageBox,
     QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
 )
-from PyQt6.QtCore import Qt
 
 from nyaatriggers.trigger_engine import (Trigger, _HAVE_REGEX, _ID_IDX, _STATUS_TYPES,
                             _regex_mod, _regex_resource_limit, _safe_search,

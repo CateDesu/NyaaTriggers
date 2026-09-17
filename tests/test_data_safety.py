@@ -587,8 +587,7 @@ class DataSafetyTests(unittest.TestCase):
                 patch.object(tts.subprocess, 'run', return_value=result), \
                 patch.object(tts, 'log_drop') as log:
             tts._play_wav_detached('unused.wav')
-            tts._play_wav_bytes_detached(b'unused')
-            self.assertEqual(log.call_count, 2)
+            self.assertEqual(log.call_count, 1)
             self.assertTrue(all('audio device busy' in call.args[1] for call in log.call_args_list))
 
 

@@ -1410,8 +1410,8 @@ def test_play_wav_file_refuses_empty_in_volume_branch():
     check("empty sound refused in the volume branch, never played", played == [])
 
 
-def test_apply_volume_bytes_unparseable_returns_input():
-    """Unsupported WAV bytes remain unchanged for playback at their original level."""
+def test_apply_volume_preserves_unsupported_wav():
+    """Unsupported WAV files remain unchanged for playback at their original level."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
@@ -1421,14 +1421,15 @@ def test_apply_volume_bytes_unparseable_returns_input():
     good = buf.getvalue()
     float_wav = bytearray(good)
     float_wav[20] = 3   # fmt tag for IEEE float, wave.open refuses it
-    check("float wav bytes come back unchanged",
-          tts._apply_volume_bytes(bytes(float_wav), 0.5) == bytes(float_wav))
-    check("truncated wav bytes come back unchanged",
-          tts._apply_volume_bytes(good[:20], 0.5) == good[:20])
-    check("empty bytes come back unchanged",
-          tts._apply_volume_bytes(b"", 0.5) == b"")
-    scaled = tts._apply_volume_bytes(good, 0.5)
-    check("valid wav still scales", scaled != good and len(scaled) == len(good))
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "volume.wav"
+        for label, data in (("float", bytes(float_wav)), ("truncated", good[:20]), ("empty", b"")):
+            path.write_bytes(data)
+            check(f"{label} wav stays unchanged",
+                  not tts._apply_volume(str(path), 0.5) and path.read_bytes() == data)
+        path.write_bytes(good)
+        check("valid wav still scales", tts._apply_volume(str(path), 0.5)
+              and path.read_bytes() != good and path.stat().st_size == len(good))
 
 
 # WS inbound message cap

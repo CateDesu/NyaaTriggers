@@ -3,7 +3,6 @@
 from pathlib import Path
 import json
 import os
-import re
 import shutil
 import threading
 import time
@@ -18,18 +17,13 @@ from PyQt6.QtWidgets import (
 
 from nyaatriggers.trigger_engine import Trigger
 from nyaatriggers.trigger_dialog import TriggerDialog
-from nyaatriggers.tts import speak, set_readings
+from nyaatriggers.tts import set_readings
 from nyaatriggers.locale_util import _, active_locale
-from nyaatriggers.status_timer import StatusTimerRunner
 from nyaatriggers.triggevent_bridge import TriggeventBridge
 try:
-    from nyaatriggers.triggernometry_bridge import TriggernometryBridge, has_packs as _tn_has_packs, \
-        packs_dir as _tn_packs_dir, _log as _tn_log
+    from nyaatriggers.triggernometry_bridge import TriggernometryBridge
 except Exception:  # noqa: BLE001
     TriggernometryBridge = None  # type: ignore
-    _tn_has_packs = lambda: False  # noqa: E731
-    _tn_packs_dir = None  # type: ignore
-    _tn_log = lambda msg: None
 from nyaatriggers import fight_catalog
 from nyaatriggers import updater
 
@@ -1368,8 +1362,6 @@ class TriggersTabMixin:
         cactbot without stopping the background Triggevent engine.
         """
         self._triggers_enabled = bool(enabled)
-        self._settings["triggers_enabled"] = self._triggers_enabled
-        self._save_settings()
         if enabled:
             # Clear the saved cactbot flag so it cannot restart on the next launch.
             self._set_cactbot_enabled(False)

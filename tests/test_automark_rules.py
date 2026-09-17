@@ -114,7 +114,7 @@ check("suspended while the black-hole chains toggle is on", w.marks == [])
 w = FakeWindow(fight="")
 w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
-check("unknown fight (app started mid-instance) still fires", w.marks == [(P1, "attack1")])
+check("unknown fight after starting inside an instance still fires", w.marks == [(P1, "attack1")])
 
 w = FakeWindow(fight="fru")
 w.feed("26", "BBC", P1)
