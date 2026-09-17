@@ -775,8 +775,13 @@ class AutomarkersTabMixin:
         uri = (self._automark_uri_edit.text() or "").strip() or DEFAULT_TELESTO_URI
         if uri == self._settings.get("telesto_uri", DEFAULT_TELESTO_URI):
             return
-        parsed = urllib.parse.urlparse(uri)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        try:
+            parsed = urllib.parse.urlparse(uri)
+            valid = (parsed.scheme in ("http", "https") and bool(parsed.hostname)
+                     and (parsed.port is None or 1 <= parsed.port <= 65535))
+        except ValueError:
+            valid = False
+        if not valid:
             saved = self._settings.get("telesto_uri")
             self._automark_uri_edit.setText(saved if isinstance(saved, str) else DEFAULT_TELESTO_URI)
             self._automark_uri_edit.setToolTip(_("Invalid URL - must be http(s)://host[:port]"))
@@ -847,6 +852,8 @@ class AutomarkersTabMixin:
             self._automark_active.clear()
         tc.configure(uri=self._settings.get("telesto_uri", DEFAULT_TELESTO_URI),
                      enabled=enabled)
+        if tc.last_status() is None:
+            self._telesto_status = "unknown"
         bridge = getattr(self, "_triggernometry", None)
         if bridge is not None:
             changed = bridge.configure_telesto(self._settings.get("telesto_uri"), enabled)
@@ -863,7 +870,13 @@ class AutomarkersTabMixin:
         """Show native Telesto reachability. Use amber when the server responds but
         commands fail.
         """
-        self._telesto_status = "bad" if not reachable else ("degraded" if degraded else "good")
+        # Queued signals may describe an endpoint that has since been replaced.
+        state = self._telesto_client.last_status()
+        if state is None:
+            self._telesto_status = "unknown"
+        else:
+            reachable, degraded = state
+            self._telesto_status = "bad" if not reachable else ("degraded" if degraded else "good")
         self._update_automark_status_label()
 
     def _on_telesto_status(self, _status: str, gen: "int | None" = None) -> None:

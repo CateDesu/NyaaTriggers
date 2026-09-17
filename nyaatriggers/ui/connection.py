@@ -82,17 +82,22 @@ class ConnectionMixin:
                 direct = Path(raw.strip())
                 if direct.is_dir():
                     return direct
-            m = re.match(r"^c:\\?(.+)$", raw.strip(), re.IGNORECASE)
-            if m:
-                rest = m.group(1).replace("\\", "/").strip("/")
+            m = re.match(r"^([a-z]):[\\/](.+)$", raw.strip(), re.IGNORECASE)
+            if m and os.name != "nt":
+                drive = m.group(1).lower()
+                rest = m.group(2).replace("\\", "/").strip("/")
+                prefix = Path.home() / ".xlcore" / "wineprefix"
+                if rest:
+                    mapped = prefix / "dosdevices" / f"{drive}:" / rest
+                    if mapped.is_dir():
+                        return mapped
                 # Match the lowercase Wine user directory while preserving later path
                 # components.
                 first, _, tail = rest.partition("/")
                 rest = first.lower() + ("/" + tail if tail else "")
                 # Reject a bare drive root as a log directory.
-                if rest:
-                    mapped = (Path.home() / ".xlcore" / "wineprefix" / "drive_c"
-                              / rest)
+                if drive == "c" and rest:
+                    mapped = prefix / "drive_c" / rest
                     if mapped.is_dir():
                         return mapped
         default = Path.home() / "Documents" / "IINACT"

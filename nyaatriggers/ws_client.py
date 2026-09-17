@@ -257,13 +257,13 @@ class WSClient(QObject):
             # ValueError.
             raw = msg.strip()
             if raw:
-                self.log_line.emit(raw)
+                self._emit_log_line(raw)
             return
 
         if not isinstance(data, dict):
             raw = msg.strip()
             if raw:
-                self.log_line.emit(raw)
+                self._emit_log_line(raw)
             return
 
         mtype = str(data.get("type", "")).lower()
@@ -329,7 +329,21 @@ class WSClient(QObject):
 
         raw = _extract_raw(data)
         if raw:
-            self.log_line.emit(raw)
+            self._emit_log_line(raw)
+
+    def _emit_log_line(self, raw: str) -> None:
+        fields = raw.split("|", 4)
+        if fields[0] == "01" and len(fields) > 3 and len(fields[2]) <= 8:
+            try:
+                zone_id = int(fields[2], 16)
+            except ValueError:
+                pass
+            else:
+                if 0 <= zone_id <= 0xFFFFFFFF:
+                    # Raw zone changes must also reach later recordings and sidecars.
+                    self._state_cache["changezone"] = json.dumps({
+                        "type": "ChangeZone", "zoneID": zone_id, "zoneName": fields[3]})
+        self.log_line.emit(raw)
 
     def _schedule_reconnect(self) -> None:
         if self._auto_reconnect and not self._reconnect_timer.isActive():

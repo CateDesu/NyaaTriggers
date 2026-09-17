@@ -85,6 +85,12 @@ _SEVERITIES = ("info", "alert", "alarm")
 _STOP = object()
 
 
+class _QueuedFrame(dict):
+    def __init__(self, frame: dict, epoch: int):
+        super().__init__(frame)
+        self.epoch = epoch
+
+
 # Frame builders
 def tick_frame(seconds) -> dict:
     """Round valid fight time to centiseconds. Return None for invalid values."""
@@ -213,6 +219,7 @@ class PluginLink(QObject):
         super().__init__(parent)
         self._port = int(port)
         self._enabled = bool(enabled)
+        self._enabled_epoch = 0
         self._idle_ping_s = max(0.5, float(idle_ping_s))
         self._queue: "queue.Queue" = queue.Queue(maxsize=OUTBOX_CAPACITY)
         self._thread: "threading.Thread | None" = None
@@ -225,7 +232,11 @@ class PluginLink(QObject):
 
     def set_enabled(self, enabled: bool) -> None:
         with self._lock:
+            if self._enabled and not enabled:
+                self._enabled_epoch += 1
             self._enabled = bool(enabled)
+            if not self._enabled:
+                self._discard_queued(self._queue)
         self._wake.set()
 
     def is_enabled(self) -> bool:
@@ -337,6 +348,7 @@ class PluginLink(QObject):
         with self._lock:
             if not self._enabled:
                 return
+            msg = _QueuedFrame(msg, self._enabled_epoch)
             try:
                 self._queue.put_nowait(msg)
             except queue.Full:
@@ -473,6 +485,18 @@ class PluginLink(QObject):
                 pong = True
         return pong
 
+    def _retry_alert(self, q: "queue.Queue", msg) -> None:
+        if not isinstance(msg, dict) or msg.get("c") != "alert":
+            return
+        with self._lock:
+            if (not self._enabled or
+                    getattr(msg, "epoch", self._enabled_epoch) != self._enabled_epoch):
+                return
+            try:
+                q.put_nowait(msg)
+            except queue.Full:
+                log_drop("plugin-drop", "alert re-queue overflowed; callout dropped")
+
     @staticmethod
     def _kill_socket(ws, done: threading.Event) -> None:
         """Abort the raw socket when send stalls. Connection.close could block on the send
@@ -529,7 +553,8 @@ class PluginLink(QObject):
                     continue
 
                 if ws is None:
-                    self._discard_queued(q, keep_alerts=True)
+                    with self._lock:
+                        self._discard_queued(q, keep_alerts=True)
                     if stopping.is_set():
                         break
                     try:
@@ -553,8 +578,8 @@ class PluginLink(QObject):
                     pong_deadline = None
                     # Discard stale ticks and schedules accumulated during the greeting
                     # wait, retaining alerts.
-                    self._discard_queued(q, keep_alerts=True)
                     with self._lock:
+                        self._discard_queued(q, keep_alerts=True)
                         if self._stopping is not stopping or stopping.is_set():
                             break
                         self._plugin_version = plugin_version
@@ -589,6 +614,14 @@ class PluginLink(QObject):
                         next_ping = now + self._idle_ping_s
                     if pong_deadline is not None and now >= pong_deadline:
                         raise TimeoutError("game plugin did not answer its ping")
+                    # Settings may change while waiting for a frame or draining replies.
+                    with self._lock:
+                        if (not self._enabled or
+                                getattr(msg, "epoch", self._enabled_epoch) != self._enabled_epoch):
+                            continue
+                        if dialed != self._port:
+                            self._retry_alert(q, msg)
+                            continue
                     if msg is not None:
                         self._send(ws, msg)
                         msg = None
@@ -598,12 +631,7 @@ class PluginLink(QObject):
                 except Exception as exc:  # Keep the worker running after send failures.
                     log_drop("plugin-link", f"connection lost: {exc}")
                     # Retry failed alert sends because reconnect does not recreate them.
-                    if isinstance(msg, dict) and msg.get("c") == "alert":
-                        try:
-                            q.put_nowait(msg)
-                        except queue.Full:
-                            log_drop("plugin-drop",
-                                     "alert re-queue overflowed; callout dropped")
+                    self._retry_alert(q, msg)
                     self._close_quietly(ws)
                     ws = None
                     self._set_connected(False, stopping)

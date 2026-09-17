@@ -18,6 +18,10 @@ def check(name, cond):
 class FakeClient:
     def __init__(self):
         self.calls = []
+        self.status = None
+
+    def last_status(self):
+        return self.status
 
     def set_enabled(self, v):
         self.calls.append(("set_enabled", bool(v)))
@@ -60,12 +64,14 @@ check("refresh is a no-op when automarkers is off", w._telesto_client.calls == [
 
 # the native client is the sole source of truth for the light
 w = FakeWin(enabled=True)
+w._telesto_client.status = (True, False)
 w._on_telesto_client_status(True, "Connected")
 check("native client turns the light green", w._telesto_status == "good")
 w._on_telesto_status("bad")            # the vestigial engine signal tries to clobber
 check("engine 'bad' no longer clobbers the native green", w._telesto_status == "good")
 w._on_telesto_status("unknown")
 check("engine 'unknown' is ignored too", w._telesto_status == "good")
+w._telesto_client.status = (False, False)
 w._on_telesto_client_status(False, "unreachable")
 check("native client can still turn it red (real reachability)",
       w._telesto_status == "bad")
@@ -206,6 +212,9 @@ class ApplyWin:
 
         def configure(self, uri=None, enabled=None):
             self.events.append(("configure", enabled))
+
+        def last_status(self):
+            return None
 
         def request_party_members(self, force=False):
             self.events.append(("refresh", force))

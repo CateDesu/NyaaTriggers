@@ -169,6 +169,7 @@ class TelestoClient(QObject):
         self._uri = uri if isinstance(uri, str) and uri else DEFAULT_URI
         self._enabled = bool(enabled)
         self._command_epoch = 0
+        self._endpoint_epoch = 0
         self._delay_base = max(0, int(delay_base_ms))
         self._delay_plus = max(0, int(delay_plus_ms))
         self._timeout = float(timeout)
@@ -176,8 +177,8 @@ class TelestoClient(QObject):
         self._queue: "queue.Queue" = queue.Queue(maxsize=self._max_queue)
         self._thread: "threading.Thread | None" = None
         self._stopping = threading.Event()
-        self._lock = threading.Lock()
-        self._reachable: "bool | None" = None  # last reported reachability, de-duped
+        self._lock = threading.RLock()
+        self._reachable: "tuple[bool, bool] | None" = None
         self._warned_sends: set = set()        # unexpected send failures already logged
         # Actor IDs to party slots. Keep empty until a valid roster arrives and skip
         # unknown actors.
@@ -188,12 +189,22 @@ class TelestoClient(QObject):
                   delay_base_ms: "int | None" = None,
                   delay_plus_ms: "int | None" = None) -> None:
         with self._lock:
+            invalidated = False
             if uri is not None:
-                self._uri = uri if isinstance(uri, str) and uri else DEFAULT_URI
+                destination = uri if isinstance(uri, str) and uri else DEFAULT_URI
+                if destination != self._uri:
+                    self._uri = destination
+                    self._endpoint_epoch += 1
+                    self._slot_by_actor = {}
+                    self._reachable = None
+                    invalidated = True
             if enabled is not None:
                 if self._enabled and not enabled:
                     self._command_epoch += 1
+                    invalidated = True
                 self._enabled = bool(enabled)
+            if invalidated:
+                self._discard_cancelled_commands()
             if delay_base_ms is not None:
                 self._delay_base = max(0, int(delay_base_ms))
             if delay_plus_ms is not None:
@@ -206,48 +217,59 @@ class TelestoClient(QObject):
         with self._lock:
             return self._enabled
 
+    def last_status(self) -> "tuple[bool, bool] | None":
+        """Current reachability and degraded flags, or None before the endpoint is checked."""
+        with self._lock:
+            return self._reachable
+
     @property
     def uri(self) -> str:
         with self._lock:
             return self._uri
 
     def start(self) -> None:
-        t = self._thread
-        if t and t.is_alive():
-            if not self._stopping.is_set():
+        with self._lock:
+            t = self._thread
+            if t and t.is_alive() and not self._stopping.is_set():
                 return
-            # Use a fresh stop event so restarting cannot revive an older worker still
-            # finishing HTTP. Retain the queue for commands submitted before start and
-            # ignore old stop sentinels.
-        self._stopping = threading.Event()
-        self._thread = threading.Thread(
-            target=self._run, args=(self._queue, self._stopping),
-            name="TelestoClient", daemon=True)
-        self._thread.start()
+            # A replacement must not replay old commands or share its queue with a
+            # worker that is still finishing a request.
+            if self._stopping.is_set():
+                self._queue = queue.Queue(maxsize=self._max_queue)
+            self._stopping = threading.Event()
+            self._thread = threading.Thread(
+                target=self._run, args=(self._queue, self._stopping),
+                name="TelestoClient", daemon=True)
+            self._thread.start()
 
     def request_stop(self) -> None:
         """Request shutdown without joining so callers can overlap client shutdown waits.
         """
-        self._stopping.set()
+        with self._lock:
+            self._stopping.set()
+            q = self._queue
         try:
-            self._queue.put_nowait(_STOP)
+            q.put_nowait(_STOP)
         except queue.Full:
             # Free a slot for the stop sentinel. The worker also checks its stop event.
             try:
-                self._queue.get_nowait()
-                self._queue.put_nowait(_STOP)
+                q.get_nowait()
+                q.put_nowait(_STOP)
             except (queue.Empty, queue.Full):
                 pass
 
     def join_stopped(self, timeout: float = 2.0) -> None:
-        t = self._thread
+        with self._lock:
+            t = self._thread
         if t and t.is_alive():
             t.join(timeout=timeout)
             if t.is_alive():
                 # Retain the handle if HTTP is still blocked so later stops can join the
                 # worker.
                 return
-        self._thread = None
+        with self._lock:
+            if self._thread is t:
+                self._thread = None
 
     def stop(self, join_timeout: float = 2.0) -> None:
         self.request_stop()
@@ -318,16 +340,35 @@ class TelestoClient(QObject):
             with self._lock:
                 if not force and not self._enabled:
                     return False
-                self._queue.put_nowait((msg, delay, force, self._command_epoch))
+                self._queue.put_nowait((msg, delay, force, self._command_epoch,
+                                       self._endpoint_epoch))
         except queue.Full:
             log_drop("telesto-queue", "command queue full, dropping message")
             self.error.emit("Telesto command queue full; command dropped")
             return False
         return True
 
-    def _can_send(self, force: bool, epoch: int) -> bool:
+    def _can_send(self, force: bool, epoch: int, endpoint: int) -> bool:
         with self._lock:
-            return force or self._enabled and epoch == self._command_epoch
+            return (endpoint == self._endpoint_epoch
+                    and (force or self._enabled and epoch == self._command_epoch))
+
+    def _discard_cancelled_commands(self) -> None:
+        # The caller holds the settings lock. Hold the queue mutex too so the worker
+        # cannot overtake forced commands while they are being retained.
+        q = self._queue
+        with q.mutex:
+            keep = [item for item in q.queue
+                    if item is _STOP or self._can_send(item[2], item[3], item[4])]
+            removed = len(q.queue) - len(keep)
+            if not removed:
+                return
+            q.queue.clear()
+            q.queue.extend(keep)
+            q.unfinished_tasks -= removed
+            if not q.unfinished_tasks:
+                q.all_tasks_done.notify_all()
+            q.not_full.notify_all()
 
     def _run(self, q: "queue.Queue", stopping: "threading.Event") -> None:
         self._request_context.stopping = stopping
@@ -344,17 +385,18 @@ class TelestoClient(QObject):
                 if stopping.is_set():
                     break
                 continue                       # stale sentinel from a previous generation
-            msg, delay, force, epoch = item
-            if not self._can_send(force, epoch):
+            msg, delay, force, epoch, endpoint = item
+            if not self._can_send(force, epoch, endpoint):
                 continue
             if delay:
                 self._sleep_command_delay(stopping)
             # Recheck shutdown after dequeue before issuing a request.
             if stopping.is_set():
                 break
-            if not self._can_send(force, epoch):
+            if not self._can_send(force, epoch, endpoint):
                 continue
             try:
+                self._request_context.endpoint = endpoint
                 self._post(msg)
             except Exception as exc:  # Continue processing after a failed command.
                 key = f"{type(exc).__name__}: {exc}"[:200]
@@ -371,34 +413,44 @@ class TelestoClient(QObject):
 
     def _post(self, msg: dict) -> None:
         with self._lock:
+            endpoint = getattr(self._request_context, "endpoint", self._endpoint_epoch)
+            if endpoint != self._endpoint_epoch:
+                return
             uri, timeout = self._uri, self._timeout
         body = json.dumps(msg).encode("utf-8")
-        req = urllib.request.Request(
-            uri, data=body, method="POST",
-            headers={"Content-Type": "application/json",
-                     "User-Agent": "NyaaTriggers"})
         try:
+            req = urllib.request.Request(
+                uri, data=body, method="POST",
+                headers={"Content-Type": "application/json",
+                         "User-Agent": "NyaaTriggers"})
             code, body = self._read_response(req, timeout)
-            if getattr(self._request_context, "stopping", self._stopping).is_set():
-                return
-            self._report_reachable(True, f"Connected (HTTP {code})")
-            if msg.get("id") == PARTY_UPDATE_ID:
-                self._update_party_slots(body)
+            with self._lock:
+                if not self._response_current(endpoint):
+                    return
+                self._report_reachable(True, f"Connected (HTTP {code})")
+                if msg.get("id") == PARTY_UPDATE_ID:
+                    self._update_party_slots(body)
         except urllib.error.HTTPError as exc:
             # HTTP errors mean the endpoint is reachable but degraded. Close the
             # response before continuing.
             exc.close()
-            if getattr(self._request_context, "stopping", self._stopping).is_set():
-                return
-            self._report_reachable(True, f"Telesto error: HTTP {exc.code}", degraded=True)
+            with self._lock:
+                if not self._response_current(endpoint):
+                    return
+                self._report_reachable(True, f"Telesto error: HTTP {exc.code}", degraded=True)
             log_drop("telesto-http", f"HTTP {exc.code} for {msg.get('type')}")
         except (urllib.error.URLError, OSError, ValueError,
                 http.client.HTTPException) as exc:
             # Report transport failures without stopping the client.
-            if getattr(self._request_context, "stopping", self._stopping).is_set():
-                return
-            self._report_reachable(False, f"Telesto unreachable: {exc}")
+            with self._lock:
+                if not self._response_current(endpoint):
+                    return
+                self._report_reachable(False, f"Telesto unreachable: {exc}")
             log_drop("telesto-http", f"unreachable: {exc}")
+
+    def _response_current(self, endpoint: int) -> bool:
+        return (endpoint == self._endpoint_epoch
+                and not getattr(self._request_context, "stopping", self._stopping).is_set())
 
     def _read_response(self, request, timeout: float) -> tuple[int, bytes]:
         """Abort a stalled request even when its peer keeps sending bytes."""

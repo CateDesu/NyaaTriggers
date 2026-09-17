@@ -94,12 +94,12 @@ class PullCapture(QObject):
             return
         now = time.monotonic()
         self._buffer.append((now, line))
-        self._buffer_bytes += len(line)
+        self._buffer_bytes += len(line.encode("utf-8"))
         cutoff = now - _PRE_PULL_SECONDS
         while self._buffer and (self._buffer[0][0] < cutoff
                                 or len(self._buffer) > _PRE_PULL_MAX_MESSAGES
                                 or self._buffer_bytes > _PRE_PULL_MAX_BYTES):
-            self._buffer_bytes -= len(self._buffer.popleft()[1])
+            self._buffer_bytes -= len(self._buffer.popleft()[1].encode("utf-8"))
 
     @pyqtSlot(str)
     def on_log_line(self, raw: str) -> None:
@@ -107,6 +107,14 @@ class PullCapture(QObject):
         if not self._recording:
             return
         fields = raw.split("|")
+        if fields[0] == "01":
+            self._finalize("reset")
+            self._buffer.clear()
+            self._buffer_bytes = 0
+            # Keep the zone boundary for replay when ChangeZone is unavailable.
+            self.on_raw_message(json.dumps({"type": "LogLine", "rawLine": raw,
+                                            "line": fields}))
+            return
         if not self._in_pull:
             if (fields[0] in _ABILITY_TYPES and len(fields) > 2
                     and fields[2] and not fields[2].startswith("1")):
@@ -115,10 +123,6 @@ class PullCapture(QObject):
         if (fields[0] == "33" and len(fields) > 3
                 and fields[3].upper() == _WIPE_COMMAND):
             self._finalize("wipe")
-        elif fields[0] == "01":
-            # Raw zone lines end captures even when ChangeZone metadata is missing or
-            # the zone name is unchanged.
-            self._finalize("reset")
 
     @pyqtSlot(bool, bool)
     def on_in_combat(self, act: bool, game: bool) -> None:
@@ -156,7 +160,7 @@ class PullCapture(QObject):
         stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")
         path = folder / f"{stamp}.jsonl"
         try:
-            fh = open(path, "w", encoding="utf-8", opener=_owner_only)
+            fh = open(path, "w", encoding="utf-8", newline="\n", opener=_owner_only)
         except OSError as e:
             self._warn_write("open the capture file", e)
             return
@@ -190,7 +194,7 @@ class PullCapture(QObject):
             # Flush each message to reduce data lost on a process crash.
             self._fh.flush()
             self._lines += 1
-            self._bytes += len(line) + 1
+            self._bytes += len(line.encode("utf-8")) + 1
         except OSError as e:
             self._warn_write("write the capture", e)
             self._finalize("ended")
