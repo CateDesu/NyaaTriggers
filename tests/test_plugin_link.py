@@ -34,8 +34,9 @@ class FakePlugin:
     """Tiny WS server standing in for the Dalamud plugin. Sends the hello on
     connect, then records every handshake's headers and every received frame."""
 
-    def __init__(self, protocol=1):
+    def __init__(self, protocol=1, dps_retention=None):
         self.protocol = protocol
+        self.dps_retention = dps_retention
         self.frames = []          # decoded JSON frames, in arrival order
         self.handshakes = []      # request headers per handshake
         self.connections = 0
@@ -56,8 +57,10 @@ class FakePlugin:
         with self._lock:
             self.connections += 1
             self._conns.add(conn)
-        conn.send(json.dumps({"ev": "hello", "protocol": self.protocol,
-                              "plugin": "0.1.0"}))
+        hello = {"ev": "hello", "protocol": self.protocol, "plugin": "0.1.0"}
+        if self.dps_retention is not None:
+            hello["dpsRetention"] = self.dps_retention
+        conn.send(json.dumps(hello))
         try:
             for raw in conn:
                 try:
@@ -121,7 +124,8 @@ check("alert severities pass through 1:1",
       == ["info", "alert", "alarm"])
 check("alert default + unknown severity degrades to info",
       pl.alert_frame("x")["sev"] == "info" and pl.alert_frame("x", "weird")["sev"] == "info")
-check("clear frame exact", pl.clear_frame() == {"c": "clear"})
+check("clear frame exact", pl.clear_frame() == {"c": "clear", "keepDps": False})
+check("wipe clear preserves DPS", pl.clear_frame(keep_dps=True) == {"c": "clear", "keepDps": True})
 check("ping frame exact", pl.ping_frame() == {"c": "ping"})
 
 # pure helpers: port parsing and the dps capability check
@@ -171,7 +175,7 @@ check("tick frame arrives verbatim",
 
 link.send_clear()
 check("clear frame arrives verbatim",
-      wait_for(lambda: {"c": "clear"} in fake.snapshot()))
+      wait_for(lambda: {"c": "clear", "keepDps": False} in fake.snapshot()))
 
 check("liveness ping on idle",
       wait_for(lambda: {"c": "ping"} in fake.snapshot(), timeout=5.0))
@@ -187,6 +191,54 @@ check("frames flow again after reconnect",
 link.stop()
 check("stop() joins the worker", wait_for(lambda: not link.is_connected(), timeout=3.0))
 fake.shutdown()
+
+for capability in (True, None, "true"):
+    fake = FakePlugin(dps_retention=capability)
+    link = make_link(fake)
+    link.start()
+    check(f"retention handshake connects {capability=}", wait_for(link.is_connected))
+    enc = {"t": "Final pull", "d": "00:01", "dps": 5000, "hasDamage": True}
+    rows = [["Player", "MCH", 5000, 100, 0, True, 0]]
+    link.send_dps(enc, rows, show=False)
+    link.send_clear(keep_dps=True)
+    link.send_clear(keep_dps=True)
+    link.send_dps({"t": "Empty pull", "hasDamage": False}, [], show=True)
+    link.send_clear(keep_dps=True)
+    link.send_alert("Retention delivered")
+    check(f"retention frames arrive {capability=}",
+          wait_for(lambda: any(f.get("text") == "Retention delivered" for f in fake.snapshot())))
+    dps = [f for f in fake.snapshot() if f.get("c") == "dps"]
+    if capability is True:
+        check("native retention receives complete final payloads unchanged",
+              dps[0] == pl.dps_frame(enc, rows, show=False) and len(dps) == 2)
+    else:
+        check(f"legacy retention restores the completed pull after every clear {capability=}",
+              len(dps) == 8 and all(dps[i] == pl.dps_frame(enc, rows) for i in (0, 2, 4, 6))
+              and all(dps[i] == {"c": "dps", "show": False} for i in (1, 3, 5, 7)))
+    before = len(fake.snapshot())
+    link.send_clear()
+    link.send_dps(None, [], show=False)
+    link.send_clear(keep_dps=True)
+    link.send_alert("Zone delivered")
+    check(f"zone frames arrive {capability=}",
+          wait_for(lambda: any(f.get("text") == "Zone delivered" for f in fake.snapshot())))
+    check(f"zone reset cannot restore cached rows {capability=}",
+          not any(f.get("rows") for f in fake.snapshot()[before:]))
+    link.send_dps(enc, rows, show=False)
+    link.send_alert("Before reconnect")
+    wait_for(lambda: any(f.get("text") == "Before reconnect" for f in fake.snapshot()))
+    fake.drop()
+    check(f"retention reconnects {capability=}",
+          wait_for(lambda: fake.connections >= 2 and link.is_connected(), timeout=8.0))
+    before = len(fake.snapshot())
+    link.send_clear(keep_dps=True)
+    link.send_alert("After reconnect")
+    check(f"retention reconnect delivers {capability=}",
+          wait_for(lambda: any(f.get("text") == "After reconnect" for f in fake.snapshot())))
+    check(f"new connections discard retained DPS {capability=}",
+          not any(f.get("rows") for f in fake.snapshot()[before:]))
+    link.stop()
+    fake.shutdown()
 
 # an alert queued during reconnect backoff survives to delivery
 fake = FakePlugin()

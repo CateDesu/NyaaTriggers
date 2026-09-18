@@ -358,8 +358,8 @@ class DpsMeter:
 
     def set_zone_metadata(self, name: str) -> None:
         """Apply zone metadata for connections that missed the raw zone line. Repeated
-        metadata must not end an encounter. Raw zone transitions still finalize through
-        _on_zone.
+        metadata must not end an encounter. A changed known zone finalizes before the
+        overlay is cleared, even when metadata arrives before the raw zone line.
         """
         name = (name or "").strip()
         if not name:
@@ -368,6 +368,8 @@ class DpsMeter:
         self._awaiting_zone_metadata = False
         if name == self._zone:
             return
+        if not first_metadata:
+            self.finalize("duty-left")
         self._zone = name
         # Preserve roster data that arrived before initial zone metadata. Clear it on
         # later changes.
@@ -706,6 +708,7 @@ class DpsMeter:
             combatants[name] = {
                 "name": name,
                 "Job": JOB_ACRONYMS.get(c.job, ""),
+                "is_self": self._me_id is not None and c.aid == self._me_id,
                 "damage": c.damage,
                 "damage%": (c.damage / total_damage * 100.0) if total_damage else 0.0,
                 "dps": c.damage / per,
@@ -735,6 +738,7 @@ class DpsMeter:
                 "duration": _mmss(dur),
                 "DURATION": int(dur),
                 "damage": total_damage,
+                "has_damage": any(c.damage > 0 or c.damagetaken > 0 for c in players),
                 "dps": encdps,
                 "encdps": encdps,
                 "ENCDPS": encdps,
@@ -767,27 +771,19 @@ class DpsMeter:
                            self._clock())
         return self._snapshot(empty, self._clock(), active=False)
 
-    def overlay_rows(self) -> list:
+    def overlay_rows(self, snapshot=None) -> list:
         """Return overlay rows in descending ENCDPS order with name, job, DPS, damage
-        share, HPS, local flag and deaths. Return no rows outside an encounter.
+        share, HPS, local flag and deaths. A supplied snapshot can describe a finished pull.
+        Without one, return no rows outside an encounter.
         """
-        enc = self._view if self._view is not None else self.current
-        if enc is None:
-            return []
-        span_end = self._clock()
-        # Use encounter start if the pull opened on a miss and has no damage timestamp.
-        idle_base = enc.last_damage if enc.last_damage is not None else enc.start
-        span_end = min(span_end, idle_base + self._idle_timeout)
-        enc_per = max(1.0, span_end - enc.start)
-        total_damage = sum(c.damage for c in enc.combatants.values())
+        if snapshot is None:
+            if self.current is None:
+                return []
+            snapshot = self.snapshot()
         rows = []
-        for c in enc.combatants.values():
-            encdps = c.damage / enc_per
-            pct = (c.damage / total_damage * 100.0) if total_damage else 0.0
-            rows.append([c.name or f"{c.aid:X}", JOB_ACRONYMS.get(c.job, ""),
-                         round(encdps, 1), round(pct, 1),
-                         round(c.healed / enc_per, 1),
-                         bool(self._me_id is not None and c.aid == self._me_id),
-                         c.deaths])
+        for c in snapshot["Combatant"].values():
+            rows.append([c["name"], c["Job"], round(c["encdps"], 1),
+                         round(c["damage%"], 1), round(c["enchps"], 1),
+                         c["is_self"], c["deaths"]])
         rows.sort(key=lambda r: r[2], reverse=True)
         return rows[:MAX_OVERLAY_ROWS]

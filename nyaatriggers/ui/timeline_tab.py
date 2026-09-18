@@ -81,7 +81,7 @@ class TimelineTabMixin:
                     and getattr(self, "_global_local_on_flag", True))):
             self._plugin_link.send_timeline(self._timeline.upcoming())
         else:
-            self._plugin_link.send_clear()
+            self._plugin_link.send_clear(keep_dps=True)
 
     def _load_timeline_for_zone(self, zone: str, *, preserve_time: bool = False) -> None:
         if not preserve_time:

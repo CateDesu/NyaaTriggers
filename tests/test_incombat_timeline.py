@@ -49,11 +49,13 @@ def sample_entries():
 class FakeLink:
     def __init__(self):
         self.clears = 0
+        self.clear_keeps_dps = []
         self.schedules = []
         self.dps_frames = []
 
-    def send_clear(self):
+    def send_clear(self, *, keep_dps=False):
         self.clears += 1
+        self.clear_keeps_dps.append(keep_dps)
 
     def send_timeline(self, rows):
         self.schedules.append(list(rows))
@@ -75,7 +77,6 @@ def make_window():
     # _on_in_combat also feeds the DPS meter (settings-gated). Provide both.
     w._settings = {"dps_meter_enabled": True}
     w._dps_meter = DpsMeter()
-    w._dps_last_end = 0.0
     w._push_timeline_to_plugin = lambda: MainWindow._push_timeline_to_plugin(w)
     return w
 
@@ -128,6 +129,7 @@ check("window: engage starts the clock", w._timeline.is_active())
 call(w, True, False)  # leave combat
 check("window: leave with marker resets the clock", not w._timeline.is_active())
 check("window: leave with marker clears the plugin once", w._plugin_link.clears == 1)
+check("window: timeline reset preserves DPS", w._plugin_link.clear_keeps_dps == [True])
 check("window: schedule re-armed after reset", len(w._plugin_link.schedules) == 1)
 
 # Re-engaging re-syncs from zero.
@@ -252,11 +254,10 @@ check("wipe re-push is the loaded schedule, not an empty one",
 check("wipe with no pull just ended sends no dps frame",
       w7._plugin_link.dps_frames == [])
 
-# Restore the final meter frame after clearing a wipe.
-w7._dps_last_end = time.monotonic()
+# Repeated wipes preserve the meter without sending an ending for another pull.
 MainWindow._dispatch_log_line(w7, ["33", "ts", "0", "4000000F"], "33|ts|0|4000000F")
-check("wipe after a pull re-asserts the dps end frame",
-      w7._plugin_link.dps_frames == [(None, [], False)])
+check("repeated wipes preserve the meter", w7._plugin_link.clear_keeps_dps == [True, True])
+check("repeated wipes do not invent an encounter ending", w7._plugin_link.dps_frames == [])
 check("second wipe clears the plugin again", w7._plugin_link.clears == 2)
 
 # Window glue: re-enabling local callouts re-pushes the schedule
@@ -267,6 +268,7 @@ w8._clear_status_timers = lambda: None
 w8._save_settings = lambda: None
 MainWindow._set_local_enabled(w8, False)
 check("local off clears the plugin", w8._plugin_link.clears == 1)
+check("local off preserves DPS", w8._plugin_link.clear_keeps_dps == [True])
 check("local off pushes no schedule", w8._plugin_link.schedules == [])
 MainWindow._set_local_enabled(w8, True)
 check("local re-enable re-pushes the schedule",

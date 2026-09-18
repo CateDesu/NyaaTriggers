@@ -502,6 +502,12 @@ frame = pl.dps_frame({"t": "Everkeep", "d": "00:12", "dps": 6291.7}, rows)
 check("dps frame command + show", frame["c"] == "dps" and frame["show"] is True)
 check("dps frame enc shape",
       frame["enc"] == {"t": "Everkeep", "d": "00:12", "dps": 6291.7})
+check("dps frame preserves an explicit damage flag",
+      all(pl.dps_frame({"hasDamage": flag}, [])["enc"]["hasDamage"] is flag
+          for flag in (True, False)))
+check("dps frame omits invalid damage flags",
+      all("hasDamage" not in pl.dps_frame({"hasDamage": flag}, [])["enc"]
+          for flag in (None, "false", 0, 1, [])))
 check("dps frame rows shape",
       frame["rows"][0] == [ME_NAME, "AST", round(62500 / 12, 1),
                            round(62500 / 75500 * 100, 1), 0.0, True, 0])
@@ -512,6 +518,11 @@ check("dps frame defaults the trailing fields for old 4-field rows",
       pl.dps_frame({}, big)["rows"][0] == ["n0", "JOB", 1.0, 1.0, 0.0, False, 0])
 check("dps frame hide", pl.dps_frame(None, [], show=False)
       == {"c": "dps", "show": False})
+ended_frame = pl.dps_frame({"t": "Everkeep", "d": "00:12", "dps": 6291.7,
+                            "hasDamage": True}, rows, show=False)
+check("dps ending can carry the complete final snapshot",
+      ended_frame["show"] is False and ended_frame["enc"]["dps"] == 6291.7
+      and ended_frame["enc"]["hasDamage"] is True and ended_frame["rows"] == frame["rows"])
 
 # roster feeds from outside the log stream
 m10 = DpsMeter(clock=Clock())
@@ -677,8 +688,10 @@ m21.set_in_combat(True, True)
 m21.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
                     [("750003", dmg(1000))]), "")
 m21.set_zone_metadata("Elsewhere")
-check("a zone event without its 01 line never ends the pull",
-      ended21 == [] and m21.current is not None)
+check("a changed zone finalizes before its raw line arrives",
+      len(ended21) == 1 and m21.current is None
+      and ended21[0]["Encounter"]["end_reason"] == "duty-left"
+      and ended21[0]["Combatant"][ME_NAME]["is_self"])
 
 for reconnect in (False, True):
     for player_first in (False, True):

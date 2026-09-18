@@ -497,6 +497,42 @@ class DataSafetyTests(unittest.TestCase):
         self.assertEqual(frames, [True, False])
         ended.assert_not_called()
 
+    def test_overlay_damage_signal_survives_zero_displayed_dps(self):
+        incoming = ability('3', 10000, source='40000001')
+        incoming[6:8] = ['10000001', 'Player']
+        invulnerable = ability('3', 10000)
+        invulnerable[9] = '27100100'
+        cases = [
+            ('combat start', None, 0, False),
+            ('healing', ability('4', 500), 0, False),
+            ('miss', ability('1', 0), 0, False),
+            ('invulnerable', invulnerable, 0, False),
+            ('incoming damage', incoming, 0, True),
+            ('rounded damage', ability('3', 1), 30, True),
+        ]
+        for name, line, delay, expected in cases:
+            with self.subTest(name=name):
+                now = [1000.0]
+                meter = DpsMeter(clock=lambda: now[0])
+                meter.set_me('10000001')
+                meter.set_in_combat(True, True)
+                now[0] += delay
+                if line is not None:
+                    meter.process(line)
+                frames = []
+                host = SimpleNamespace(
+                    _update_live_dps=lambda: None, _dps_meter=meter, _dps_overlay_live=False,
+                    _plugin_link=SimpleNamespace(
+                        is_connected=lambda: True,
+                        send_dps=lambda *a, **kw: frames.append(plugin_link.dps_frame(*a, **kw))))
+                DpsTabMixin._dps_tick(host)
+                self.assertEqual(len(frames), 1)
+                self.assertEqual(frames[0]['enc']['dps'], 0)
+                self.assertIs(frames[0]['enc']['hasDamage'], expected)
+                self.assertIs(meter.full_snapshot()['Encounter']['has_damage'], expected)
+                meter.finalize()
+                self.assertIs(meter.snapshot()['Encounter']['has_damage'], expected)
+
     def test_quit_waits_for_earlier_writer(self):
         release = threading.Event()
         finished = threading.Event()
@@ -613,7 +649,7 @@ class WorkerLifecycleTests(unittest.TestCase):
                     if generation == 0 and fail:
                         raise RuntimeError('old connect failed')
                     ws = SimpleNamespace(close=lambda: closed.append(generation))
-                    return ws, str(generation)
+                    return ws, str(generation), True
 
                 def send(ws, frame):
                     sent.append(frame)

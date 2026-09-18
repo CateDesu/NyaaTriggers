@@ -139,9 +139,9 @@ def alert_frame(text, severity="info") -> dict:
             "sev": sev if sev in _SEVERITIES else "info"}
 
 
-def clear_frame() -> dict:
-    """Clear the schedule, alerts and meter state."""
-    return {"c": "clear"}
+def clear_frame(keep_dps=False) -> dict:
+    """Clear the schedule and alerts. Wipes can retain the meter."""
+    return {"c": "clear", "keepDps": bool(keep_dps)}
 
 
 def ping_frame() -> dict:
@@ -149,11 +149,12 @@ def ping_frame() -> dict:
 
 
 def dps_frame(enc, rows, show=True) -> dict:
-    """Build a live or ended DPS frame. Live rows contain name, job, DPS, share, HPS, local
+    """Build a live or ended DPS frame. Rows contain name, job, DPS, share, HPS, local
     flag and deaths. Supply defaults for missing trailing fields and reject invalid
-    values.
+    values. The optional hasDamage flag includes damage taken and survives DPS rounding.
+    Endings include final values when enc is supplied.
     """
-    if not show:
+    if not show and enc is None:
         return {"c": "dps", "show": False}
     enc = enc if isinstance(enc, dict) else {}
     try:
@@ -178,10 +179,10 @@ def dps_frame(enc, rows, show=True) -> dict:
         except (TypeError, ValueError, IndexError, OverflowError):
             # Skip rows whose integer fields cannot be converted.
             continue
-    return {"c": "dps", "show": True,
-            "enc": {"t": str(enc.get("t", "")), "d": str(enc.get("d", "")),
-                    "dps": dps},
-            "rows": clean_rows}
+    encounter = {"t": str(enc.get("t", "")), "d": str(enc.get("d", "")), "dps": dps}
+    if isinstance(enc.get("hasDamage"), bool):
+        encounter["hasDamage"] = enc["hasDamage"]
+    return {"c": "dps", "show": bool(show), "enc": encounter, "rows": clean_rows}
 
 
 def parse_port(value) -> "int | None":
@@ -206,6 +207,45 @@ def plugin_supports_dps(version: str) -> bool:
     except (TypeError, ValueError):
         return True
     return (parts + [0, 0])[:2] >= [0, 2]
+
+
+class _DpsProtocol:
+    """Adapt retained DPS to older overlays for one connection."""
+
+    def __init__(self, native_retention: bool):
+        self.native_retention = native_retention
+        self.last_dps = None
+
+    @staticmethod
+    def _restore(frame):
+        frames = [{**frame, "show": True}]
+        if not frame["show"]:
+            frames.append({"c": "dps", "show": False})
+        return frames
+
+    def frames(self, frame):
+        if self.native_retention:
+            return [frame]
+        if frame.get("c") == "dps":
+            if "enc" in frame and "rows" in frame:
+                last = self.last_dps
+                if (last and not last["show"] and last["rows"]
+                        and frame["enc"].get("hasDamage") is False):
+                    return []
+                self.last_dps = frame
+                if not frame["show"]:
+                    return self._restore(frame)
+            elif not frame["show"] and self.last_dps is not None:
+                self.last_dps = {**self.last_dps, "show": False}
+        elif frame.get("c") == "clear":
+            if frame.get("keepDps"):
+                if self.last_dps is not None:
+                    return [frame, *self._restore(self.last_dps)]
+            else:
+                self.last_dps = None
+                # Older clears leave a cached live frame for bare endings.
+                return [dps_frame({}, [], show=True), frame]
+        return [frame]
 
 
 class PluginLink(QObject):
@@ -333,9 +373,9 @@ class PluginLink(QObject):
         log_drop("plugin-tx", f"timeline {len(entries)} entries", 0)
         self._enqueue(timeline_frame(entries))
 
-    def send_clear(self) -> None:
+    def send_clear(self, *, keep_dps: bool = False) -> None:
         log_drop("plugin-tx", "clear", 0)
-        self._enqueue(clear_frame())
+        self._enqueue(clear_frame(keep_dps=keep_dps))
 
     def send_dps(self, enc, rows, show: bool = True) -> None:
         log_drop("plugin-tx-dps",
@@ -441,7 +481,7 @@ class PluginLink(QObject):
                 "Plugin protocol "
                 f"{hello.get('protocol') if isinstance(hello, dict) else hello!r}, "
                 f"program requires {PROTOCOL_VERSION}")
-        return ws, str(hello.get("plugin") or "")
+        return ws, str(hello.get("plugin") or ""), hello.get("dpsRetention") is True
 
     @staticmethod
     def _discard_queued(q: "queue.Queue", keep_alerts: bool = False) -> None:
@@ -560,7 +600,8 @@ class PluginLink(QObject):
                     try:
                         with self._lock:
                             dialed = self._port
-                        ws, plugin_version = self._connect()
+                        ws, plugin_version, native_retention = self._connect()
+                        dps_protocol = _DpsProtocol(native_retention)
                     except Exception as exc:  # noqa: BLE001
                         log_drop("plugin-link", f"connect failed: {exc}")
                         # Show actionable configuration errors. Connection refusal
@@ -623,7 +664,8 @@ class PluginLink(QObject):
                             self._retry_alert(q, msg)
                             continue
                     if msg is not None:
-                        self._send(ws, msg)
+                        for frame in dps_protocol.frames(msg):
+                            self._send(ws, frame)
                         msg = None
                     if pong_deadline is None and time.monotonic() >= next_ping:
                         self._send(ws, ping_frame())

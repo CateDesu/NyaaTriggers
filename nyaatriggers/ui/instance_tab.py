@@ -100,7 +100,6 @@ class InstanceTabMixin:
             self._status_lbl.setStyleSheet("color:#f38ba8; font-weight:bold;")
             self._conn_btn.setText(_("Connect"))
             self._zone_lbl.setText(self._zone_banner_text())
-            self._plugin_link.send_clear()
             # Cancel warnings whose loss or wipe events can no longer arrive.
             self._clear_status_timers()
             self._clear_seq_runners()
@@ -109,6 +108,8 @@ class InstanceTabMixin:
                 # Close the pull and reset the combat edge so reconnect can start a new
                 # encounter.
                 meter.feed_lost()
+            # Finalize before clearing so its last frame cannot restore disconnected DPS.
+            self._plugin_link.send_clear()
 
     def _set_zone_aliases(self, zone: str, zone_id: int) -> None:
         """Return the reported zone name and its canonical English alias when available.
@@ -134,7 +135,7 @@ class InstanceTabMixin:
         """Match a compiled zone pattern against every current name."""
         return any(_safe_search(rx, z) for z in self._zone_aliases if z)
 
-    def _apply_zone(self, zone: str, zone_id: int = 0) -> None:
+    def _apply_zone(self, zone: str, zone_id: int = 0, *, raw_zone: bool = False) -> None:
         """Apply a zone change and reset its state. Duplicate reports from log and metadata
         events do not repeat teardown.
         """
@@ -149,6 +150,9 @@ class InstanceTabMixin:
         meter = getattr(self, "_dps_meter", None)
         if meter is not None:
             meter.set_zone_metadata(zone)
+        if raw_zone:
+            # Raw zone boundaries clear DPS even when the zone name repeats.
+            self._plugin_link.send_clear()
         if zone == self._current_zone:
             # The zone ID and name can arrive in either order. Rebuild aliases when a
             # late or corrected ID changes the canonical name.
@@ -158,12 +162,15 @@ class InstanceTabMixin:
             if zone_id and self._current_zone_id != prev_zone_id:
                 # A changed ID can also select a different cactbot timeline.
                 self._redetect_zone_fight()
+            if raw_zone:
+                self._push_timeline_to_plugin()
             return
         self._current_zone = zone
         if not zone_id:
             self._current_zone_id = 0
         self._set_zone_aliases(zone, zone_id)
-        self._plugin_link.send_clear()
+        if not raw_zone:
+            self._plugin_link.send_clear()
         self._clear_status_timers()
         self._clear_seq_runners()
         self._actor_jobs.clear()
@@ -217,7 +224,7 @@ class InstanceTabMixin:
         # must preserve the clock.
         if was and not game and self._timeline_reset_on_combat_end:
             self._timeline.reset()
-            self._plugin_link.send_clear()
+            self._plugin_link.send_clear(keep_dps=True)
             self._push_timeline_to_plugin()
 
     @pyqtSlot(str)
@@ -271,7 +278,7 @@ class InstanceTabMixin:
                 self._set_me_name(name)
 
         if fields[0] == "01" and len(fields) > 3:
-            self._apply_zone(fields[3], _hex_id(fields[2]))
+            self._apply_zone(fields[3], _hex_id(fields[2]), raw_zone=True)
 
         # Cancel pending warnings on loss or wipe regardless of the local trigger
         # switch. Arming remains gated below.
@@ -281,10 +288,7 @@ class InstanceTabMixin:
               and fields[3].upper() == "4000000F"):
             # ActorControl stores the wipe command at field 3, before data0.
             self._clear_status_timers()
-            self._plugin_link.send_clear()
-            # Restore the final meter frame after clearing the overlay for a wipe.
-            if time.monotonic() - self._dps_last_end < 10.0:
-                self._plugin_link.send_dps(None, [], show=False)
+            self._plugin_link.send_clear(keep_dps=True)
             # Restore the retained schedule immediately so the next pull has bars.
             self._push_timeline_to_plugin()
             self._clear_seq_runners()

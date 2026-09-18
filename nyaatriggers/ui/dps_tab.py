@@ -32,8 +32,6 @@ class DpsTabMixin:
         self._dps_meter.set_idle_timeout(self._dps_idle_timeout)
         self._dps_meter.on_encounter_end = self._on_meter_encounter_end
         self._fflogs_last_title = ""           # last finalized encounter, for the FFLogs refresh button
-        # Track the last finalization so a wipe can restore the final overlay frame.
-        self._dps_last_end = 0.0
         self._dps_history: list[dict] = []
         self._dps_selected_idx: "int | None" = None
         self._dps_live_active: bool = False
@@ -68,8 +66,9 @@ class DpsTabMixin:
                 enc = snap["Encounter"]
                 self._plugin_link.send_dps(
                     {"t": enc["title"], "d": enc["duration"],
-                     "dps": round(enc["encdps"], 1)},
-                    self._dps_meter.overlay_rows(), show=True)
+                     "dps": round(enc["encdps"], 1),
+                     "hasDamage": enc["has_damage"]},
+                    self._dps_meter.overlay_rows(snap), show=True)
                 self._dps_overlay_live = True
             elif self._dps_overlay_live:
                 self._plugin_link.send_dps(None, [], show=False)
@@ -157,10 +156,12 @@ class DpsTabMixin:
         """Finish encounter display and recording, preserving final values in the table and
         starting any FFLogs lookup.
         """
-        self._plugin_link.send_dps(None, [], show=False)
-        self._dps_overlay_live = False
-        self._dps_last_end = time.monotonic()
         enc = snapshot.get("Encounter") or {}
+        self._plugin_link.send_dps(
+            {"t": enc["title"], "d": enc["duration"],
+             "dps": round(enc["encdps"], 1), "hasDamage": enc["has_damage"]},
+            self._dps_meter.overlay_rows(snapshot), show=False)
+        self._dps_overlay_live = False
         title = enc.get("title") or ""
         if title:
             self._fflogs_last_title = title
