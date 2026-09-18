@@ -35,6 +35,14 @@ def convert(src: str):
 _HEADER = 'package test;\n\n@CalloutRepo(name = "M1S")\npublic class Fixture {\n'
 _FOOTER = '\n}\n'
 
+for repo, fight, ident in (("EX1", "Valigarmanda EX", "8FF0"),
+                         ("EX2", "Zoraal Ja EX", "9398")):
+    res, _ = convert(f'@CalloutRepo(name = "{repo}")\nclass Trial {{\n'
+                     f'@NpcCastCallout(0x{ident})\n'
+                     'private final ModifiableCallout<AbilityCastStart> cast = '
+                     'ModifiableCallout.durationBasedCall("Ability", "Raidwide");\n}')
+    check(f"{repo} maps to {fight}", len(res) == 1 and res[0]["fight"] == fight)
+
 # the classic adjacent-line form still converts
 res, _ = convert(_HEADER + '''
     @NpcCastCallout(0x8C01)

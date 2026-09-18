@@ -21,6 +21,10 @@ from nyaatriggers.app_common import (
 )
 
 
+# These Dancing Mad basic attacks have no name in the game data.
+_ABILITY_NAME_FALLBACKS = {0xC250: "Attack", 0xC252: "Attack"}
+
+
 class InstanceTabMixin:
     def _zone_dot(self, t: "Trigger") -> tuple[str, str]:
         if not self._current_zone:
@@ -173,6 +177,8 @@ class InstanceTabMixin:
             self._plugin_link.send_clear()
         self._clear_status_timers()
         self._clear_seq_runners()
+        for trigger in getattr(self, "_triggers", ()):
+            trigger._last_fired.clear()
         self._actor_jobs.clear()
         self._umad_actor_names.clear()
         self._umad_chain_reset()
@@ -288,6 +294,9 @@ class InstanceTabMixin:
               and fields[3].upper() == "4000000F"):
             # ActorControl stores the wipe command at field 3, before data0.
             self._clear_status_timers()
+            # Empty pulls do not reach the meter's encounter end callback.
+            for trigger in self._triggers:
+                trigger._last_fired.clear()
             self._plugin_link.send_clear(keep_dps=True)
             # Restore the retained schedule immediately so the next pull has bars.
             self._push_timeline_to_plugin()
@@ -433,10 +442,11 @@ class InstanceTabMixin:
         # timers.
         if t.cooldown_s > 0:
             now = time.monotonic()
-            last_fired = t._last_fired.get(runner.effect_id)
+            cooldown_key = t.cooldown_key(runner.effect_id)
+            last_fired = t._last_fired.get(cooldown_key)
             if last_fired is not None and now - last_fired < t.cooldown_s:
                 return
-            t._last_fired[runner.effect_id] = now
+            t._last_fired[cooldown_key] = now
         self._fire(t, captured)
 
     def _cancel_status_timers_for_loss(self, fields: list[str]) -> None:
@@ -574,6 +584,8 @@ class InstanceTabMixin:
         src        = fields[3]
         ability_id = fields[4] if len(fields) > 4 else ""
         ability    = fields[5]
+        if not ability.strip() or ac._UNKNOWN_NAME_RE.fullmatch(ability):
+            ability = _ABILITY_NAME_FALLBACKS.get(_hex_id(ability_id), ability)
 
         if log_type == "20":
             raw_ct = fields[8] if len(fields) > 8 else ""

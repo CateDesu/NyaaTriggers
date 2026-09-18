@@ -30,8 +30,8 @@ REPO_TO_FIGHT: dict[str, str] = {
     "M1N": "M1N",   "M2N": "M2N",   "M3N": "M3N",   "M4N": "M4N",
     # DT ultimate + extremes
     "FRU Triggers":          "FRU",
-    "EX1":                   "Zoraal Ja EX",
-    "EX2":                   "Queen EX",
+    "EX1":                   "Valigarmanda EX",
+    "EX2":                   "Zoraal Ja EX",
     # EW ultimates
     "TOP Triggers":          "TOP",
     "Dragonsong's Reprise":  "DSR",

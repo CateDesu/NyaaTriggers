@@ -360,6 +360,8 @@ class TriggerDialog(QDialog):
         self._cooldown.setSuffix(" s")
         self._cooldown.setValue(5.0)
         layout.addRow(_("Cooldown:"), self._cooldown)
+        self._shared_cooldown = QCheckBox(_("Share cooldown across sources"))
+        layout.addRow("", self._shared_cooldown)
 
         self._speed = QDoubleSpinBox()
         self._speed.setRange(0.5, 3.0)
@@ -502,6 +504,7 @@ class TriggerDialog(QDialog):
         self._fight.setText(t.fight)
         self._zone.setText(t.zone_regex)
         self._load_spin(self._cooldown, t.cooldown_s, _("Cooldown"))
+        self._shared_cooldown.setChecked(t.cooldown_scope == "trigger")
         self._load_spin(self._speed, t.speed, _("Speed"))
         self._interrupt.setChecked(t.interrupt)
         self._load_spin(self._dur_min, t.duration_min, _("Duration min"))
@@ -699,6 +702,7 @@ class TriggerDialog(QDialog):
             ability_regex=self._regex.text().strip(),
             tts_text=self._tts.text().strip(),
             cooldown_s=self._cooldown.value(),
+            cooldown_scope="trigger" if self._shared_cooldown.isChecked() else "source",
             enabled=self._enabled.isChecked(),
             fight=self._fight.text().strip(),
             zone_regex=self._zone.text().strip(),

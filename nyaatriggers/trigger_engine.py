@@ -290,6 +290,7 @@ class Trigger:
     expiry_warn_s: float = 0.0
     sound_file: str = ""
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    cooldown_scope: str = "source"
     # Runtime state is not persisted.
     _last_fired: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
@@ -304,6 +305,8 @@ class Trigger:
         }
         if self.ability_id:
             d["ability_id"] = self.ability_id
+        if self.cooldown_scope != "source":
+            d["cooldown_scope"] = self.cooldown_scope
         if self.ability_regex:
             d["ability_regex"] = self.ability_regex
         if self.zone_regex:
@@ -361,6 +364,7 @@ class Trigger:
             ability_regex=_str_or(d.get("ability_regex"), ""),
             tts_text=_str_or(d.get("tts_text"), ""),
             cooldown_s=max(0.0, _as_float(d.get("cooldown_s"), 5.0)),
+            cooldown_scope=("trigger" if d.get("cooldown_scope") == "trigger" else "source"),
             enabled=_as_bool(d.get("enabled"), True),
             zone_regex=_str_or(d.get("zone_regex"), ""),
             fight=_str_or(d.get("fight"), ""),
@@ -378,6 +382,9 @@ class Trigger:
             expiry_warn_s=warn,
             sound_file=_str_or(d.get("sound_file"), ""),
         )
+
+    def cooldown_key(self, source_id: str) -> str:
+        return "*" if self.cooldown_scope == "trigger" else source_id.upper()
 
     def matches(self, fields: list[str], me: str = "") -> dict | None:
         """Match a log line using the current player name for self scope."""
@@ -455,7 +462,7 @@ class Trigger:
         # for statuses. Expiry gains and losses bypass this check so they can reset
         # timers. Timer firing applies the cooldown.
         if not (self.expiry_warn_s > 0 and lt in _STATUS_TYPES):
-            source_id = fields[2].upper() if len(fields) > 2 else ""
+            source_id = self.cooldown_key(fields[2] if len(fields) > 2 else "")
             now = time.monotonic()
             last_fired = self._last_fired.get(source_id)
             if last_fired is not None and now - last_fired < self.cooldown_s:

@@ -22,6 +22,19 @@ def check(name, cond):
 
 _app = QApplication.instance() or QApplication(sys.argv)
 
+from nyaatriggers.trigger_engine import Trigger
+
+shared = Trigger(name="Helpers", log_type="20", ability_id="945E",
+                 cooldown_scope="trigger")
+shared_dialog = TriggerDialog(trigger=shared)
+check("editor preserves a shared cooldown",
+      shared_dialog.get_trigger(shared.id).to_dict().get("cooldown_scope") == "trigger")
+shared_dialog._shared_cooldown.setChecked(False)
+check("editor can restore a separate cooldown per source",
+      shared_dialog.get_trigger(shared.id).cooldown_scope == "source")
+check("invalid cooldown scope keeps the existing default",
+      Trigger.from_dict({"cooldown_scope": "invalid"}).cooldown_scope == "source")
+
 ZONE = "The Voidcast Dais"
 GREEN, RED, GREY = "#a6e3a1", "#f38ba8", "#5e6480"
 

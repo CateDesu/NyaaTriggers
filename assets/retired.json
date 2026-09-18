@@ -55,6 +55,56 @@
       "id": "254469d5-dd56-4746-ac0e-b5fe5ab1e12a",
       "name": "Arcane Revelation Dark",
       "reason": "Second claim on P11S cast 8210 with identical 'Light Safe' text. The first row stays."
+    },
+    {
+      "id": "db8252a8-4de0-40a7-8c9e-33bd2167ae35",
+      "name": "M4N – Sidewise Spark: West safe",
+      "reason": "Sidewise Spark directions depend on the caster heading and the replica sequence"
+    },
+    {
+      "id": "accaccdb-6b7d-4e88-9c78-44dccd1b8722",
+      "name": "Azure Wings",
+      "reason": "The safe direction depends on previous spins or moving star positions"
+    },
+    {
+      "id": "8c173bd4-0418-427b-8ef6-afd724efa876",
+      "name": "Adds Left/Right (North/South/East/West Safe) lines 26",
+      "reason": "The actor VFX status needs the replica position and its extra value to determine a safe direction"
+    },
+    {
+      "id": "363cba0c-a351-48ae-9c4a-83ffd410f177",
+      "name": "Single KB Star",
+      "reason": "The safe direction depends on previous spins or moving star positions"
+    },
+    {
+      "id": "38b31f57-b0ce-49c2-a09c-733ba05a471d",
+      "name": "Single AOE Stars",
+      "reason": "The safe direction depends on previous spins or moving star positions"
+    },
+    {
+      "id": "3387ff46-c878-483e-921f-3985e44bc213",
+      "name": "Head Facing During Single Stars?",
+      "reason": "The safe direction depends on previous spins or moving star positions"
+    },
+    {
+      "id": "c1dd11fc-b188-4a58-8015-c079bf71a41f",
+      "name": "Spikecicle + avalanche",
+      "reason": "The avalanche safe side depends on the arena effect and cannot always be left"
+    },
+    {
+      "id": "a8cc54d4-77b2-4f77-ac13-7e22ef00ab86",
+      "name": "Stygian Maw",
+      "reason": "The second vertical spin can require in or corners depending on the first spin"
+    },
+    {
+      "id": "f7bb248b-5261-404a-8d55-9dcd7aa50218",
+      "name": "In/Out?",
+      "reason": "This ID is an instant teleport and provides no in or out instruction"
+    },
+    {
+      "id": "a3073d15-4e8d-465a-b329-aebfd1031ffd",
+      "name": "Movement",
+      "reason": "The safe rotation depends on mirror positions and cannot always be clockwise"
     }
   ]
 }
