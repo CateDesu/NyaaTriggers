@@ -250,6 +250,36 @@ check("the live generation's callout is emitted with its generation",
 check("the live generation's exit status is emitted with its generation",
       ("status", "Sidecar exited", 3) in fired)
 
+# Ubuntu Xvfb sends engine diagnostics through stdout.
+merged_diagnostics = (
+    "[triggevent-core] ready; reading WS messages on stdin; recovery=1; history=1; catchup=1\n"
+    "Error in sequential trigger 'DMU.ttSq' while waiting for 'BuffApplied'\n"
+)
+for live in (False, True):
+    merged_bridge = tb.TriggeventBridge()
+    merged_bridge._active = True
+    merged_bridge._gen = 2
+    merged_proc = _OldProc(merged_diagnostics)
+    merged_bridge._proc = merged_proc if live else _OldProc("")
+    merged_ready, merged_failures, merged_drops = [], [], []
+    merged_bridge.ready.connect(lambda gen: merged_ready.append(
+        (gen, merged_bridge.supports_recovery(), merged_bridge.supports_local_history(),
+         merged_bridge.supports_catchup())))
+    merged_bridge.chain_failure.connect(lambda line, gen: merged_failures.append((line, gen)))
+    with mock.patch.object(merged_bridge, "_reap"), \
+            mock.patch.object(tb, "log_drop", side_effect=lambda *args: merged_drops.append(args)):
+        merged_bridge._read_loop(merged_proc, queue.Queue(), {"last": None}, 2 if live else 1)
+    if live:
+        check("merged stdout announces readiness and recovery capabilities",
+              merged_ready == [(2, True, True, True)])
+        check("merged stdout reports live sequential trigger failures",
+              len(merged_failures) == 1 and merged_failures[0][1] == 2
+              and merged_drops[0][0] == "engine-chain")
+    else:
+        check("stale merged stdout cannot announce readiness or trigger failures",
+              merged_ready == [] and merged_failures == []
+              and merged_bridge._recovery_gen == -1)
+
 # Reject stale signals delivered after a restart.
 from nyaatriggers.ui.engines import EnginesMixin
 

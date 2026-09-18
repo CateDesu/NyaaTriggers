@@ -854,6 +854,7 @@ class TriggeventBridge(QObject):
                     continue
                 if not line.startswith("{"):
                     _log(f"[sidecar] {line}")
+                    self._handle_diagnostic(line, gen)
                     continue
                 try:
                     msg = json.loads(line)
@@ -897,24 +898,26 @@ class TriggeventBridge(QObject):
             if not line:
                 continue
             _log(f"[sidecar stderr] {line}")
-            # Report sequential trigger failures from stderr only for the current
-            # generation.
-            if "Error in sequential trigger" in line:
-                log_drop("engine-chain", line, 0)
-                if self._gen_live(gen):
-                    self.chain_failure.emit(line, gen)
-            # Replay world state once the live sidecar is reading stdin.
-            if "reading WS messages on stdin" in line:
-                with self._state_lock:
-                    if not self._gen_live(gen):
-                        continue
-                    if "recovery=1" in line:
-                        self._recovery_gen = gen
-                    if "history=1" in line:
-                        self._history_gen = gen
-                    if "catchup=1" in line:
-                        self._catchup_gen = gen
-                self.ready.emit(gen)
+            self._handle_diagnostic(line, gen)
+
+    def _handle_diagnostic(self, line: str, gen: int) -> None:
+        # Some Xvfb wrappers merge stderr into stdout.
+        if "Error in sequential trigger" in line:
+            log_drop("engine-chain", line, 0)
+            if self._gen_live(gen):
+                self.chain_failure.emit(line, gen)
+        # Replay world state once the live sidecar is reading stdin.
+        if "reading WS messages on stdin" in line:
+            with self._state_lock:
+                if not self._gen_live(gen):
+                    return
+                if "recovery=1" in line:
+                    self._recovery_gen = gen
+                if "history=1" in line:
+                    self._history_gen = gen
+                if "catchup=1" in line:
+                    self._catchup_gen = gen
+            self.ready.emit(gen)
 
     def _dispatch(self, msg: dict, seq_state: "dict | None" = None,
                   gen: "int | None" = None) -> None:
