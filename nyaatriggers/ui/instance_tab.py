@@ -107,6 +107,7 @@ class InstanceTabMixin:
             # Cancel warnings whose loss or wipe events can no longer arrive.
             self._clear_status_timers()
             self._clear_seq_runners()
+            self._clear_callout_dedup()
             meter = getattr(self, "_dps_meter", None)
             if meter is not None:
                 # Close the pull and reset the combat edge so reconnect can start a new
@@ -174,6 +175,7 @@ class InstanceTabMixin:
             self._plugin_link.send_clear()
         self._clear_status_timers()
         self._clear_seq_runners()
+        self._clear_callout_dedup()
         for trigger in getattr(self, "_triggers", ()):
             trigger._last_fired.clear()
         self._actor_jobs.clear()
@@ -291,6 +293,7 @@ class InstanceTabMixin:
               and fields[3].upper() == "4000000F"):
             # ActorControl stores the wipe command at field 3, before data0.
             self._clear_status_timers()
+            self._clear_callout_dedup()
             # Empty pulls do not reach the meter's encounter end callback.
             for trigger in self._triggers:
                 trigger._last_fired.clear()

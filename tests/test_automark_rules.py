@@ -241,6 +241,9 @@ class ZoneWin:
     def _clear_seq_runners(self):
         pass
 
+    def _clear_callout_dedup(self):
+        pass
+
     def _umad_chain_reset(self, clear_marks=False):
         pass
 

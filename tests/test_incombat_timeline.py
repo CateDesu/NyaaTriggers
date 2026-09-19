@@ -238,6 +238,7 @@ w7._local_enabled = True
 w7._triggers = []
 w7._clear_status_timers = lambda: MainWindow._clear_status_timers(w7)
 w7._clear_seq_runners = lambda: MainWindow._clear_seq_runners(w7)
+w7._clear_callout_dedup = lambda: None
 w7._umad_chain_reset = lambda clear_marks=False: \
     MainWindow._umad_chain_reset(w7, clear_marks=clear_marks)
 w7._umad_gaze_reset = lambda clear_marks=False: \

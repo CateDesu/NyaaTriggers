@@ -2496,10 +2496,14 @@ def test_feed_loss_cancels_pending_local_warnings():
         def _clear_seq_runners(self):
             self.cleared.append("seq")
 
+        def _clear_callout_dedup(self):
+            self.cleared.append("guest")
+
     host = _Host()
     host._on_status_changed(False, "Disconnected")
     check("feed loss drops pending status warnings", "status" in host.cleared)
     check("feed loss drops in-flight sequences", "seq" in host.cleared)
+    check("feed loss drops pending guests", "guest" in host.cleared)
     check("feed loss closes the meter encounter and combat edge",
           "feed_lost" in host._dps_meter.calls)
 

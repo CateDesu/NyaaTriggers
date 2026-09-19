@@ -1476,7 +1476,8 @@ class TriggersTabMixin:
         if not path:
             return
         try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            imported = Path(path).read_bytes()
+            data = json.loads(imported.decode("utf-8"))
             # Require an object before checking for the triggers key.
             if not isinstance(data, dict) or "triggers" not in data:
                 raise ValueError(_("File is missing a 'triggers' key - not a NyaaTriggers export"))
@@ -1496,7 +1497,7 @@ class TriggersTabMixin:
         try:
             # Import through a sibling temporary file to avoid partial writes.
             tmp = ac.TRIGGERS_LOCAL_FILE.with_suffix(ac.TRIGGERS_LOCAL_FILE.suffix + ".tmp")
-            shutil.copy2(path, tmp)
+            tmp.write_bytes(imported)
             # Keep a backup because import replaces the complete local file.
             backup = None
             if ac.TRIGGERS_LOCAL_FILE.exists():

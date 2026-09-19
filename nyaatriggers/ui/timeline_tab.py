@@ -178,6 +178,8 @@ class TimelineTabMixin:
                 data = fetch_bytes(req, _TIMELINE_MAX_BYTES)
                 if len(data) > _TIMELINE_MAX_BYTES:
                     raise ValueError("timeline response too large")
+                if not timeline_parser.parse(data.decode("utf-8-sig")):
+                    raise ValueError("refreshed timeline has no entries")
                 ac.TIMELINES_DIR.mkdir(parents=True, exist_ok=True)
                 dest = ac.TIMELINES_DIR / f"{tag}.cactbot.cache.txt"
                 tmp = dest.with_name(f"{dest.name}.{os.getpid()}.{threading.get_ident()}.tmp")

@@ -4,6 +4,7 @@ from contextlib import ExitStack
 import json
 from pathlib import Path
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -11,6 +12,7 @@ from unittest.mock import Mock, patch
 from tests.test_callout_review_fixes import Host
 from tests.test_data_safety import TriggerHost
 from nyaatriggers import app_common as ac, tts
+from nyaatriggers.main_window import MainWindow
 from nyaatriggers.status_timer import StatusTimerRunner
 from nyaatriggers.timeline_engine import TimelineEngine
 from nyaatriggers.timeline_parser import parse
@@ -18,6 +20,7 @@ from nyaatriggers.trigger_dialog import TriggerDialog
 from nyaatriggers.trigger_engine import Trigger
 from nyaatriggers.ui.automarkers_tab import AutomarkersTabMixin
 from nyaatriggers.ui.connection import ConnectionMixin
+from nyaatriggers.ui.timeline_tab import TimelineTabMixin
 
 
 class CalloutBoundaryTests(unittest.TestCase):
@@ -135,6 +138,40 @@ class CalloutBoundaryTests(unittest.TestCase):
             runner._fire()
             done.assert_called_once()
 
+    def test_guest_callouts_do_not_survive_empty_wipes_or_zone_boundaries(self):
+        from PyQt6.QtTest import QTest
+
+        host = self.host
+        del host._clear_callout_dedup
+        host._triggers_enabled = True
+        host._localize_text = lambda text: text
+        host._pending_guests = {}
+        host._callout_claimed = {}
+        host._guest_claim_sev = {}
+        host._flush_guest = MainWindow._flush_guest.__get__(host)
+        host._flush_guest_deferred = MainWindow._flush_guest_deferred.__get__(host)
+        self.addCleanup(host._clear_callout_dedup)
+        host._status_lbl = Mock()
+        host._conn_btn = Mock()
+        for boundary in ("zone", "same_zone", "wipe", "disconnect", "metadata"):
+            with self.subTest(boundary=boundary), patch("nyaatriggers.main_window.speak") as speak:
+                host.prepare_zone()
+                host._clear_callout_dedup()
+                host._emit_guest_callout("Move away")
+                self.assertTrue(host._pending_guests)
+                if boundary == "zone":
+                    host.raw_zone()
+                elif boundary == "same_zone":
+                    host.raw_zone("Old Arena", "64")
+                elif boundary == "wipe":
+                    host.wipe()
+                elif boundary == "disconnect":
+                    host._on_status_changed(False, "Disconnected")
+                else:
+                    host._apply_zone("Old Arena", 100)
+                QTest.qWait(ac._GUEST_CALLOUT_DEFER_MS + 60)
+                self.assertEqual(speak.call_count, int(boundary == "metadata"))
+
 
 class TriggerFileBoundaryTests(unittest.TestCase):
     def setUp(self):
@@ -183,6 +220,69 @@ class TriggerFileBoundaryTests(unittest.TestCase):
         self.assertTrue(host._local_corrupt)
         self.assertFalse(host._save_triggers())
         self.assertEqual(ac.TRIGGERS_LOCAL_FILE.read_text(), content)
+
+    def test_import_uses_the_validated_file_even_if_the_source_changes(self):
+        source = ac.TRIGGERS_LOCAL_FILE.with_name("import.json")
+        original = b'{"triggers": [{"id": "imported", "tts_text": "Keep me"}]}'
+        previous = b'{"triggers": [{"id": "previous"}]}'
+        source.write_bytes(original)
+        ac.TRIGGERS_LOCAL_FILE.write_bytes(previous)
+        host = TriggerHost()
+        host._load_triggers()
+
+        def confirm(*args):
+            source.write_text("interrupted write")
+            return ac.QMessageBox.StandardButton.Yes
+
+        with patch.object(ac.QFileDialog, "getOpenFileName", return_value=(str(source), "")), \
+                patch.object(ac.QMessageBox, "question", side_effect=confirm), \
+                patch.object(ac.QMessageBox, "information"), \
+                patch.object(ac.QMessageBox, "critical") as failure:
+            host._import_triggers()
+        failure.assert_not_called()
+        self.assertEqual(ac.TRIGGERS_LOCAL_FILE.read_bytes(), original)
+        self.assertEqual(Path(str(ac.TRIGGERS_LOCAL_FILE) + ".bak").read_bytes(), previous)
+        self.assertFalse(host._local_corrupt)
+        self.assertIn("imported", {trigger.id for trigger in host._triggers})
+
+    def test_import_rejects_encodings_the_local_reader_cannot_load(self):
+        source = ac.TRIGGERS_LOCAL_FILE.with_name("import.json")
+        previous = b'{"triggers": [{"id": "previous"}]}'
+        ac.TRIGGERS_LOCAL_FILE.write_bytes(previous)
+        for encoding in ("utf-16", "utf-8-sig"):
+            with self.subTest(encoding=encoding), \
+                    patch.object(ac.QFileDialog, "getOpenFileName", return_value=(str(source), "")), \
+                    patch.object(ac.QMessageBox, "question") as confirm, \
+                    patch.object(ac.QMessageBox, "critical") as failure:
+                source.write_bytes('{"triggers": []}'.encode(encoding))
+                TriggerHost()._import_triggers()
+                failure.assert_called_once()
+                confirm.assert_not_called()
+                self.assertEqual(ac.TRIGGERS_LOCAL_FILE.read_bytes(), previous)
+
+
+class TimelineDownloadBoundaryTests(unittest.TestCase):
+    def test_invalid_refresh_preserves_the_cached_timeline_and_allows_retry(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(ac, "TIMELINES_DIR", Path(directory)), \
+                patch("nyaatriggers.ui.timeline_tab.threading.Thread") as thread:
+            thread.side_effect = lambda *, target, daemon: SimpleNamespace(start=target)
+            host = SimpleNamespace(_cactbot_tl_lock=threading.Lock(),
+                                   _cactbot_tl_fetching=set(), _cactbot_tl_signal=Mock())
+            cache = Path(directory) / "Arena.cactbot.cache.txt"
+            previous = b'30 "Raidwide"\n'
+            replacement = b'\xef\xbb\xbf40 "Tankbuster"\n'
+            for response in (b"", b"<html>Temporarily unavailable</html>", b"\xff", replacement):
+                with self.subTest(response=response), \
+                        patch("nyaatriggers.ui.timeline_tab.fetch_bytes", return_value=response):
+                    cache.write_bytes(previous)
+                    host._cactbot_tl_signal.reset_mock()
+                    TimelineTabMixin._fetch_cactbot_timeline(host, "Arena", "raid/arena.txt")
+                    valid = response == replacement
+                    self.assertEqual(cache.read_bytes(), response if valid else previous)
+                    self.assertEqual(host._cactbot_tl_signal.emit.call_count, int(valid))
+                    self.assertFalse(host._cactbot_tl_fetching)
+                    self.assertFalse(list(Path(directory).glob("*.tmp")))
 
 
 class TriggerEditorBoundaryTests(unittest.TestCase):
