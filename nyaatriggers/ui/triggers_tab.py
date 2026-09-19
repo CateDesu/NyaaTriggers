@@ -134,14 +134,26 @@ class TriggersTabMixin:
             # sorting.
             self._deleted_ids = {x for x in _as_strset(raw.get("deleted"))
                                  if isinstance(x, str)}
-        # Keep an enabled duplicate enabled through its surviving definition.
+        # Carry saved wording and enabled choices to the surviving definitions.
         choices = {ident: {"enabled": enabled} for ident, enabled in enabled_overrides.items()}
-        choices.update({t.id: {"enabled": t.enabled} for t in local_triggers})
+        for trigger in local_triggers:
+            choice = {"enabled": trigger.enabled, "text": trigger.tts_text}
+            off = self._official_triggers.get(trigger.id)
+            if off is not None:
+                td, od = trigger.to_dict(), off.to_dict()
+                td.pop("enabled", None)
+                od.pop("enabled", None)
+                # Treat unchanged full copies as toggle records.
+                if td == od:
+                    choice.pop("text")
+            choices[trigger.id] = choice
         choices = merge_local_choices(choices, self._trigger_replacements)
         enabled_overrides = {ident: choice["enabled"] for ident, choice in choices.items()}
         for trigger in local_triggers:
             if trigger.id in choices:
                 trigger.enabled = choices[trigger.id]["enabled"]
+                if "text" in choices[trigger.id]:
+                    trigger.tts_text = choices[trigger.id]["text"]
         # Remove retired local triggers and tombstones before merging or saving.
         local_triggers = [t for t in local_triggers if t.id not in self._retired_ids]
         self._deleted_ids -= self._retired_ids
@@ -168,6 +180,8 @@ class TriggersTabMixin:
                 continue
             if t.id in enabled_overrides:
                 t.enabled = enabled_overrides[t.id]
+                if "text" in choices[t.id]:
+                    t.tts_text = choices[t.id]["text"]
             merged.append(t)
         for t in local_triggers:
             if t.id not in self._official_ids:

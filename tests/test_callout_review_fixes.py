@@ -284,12 +284,61 @@ class MigrationTests(unittest.TestCase):
                 for retired, targets in REPLACEMENTS.items():
                     self.assertNotIn(retired, survivors)
                     self.assertTrue(all(survivors[t].enabled for t in targets))
+                    for ident in targets:
+                        bundled = next(r for r in ROWS if r["id"] == ident)["tts_text"]
+                        expected = "Saved text" if full else bundled
+                        self.assertEqual(survivors[ident].tts_text, expected)
+                        self.assertEqual(host._official_triggers[ident].tts_text, bundled)
                 self.assertTrue(host._save_triggers())
                 saved = json.loads(ac.TRIGGERS_LOCAL_FILE.read_text())
                 self.assertFalse({r["id"] for r in saved["triggers"]} & REPLACEMENTS.keys())
                 host._load_triggers()
                 survivors = {t.id: t for t in host._triggers}
                 self.assertTrue(all(survivors[t].enabled for targets in REPLACEMENTS.values() for t in targets))
+                for targets in REPLACEMENTS.values():
+                    for ident in targets:
+                        bundled = next(r for r in ROWS if r["id"] == ident)["tts_text"]
+                        self.assertEqual(survivors[ident].tts_text, "Saved text" if full else bundled)
+
+    def test_retired_wording_survives_slim_toggles_but_keeps_survivor_edits(self):
+        retired, targets = next(iter(REPLACEMENTS.items()))
+        ident = targets[0]
+        bundled = next(r for r in ROWS if r["id"] == ident)
+        for survivor_kind, survivor_text in (("slim", None), ("legacy", None),
+                                             ("custom", "Survivor wording"), ("blank", "")):
+            with self.subTest(survivor_kind=survivor_kind), tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+                for name in ("TRIGGERS_LOCAL_FILE", "_REPO_TRIGGERS_FILE", "_REPO_RETIRED_FILE", "_REPO_TRIGGERS_VERSION"):
+                    stack.enter_context(patch.object(ac, name, Path(directory) / name))
+                retired_row = {**bundled, "id": retired, "enabled": True, "tts_text": "Join my group"}
+                survivor = {"id": ident, "enabled": False}
+                if survivor_kind == "legacy":
+                    survivor = {**bundled, **survivor}
+                elif survivor_text is not None:
+                    survivor = {**bundled, **survivor, "tts_text": survivor_text, "cooldown_s": 31}
+                ac.TRIGGERS_LOCAL_FILE.write_text(json.dumps({"triggers": [retired_row, survivor]}))
+
+                class Window(TriggersTabMixin):
+                    def _refresh_table(self):
+                        pass
+
+                host = Window()
+                host._load_triggers()
+                self.assertTrue(host._save_triggers())
+                host._load_triggers()
+                trigger = next(t for t in host._triggers if t.id == ident)
+                self.assertTrue(trigger.enabled)
+                expected = "Join my group" if survivor_text is None else survivor_text
+                self.assertEqual(trigger.tts_text, expected)
+                if survivor_text is not None:
+                    self.assertEqual(trigger.cooldown_s, 31)
+                else:
+                    dispatch = Host([1000.0])
+                    self.addCleanup(dispatch._clear_seq_runners)
+                    dispatch._triggers = host._triggers
+                    dispatch._zone_aliases = ("Everkeep (Extreme)",)
+                    with patch("nyaatriggers.main_window.speak") as speech:
+                        dispatch.dispatch("9374", "20")
+                        speech.assert_called_once_with(expected, speed=1.0, reading=expected)
 
     def test_profiles_merge_enabled_choices_without_rewriting_the_saved_profile(self):
         retired, targets = next(iter(REPLACEMENTS.items()))

@@ -106,6 +106,33 @@ class NativeCrashLogTests(unittest.TestCase):
             self.assertIn("could not enable native crash logging",
                           (Path(directory) / "nyaatriggers.log").read_text())
 
+    def test_write_and_close_failures_do_not_prevent_startup_or_retry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_child(directory, """
+                import errno
+                import io
+                from unittest.mock import patch
+
+                class FullDisk(io.RawIOBase):
+                    def writable(self):
+                        return True
+
+                    def write(self, data):
+                        raise OSError(errno.ENOSPC, 'disk full')
+
+                log = io.TextIOWrapper(io.BufferedWriter(FullDisk()), encoding='utf-8')
+                with patch.object(drop_log, 'open_private_log', return_value=log):
+                    assert not drop_log.enable_native_crash_log()
+                assert log.closed
+                assert drop_log._native_crash_file is None
+                assert drop_log.enable_native_crash_log()
+                assert drop_log._native_crash_file is not None
+                print('startup continues')
+            """)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('startup continues', result.stdout)
+            self.assertIn('disk full', (Path(directory) / 'nyaatriggers.log').read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

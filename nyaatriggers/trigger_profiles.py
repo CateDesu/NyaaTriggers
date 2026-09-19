@@ -8,7 +8,7 @@ DEFAULT_PROFILE_ID = "00000000-0000-0000-0000-000000000000"
 
 
 def merge_local_choices(choices, replacements):
-    """Carry enabled choices from duplicate rows to their surviving definitions."""
+    """Carry saved choices from duplicate rows to their surviving definitions."""
     merged = deepcopy(choices)
     for retired, targets in replacements.items():
         choice = choices.get(retired)
@@ -18,8 +18,11 @@ def merge_local_choices(choices, replacements):
         for target in targets:
             if target not in merged:
                 merged[target] = deepcopy(choice)
-            elif choice["enabled"]:
-                merged[target]["enabled"] = True
+            else:
+                if choice["enabled"]:
+                    merged[target]["enabled"] = True
+                if "text" in choice:
+                    merged[target].setdefault("text", choice["text"])
     return merged
 
 

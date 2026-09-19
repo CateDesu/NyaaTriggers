@@ -69,7 +69,11 @@ def enable_native_crash_log() -> bool:
         faulthandler.enable(file=log, all_threads=True)
     except (OSError, RuntimeError) as exc:
         if log is not None:
-            log.close()
+            try:
+                log.close()
+            except OSError:
+                # Closing a buffered stream can retry the failed write.
+                pass
         log_drop("crash-log", f"could not enable native crash logging: {exc}")
         return False
     # Retain the handle for the whole process, including interpreter shutdown.
