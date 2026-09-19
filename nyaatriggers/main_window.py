@@ -1255,7 +1255,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         enabled = item.checkState() == Qt.CheckState.Checked
         for t in self._triggers:
             if t.id == trigger_id:
-                t.enabled = enabled
+                self._set_trigger_enabled(t, enabled)
                 self._local_ids.add(trigger_id)
                 break
         self._save_triggers()

@@ -100,6 +100,9 @@ if "--apply-update" in sys.argv:
     _maybe_finish_windows_update()
     sys.exit(0)
 
+if __name__ == "__main__":
+    drop_log.enable_native_crash_log()
+
 from nyaatriggers.http_fetch import configure_ssl_trust
 
 configure_ssl_trust()

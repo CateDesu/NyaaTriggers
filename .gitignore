@@ -3,6 +3,7 @@ __pycache__/
 triggers.local.json
 triggers.experimental.json
 nyaatriggers.log
+nyaatriggers.crash.log*
 nyaatriggers_settings.json
 dps_logs/
 pull_logs/

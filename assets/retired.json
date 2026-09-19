@@ -105,6 +105,72 @@
       "id": "a3073d15-4e8d-465a-b329-aebfd1031ffd",
       "name": "Movement",
       "reason": "The safe rotation depends on mirror positions and cannot always be clockwise"
+    },
+    {
+      "id": "1d837552-e81a-5351-8a74-266290ad62a6",
+      "name": "Zoraal Ja Ex Duty's Edge",
+      "reason": "Duplicate event coverage merged into existing local triggers",
+      "replaced_by": [
+        "dd5a2525-2fb3-4977-8207-0d8dff0f47d8"
+      ]
+    },
+    {
+      "id": "00ec4828-0ff3-5be5-afe0-71d63f783c10",
+      "name": "P9N Gluttony's Augur",
+      "reason": "Duplicate event coverage merged into existing local triggers",
+      "replaced_by": [
+        "40c9402e-68fe-4131-b919-00231c5e93ae"
+      ]
+    },
+    {
+      "id": "91de0a44-ec29-5423-a2ab-cc8be1c9e63c",
+      "name": "P9N Burst",
+      "reason": "Duplicate event coverage merged into existing local triggers",
+      "replaced_by": [
+        "fe96f3f7-d04f-45e5-9324-88cb370b0f3e"
+      ]
+    },
+    {
+      "id": "b12018c6-d8d5-5562-aacf-f708926f7e8e",
+      "name": "Aglaia Tank Busters",
+      "reason": "Duplicate event coverage merged into existing local triggers",
+      "replaced_by": [
+        "0d03ee45-8e09-4d09-8860-ccd64be65f59",
+        "b91b14a0-a115-4c66-9d97-8d2fa8225f63",
+        "3d0cf919-9e06-4beb-b0d6-551a6f36a54c"
+      ]
+    },
+    {
+      "id": "f697006a-1bae-515f-b610-0dc30a903e71",
+      "name": "O11S Mustard Bomb",
+      "reason": "Duplicate event coverage merged into existing local triggers",
+      "replaced_by": [
+        "5e629f5c-5110-4504-9552-28af076c0356"
+      ]
+    },
+    {
+      "id": "9ea7628a-42c0-4339-9347-8adf4c9e432b",
+      "name": "Zoraal Ja EX – Actualize",
+      "reason": "Duplicate event coverage after moving the callout to Zoraal Ja EX",
+      "replaced_by": [
+        "d13cd2cd-ba9a-4ac6-b6fd-1b902c5b6f4e"
+      ]
+    },
+    {
+      "id": "a38cb759-cbc2-48db-ba2c-a56b5e518ff8",
+      "name": "Zoraal Ja EX – Dawn of an Age",
+      "reason": "Duplicate event coverage after moving the callout to Zoraal Ja EX",
+      "replaced_by": [
+        "b3c96df1-8ff5-447b-8957-5dca5f407937"
+      ]
+    },
+    {
+      "id": "62e71089-fc50-4360-84b8-f69cca08ac84",
+      "name": "Zoraal Ja EX – Forged Track",
+      "reason": "Duplicate event coverage after moving the callout to Zoraal Ja EX",
+      "replaced_by": [
+        "a5a97bd7-dcd2-40a8-a668-ddea457b1fba"
+      ]
     }
   ]
 }

@@ -77,6 +77,8 @@ Select a fight or folder to filter the table. Headers expand or collapse groups.
 
 **Row menu.** Right-click for Edit, Duplicate, Test Fire, Enable / Disable, Delete, Move to Folder, and Reset to Default. Moving changes the fight tag. Reset restores a modified bundled trigger's values.
 
+**Callout delay.** The editor can wait before speaking, starting from the matching event or the final follow-up step. Wipes, zone changes, disconnects, and disabling the trigger or local callouts cancel pending delays. Reapply warnings use their own expiry timer instead.
+
 **Tree menu.** Right-click to create, rename, or delete Unsorted folders and subfolders. **New folder for a fight...** opens a searchable Savage, Ultimate, and Extreme picker. Deletion confirms how many triggers it will remove, including subfolders.
 
 The toolbar has row actions, global toggles, and **Reset to Default**. This reset only clears all trigger checkmarks; definitions and edited values are preserved.

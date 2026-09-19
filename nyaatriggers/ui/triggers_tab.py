@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from nyaatriggers.trigger_engine import Trigger
+from nyaatriggers.trigger_profiles import merge_local_choices
 from nyaatriggers.trigger_dialog import TriggerDialog
 from nyaatriggers.tts import set_readings
 from nyaatriggers.locale_util import _, active_locale
@@ -36,6 +37,7 @@ from nyaatriggers.app_common import (
 class TriggersTabMixin:
     def _load_retired_ids(self) -> set[str]:
         """Read retired trigger IDs from strings or records with an ID and reason."""
+        self._trigger_replacements = {}
         src = ac._REPO_RETIRED_FILE
         # Load downloaded retirements only when their version stamp matches the program.
         if not (src.exists() and src != ac.RETIRED_FILE
@@ -56,6 +58,13 @@ class TriggersTabMixin:
                 out.add(row)
             elif isinstance(row, dict) and isinstance(row.get("id"), str):
                 out.add(row["id"])
+                targets = row.get("replaced_by")
+                if isinstance(targets, list) and all(isinstance(t, str) for t in targets):
+                    self._trigger_replacements[row["id"]] = targets
+        self._trigger_replacements = {
+            ident: [t for t in targets if t not in out]
+            for ident, targets in self._trigger_replacements.items()
+        }
         return out
 
     def _load_triggers(self) -> None:
@@ -125,6 +134,14 @@ class TriggersTabMixin:
             # sorting.
             self._deleted_ids = {x for x in _as_strset(raw.get("deleted"))
                                  if isinstance(x, str)}
+        # Keep an enabled duplicate enabled through its surviving definition.
+        choices = {ident: {"enabled": enabled} for ident, enabled in enabled_overrides.items()}
+        choices.update({t.id: {"enabled": t.enabled} for t in local_triggers})
+        choices = merge_local_choices(choices, self._trigger_replacements)
+        enabled_overrides = {ident: choice["enabled"] for ident, choice in choices.items()}
+        for trigger in local_triggers:
+            if trigger.id in choices:
+                trigger.enabled = choices[trigger.id]["enabled"]
         # Remove retired local triggers and tombstones before merging or saving.
         local_triggers = [t for t in local_triggers if t.id not in self._retired_ids]
         self._deleted_ids -= self._retired_ids
@@ -959,7 +976,7 @@ class TriggersTabMixin:
             live = next((x for x in self._triggers if x.id == t.id), None)
             if live is None:
                 return
-            live.enabled = not live.enabled
+            self._set_trigger_enabled(live, not live.enabled)
             self._local_ids.add(live.id)
             self._refresh_table()
             self._save_triggers()
@@ -994,7 +1011,7 @@ class TriggersTabMixin:
         changed = False
         for t in self._triggers:
             if t.enabled:
-                t.enabled = False
+                self._set_trigger_enabled(t, False)
                 if t.id in self._official_ids:
                     self._local_ids.add(t.id)
                 changed = True
@@ -1225,11 +1242,18 @@ class TriggersTabMixin:
                 if e.get("source") == "triggevent" and e.get("id")
                 and self._engine_fight_tag(e) == fight]
 
+    def _set_trigger_enabled(self, trigger: Trigger, enabled: bool) -> None:
+        trigger.enabled = enabled
+        if not enabled:
+            for runner in list(getattr(self, "_seq_runners", ())):
+                if runner.trigger is trigger:
+                    self._drop_seq_runner(runner)
+
     def _set_fight_local(self, fight: str, enabled: bool) -> None:
         changed = False
         for t in self._fight_local_triggers(fight):
             if t.enabled != enabled:
-                t.enabled = enabled
+                self._set_trigger_enabled(t, enabled)
                 self._local_ids.add(t.id)
                 changed = True
         if changed:
@@ -1278,7 +1302,7 @@ class TriggersTabMixin:
         self._settings["global_local_on"] = enable
         for t in self._triggers:
             if t.enabled != enable:
-                t.enabled = enable
+                self._set_trigger_enabled(t, enable)
                 self._local_ids.add(t.id)
         self._save_triggers()
         self._save_settings()
@@ -1345,6 +1369,7 @@ class TriggersTabMixin:
         # matching.
         if not self._local_enabled:
             self._clear_status_timers()
+            self._clear_seq_runners()
             # Reset the local timeline because its own timer would keep speaking after
             # the switch.
             self._timeline.reset()

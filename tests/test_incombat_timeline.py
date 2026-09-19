@@ -265,6 +265,7 @@ check("second wipe clears the plugin again", w7._plugin_link.clears == 2)
 w8 = make_window()
 w8._timeline.load(sample_entries())
 w8._clear_status_timers = lambda: None
+w8._clear_seq_runners = lambda: None
 w8._save_settings = lambda: None
 MainWindow._set_local_enabled(w8, False)
 check("local off clears the plugin", w8._plugin_link.clears == 1)

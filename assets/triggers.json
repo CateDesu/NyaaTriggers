@@ -4036,18 +4036,6 @@
     "zone_regex": "^Worqor Lar Dor \\(Extreme\\)$"
   },
   {
-    "id": "9ea7628a-42c0-4339-9347-8adf4c9e432b",
-    "name": "Zoraal Ja EX – Actualize",
-    "fight": "Zoraal Ja EX",
-    "log_type": "20",
-    "ability_id": "9398",
-    "ability_regex": "",
-    "tts_text": "Raidwide",
-    "cooldown_s": 5.0,
-    "enabled": false,
-    "zone_regex": "^Everkeep \\(Extreme\\)$"
-  },
-  {
     "id": "978a15ea-a046-49f0-8460-4c4635951005",
     "name": "Zoraal Ja EX – Multidirectional Divide",
     "fight": "Zoraal Ja EX",
@@ -4079,18 +4067,6 @@
     "ability_id": "9374",
     "ability_regex": "",
     "tts_text": "Stack - Multiple Hits",
-    "cooldown_s": 5.0,
-    "enabled": false,
-    "zone_regex": "^Everkeep \\(Extreme\\)$"
-  },
-  {
-    "id": "a38cb759-cbc2-48db-ba2c-a56b5e518ff8",
-    "name": "Zoraal Ja EX – Dawn of an Age",
-    "fight": "Zoraal Ja EX",
-    "log_type": "20",
-    "ability_id": "9397",
-    "ability_regex": "",
-    "tts_text": "Raidwide",
     "cooldown_s": 5.0,
     "enabled": false,
     "zone_regex": "^Everkeep \\(Extreme\\)$"
@@ -4151,18 +4127,6 @@
     "ability_id": "9381",
     "ability_regex": "",
     "tts_text": "Watch Tracks",
-    "cooldown_s": 5.0,
-    "enabled": false,
-    "zone_regex": "^Everkeep \\(Extreme\\)$"
-  },
-  {
-    "id": "62e71089-fc50-4360-84b8-f69cca08ac84",
-    "name": "Zoraal Ja EX – Forged Track",
-    "fight": "Zoraal Ja EX",
-    "log_type": "20",
-    "ability_id": "939C",
-    "ability_regex": "",
-    "tts_text": "Watch Swords and Tracks",
     "cooldown_s": 5.0,
     "enabled": false,
     "zone_regex": "^Everkeep \\(Extreme\\)$"
@@ -7770,8 +7734,8 @@
     "tts_text": "Prepare for mirror knockbacks",
     "cooldown_s": 5.0,
     "enabled": false,
-    "fight": "E8N",
-    "zone_regex": "^Eden's Verse: Refulgence$",
+    "fight": "E8S",
+    "zone_regex": "^Eden's Verse: Refulgence \\(Savage\\)$",
     "cooldown_scope": "trigger"
   },
   {
@@ -11511,18 +11475,6 @@
     "zone_regex": "^Everkeep \\(Extreme\\)$"
   },
   {
-    "id": "1d837552-e81a-5351-8a74-266290ad62a6",
-    "name": "Zoraal Ja Ex Duty's Edge",
-    "fight": "Zoraal Ja EX",
-    "log_type": "20",
-    "ability_id": "9374",
-    "ability_regex": "",
-    "tts_text": "Stack",
-    "cooldown_s": 5.0,
-    "enabled": false,
-    "zone_regex": "^Everkeep \\(Extreme\\)$"
-  },
-  {
     "id": "af7eb0aa-a84d-58cf-9ec1-35413e6ad193",
     "name": "Valigarmanda Ex Disaster Zone",
     "fight": "Valigarmanda EX",
@@ -11763,18 +11715,6 @@
     "zone_regex": "^Anabaseios: The Eleventh Circle \\(Savage\\)$"
   },
   {
-    "id": "00ec4828-0ff3-5be5-afe0-71d63f783c10",
-    "name": "P9N Gluttony's Augur",
-    "fight": "P9N",
-    "log_type": "20",
-    "ability_id": "8116",
-    "ability_regex": "",
-    "tts_text": "Raidwide",
-    "cooldown_s": 5.0,
-    "enabled": false,
-    "zone_regex": "^Anabaseios: The Ninth Circle$"
-  },
-  {
     "id": "b48c563d-402d-56ae-ba00-bd5bcc704968",
     "name": "P9N Beastly Roar",
     "fight": "P9N",
@@ -11806,18 +11746,6 @@
     "ability_id": "8149",
     "ability_regex": "",
     "tts_text": "Go Front and Out",
-    "cooldown_s": 5.0,
-    "enabled": false,
-    "zone_regex": "^Anabaseios: The Ninth Circle$"
-  },
-  {
-    "id": "91de0a44-ec29-5423-a2ab-cc8be1c9e63c",
-    "name": "P9N Burst",
-    "fight": "P9N",
-    "log_type": "20",
-    "ability_id": "8136",
-    "ability_regex": "",
-    "tts_text": "Move!",
     "cooldown_s": 5.0,
     "enabled": false,
     "zone_regex": "^Anabaseios: The Ninth Circle$"
@@ -14210,18 +14138,6 @@
     "cooldown_s": 5.0,
     "enabled": false,
     "zone_regex": "^Sigmascape V4\\.0$"
-  },
-  {
-    "id": "f697006a-1bae-515f-b610-0dc30a903e71",
-    "name": "O11S Mustard Bomb",
-    "fight": "O11S",
-    "log_type": "20",
-    "ability_id": "326D",
-    "ability_regex": "",
-    "tts_text": "Tank Buster",
-    "cooldown_s": 5.0,
-    "enabled": false,
-    "zone_regex": "^Alphascape V3\\.0 \\(Savage\\)$"
   },
   {
     "id": "e79f9f88-58c4-50c7-a0df-e766db8ba529",
@@ -19639,7 +19555,8 @@
     "ability_regex": "",
     "enabled": false,
     "zone_regex": "^The Epic of Alexander \\(Ultimate\\)$",
-    "cooldown_scope": "trigger"
+    "cooldown_scope": "trigger",
+    "delay_s": 6.0
   },
   {
     "id": "377d502d-17a3-57af-929d-937074776fa9",
@@ -24092,19 +24009,6 @@
     "ability_regex": "",
     "enabled": false,
     "zone_regex": "^The Omega Protocol \\(Ultimate\\)$",
-    "cooldown_scope": "trigger"
-  },
-  {
-    "id": "b12018c6-d8d5-5562-aacf-f708926f7e8e",
-    "name": "Aglaia Tank Busters",
-    "log_type": "20",
-    "ability_id": "70B4|709F|711D",
-    "ability_regex": "",
-    "tts_text": "Spread tank busters",
-    "cooldown_s": 5.0,
-    "enabled": false,
-    "fight": "Aglaia",
-    "zone_regex": "^Aglaia$",
     "cooldown_scope": "trigger"
   },
   {

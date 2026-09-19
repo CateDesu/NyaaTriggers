@@ -291,6 +291,7 @@ class Trigger:
     sound_file: str = ""
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     cooldown_scope: str = "source"
+    delay_s: float = 0.0
     # Runtime state is not persisted.
     _last_fired: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
@@ -307,6 +308,8 @@ class Trigger:
             d["ability_id"] = self.ability_id
         if self.cooldown_scope != "source":
             d["cooldown_scope"] = self.cooldown_scope
+        if self.delay_s:
+            d["delay_s"] = self.delay_s
         if self.ability_regex:
             d["ability_regex"] = self.ability_regex
         if self.zone_regex:
@@ -365,6 +368,7 @@ class Trigger:
             tts_text=_str_or(d.get("tts_text"), ""),
             cooldown_s=max(0.0, _as_float(d.get("cooldown_s"), 5.0)),
             cooldown_scope=("trigger" if d.get("cooldown_scope") == "trigger" else "source"),
+            delay_s=0.0 if warn > 0 else max(0.0, _as_float(d.get("delay_s"), 0.0)),
             enabled=_as_bool(d.get("enabled"), True),
             zone_regex=_str_or(d.get("zone_regex"), ""),
             fight=_str_or(d.get("fight"), ""),

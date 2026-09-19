@@ -7,6 +7,22 @@ SOURCES = ("cactbot", "triggevent", "triggernometry")
 DEFAULT_PROFILE_ID = "00000000-0000-0000-0000-000000000000"
 
 
+def merge_local_choices(choices, replacements):
+    """Carry enabled choices from duplicate rows to their surviving definitions."""
+    merged = deepcopy(choices)
+    for retired, targets in replacements.items():
+        choice = choices.get(retired)
+        if choice is None:
+            continue
+        merged.pop(retired, None)
+        for target in targets:
+            if target not in merged:
+                merged[target] = deepcopy(choice)
+            elif choice["enabled"]:
+                merged[target]["enabled"] = True
+    return merged
+
+
 def validate_profile(data):
     if not isinstance(data.get("name"), str) or not data["name"].strip() or len(data["name"]) > 200:
         raise ValueError("Invalid profile name")
@@ -48,8 +64,10 @@ def capture_profile(window, name, ident=None):
 def preserve_default(window, previous, target):
     current = capture_profile(window, "Default", DEFAULT_PROFILE_ID)
     default = deepcopy(previous) if previous is not None else current
+    replacements = getattr(window, "_trigger_replacements", {})
+    default["local"] = merge_local_choices(default["local"], replacements)
     # Remember choices introduced by another profile before it changes them.
-    for ident in target["local"]:
+    for ident in merge_local_choices(target["local"], replacements):
         if ident in current["local"]:
             default["local"].setdefault(ident, current["local"][ident])
     for source, choices in target["engines"].items():
@@ -62,8 +80,9 @@ def preserve_default(window, previous, target):
 
 def apply_choices(window, profile):
     validate_profile(profile)
+    local = merge_local_choices(profile["local"], getattr(window, "_trigger_replacements", {}))
     for trigger in window._triggers:
-        choice = profile["local"].get(trigger.id)
+        choice = local.get(trigger.id)
         if choice is not None:
             if (trigger.enabled, trigger.tts_text) != (choice["enabled"], choice["text"]):
                 trigger.enabled = choice["enabled"]

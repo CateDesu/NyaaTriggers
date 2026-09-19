@@ -366,19 +366,28 @@ class InstanceTabMixin:
                     if rx is None or not self._zone_matches(rx):
                         continue
 
+                key = t.cooldown_key(fields[2] if len(fields) > 2 else "")
+                if (t.delay_s > 0 and not t.sequence
+                        and any(r.trigger is t and r.cooldown_key == key
+                                for r in self._seq_runners)):
+                    # Ignore pending repeats before matching consumes their cooldown.
+                    continue
+
                 m = t.matches(fields, me=self._me_name)
                 if m is None:
                     continue
 
-                if t.sequence:
-                    for runner in list(self._seq_runners):
-                        if runner.trigger is t:
-                            self._drop_seq_runner(runner)
+                if t.sequence or t.delay_s > 0:
+                    if t.sequence:
+                        for runner in list(self._seq_runners):
+                            if runner.trigger is t:
+                                self._drop_seq_runner(runner)
                     runner = SequentialRunner(
                         t, m,
                         on_complete=self._on_seq_complete,
                         on_expire=self._on_seq_expire,
                         parent=self,
+                        cooldown_key=key,
                     )
                     self._seq_runners.append(runner)
                 elif t.expiry_warn_s > 0 and fields[0] == "26":

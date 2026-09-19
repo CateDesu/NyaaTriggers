@@ -1,11 +1,12 @@
-"""Track one active trigger sequence. The caller replaces existing runners before starting
-another. Fire only after all steps complete within their timeouts.
-"""
+"""Wait for follow-up events and the callout delay before firing a trigger."""
 
+import math
 import re
+import time
 
-from PyQt6.QtCore import QObject, QTimer
+from PyQt6.QtCore import QObject, QTimer, Qt
 
+from nyaatriggers.drop_log import log_drop
 from nyaatriggers.trigger_engine import (
     _ABILITY_IDX, _ID_IDX, _SOURCE_IDX, _TARGET_IDX, _id_set, _safe_search,
     _str_or, compile_user_regex,
@@ -15,12 +16,15 @@ from nyaatriggers.trigger_engine import (
 class SequentialRunner(QObject):
 
     def __init__(self, trigger, captured: dict,
-                 on_complete, on_expire, parent=None):
+                 on_complete, on_expire, parent=None, cooldown_key=""):
         super().__init__(parent)
         self.trigger = trigger
         self._captured = dict(captured)
         self._on_complete = on_complete
         self._on_expire = on_expire
+        self.cooldown_key = cooldown_key
+        self._cancelled = False
+        self._delay_deadline = None
         self._step = 0  # index into trigger.sequence, step 0 is the first subsequent step
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -28,8 +32,8 @@ class SequentialRunner(QObject):
         self._arm_timer()
 
     def try_advance(self, fields: list[str]) -> bool:
-        """Return True if all sequence steps are now complete."""
-        if not fields:
+        """Return True when the final step fires the callout without a delay."""
+        if self._cancelled or not fields:
             return False
         if self._step >= len(self.trigger.sequence):
             return False
@@ -74,6 +78,9 @@ class SequentialRunner(QObject):
 
         self._step += 1
         if self._step >= len(self.trigger.sequence):
+            if self.trigger.delay_s > 0:
+                self._arm_delay()
+                return False
             self._on_complete(self, self._captured)
             return True
 
@@ -81,9 +88,13 @@ class SequentialRunner(QObject):
         return False
 
     def cancel(self) -> None:
+        self._cancelled = True
         self._timer.stop()
 
     def _arm_timer(self) -> None:
+        if self._step >= len(self.trigger.sequence):
+            self._arm_delay()
+            return
         timeout_s = self.trigger.sequence[self._step].get("timeout_s")
         # Use ten seconds for invalid, nonfinite or sub-millisecond timeouts instead of
         # creating an immediately expiring timer.
@@ -95,5 +106,26 @@ class SequentialRunner(QObject):
             timeout_ms = 10000
         self._timer.start(timeout_ms)
 
+    def _arm_delay(self) -> None:
+        self._delay_deadline = time.monotonic() + self.trigger.delay_s
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._start_delay_timer()
+
+    def _start_delay_timer(self) -> None:
+        remaining = max(0.0, self._delay_deadline - time.monotonic())
+        self._timer.start(math.ceil(min(remaining * 1000, 2**31 - 1)))
+
     def _expire(self) -> None:
-        self._on_expire(self)
+        if self._cancelled:
+            return
+        try:
+            if self._delay_deadline is not None:
+                if time.monotonic() < self._delay_deadline:
+                    self._start_delay_timer()
+                else:
+                    self._on_complete(self, self._captured)
+            else:
+                self._on_expire(self)
+        except Exception as exc:
+            self.cancel()
+            log_drop("trigger-sequence", f"{self.trigger.name!r}: {exc!r}")

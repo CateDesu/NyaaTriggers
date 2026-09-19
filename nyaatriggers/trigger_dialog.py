@@ -363,6 +363,14 @@ class TriggerDialog(QDialog):
         self._shared_cooldown = QCheckBox(_("Share cooldown across sources"))
         layout.addRow("", self._shared_cooldown)
 
+        self._delay = QDoubleSpinBox()
+        self._delay.setRange(0.0, 3600.0)
+        self._delay.setDecimals(1)
+        self._delay.setSuffix(" s")
+        self._delay.setToolTip(_("Wait after matching or the final follow-up step. Expiry warnings use their own timer."))
+        layout.addRow(_("Callout delay:"), self._delay)
+        self._warn.valueChanged.connect(self._update_dur_row_visibility)
+
         self._speed = QDoubleSpinBox()
         self._speed.setRange(0.5, 3.0)
         self._speed.setDecimals(1)
@@ -432,6 +440,7 @@ class TriggerDialog(QDialog):
         dur_visible = bool(parts & _DURATION_TYPES)
         status_visible = bool(parts & _STATUS_TYPES)
         warn_visible = "26" in parts and parts <= _STATUS_TYPES
+        self._delay.setEnabled(not (warn_visible and self._warn.value() > 0))
         if hasattr(self._form, "setRowVisible"):
             self._form.setRowVisible(self._dur_row, dur_visible)
             self._form.setRowVisible(self._count_row, status_visible)
@@ -505,6 +514,7 @@ class TriggerDialog(QDialog):
         self._zone.setText(t.zone_regex)
         self._load_spin(self._cooldown, t.cooldown_s, _("Cooldown"))
         self._shared_cooldown.setChecked(t.cooldown_scope == "trigger")
+        self._load_spin(self._delay, t.delay_s, _("Callout delay"))
         self._load_spin(self._speed, t.speed, _("Speed"))
         self._interrupt.setChecked(t.interrupt)
         self._load_spin(self._dur_min, t.duration_min, _("Duration min"))
@@ -550,6 +560,7 @@ class TriggerDialog(QDialog):
                    for spin, label, original in self._clamped
                    if (keep_dur or spin not in (self._dur_min, self._dur_max))
                    and (keep_count or spin not in (self._count_min, self._count_max))
+                   and (self._delay.isEnabled() or spin is not self._delay)
                    and (keep_warn or spin is not self._warn)]
         for n, row in enumerate(self._sequence._rows, 1):
             if row._timeout_clamped is not None:
@@ -703,6 +714,7 @@ class TriggerDialog(QDialog):
             tts_text=self._tts.text().strip(),
             cooldown_s=self._cooldown.value(),
             cooldown_scope="trigger" if self._shared_cooldown.isChecked() else "source",
+            delay_s=0.0 if warn > 0 else self._delay.value(),
             enabled=self._enabled.isChecked(),
             fight=self._fight.text().strip(),
             zone_regex=self._zone.text().strip(),
