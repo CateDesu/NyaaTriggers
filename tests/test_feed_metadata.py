@@ -93,6 +93,17 @@ class FeedMetadataTests(unittest.TestCase):
         cap.on_zone_changed(100, "Arena")
         self.assertTrue(cap._in_pull)
 
+    def test_first_zone_metadata_after_reconnect_keeps_the_new_capture(self):
+        cap = self.capture()
+        cap.on_status_changed(False, "Disconnected")
+        cap.on_status_changed(True, "Connected")
+        cap.on_log_line(CAST)
+        current = cap._path
+        cap.on_zone_changed(0, "")
+        cap.on_zone_changed(200, "New arena")
+        self.assertTrue(cap._in_pull)
+        self.assertEqual(cap._path, current)
+
     def test_valid_feed_ids_reach_signals_without_changing(self):
         client = WSClient()
         zones, players = [], []

@@ -77,17 +77,13 @@ class InstanceTabMixin:
         """
         if not zone_id and not zone_name:
             return
-        if zone_name or (zone_id and self._current_zone_id and zone_id != self._current_zone_id):
-            self._apply_zone(zone_name or canonical_zone_name(zone_id), zone_id)
-        else:
-            track_zone = getattr(self, "_track_activity_zone", None)
-            if track_zone is not None:
-                track_zone("", zone_id)
-            self._current_zone_id = zone_id
-            if zone_id:
-                self._set_zone_aliases(self._current_zone, zone_id)
-            if zone_id and getattr(self, "_cactbot_mode", False):
-                self._redetect_zone_fight()
+        if not zone_name:
+            changed_id = zone_id and self._current_zone_id and zone_id != self._current_zone_id
+            if ((zone_id and zone_id == self._current_zone_id)
+                    or (not changed_id and not getattr(self, "_awaiting_zone_metadata", False))):
+                zone_name = self._current_zone
+            zone_name = zone_name or canonical_zone_name(zone_id)
+        self._apply_zone(zone_name, zone_id)
 
     @pyqtSlot(bool, str)
     def _on_status_changed(self, connected: bool, msg: str) -> None:
@@ -104,6 +100,7 @@ class InstanceTabMixin:
                 # Backfill jobs from live memory when connecting midfight.
                 self._ws.request_combatants_once()
         else:
+            self._awaiting_zone_metadata = True
             self._status_lbl.setText(f"● {msg}")
             self._status_lbl.setStyleSheet("color:#f38ba8; font-weight:bold;")
             self._conn_btn.setText(_("Connect"))
@@ -112,6 +109,7 @@ class InstanceTabMixin:
             self._clear_status_timers()
             self._clear_seq_runners()
             self._clear_callout_dedup()
+            self._clear_actor_state()
             meter = getattr(self, "_dps_meter", None)
             if meter is not None:
                 # Close the pull and reset the combat edge so reconnect can start a new
@@ -155,21 +153,27 @@ class InstanceTabMixin:
         changed_id = known_ids and zone_id != prev_zone_id
         changed = (changed_id if known_ids else
                    bool(zone and self._current_zone and zone != self._current_zone))
+        # Feed loss already cleared old work before this metadata arrived.
+        first_metadata = getattr(self, "_awaiting_zone_metadata", False)
+        self._awaiting_zone_metadata = False
+        if first_metadata and not raw_zone:
+            self._current_zone = ""
+            self._current_zone_id = 0
         if zone_id:
             self._current_zone_id = zone_id
         meter = getattr(self, "_dps_meter", None)
         if meter is not None:
-            meter.set_zone_metadata(zone, zone_changed=changed and not raw_zone)
+            meter.set_zone_metadata(zone, zone_changed=changed and not raw_zone and not first_metadata)
         if raw_zone:
             # Raw zone boundaries clear DPS even when the zone name repeats.
             self._plugin_link.send_clear()
-        if not raw_zone and not changed:
+        if not raw_zone and (first_metadata or not changed):
             # Names and IDs can arrive separately or correct earlier metadata.
             updated = bool(zone and zone != self._current_zone)
             if zone:
                 self._current_zone = zone
             self._set_zone_aliases(self._current_zone, self._current_zone_id)
-            if updated or self._current_zone_id != prev_zone_id:
+            if first_metadata or updated or self._current_zone_id != prev_zone_id:
                 self._zone_lbl.setText(self._zone_banner_text())
                 self._refresh_zone_column()
                 self._redetect_zone_fight()
@@ -185,13 +189,7 @@ class InstanceTabMixin:
         self._clear_callout_dedup()
         for trigger in getattr(self, "_triggers", ()):
             trigger._last_fired.clear()
-        self._actor_jobs.clear()
-        self._umad_actor_names.clear()
-        self._umad_chain_reset()
-        self._umad_gaze_reset()
-        self._automark_pairs.reset()
-        self._automark_pending.clear()
-        self._automark_active.clear()
+        self._clear_actor_state()
         if self._umad_chain_enabled:
             # Backfill jobs if the session missed initial combatant lines.
             self._ws.request_combatants_once()
@@ -203,6 +201,16 @@ class InstanceTabMixin:
         self._refresh_telesto_party()
         if self._mute_until_zone:
             self._mute_btn.setChecked(False)
+
+    def _clear_actor_state(self) -> None:
+        """Discard actors and pending marks whose loss events can no longer arrive."""
+        self._actor_jobs.clear()
+        self._umad_actor_names.clear()
+        self._umad_chain_reset()
+        self._umad_gaze_reset()
+        self._automark_pairs.reset()
+        self._automark_pending.clear()
+        self._automark_active.clear()
 
     @pyqtSlot(bool, bool)
     def _on_in_combat(self, act: bool, game: bool) -> None:

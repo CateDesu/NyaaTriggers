@@ -306,6 +306,18 @@ class EditorStorageTests(unittest.TestCase):
         host.dispatch("ABCD", kind="20")
         self.assertEqual(len(host._seq_runners), 1)
 
+    def test_consecutive_nameless_id_changes_remain_real_boundaries(self):
+        host = Host([1000.0])
+        host.prepare_zone()
+        host._triggers = [Trigger(ability_id="ABCD", delay_s=10)]
+        self.addCleanup(host._clear_seq_runners)
+        with patch("nyaatriggers.ui.instance_tab.canonical_zone_name", return_value=""):
+            for zone_id in (200, 300):
+                host.dispatch("ABCD", kind="20")
+                self.assertEqual(len(host._seq_runners), 1)
+                host._on_ws_zone_changed(zone_id, "")
+                self.assertFalse(host._seq_runners)
+
 
 if __name__ == "__main__":
     unittest.main()

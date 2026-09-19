@@ -248,6 +248,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._folders: list[dict] = []                  # [{id, name, parent_id}]
         self._current_zone: str = ""
         self._current_zone_id: int = 0   # retained for the Triggernometry zone replay
+        self._awaiting_zone_metadata = True
         # Use the canonical English zone for trigger matching when available. Keep the
         # reported name in _current_zone for display.
         self._match_zone: str = ""

@@ -155,7 +155,7 @@ def _atomic_write_json(path: "Path", data, *, indent: "int | None" = None) -> No
 
 def _atomic_write_bytes(path: "Path", payload: bytes) -> None:
     """Replace a file only after its complete contents have reached disk."""
-    fd, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    fd, name = tempfile.mkstemp(prefix=".nyaa-", suffix=".tmp", dir=path.parent)
     tmp = Path(name)
     try:
         with os.fdopen(fd, "wb") as f:

@@ -1070,13 +1070,14 @@ class EnginesMixin:
             try:
                 packs = _tn_packs_dir()
                 src = Path(path)
-                target = packs / src.name
+                filename = src.name if src.suffix.lower() == ".xml" else src.stem + ".xml"
+                target = packs / filename
                 if target.exists() and target.resolve() != src.resolve():
                     # Keep exports with the same basename by adding a counter.
                     n = 2
-                    while (packs / f"{src.stem}_{n}{src.suffix}").exists():
+                    while (packs / f"{target.stem}_{n}{target.suffix}").exists():
                         n += 1
-                    target = packs / f"{src.stem}_{n}{src.suffix}"
+                    target = packs / f"{target.stem}_{n}{target.suffix}"
                 ac._atomic_write_bytes(target, xml_bytes)
                 staged = True
             except Exception as exc:  # noqa: BLE001

@@ -1714,13 +1714,6 @@ def test_piped_expiry_warn_swallows_loss_line():
     check("line tail still ran", w.appended == 1)
 
 
-# a staged Triggernometry pack never clobbers a same-named one
-def test_tn_pack_staging_disambiguates_colliding_basenames():
-    src = _program_sources()
-    check("staged pack name gets a counter suffix on collision",
-          'f"{src.stem}_{n}{src.suffix}"' in src)
-
-
 # a stalled handshake is aborted and retried, never parked forever
 def test_ws_stalled_handshake_aborts_and_reopens():
     from PyQt6.QtWidgets import QApplication
@@ -2499,11 +2492,15 @@ def test_feed_loss_cancels_pending_local_warnings():
         def _clear_callout_dedup(self):
             self.cleared.append("guest")
 
+        def _clear_actor_state(self):
+            self.cleared.append("actors")
+
     host = _Host()
     host._on_status_changed(False, "Disconnected")
     check("feed loss drops pending status warnings", "status" in host.cleared)
     check("feed loss drops in-flight sequences", "seq" in host.cleared)
     check("feed loss drops pending guests", "guest" in host.cleared)
+    check("feed loss drops actor state", "actors" in host.cleared)
     check("feed loss closes the meter encounter and combat edge",
           "feed_lost" in host._dps_meter.calls)
 

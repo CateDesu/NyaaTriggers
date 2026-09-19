@@ -5,6 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from contextlib import ExitStack
 from copy import deepcopy
+from itertools import permutations
 import json
 from pathlib import Path
 import tempfile
@@ -108,6 +109,118 @@ class SessionUiTests(unittest.TestCase):
         self.window._on_ws_zone_changed(1, "Localized duty")
         self.assertEqual(self.window._death_recap.buffers, buffers)
         self.assertEqual(self.window._death_recap.zone, "Localized duty")
+
+    def test_partial_metadata_after_a_name_correction_keeps_the_session(self):
+        self.connect()
+        window = self.window
+        window._prog_tab.start_button.click()
+        session = window._prog_sessions.current
+        self.assertIsNotNone(session)
+        window._on_ws_zone_changed(1, "Localized duty")
+        window._on_ws_zone_changed(0, "Localized duty")
+        self.assertIs(window._prog_sessions.current, session)
+
+    def test_reconnect_zone_metadata_keeps_fresh_player_identity(self):
+        self.connect()
+        window = self.window
+        window._on_status_changed(False, "Disconnected")
+        window._on_status_changed(True, "Connected")
+        window._on_ws_primary_player(int(PLAYER, 16), "Player")
+        window._local_enabled = True
+        window._triggers = [Trigger(ability_id="ABCD", delay_s=10)]
+        self.line(["20", "ts", "40000001", "Boss", "ABCD", "Cast", PLAYER, "Player"])
+        runner, = window._seq_runners
+        window._on_ws_zone_changed(2, "New duty")
+        with self.subTest(state="identity"):
+            self.assertEqual(window._dps_meter._me_id, int(PLAYER, 16))
+        with self.subTest(state="callouts"):
+            self.assertEqual(window._seq_runners, [runner])
+
+    def test_first_zone_id_resolves_a_known_name_without_another_event(self):
+        window = self.window
+        window._on_status_changed(True, "Connected")
+        window._on_ws_zone_changed(1226, "")
+        self.assertEqual(window._current_zone, "AAC Light-heavyweight M1 (Savage)")
+        self.assertIn("AAC Light-heavyweight M1", window._zone_lbl.text())
+        self.assertEqual(window._dps_meter._zone, window._current_zone)
+
+    def test_reconnect_metadata_orders_preserve_new_work_through_real_signals(self):
+        window = self.window
+        window._local_enabled = True
+        window._triggers = [Trigger(log_type="21", ability_id="A1", delay_s=60)]
+        window._pull_capture._log_dir = self.temp / "captures"
+        window._pull_capture.set_recording(True)
+        for order in permutations(("player", "zone", "ability")):
+            with self.subTest(order=order):
+                window._ws.status_changed.emit(False, "Disconnected")
+                window._ws.status_changed.emit(True, "Connected")
+                window._ws.in_combat.emit(True, True)
+                messages = {
+                    "player": {"type": "ChangePrimaryPlayer", "charID": int(PLAYER, 16),
+                               "charName": "Player"},
+                    "zone": {"type": "ChangeZone", "zoneID": 1226, "zoneName": "Arena"},
+                    "ability": {"type": "LogLine", "rawLine": "|".join(ability())},
+                }
+                for kind in order:
+                    window._ws._on_message(json.dumps(messages[kind]))
+                self.assertEqual(window._dps_meter._me_id, int(PLAYER, 16))
+                self.assertIsNotNone(window._dps_meter.current)
+                self.assertEqual(len(window._seq_runners), 1)
+                self.assertTrue(window._pull_capture._in_pull)
+                window._ws._on_message(json.dumps({"type": "LogLine", "rawLine": "01|ts|4CA|Arena|"}))
+                self.assertIsNone(window._dps_meter.current)
+                self.assertFalse(window._seq_runners)
+                self.assertFalse(window._pull_capture._in_pull)
+
+    def test_reconnect_to_another_duty_still_ends_the_previous_session(self):
+        self.connect()
+        window = self.window
+        window._prog_tab.start_button.click()
+        session = window._prog_sessions.current
+        window._ws.status_changed.emit(False, "Disconnected")
+        window._ws.status_changed.emit(True, "Connected")
+        window._ws.primary_player.emit(int(PLAYER, 16), "Player")
+        window._ws.zone_changed.emit(2, "New duty")
+        self.assertIsNone(window._prog_sessions.current)
+        self.assertEqual(session["state"], "ended")
+        self.assertEqual(window._dps_meter._me_id, int(PLAYER, 16))
+
+    def test_raw_zone_before_reconnect_metadata_still_clears_fresh_work(self):
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._triggers = [Trigger(ability_id="ABCD", delay_s=60)]
+        window._ws.status_changed.emit(False, "Disconnected")
+        window._ws.status_changed.emit(True, "Connected")
+        self.line(["20", "ts", "40000001", "Boss", "ABCD", "Cast", PLAYER, "Player"])
+        self.assertEqual(len(window._seq_runners), 1)
+        self.line(["01", "ts", "01", "Test duty"])
+        self.assertFalse(window._seq_runners)
+        window._ws.primary_player.emit(int(PLAYER, 16), "Player")
+        window._ws.zone_changed.emit(1, "Test duty")
+        self.assertEqual(window._dps_meter._me_id, int(PLAYER, 16))
+
+    def test_feed_loss_drops_old_actor_state_before_fresh_metadata_arrives(self):
+        self.connect()
+        window = self.window
+        old_actor = int(PLAYER, 16) + 1
+        fresh_actor = int(PLAYER, 16) + 2
+        window._actor_jobs[old_actor] = 19
+        window._umad_actor_names[old_actor] = "Old player"
+        window._automark_pending.append((f"{old_actor:08X}", "attack1", "Old player", 0.0, "ABC"))
+        window._ws.status_changed.emit(False, "Disconnected")
+        window._ws.status_changed.emit(True, "Connected")
+        window._on_ws_party_jobs({fresh_actor: 21})
+        fresh_mark = (f"{fresh_actor:08X}", "attack2", "New player", 0.0, "DEF")
+        window._automark_pending.append(fresh_mark)
+        window._ws.zone_changed.emit(2, "New duty")
+        with self.subTest(state="jobs"):
+            self.assertNotIn(old_actor, window._actor_jobs)
+        with self.subTest(state="names"):
+            self.assertNotIn(old_actor, window._umad_actor_names)
+        with self.subTest(state="pending marks"):
+            self.assertEqual(window._automark_pending, [fresh_mark])
+        self.assertEqual(window._actor_jobs[fresh_actor], 21)
 
     def test_oversized_saved_volumes_allow_startup_and_unmute(self):
         settings = deepcopy(self.window._settings)

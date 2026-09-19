@@ -66,6 +66,7 @@ class PullCapture(QObject):
         self._zone = ""
         self._zone_id = 0
         self._zone_name = ""
+        self._awaiting_zone_metadata = False
         self._warned_write = False
         self._state_snapshot = state_snapshot or (lambda: ())
         # The caller supplies fight and zone names for capture paths.
@@ -116,6 +117,7 @@ class PullCapture(QObject):
                 except ValueError:
                     self._zone_id = 0
                 self._zone_name = fields[3]
+                self._awaiting_zone_metadata = False
             if not self._recording:
                 return
             self._finalize("reset")
@@ -141,10 +143,14 @@ class PullCapture(QObject):
 
     @pyqtSlot(int, str)
     def on_zone_changed(self, zone_id: int, name: str) -> None:
+        if not zone_id and not name:
+            return
         previous_name = self._zone_name or (self._zone if self._in_pull else "")
         known_ids = bool(zone_id and self._zone_id)
         changed = (zone_id != self._zone_id if known_ids else
                    bool(name and previous_name and name != previous_name))
+        changed = changed and not self._awaiting_zone_metadata
+        self._awaiting_zone_metadata = False
         if changed or name:
             self._zone_name = name
         if changed or zone_id:
@@ -165,6 +171,7 @@ class PullCapture(QObject):
             self._finalize("feed-lost")
             self._zone_id = 0
             self._zone_name = ""
+            self._awaiting_zone_metadata = True
             self._buffer.clear()
             self._buffer_bytes = 0
 

@@ -215,6 +215,7 @@ class ZoneWin:
     """Just enough of MainWindow for _apply_zone: zone state, the automark
     bookkeeping, and stubbed UI and plugin link."""
     _apply_zone = mw.MainWindow._apply_zone
+    _clear_actor_state = mw.MainWindow._clear_actor_state
 
     def __init__(self):
         self._current_zone = "Old Zone"

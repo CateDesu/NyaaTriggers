@@ -65,15 +65,16 @@ class SessionTrackingMixin:
     def _track_activity_zone(self, zone, zone_id):
         active = self._prog_sessions.current
         if active and ((zone_id and zone_id != active["zone_id"])
-                       or (not zone_id and zone and zone != active["zone"])):
+                       or (not zone_id and zone and zone != self._current_zone)):
             self._prog_sessions.end(self._dps_meter.full_snapshot(), "duty-left")
             self._prog_tab.refresh()
         changed_id = zone_id and self._current_zone_id and zone_id != self._current_zone_id
         known_ids = bool(zone_id and self._current_zone_id)
         changed_name = zone and self._death_recap.zone and zone != self._death_recap.zone
-        if changed_id or (not known_ids and changed_name):
+        first_metadata = getattr(self, "_awaiting_zone_metadata", False)
+        if not first_metadata and (changed_id or (not known_ids and changed_name)):
             self._death_recap.reset()
-        if zone or changed_id:
+        if first_metadata or zone or changed_id:
             self._death_recap.zone = zone
 
     def _finish_activity(self):

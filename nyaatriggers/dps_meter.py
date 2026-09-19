@@ -354,13 +354,14 @@ class DpsMeter:
         self._owners.clear()
         self._names.clear()
         self._me_id = None
+        self._zone = ""
         self._awaiting_zone_metadata = True
 
     def set_zone_metadata(self, name: str, *, zone_changed: bool | None = None) -> None:
         """Apply zone metadata for connections that missed the raw zone line. Repeated
         metadata must not end an encounter. A changed known zone finalizes before the
         overlay is cleared, even when metadata arrives before the raw zone line.
-        An explicit False means the ID confirms this is still the same zone.
+        An explicit False treats this as metadata for the current encounter.
         """
         name = (name or "").strip()
         if zone_changed:

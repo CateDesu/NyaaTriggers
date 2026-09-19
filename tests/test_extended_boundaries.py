@@ -19,6 +19,7 @@ from nyaatriggers import app_common as ac
 from nyaatriggers.convert_triggernometry import convert_xml
 from nyaatriggers.sequential import SequentialRunner
 from nyaatriggers.trigger_engine import Trigger
+from nyaatriggers import triggernometry_bridge
 from nyaatriggers.ui import engines
 from nyaatriggers.ui.dps_tab import DpsTabMixin
 from nyaatriggers.ui.voice_tab import VoiceTabMixin
@@ -218,6 +219,41 @@ with patch.object(ac.QFileDialog, "getOpenFileName", return_value=(str(source), 
                 ac._atomic_write_bytes(destination, b"Replacement sound")
         self.assertEqual(destination.read_bytes(), b"Previous sound")
         self.assertEqual(list(self.root.iterdir()), [destination])
+
+    def test_atomic_replacement_accepts_long_valid_filenames(self):
+        destination = self.root / ("s" * 240 + ".wav")
+        destination.write_bytes(b"Previous sound")
+        ac._atomic_write_bytes(destination, b"Replacement sound")
+        self.assertEqual(destination.read_bytes(), b"Replacement sound")
+        self.assertEqual(list(self.root.iterdir()), [destination])
+
+    def test_imported_pack_without_xml_suffix_is_discovered_by_the_engine(self):
+        source = self.root / "downloaded-pack"
+        source.write_text('<TriggernometryExport><ExportedFolder Name="Pack"/></TriggernometryExport>')
+        packs = self.root / "packs"
+        packs.mkdir()
+        failure, success, warning = self.import_pack(source, packs)
+        failure.assert_not_called()
+        warning.assert_not_called()
+        success.assert_called_once()
+        with patch.object(triggernometry_bridge, "_packs_dir", return_value=packs):
+            found = triggernometry_bridge._find_packs()
+        self.assertEqual(len(found), 1)
+        self.assertEqual(Path(found[0]).read_bytes(), source.read_bytes())
+
+    def test_normalizing_a_pack_suffix_preserves_existing_exports(self):
+        source = self.root / "pack.txt"
+        source.write_text('<TriggernometryExport><ExportedFolder Name="New"/></TriggernometryExport>')
+        packs = self.root / "packs"
+        packs.mkdir()
+        previous = packs / "pack.xml"
+        previous.write_bytes(b"Previous export")
+        failure, success, warning = self.import_pack(source, packs)
+        failure.assert_not_called()
+        warning.assert_not_called()
+        success.assert_called_once()
+        self.assertEqual(previous.read_bytes(), b"Previous export")
+        self.assertEqual((packs / "pack_2.xml").read_bytes(), source.read_bytes())
 
     def test_pack_name_collision_preserves_both_exports(self):
         source = self.root / "pack.xml"
