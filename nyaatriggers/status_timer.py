@@ -2,9 +2,11 @@
 separately. Refresh events reset the timer, and matching loss events cancel it.
 """
 
+import math
+import time
 import traceback
 
-from PyQt6.QtCore import QObject, QTimer
+from PyQt6.QtCore import QObject, QTimer, Qt
 
 
 class StatusTimerRunner(QObject):
@@ -23,13 +25,20 @@ class StatusTimerRunner(QObject):
         self._cancelled = False
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._fire)
         try:
-            delay = max(0, int(delay_ms))
+            delay = float(delay_ms) / 1000
         except (TypeError, ValueError, OverflowError):
-            # Treat nonfinite delays as immediate warnings.
             delay = 0
-        self._timer.start(delay)
+        if not math.isfinite(delay) or delay < 0:
+            delay = 0
+        self._deadline = time.monotonic() + delay
+        self._start_timer()
+
+    def _start_timer(self) -> None:
+        remaining = max(0.0, self._deadline - time.monotonic())
+        self._timer.start(math.ceil(min(remaining * 1000, 2**31 - 1)))
 
     def matches_loss(self, effect_id: str, source_id: str, target_id: str) -> bool:
         """True when this LosesEffect should cancel the pending warning."""
@@ -43,6 +52,9 @@ class StatusTimerRunner(QObject):
 
     def _fire(self) -> None:
         if self._cancelled:
+            return
+        if time.monotonic() < self._deadline:
+            self._start_timer()
             return
         self.cancel()
         try:

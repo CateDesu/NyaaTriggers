@@ -54,7 +54,7 @@ class Win(QObject, TriggersTabMixin, InstanceTabMixin, TimelineTabMixin):
 
 def arm_status(win, trigger, effect_id):
     runner = StatusTimerRunner(trigger, {}, effect_id, "10FF0001", "40000001",
-                               100000, win._on_status_timer, win)
+                               0, win._on_status_timer, win)
     win._status_timers.append(runner)
     return runner
 

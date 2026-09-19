@@ -36,7 +36,8 @@ from nyaatriggers.app_common import (
 
 def _read_local_triggers():
     data = json.loads(ac.TRIGGERS_LOCAL_FILE.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or not isinstance(data.get("triggers", []), list):
+    if (not isinstance(data, dict) or not isinstance(data.get("triggers", []), list)
+            or not all(isinstance(row, dict) for row in data.get("triggers", []))):
         raise ValueError("Invalid local trigger file")
     return data
 
@@ -1049,6 +1050,9 @@ class TriggersTabMixin:
         self._global_tv_on_flag = False
         self._settings["global_local_on"] = False
         self._settings["global_tv_on"] = False
+        if not getattr(self, "_cactbot_mode", False):
+            self._timeline.reset()
+        self._push_timeline_to_plugin()
         for src in engine_srcs:
             self._persist_engine_disabled(src)
             self._apply_engine_disabled(src)
@@ -1336,7 +1340,8 @@ class TriggersTabMixin:
         else:
             # Stop the separate local timeline clock too. Preserve cactbot bars while
             # that mode is active.
-            self._timeline.reset()
+            if not getattr(self, "_cactbot_mode", False):
+                self._timeline.reset()
             self._push_timeline_to_plugin()
         self._set_sections_collapsed(not enable, "general", "dot", "local")
         self._refresh_table()

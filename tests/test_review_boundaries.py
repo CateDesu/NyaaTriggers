@@ -11,6 +11,10 @@ from unittest.mock import Mock, patch
 from tests.test_callout_review_fixes import Host
 from tests.test_data_safety import TriggerHost
 from nyaatriggers import app_common as ac, tts
+from nyaatriggers.status_timer import StatusTimerRunner
+from nyaatriggers.timeline_engine import TimelineEngine
+from nyaatriggers.timeline_parser import parse
+from nyaatriggers.trigger_dialog import TriggerDialog
 from nyaatriggers.trigger_engine import Trigger
 from nyaatriggers.ui.automarkers_tab import AutomarkersTabMixin
 from nyaatriggers.ui.connection import ConnectionMixin
@@ -93,6 +97,44 @@ class CalloutBoundaryTests(unittest.TestCase):
         self.assertTrue(AutomarkersTabMixin._is_me_actor(host, "10000002", "Player"))
         self.assertFalse(AutomarkersTabMixin._is_me_actor(host, "10000001", "Player"))
 
+    def test_local_controls_stop_local_timelines_and_preserve_cactbot_timelines(self):
+        for cactbot in (False, True):
+            for action in ("_toggle_global_local", "_reset_all_to_default"):
+                with self.subTest(cactbot=cactbot, action=action):
+                    host = self.host
+                    host._cactbot_mode = cactbot
+                    host._global_local_on_flag = True
+                    host._official_ids = set()
+                    host._engine_inventory = []
+                    host._src_collapsed = {}
+                    host._refresh_table = lambda: None
+                    host._update_fight_controls = lambda: None
+                    host._timeline = TimelineEngine(host)
+                    host._timeline.load(parse('30 "Raidwide"'))
+                    host._timeline.start()
+                    self.addCleanup(host._timeline.reset)
+                    host.frames.clear()
+                    getattr(host, action)()
+                    self.assertEqual(host._timeline.is_active(), cactbot)
+                    if cactbot:
+                        self.assertTrue(all(frame["c"] != "clear" for frame in host.frames))
+                    else:
+                        self.assertEqual(host.frames[-1]["c"], "clear")
+
+    def test_status_warning_waits_for_its_deadline_and_fires_once(self):
+        now = [100.0]
+        done = Mock()
+        with patch("time.monotonic", side_effect=lambda: now[0]):
+            runner = StatusTimerRunner(Trigger(), {}, "A", "B", "C", 10000, done)
+            self.addCleanup(runner.cancel)
+            now[0] = 109.9
+            runner._fire()
+            done.assert_not_called()
+            now[0] = 110.0
+            runner._fire()
+            runner._fire()
+            done.assert_called_once()
+
 
 class TriggerFileBoundaryTests(unittest.TestCase):
     def setUp(self):
@@ -132,6 +174,32 @@ class TriggerFileBoundaryTests(unittest.TestCase):
                 host = TriggerHost()
                 host._load_triggers()
                 self.assertFalse(host._triggers[0].enabled)
+
+    def test_invalid_rows_in_a_local_list_are_preserved(self):
+        content = json.dumps({"triggers": [{"id": "custom"}, ["another custom trigger"]]})
+        ac.TRIGGERS_LOCAL_FILE.write_text(content)
+        host = TriggerHost()
+        host._load_triggers()
+        self.assertTrue(host._local_corrupt)
+        self.assertFalse(host._save_triggers())
+        self.assertEqual(ac.TRIGGERS_LOCAL_FILE.read_text(), content)
+
+
+class TriggerEditorBoundaryTests(unittest.TestCase):
+    def test_extended_wire_types_can_be_edited_and_still_match(self):
+        from PyQt6.QtWidgets import QDialog
+
+        for kind in ("257", "260", "21|267"):
+            with self.subTest(kind=kind):
+                trigger = Trigger(log_type=kind, ability_regex="Ready")
+                dlg = TriggerDialog(trigger)
+                self.addCleanup(dlg.deleteLater)
+                with patch("nyaatriggers.trigger_dialog.QMessageBox.warning") as warning:
+                    dlg.accept()
+                warning.assert_not_called()
+                self.assertEqual(dlg.result(), QDialog.DialogCode.Accepted)
+                saved = dlg.get_trigger(trigger.id)
+                self.assertIsNotNone(saved.matches([kind.split("|")[-1], "ts", "Ready"]))
 
 
 class SystemVoiceBoundaryTests(unittest.TestCase):

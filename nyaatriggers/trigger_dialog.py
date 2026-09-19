@@ -571,11 +571,12 @@ class TriggerDialog(QDialog):
     def accept(self) -> None:
         if self._type_combo.currentIndex() == _CUSTOM_IDX:
             custom = self._type_custom.text().strip()
-            # Wire types use two ASCII digits. Regex \d also accepts other digits.
-            if not re.fullmatch(r"[0-9]{2}(\|[0-9]{2})*", custom):
+            # Extended events such as InCombat use three digits on the wire.
+            type_pattern = r"(?:[0-9]{2}|[1-9][0-9]{2})"
+            if not re.fullmatch(rf"{type_pattern}(\|{type_pattern})*", custom):
                 QMessageBox.warning(
                     self, _("Invalid log type"),
-                    _("The custom log type must be a 2 digit type number, or "
+                    _("The custom log type must be a 2 or 3 digit type number, or "
                       "several pipe-separated like 21|22. Anything else never "
                       "matches a log line, so this trigger would never fire."))
                 return

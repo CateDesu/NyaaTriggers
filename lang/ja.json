@@ -451,7 +451,7 @@
   "The ability regex for step {n} does not compile, so the sequence could never advance past that step. Fix the regex or clear it.": "ステップ{n}のアビリティ正規表現がコンパイルできないため、シーケンスはそのステップから先に進めません。正規表現を修正するか、空にしてください。",
   "The ability regex for step {n} was rejected as potentially catastrophic, so the sequence could never advance past that step. Simplify the regex or clear it.": "ステップ{n}のアビリティ正規表現は処理が極端に遅くなる恐れがあり、拒否されました。このままでは次に進めません。正規表現を簡略化するか空欄にしてください。",
   "The ability regex was rejected as potentially catastrophic, and with no Ability ID set this trigger would never fire. Simplify the regex or enter an Ability ID.": "アビリティ正規表現は処理が極端に遅くなる恐れがあり、拒否されました。アビリティIDも未指定のため発動しません。正規表現を簡略化するかIDを入力してください。",
-  "The custom log type must be a 2 digit type number, or several pipe-separated like 21|22. Anything else never matches a log line, so this trigger would never fire.": "カスタムログタイプは2桁のタイプ番号、または 21|22 のようにパイプ区切りで複数指定してください。それ以外はログ行に一切一致しないため、このトリガーは発動しません。",
+  "The custom log type must be a 2 or 3 digit type number, or several pipe-separated like 21|22. Anything else never matches a log line, so this trigger would never fire.": "カスタムログタイプは2桁または3桁のタイプ番号、または 21|22 のようにパイプ区切りで複数指定してください。それ以外はログ行に一切一致しないため、このトリガーは発動しません。",
   "The interface language changed. Restart NyaaTriggers now to apply it?": "インターフェース言語が変更されました。適用するには NyaaTriggers を今すぐ再起動しますか？",
   "The neural Japanese voice is ready. Restart to use it.": "ニューラル日本語音声の準備ができました。再起動すると使用できます。",
   "The pack {verb}. Find it under Triggernometry in the Triggers tab. New engine triggers are enabled by default.": "パックは{verb}。「トリガー」タブの「Triggernometry」に表示されます。新しいエンジントリガーは初期状態で有効です。",
