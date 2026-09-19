@@ -75,6 +75,8 @@ class InstanceTabMixin:
         """Apply cached or live zone metadata. Resolve ID only updates immediately and
         retain the ID for sidecar restarts. _apply_zone handles duplicate name events.
         """
+        if not zone_id and not zone_name:
+            return
         if zone_name or (zone_id and self._current_zone_id and zone_id != self._current_zone_id):
             self._apply_zone(zone_name or canonical_zone_name(zone_id), zone_id)
         else:
@@ -123,7 +125,7 @@ class InstanceTabMixin:
         """
         canon = canonical_zone_name(zone_id) if zone_id else ""
         self._match_zone = canon or zone
-        self._zone_aliases = (zone, canon) if (canon and canon != zone) else (zone,)
+        self._zone_aliases = tuple(dict.fromkeys(name for name in (zone, canon) if name))
 
     def _zone_banner_text(self) -> str:
         """Show the client zone name and a differing English alias. Distinguish a connected
@@ -148,26 +150,28 @@ class InstanceTabMixin:
         track_zone = getattr(self, "_track_activity_zone", None)
         if track_zone is not None:
             track_zone(zone, zone_id)
+        prev_zone_id = self._current_zone_id
+        known_ids = bool(zone_id and prev_zone_id)
+        changed_id = known_ids and zone_id != prev_zone_id
+        changed = (changed_id if known_ids else
+                   bool(zone and self._current_zone and zone != self._current_zone))
         if zone_id:
-            prev_zone_id = self._current_zone_id
             self._current_zone_id = zone_id
-        else:
-            prev_zone_id = 0
-        changed_id = bool(zone_id and prev_zone_id and zone_id != prev_zone_id)
         meter = getattr(self, "_dps_meter", None)
         if meter is not None:
-            meter.set_zone_metadata(zone, zone_changed=changed_id and not raw_zone)
+            meter.set_zone_metadata(zone, zone_changed=changed and not raw_zone)
         if raw_zone:
             # Raw zone boundaries clear DPS even when the zone name repeats.
             self._plugin_link.send_clear()
-        if zone == self._current_zone and not raw_zone and not changed_id:
-            # The zone ID and name can arrive in either order. Rebuild aliases when a
-            # late or corrected ID changes the canonical name.
-            if zone_id and (self._current_zone_id != prev_zone_id
-                            or len(self._zone_aliases) < 2):
-                self._set_zone_aliases(zone, zone_id)
-            if zone_id and self._current_zone_id != prev_zone_id:
-                # A changed ID can also select a different cactbot timeline.
+        if not raw_zone and not changed:
+            # Names and IDs can arrive separately or correct earlier metadata.
+            updated = bool(zone and zone != self._current_zone)
+            if zone:
+                self._current_zone = zone
+            self._set_zone_aliases(self._current_zone, self._current_zone_id)
+            if updated or self._current_zone_id != prev_zone_id:
+                self._zone_lbl.setText(self._zone_banner_text())
+                self._refresh_zone_column()
                 self._redetect_zone_fight()
             return
         self._current_zone = zone

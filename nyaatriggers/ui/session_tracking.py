@@ -69,8 +69,11 @@ class SessionTrackingMixin:
             self._prog_sessions.end(self._dps_meter.full_snapshot(), "duty-left")
             self._prog_tab.refresh()
         changed_id = zone_id and self._current_zone_id and zone_id != self._current_zone_id
-        if changed_id or (zone and zone != self._death_recap.zone):
+        known_ids = bool(zone_id and self._current_zone_id)
+        changed_name = zone and self._death_recap.zone and zone != self._death_recap.zone
+        if changed_id or (not known_ids and changed_name):
             self._death_recap.reset()
+        if zone or changed_id:
             self._death_recap.zone = zone
 
     def _finish_activity(self):

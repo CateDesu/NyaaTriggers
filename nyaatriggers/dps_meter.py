@@ -356,10 +356,11 @@ class DpsMeter:
         self._me_id = None
         self._awaiting_zone_metadata = True
 
-    def set_zone_metadata(self, name: str, *, zone_changed: bool = False) -> None:
+    def set_zone_metadata(self, name: str, *, zone_changed: bool | None = None) -> None:
         """Apply zone metadata for connections that missed the raw zone line. Repeated
         metadata must not end an encounter. A changed known zone finalizes before the
         overlay is cleared, even when metadata arrives before the raw zone line.
+        An explicit False means the ID confirms this is still the same zone.
         """
         name = (name or "").strip()
         if zone_changed:
@@ -369,7 +370,7 @@ class DpsMeter:
             return
         if not name:
             return
-        first_metadata = self._awaiting_zone_metadata
+        first_metadata = self._awaiting_zone_metadata or zone_changed is False
         self._awaiting_zone_metadata = False
         if name == self._zone:
             return
@@ -384,11 +385,12 @@ class DpsMeter:
             self._owners.clear()
             self._names.clear()
             self._me_id = None
-        # Replace placeholder titles when zone metadata arrives after encounter start.
+        # Keep live damage when only the zone name changes.
         for enc in (self.current, self._view):
-            if enc is not None and not enc.zone:
+            if enc is not None and (not enc.zone or zone_changed is False):
+                if not enc.zone or enc.title == enc.zone:
+                    enc.title = name
                 enc.zone = name
-                enc.title = name
 
     def set_in_combat(self, in_act: bool, in_game: bool) -> None:
         """Either combat flag can start or end a pull. Process falling edges before rising

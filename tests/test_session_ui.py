@@ -100,6 +100,15 @@ class SessionUiTests(unittest.TestCase):
         window._fflogs_signal.emit(1, {"amount": 2000, "percent": 50})
         self.assertIn("1.0k", window._fflogs_lbl.text())
 
+    def test_zone_name_correction_keeps_live_recap_history(self):
+        self.connect()
+        self.line(["26", "ts", "123", "Status", "30", PLAYER, "Player", PLAYER, "Player"])
+        buffers = deepcopy(self.window._death_recap.buffers)
+        self.assertTrue(buffers)
+        self.window._on_ws_zone_changed(1, "Localized duty")
+        self.assertEqual(self.window._death_recap.buffers, buffers)
+        self.assertEqual(self.window._death_recap.zone, "Localized duty")
+
     def test_oversized_saved_volumes_allow_startup_and_unmute(self):
         settings = deepcopy(self.window._settings)
         for value, master, alert in ((10**400, 100, 50), (1e308, 200, 100), (-1e308, 0, 0)):

@@ -253,6 +253,59 @@ class EditorStorageTests(unittest.TestCase):
         self.assertEqual(current.zone, "New Arena")
         self.assertEqual(len(ended), 1)
 
+    def test_late_zone_name_keeps_callouts_started_after_the_boundary(self):
+        host = Host([1000.0])
+        host.prepare_zone()
+        host._triggers = [Trigger(ability_id="ABCD", delay_s=10)]
+        self.addCleanup(host._clear_seq_runners)
+        with patch("nyaatriggers.ui.instance_tab.canonical_zone_name", return_value=""):
+            host._on_ws_zone_changed(200, "")
+            host.dispatch("ABCD", kind="20")
+            runner, = host._seq_runners
+            host._on_ws_zone_changed(200, "New Arena")
+        self.assertEqual(host._seq_runners, [runner])
+        self.assertEqual(host._current_zone, "New Arena")
+
+    def test_corrected_name_for_the_same_zone_preserves_callouts_and_damage(self):
+        host = Host([1000.0])
+        host.prepare_zone()
+        host._triggers = [Trigger(ability_id="ABCD", delay_s=10)]
+        self.addCleanup(host._clear_seq_runners)
+        host.dispatch("ABCD", kind="20")
+        runner, = host._seq_runners
+        host._dps_meter.set_in_combat(True, True)
+        host._dps_meter.process(ability("0003", 1000))
+        current = host._dps_meter.current
+        host._on_ws_zone_changed(100, "Localized Arena")
+        with self.subTest(state="callouts"):
+            self.assertEqual(host._seq_runners, [runner])
+        with self.subTest(state="damage"):
+            self.assertIs(host._dps_meter.current, current)
+        self.assertEqual(host._current_zone, "Localized Arena")
+
+    def test_empty_zone_metadata_does_not_forget_the_previous_identity(self):
+        host = Host([1000.0])
+        host.prepare_zone()
+        host._triggers = [Trigger(ability_id="ABCD", delay_s=10)]
+        self.addCleanup(host._clear_seq_runners)
+        host.dispatch("ABCD", kind="20")
+        host._on_ws_zone_changed(0, "")
+        with self.subTest(state="identity"):
+            self.assertEqual(host._current_zone_id, 100)
+        host._on_ws_zone_changed(200, "Old Arena")
+        with self.subTest(state="boundary"):
+            self.assertFalse(host._seq_runners)
+
+    def test_unknown_name_after_a_zone_boundary_does_not_block_filtered_callouts(self):
+        host = Host([1000.0])
+        host.prepare_zone()
+        host._triggers = [Trigger(ability_id="ABCD", zone_regex="New Arena", delay_s=10)]
+        self.addCleanup(host._clear_seq_runners)
+        with patch("nyaatriggers.ui.instance_tab.canonical_zone_name", return_value=""):
+            host._on_ws_zone_changed(200, "")
+        host.dispatch("ABCD", kind="20")
+        self.assertEqual(len(host._seq_runners), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
