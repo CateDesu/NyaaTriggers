@@ -605,8 +605,8 @@ class UpdaterUiMixin:
                 if len(raw) > _REPO_JSON_MAX_BYTES:
                     raise ValueError("triggers.json response too large")
                 data = json.loads(raw)
-                if not isinstance(data, list):
-                    raise ValueError("Unexpected format - not a list")
+                if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
+                    raise ValueError("Expected a list of trigger objects")
                 # Download to untracked cache names so source checkouts keep their
                 # tracked trigger files unchanged.
                 _atomic_write_json(ac._REPO_TRIGGERS_FILE, data, indent=2)

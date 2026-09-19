@@ -398,7 +398,7 @@ class CactbotReader(QObject):
     def _on_message(self, kind: str, payload: str) -> None:
         try:
             data = json.loads(payload)
-        except (json.JSONDecodeError, ValueError):
+        except (ValueError, RecursionError):
             return
         # Only the triggers message accepts a list payload.
         if kind == "triggers":

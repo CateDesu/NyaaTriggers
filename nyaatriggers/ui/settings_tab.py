@@ -64,7 +64,7 @@ class SettingsTabMixin:
         try:
             _atomic_write_json(ac._SETTINGS_FILE, self._settings, indent=2)
             return True
-        except OSError as exc:
+        except (OSError, TypeError, ValueError, RecursionError) as exc:
             self._warn_save_failed(_("settings"), exc)
             return False
 

@@ -76,17 +76,15 @@ class FflogsClient:
 
             def _reader() -> None:
                 try:
+                    read_chunk = getattr(resp, "read1", resp.read)
                     while True:
-                        chunk = resp.read(1 << 16)
+                        chunk = read_chunk(1 << 16)
                         if not chunk:
                             break
                         buf.extend(chunk)
                         progress[0] = len(buf)
                         if len(buf) > _MAX_RESPONSE_BYTES:
                             raise ValueError("fflogs response exceeded the size cap")
-                        if len(chunk) < 1 << 16:
-                            # urllib's read only returns short at the end of the body.
-                            break
                 except BaseException as exc:
                     reader_error[0] = exc
                 finally:

@@ -1,5 +1,6 @@
 """Stable release lookup, version display and update eligibility."""
 import email.message
+import io
 import json
 import os
 import sys
@@ -34,8 +35,11 @@ def fetch_stubbed(channel=None, payload=PAYLOAD):
     urls = []
 
     class Resp:
+        def __init__(self):
+            self.body = io.BytesIO(payload)
+
         def read(self, *args):
-            return payload
+            return self.body.read(*args)
 
         def __enter__(self):
             return self

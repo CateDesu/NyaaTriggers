@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from nyaatriggers.drop_log import log_drop
+from nyaatriggers.http_fetch import open_response
 from nyaatriggers.locale_util import _, N_
 
 FightTree = list[tuple[str, list[tuple[str, list[str]]]]]
@@ -211,7 +212,8 @@ def refresh_from_cactbot_async(cache_path: Path) -> None:
         try:
             req = urllib.request.Request(
                 _CACTBOT_TREE_API, headers={"User-Agent": "NyaaTriggers"})
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            deadline = time.monotonic() + _TREE_DEADLINE_S
+            with open_response(req, 20, min(deadline, time.monotonic() + _TREE_STALL_S)) as resp:
                 # Read in a helper so the watchdog can enforce both deadlines.
                 done = threading.Event()
                 progress = [0]
@@ -220,8 +222,9 @@ def refresh_from_cactbot_async(cache_path: Path) -> None:
 
                 def _reader() -> None:
                     try:
+                        read_chunk = getattr(resp, "read1", resp.read)
                         while True:
-                            chunk = resp.read(1 << 16)
+                            chunk = read_chunk(1 << 16)
                             if not chunk:
                                 break
                             raw.extend(chunk)
@@ -234,7 +237,6 @@ def refresh_from_cactbot_async(cache_path: Path) -> None:
                         done.set()
 
                 threading.Thread(target=_reader, daemon=True).start()
-                deadline = time.monotonic() + _TREE_DEADLINE_S
                 last_seen = progress[0]
                 last_change = time.monotonic()
                 while not done.wait(timeout=min(_TREE_STALL_S, max(0.0, deadline - time.monotonic()))):

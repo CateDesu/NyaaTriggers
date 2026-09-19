@@ -180,9 +180,10 @@ class _HealthyServer:
 def test_fetch_latest_release_cut():
     for mode in ("trickle", "park"):
         srv = _TrickleServer(mode=mode)
-        saved = (updater.API_LATEST_URL, updater._READ_STALL_S)
+        saved = (updater.API_LATEST_URL, updater._READ_STALL_S, updater._RELEASE_DEADLINE_S)
         updater.API_LATEST_URL = srv.url
         updater._READ_STALL_S = _STALL
+        updater._RELEASE_DEADLINE_S = 1.0
         try:
             t0 = time.monotonic()
             raised = None
@@ -194,7 +195,7 @@ def test_fetch_latest_release_cut():
             assert raised is not None and "timed out after 30 seconds" in str(raised), mode
             assert elapsed < 10, mode
         finally:
-            updater.API_LATEST_URL, updater._READ_STALL_S = saved
+            updater.API_LATEST_URL, updater._READ_STALL_S, updater._RELEASE_DEADLINE_S = saved
             srv.close()
 
 
@@ -229,9 +230,10 @@ def test_fight_catalog_cut():
         with tempfile.TemporaryDirectory() as td:
             srv = _TrickleServer(mode=mode)
             drops = []
-            saved = (fc._CACTBOT_TREE_API, fc._TREE_STALL_S, fc.log_drop)
+            saved = (fc._CACTBOT_TREE_API, fc._TREE_STALL_S, fc._TREE_DEADLINE_S, fc.log_drop)
             fc._CACTBOT_TREE_API = srv.url
             fc._TREE_STALL_S = _STALL
+            fc._TREE_DEADLINE_S = 1.0
             fc.log_drop = lambda site, detail, *a, **k: drops.append(detail)
             cache = Path(td) / "fight_catalog.json"
             try:
@@ -239,9 +241,10 @@ def test_fight_catalog_cut():
                 # The latch must free even though the read never finishes.
                 assert _wait_for(lambda: not fc._REFRESH_RUNNING.is_set()), mode
                 assert not cache.exists(), mode
-                assert any("stalled, no new bytes" in d for d in drops), mode
+                reason = "timed out after 60 s" if mode == "trickle" else "stalled, no new bytes"
+                assert any(reason in d for d in drops), (mode, drops)
             finally:
-                fc._CACTBOT_TREE_API, fc._TREE_STALL_S, fc.log_drop = saved
+                fc._CACTBOT_TREE_API, fc._TREE_STALL_S, fc._TREE_DEADLINE_S, fc.log_drop = saved
                 srv.close()
 
 
@@ -250,10 +253,12 @@ def test_tts_kokoro_cut():
         with tempfile.TemporaryDirectory() as td:
             srv = _TrickleServer(mode=mode)
             dest = Path(td) / "kokoro-v1.0.onnx"
-            saved = (tts._MODEL_DIR, tts._KOKORO_URLS, tts._KOKORO_DL_STALL_S)
+            saved = (tts._MODEL_DIR, tts._KOKORO_URLS, tts._KOKORO_DL_STALL_S,
+                     tts._KOKORO_DL_DEADLINE_S)
             tts._MODEL_DIR = Path(td)
             tts._KOKORO_URLS = {dest: srv.url}
             tts._KOKORO_DL_STALL_S = _STALL
+            tts._KOKORO_DL_DEADLINE_S = 1.0
             try:
                 import io
                 import contextlib
@@ -264,10 +269,12 @@ def test_tts_kokoro_cut():
                 elapsed = time.monotonic() - t0
                 assert ok is False, mode
                 assert elapsed < 10, mode
-                assert "stalled, no new bytes" in err.getvalue(), mode
+                reason = "still running past" if mode == "trickle" else "stalled, no new bytes"
+                assert reason in err.getvalue(), mode
                 assert not dest.exists() and not list(Path(td).glob("*.part")), mode
             finally:
-                tts._MODEL_DIR, tts._KOKORO_URLS, tts._KOKORO_DL_STALL_S = saved
+                (tts._MODEL_DIR, tts._KOKORO_URLS, tts._KOKORO_DL_STALL_S,
+                 tts._KOKORO_DL_DEADLINE_S) = saved
                 srv.close()
 
 
@@ -304,8 +311,9 @@ def test_install_voice_cut():
 def test_fflogs_cut():
     for mode in ("trickle", "park"):
         srv = _TrickleServer(mode=mode)
-        saved = fflogs._READ_STALL_S
+        saved = fflogs._READ_STALL_S, fflogs._RESPONSE_DEADLINE_S
         fflogs._READ_STALL_S = _STALL
+        fflogs._RESPONSE_DEADLINE_S = 1.0
         try:
             t0 = time.monotonic()
             raised = None
@@ -314,11 +322,11 @@ def test_fflogs_cut():
             except TimeoutError as exc:
                 raised = exc
             elapsed = time.monotonic() - t0
-            assert raised is not None and "stalled, no new bytes" in str(raised), mode
-            assert "timed out" not in str(raised), mode
+            reason = "timed out after 60 s" if mode == "trickle" else "stalled, no new bytes"
+            assert raised is not None and reason in str(raised), mode
             assert elapsed < 10, mode
         finally:
-            fflogs._READ_STALL_S = saved
+            fflogs._READ_STALL_S, fflogs._RESPONSE_DEADLINE_S = saved
             srv.close()
 
 

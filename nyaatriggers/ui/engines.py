@@ -3,7 +3,6 @@
 from pathlib import Path
 import html
 import json
-import shutil
 import sys
 from collections import deque
 
@@ -17,7 +16,10 @@ from nyaatriggers.trigger_engine import Trigger
 from nyaatriggers.convert_event_trigger import REPO_TO_FIGHT
 try:
     # Let the import button report converter failures without blocking startup.
-    from nyaatriggers.convert_triggernometry import convert_xml as _tn_convert_xml, load_zone_map as _tn_zone_map
+    from nyaatriggers.convert_triggernometry import (
+        MAX_XML_BYTES as _TN_MAX_XML_BYTES, convert_xml as _tn_convert_xml,
+        load_zone_map as _tn_zone_map,
+    )
 except Exception:  # noqa: BLE001
     _tn_convert_xml = None
     _tn_zone_map = None
@@ -483,7 +485,7 @@ class EnginesMixin:
         """Show cached Triggernometry rows until a live harvest replaces them."""
         try:
             parsed = json.loads(ac._TRIGGERNOMETRY_INVENTORY_CACHE.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return
         if not isinstance(parsed, list) or not parsed:
             return
@@ -585,11 +587,14 @@ class EnginesMixin:
         for src in (ac._TRIGGEVENT_INVENTORY_CACHE, ac._TRIGGEVENT_INVENTORY_SEED):
             try:
                 parsed = json.loads(src.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+            except (OSError, ValueError, RecursionError):
                 continue
-            # An empty cache must not mask the bundled seed.
-            if isinstance(parsed, list) and parsed:
-                tv = parsed
+            # A cache without usable rows must not mask the bundled seed.
+            if not isinstance(parsed, list):
+                continue
+            valid = [e for e in parsed if isinstance(e, dict) and _as_str(e.get("id"))]
+            if valid:
+                tv = valid
                 break
         if not isinstance(tv, list):
             return
@@ -1050,7 +1055,9 @@ class EnginesMixin:
             return
         try:
             zone_map  = _tn_zone_map([t.to_dict() for t in self._triggers])
-            converted = _tn_convert_xml(Path(path), zone_map)
+            with Path(path).open("rb") as source:
+                xml_bytes = source.read(_TN_MAX_XML_BYTES + 1)
+            converted = _tn_convert_xml(Path(path), zone_map, content=xml_bytes, strict=True)
         except Exception as exc:  # noqa: BLE001
             ac.QMessageBox.critical(
                 self, _("Import Triggernometry"),
@@ -1058,6 +1065,7 @@ class EnginesMixin:
             return
         # Copy the pack into managed storage for scripted triggers.
         staged = False
+        stage_failed = False
         if TriggernometryBridge is not None and _tn_packs_dir is not None:
             try:
                 packs = _tn_packs_dir()
@@ -1069,11 +1077,13 @@ class EnginesMixin:
                     while (packs / f"{src.stem}_{n}{src.suffix}").exists():
                         n += 1
                     target = packs / f"{src.stem}_{n}{src.suffix}"
-                if target.resolve() != src.resolve():
-                    shutil.copy2(path, target)
+                ac._atomic_write_bytes(target, xml_bytes)
                 staged = True
             except Exception as exc:  # noqa: BLE001
+                stage_failed = True
                 print(f"[triggernometry] could not stage pack for the engine: {exc!r}", file=sys.stderr)
+                ac.QMessageBox.warning(self, _("Import Triggernometry"),
+                                      _("Could not write file:\n{error}").format(error=exc))
 
         # Prefer running the pack in Triggernometry. Convert its simple subset to Local
         # only when the engine cannot run it.
@@ -1113,6 +1123,8 @@ class EnginesMixin:
             engine_running = self._triggernometry_mode
 
         if not added and not staged and not converted:
+            if stage_failed:
+                return
             ac.QMessageBox.information(
                 self, _("Import Triggernometry"),
                 _("No importable triggers were found in that file, and the Triggernometry "

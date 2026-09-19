@@ -39,6 +39,9 @@ class SequentialRunner(QObject):
             return False
         if self._step >= len(self.trigger.sequence):
             return False
+        if time.monotonic() >= self._step_deadline:
+            self._expire()
+            return False
         step = self.trigger.sequence[self._step]
         # Normalize step log types using the same default and whitespace handling as
         # Trigger.from_dict.

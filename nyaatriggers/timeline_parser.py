@@ -9,7 +9,7 @@ from dataclasses import dataclass, field as dc_field
 _LINE_RE = re.compile(
     r'^(?P<time>-?[\d.]+)\s+(?P<labelkw>label\s+)?"(?P<label>[^"]*)"\s*(?P<rest>.*)$'
 )
-_EVENT_RE = re.compile(r"(?P<event>[A-Za-z]\w*)\s*\{(?P<fields>(?:[^{}\"']|\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')*)\}")
+_EVENT_RE = re.compile(r"\b(?P<event>[A-Za-z]\w*)\s*\{(?P<fields>(?:[^{}\"']|\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')*)\}")
 # Keep unsupported nested fields for diagnostics so an empty constraint set cannot match
 # every line.
 _EVENT_KW_RE = re.compile(r"\b([A-Za-z]\w*)\s*\{")
@@ -17,9 +17,9 @@ _EVENT_KW_RE = re.compile(r"\b([A-Za-z]\w*)\s*\{")
 _WINDOW_RE = re.compile(r'\bwindow\s+(?P<before>[\d.]+)(?:\s*,\s*(?P<after>[\d.]+))?')
 _JUMP_RE = re.compile(r'\b(?P<force>force)?jump\s+(?:"(?P<jlabel>[^"]*)"|(?P<jtime>-?[\d.]+))')
 # Accept quoted or bare values and preserve regex escapes.
-_KV_RE = re.compile(r"(\w+)\s*:\s*(?:\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'|([^\s,\[\]{},\"']+))")
+_KV_RE = re.compile(r"\b(\w+)\s*:\s*(?:\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'|([^\s,\[\]{},\"']+))")
 # Parse arrays explicitly so ID alternatives are not lost.
-_KV_ARRAY_START_RE = re.compile(r"(\w+)\s*:\s*\[")
+_KV_ARRAY_START_RE = re.compile(r"\b(\w+)\s*:\s*\[")
 _ARRAY_ITEM_RE = re.compile(r"\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'")
 # Remove legacy regex sync bodies before searching for event clauses.
 _LEGACY_SYNC_RE = re.compile(r'\bsync\s*/(?:[^/\\]|\\.)*/')

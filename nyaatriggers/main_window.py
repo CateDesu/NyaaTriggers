@@ -227,7 +227,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
     _te_update_signal      = pyqtSignal(bool, str, bool)  # changed, message, manual, from the bg Triggevent update
     _callouts_ja_signal    = pyqtSignal(bool)      # background callouts_ja refresh finished, arg is changed
     _kokoro_dl_signal       = pyqtSignal(str)       # Kokoro setup finished, status string for the UI
-    _fflogs_signal          = pyqtSignal(object)    # FFLogs fetch done, result dict or None
+    _fflogs_signal          = pyqtSignal(int, object)    # Request number and FFLogs result.
 
     def __init__(self):
         super().__init__()
@@ -349,7 +349,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
                   "are in use.").format(err=err) + ("\n\n" + where if where else ""))
         self._callouts_ja: dict = {}
         self._callouts_phrases_ja: dict = {}
-        self._callouts_phrases_ja_patterns: list = []   # regex and ja pairs for {token} keys
+        self._callouts_phrases_ja_patterns: list = []   # Matchers and translations for tokenized keys.
         self._callouts_readings: dict = {}
         self._callouts_names_ja: dict = {}
         self._callouts_names_text_ja: dict = {}          # english name to ja, engine triggers

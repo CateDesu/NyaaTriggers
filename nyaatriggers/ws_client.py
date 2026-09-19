@@ -277,20 +277,13 @@ class WSClient(QObject):
             return
 
         if mtype == "changeprimaryplayer":
-            try:
-                self._player_id = int(data.get("charID") or data.get("charId") or 0)
-            except (TypeError, ValueError, OverflowError):
-                # Do not pair a new player name with the previous player's ID.
-                self._player_id = 0
+            self._player_id = _signal_id(data.get("charID") or data.get("charId") or 0)
             self.primary_player.emit(self._player_id,
                                      str(data.get("charName") or data.get("charname") or ""))
             return
 
         if mtype == "changezone":
-            try:
-                zid = int(data.get("zoneID") or data.get("zoneId") or 0)
-            except (TypeError, ValueError, OverflowError):
-                zid = 0
+            zid = _signal_id(data.get("zoneID") or data.get("zoneId") or 0)
             self.zone_changed.emit(zid, str(data.get("zoneName") or ""))
             return
 
@@ -368,6 +361,15 @@ def _extract_raw(data: dict) -> str:
         return str(data.get("msg", "")).strip()
 
     return ""
+
+
+def _signal_id(value) -> int:
+    """Reject IDs that Qt would truncate when emitting its signed int signal."""
+    try:
+        ident = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return ident if 0 <= ident <= 0x7FFFFFFF else 0
 
 
 def _ci(v) -> int:

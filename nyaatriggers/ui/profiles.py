@@ -22,7 +22,9 @@ class ProfilesMixin:
         records, errors = load_records(self._profiles_dir, validate_profile)
         self._default_profile = next((p for p in records if p["id"] == DEFAULT_PROFILE_ID), None)
         self._profiles = [p for p in records if p["id"] != DEFAULT_PROFILE_ID]
-        self._default_unreadable = any(error.startswith(DEFAULT_PROFILE_ID + ".json:") for error in errors)
+        self._default_unreadable = any(
+            error.startswith((DEFAULT_PROFILE_ID + ".json:", str(self._profiles_dir) + ":"))
+            for error in errors)
         try:
             self._active_profile_id = record_id(self._settings.get("active_trigger_profile", DEFAULT_PROFILE_ID))
         except ValueError:

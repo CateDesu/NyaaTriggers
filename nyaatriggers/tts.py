@@ -262,8 +262,9 @@ def download_kokoro_model() -> bool:
 
                 def _reader() -> None:
                     try:
+                        read_chunk = getattr(r, "read1", r.read)
                         while True:
-                            chunk = r.read(1 << 16)
+                            chunk = read_chunk(1 << 16)
                             if not chunk:
                                 break
                             progress[0] += len(chunk)

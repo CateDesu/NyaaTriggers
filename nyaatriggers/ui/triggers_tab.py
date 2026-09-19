@@ -99,7 +99,7 @@ class TriggersTabMixin:
             try:
                 data = json.loads(_src.read_text(encoding="utf-8"))
                 # Valid JSON must still contain a trigger list.
-                if not isinstance(data, list):
+                if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
                     raise ValueError("not a trigger list")
                 official = [Trigger.from_dict(d) for d in data if isinstance(d, dict)]
             except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
@@ -453,22 +453,26 @@ class TriggersTabMixin:
 
     def _add_folder_node(self, folder: dict, parent: QTreeWidgetItem,
                          visited: "set[str] | None" = None) -> None:
-        fi = QTreeWidgetItem([f"▶ {folder['name']}"])
-        fi.setData(0, Qt.ItemDataRole.UserRole, folder["name"])
-        fi.setData(0, _ITEM_TYPE_ROLE, "folder")
-        fi.setData(0, _ITEM_ID_ROLE, folder["id"])
-        fi.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-        fi.setSizeHint(0, QSize(0, 22))
-        parent.addChild(fi)
-        # Track visited folder IDs so duplicate IDs or cycles cannot recurse
-        # indefinitely.
         if visited is None:
             visited = set()
-        visited.add(folder["id"])
+        children = {}
         for child in self._folders:
-            if child.get("parent_id") == folder["id"] \
-                    and child.get("id") not in visited:
-                self._add_folder_node(child, fi, visited)
+            if isinstance(child.get("parent_id"), str):
+                children.setdefault(child["parent_id"], []).append(child)
+        pending = [(folder, parent)]
+        while pending:
+            folder, parent = pending.pop()
+            if folder["id"] in visited:
+                continue
+            visited.add(folder["id"])
+            fi = QTreeWidgetItem([f"▶ {folder['name']}"])
+            fi.setData(0, Qt.ItemDataRole.UserRole, folder["name"])
+            fi.setData(0, _ITEM_TYPE_ROLE, "folder")
+            fi.setData(0, _ITEM_ID_ROLE, folder["id"])
+            fi.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            fi.setSizeHint(0, QSize(0, 22))
+            parent.addChild(fi)
+            pending.extend((child, fi) for child in reversed(children.get(folder["id"], [])))
 
     def _on_tree_context_menu(self, pos) -> None:
         item = self._tree.itemAt(pos)
@@ -528,6 +532,8 @@ class TriggersTabMixin:
                 self, _("New Folder"),
                 _("A folder named '{name}' already exists.").format(name=name))
             return
+        if parent_id is not None and not any(f["id"] == parent_id for f in self._folders):
+            parent_id = None
         self._folders.append({"id": str(uuid.uuid4()), "name": name, "parent_id": parent_id})
         self._save_triggers()
         self._refresh_tree()
@@ -554,6 +560,10 @@ class TriggersTabMixin:
         if not ok or not name.strip():
             return
         name = name.strip()
+        # A file reload can replace folders while the dialog is open.
+        folder = next((f for f in self._folders if f["id"] == folder_id), None)
+        if folder is None:
+            return
         # Renaming to an existing folder would merge membership.
         if name != folder["name"] and any(f["name"] == name for f in self._folders):
             ac.QMessageBox.information(
@@ -575,24 +585,24 @@ class TriggersTabMixin:
         folder = next((f for f in self._folders if f["id"] == folder_id), None)
         if folder is None:
             return
-        # Track visited descendants to tolerate duplicate folder IDs.
-        def _collect(fid: str, seen: "set[str]") -> list[str]:
-            ids = [fid]
-            seen.add(fid)
-            for ch in self._folders:
-                cid = ch.get("id")
-                if ch.get("parent_id") == fid and cid not in seen:
-                    ids.extend(_collect(cid, seen))
-            return ids
-        to_remove = set(_collect(folder_id, set()))
-        # Delete local triggers tagged with removed folder names. Preserve official
-        # triggers.
-        names_to_remove = {f["name"] for f in self._folders if f["id"] in to_remove}
-        victims = [
-            t for t in self._triggers
-            if t.fight in names_to_remove
-            and t.id in self._local_ids and t.id not in self._official_ids
-        ]
+        def _members():
+            children = {}
+            for child in self._folders:
+                if isinstance(child.get("parent_id"), str):
+                    children.setdefault(child["parent_id"], []).append(child["id"])
+            to_remove = set()
+            pending = [folder_id]
+            while pending:
+                fid = pending.pop()
+                if fid in to_remove:
+                    continue
+                to_remove.add(fid)
+                pending.extend(children.get(fid, []))
+            names = {f["name"] for f in self._folders if f["id"] in to_remove}
+            victims = [t for t in self._triggers if t.fight in names
+                       and t.id in self._local_ids and t.id not in self._official_ids]
+            return to_remove, victims
+        to_remove, victims = _members()
         n = len(victims)
         answer = ac.QMessageBox.question(
             self, _("Delete Folder"),
@@ -604,6 +614,10 @@ class TriggersTabMixin:
         )
         if answer != ac.QMessageBox.StandardButton.Yes:
             return
+        if not any(f["id"] == folder_id for f in self._folders):
+            return
+        # Respect moves and reloads made while confirmation was open.
+        to_remove, victims = _members()
         victim_ids = {t.id for t in victims}
         self._folders = [f for f in self._folders if f["id"] not in to_remove]
         self._triggers = [t for t in self._triggers if t.id not in victim_ids]
@@ -630,11 +644,12 @@ class TriggersTabMixin:
             item.setText(0, "▶ " + text[2:])
 
     def _collapse_tree_descendants(self, item: QTreeWidgetItem) -> None:
-        for i in range(item.childCount()):
-            child = item.child(i)
+        pending = [item.child(i) for i in range(item.childCount())]
+        while pending:
+            child = pending.pop()
             child.setExpanded(False)
             self._set_tree_arrow(child, False)
-            self._collapse_tree_descendants(child)
+            pending.extend(child.child(i) for i in range(child.childCount()))
 
     def _apply_tab_filter(self, item: QTreeWidgetItem | None = None) -> None:
         if item is None:
@@ -1189,6 +1204,8 @@ class TriggersTabMixin:
         then the larger map. Replace dictionaries atomically for active readers.
         """
         best_key, parsed = None, {}
+        _clean = lambda m: {k: v for k, v in (m if isinstance(m, dict) else {}).items()
+                            if isinstance(k, str) and isinstance(v, str) and v}
         for src in (ac._CALLOUTS_JA_CACHE, ac._CALLOUTS_JA_BUNDLE):
             try:
                 cand = json.loads(src.read_text(encoding="utf-8"))
@@ -1196,12 +1213,16 @@ class TriggersTabMixin:
                 continue
             if not (isinstance(cand, dict) and isinstance(cand.get("callouts"), dict)):
                 continue
-            key = (updater.parse_version(str(cand.get("app_version") or "0")),
-                   len(cand["callouts"]))
+            if not any(_clean(cand.get(field)) for field in
+                       ("callouts", "phrases", "readings", "names", "names_text")):
+                continue
+            try:
+                key = (updater.parse_version(str(cand.get("app_version") or "0")),
+                       len(_clean(cand["callouts"])))
+            except ValueError:
+                continue
             if best_key is None or key > best_key:
                 best_key, parsed = key, cand
-        _clean = lambda m: {k: v for k, v in (m if isinstance(m, dict) else {}).items()
-                            if isinstance(k, str) and isinstance(v, str) and v}
         self._callouts_ja = _clean(parsed.get("callouts"))          # id -> ja display
         self._callouts_phrases_ja = _clean(parsed.get("phrases"))   # callout-text -> ja display
         self._callouts_readings = _clean(parsed.get("readings"))    # ja display -> kana reading
@@ -1455,17 +1476,7 @@ class TriggersTabMixin:
             # Export through a sibling temporary file so interruption preserves the
             # previous file.
             dest = Path(path)
-            tmp = dest.with_suffix(dest.suffix + ".tmp")
-            try:
-                shutil.copy2(ac.TRIGGERS_LOCAL_FILE, tmp)
-                _fsync_file(tmp)
-                os.replace(tmp, dest)
-            except OSError:
-                try:
-                    tmp.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                raise
+            ac._atomic_write_bytes(dest, ac.TRIGGERS_LOCAL_FILE.read_bytes())
         except OSError as exc:
             ac.QMessageBox.critical(self, _("Export Failed"),
                                  _("Could not write file:\n{error}").format(error=exc))

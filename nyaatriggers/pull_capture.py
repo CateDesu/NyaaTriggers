@@ -64,6 +64,8 @@ class PullCapture(QObject):
         self._started_wall = ""
         self._fight = ""
         self._zone = ""
+        self._zone_id = 0
+        self._zone_name = ""
         self._warned_write = False
         self._state_snapshot = state_snapshot or (lambda: ())
         # The caller supplies fight and zone names for capture paths.
@@ -104,10 +106,18 @@ class PullCapture(QObject):
     @pyqtSlot(str)
     def on_log_line(self, raw: str) -> None:
         """Parsed ACT log line, used for pull segmentation only."""
-        if not self._recording:
+        if not self._recording and not raw.startswith("01|"):
             return
         fields = raw.split("|")
         if fields[0] == "01":
+            if len(fields) > 3:
+                try:
+                    self._zone_id = int(fields[2], 16)
+                except ValueError:
+                    self._zone_id = 0
+                self._zone_name = fields[3]
+            if not self._recording:
+                return
             self._finalize("reset")
             self._buffer.clear()
             self._buffer_bytes = 0
@@ -131,6 +141,16 @@ class PullCapture(QObject):
 
     @pyqtSlot(int, str)
     def on_zone_changed(self, zone_id: int, name: str) -> None:
+        previous_name = self._zone_name or (self._zone if self._in_pull else "")
+        known_ids = bool(zone_id and self._zone_id)
+        changed = (zone_id != self._zone_id if known_ids else
+                   bool(name and previous_name and name != previous_name))
+        if changed or name:
+            self._zone_name = name
+        if changed or zone_id:
+            self._zone_id = zone_id
+        if not changed:
+            return
         if self._in_pull:
             self._finalize("reset")
         self._buffer.clear()
@@ -143,6 +163,8 @@ class PullCapture(QObject):
         """
         if not connected:
             self._finalize("feed-lost")
+            self._zone_id = 0
+            self._zone_name = ""
             self._buffer.clear()
             self._buffer_bytes = 0
 

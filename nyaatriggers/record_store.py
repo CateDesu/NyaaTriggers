@@ -50,7 +50,15 @@ def write_record(directory, data):
 
 def load_records(directory, validate):
     records, errors = [], []
-    for path in sorted(Path(directory).glob("*.json")):
+    try:
+        paths = sorted(Path(directory).iterdir())
+    except FileNotFoundError:
+        return records, errors
+    except OSError as exc:
+        return records, [f"{directory}: {exc}"]
+    for path in paths:
+        if path.suffix != ".json":
+            continue
         try:
             data = read_record(path)
             validate(data)

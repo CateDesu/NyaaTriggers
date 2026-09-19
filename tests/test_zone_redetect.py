@@ -478,8 +478,8 @@ zw._on_ws_zone_changed(222, "Zone One")
 check("named WS zone event delegates without pre-assigning the id",
       zw.applied == [("Zone One", 222)] and zw._current_zone_id == 111)
 zw._on_ws_zone_changed(333, "")
-check("nameless WS zone event still retains the id for the sidecar replay",
-      zw._current_zone_id == 333 and len(zw.applied) == 1)
+check("nameless changed WS zone delegates the boundary without pre-assigning the id",
+      zw._current_zone_id == 111 and len(zw.applied) == 2 and zw.applied[-1][1] == 333)
 
 # a UTF-8 BOM does not eat the first timeline line
 fw3 = _FightWin()

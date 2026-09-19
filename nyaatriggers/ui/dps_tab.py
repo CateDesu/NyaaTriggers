@@ -25,13 +25,14 @@ class DpsTabMixin:
         # Use the same supported timeout value in the meter and selector.
         try:
             self._dps_idle_timeout = int(self._settings.get("dps_idle_timeout", 120))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             self._dps_idle_timeout = 120
         if self._dps_idle_timeout not in (15, 30, 60, 120, 180, 240, 300, 600):
             self._dps_idle_timeout = 120
         self._dps_meter.set_idle_timeout(self._dps_idle_timeout)
         self._dps_meter.on_encounter_end = self._on_meter_encounter_end
         self._fflogs_last_title = ""           # last finalized encounter, for the FFLogs refresh button
+        self._fflogs_request_id = 0
         self._dps_history: list[dict] = []
         self._dps_selected_idx: "int | None" = None
         self._dps_live_active: bool = False
@@ -52,8 +53,14 @@ class DpsTabMixin:
         self._dps_meter.set_idle_timeout(secs)
 
     def _open_dps_folder(self) -> None:
-        self._dps_dir().mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._dps_dir())))
+        folder = self._dps_dir()
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            ac.QMessageBox.warning(self, _("Open folder"),
+                                  _("Could not open that folder:\n{error}").format(error=exc))
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _dps_tick(self) -> None:
         self._update_live_dps()
@@ -244,24 +251,27 @@ class DpsTabMixin:
                     and self._settings.get("fflogs_client_secret")
                     and self._settings.get("fflogs_server"))
 
+    def _fflogs_context(self) -> tuple:
+        name = self._settings.get("fflogs_name")
+        char = ((name if isinstance(name, str) else "") or self._me_name or "").strip()
+        return (char, self._settings.get("fflogs_server"),
+                self._settings.get("fflogs_region", "NA"),
+                self._settings.get("fflogs_client_id"), self._settings.get("fflogs_client_secret"))
+
     def _maybe_fetch_fflogs(self, title: str) -> None:
         """Fetch configured FFLogs comparisons in the background and deliver through
         _fflogs_signal.
         """
+        self._fflogs_request_id = getattr(self, "_fflogs_request_id", 0) + 1
+        request_id = self._fflogs_request_id
         lbl = getattr(self, "_fflogs_lbl", None)
         if not title or lbl is None or not self._fflogs_configured():
             return
-        name = self._settings.get("fflogs_name")
-        if not isinstance(name, str):
-            name = ""
-        char = (name or self._me_name or "").strip()
+        self._fflogs_request_context = self._fflogs_context()
+        char, server, region, cid, secret = self._fflogs_request_context
         if not char:
             lbl.setText(_("FFLogs: no data"))
             return
-        cid = self._settings.get("fflogs_client_id")
-        secret = self._settings.get("fflogs_client_secret")
-        server = self._settings.get("fflogs_server")
-        region = self._settings.get("fflogs_region", "NA")
         lbl.setText(_("FFLogs: fetching…"))
         # Reuse the client for each credential pair to preserve its token cache.
         creds = (cid, secret)
@@ -272,9 +282,13 @@ class DpsTabMixin:
 
         def work() -> None:
             self._fflogs_signal.emit(
-                client.fetch_best(char, server, region, title))
+                request_id, client.fetch_best(char, server, region, title))
 
-        threading.Thread(target=work, daemon=True).start()
+        try:
+            threading.Thread(target=work, daemon=True).start()
+        except RuntimeError as exc:
+            lbl.setText(_("FFLogs: no data"))
+            ac.log_drop("fflogs", f"could not start lookup: {exc}")
 
     def _on_fflogs_refresh(self) -> None:
         title = self._fflogs_last_title
@@ -282,9 +296,15 @@ class DpsTabMixin:
             title = (self._dps_meter.snapshot().get("Encounter") or {}).get("title", "")
         self._maybe_fetch_fflogs(title)
 
-    def _on_fflogs_result(self, res) -> None:
+    def _on_fflogs_result(self, request_id, res) -> None:
+        if request_id != self._fflogs_request_id:
+            return
         lbl = getattr(self, "_fflogs_lbl", None)
         if lbl is None:
+            return
+        context = getattr(self, "_fflogs_request_context", None)
+        if context is not None and context != self._fflogs_context():
+            lbl.setText(_("FFLogs: no data"))
             return
         if not isinstance(res, dict):
             lbl.setText(_("FFLogs: no data"))
@@ -296,7 +316,7 @@ class DpsTabMixin:
             return
         best = f"{amount / 1000:.1f}k" if amount >= 1000 else f"{amount:,.0f}"
         text = _("FFLogs best: {best} rDPS").format(best=best)
-        if isinstance(percent, (int, float)) and percent:
+        if isinstance(percent, (int, float)):
             text += f" ({percent:.0f}%)"
         lbl.setText(text)
 
@@ -377,6 +397,9 @@ class DpsTabMixin:
                 changed = True
         if not changed:
             return
+        self._fflogs_request_id = getattr(self, "_fflogs_request_id", 0) + 1
+        if getattr(self, "_fflogs_lbl", None) is not None:
+            self._fflogs_lbl.clear()
         self._save_settings()
         self._update_fflogs_visibility()
 

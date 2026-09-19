@@ -270,15 +270,13 @@ def fetch_latest_release(timeout: int = 8, channel: str = "stable") -> Release:
 
             def _reader() -> None:
                 try:
+                    read_chunk = getattr(resp, "read1", resp.read)
                     while True:
-                        chunk = resp.read(65536)
+                        chunk = read_chunk(65536)
                         if not chunk:
                             break
                         chunks.append(chunk)
                         progress[0] += len(chunk)
-                        if len(chunk) < 65536:
-                            # urllib's read only returns short at the end of the body.
-                            break
                         if progress[0] > _MAX_RELEASE_BYTES:
                             raise OSError(
                                 f"Release info exceeded the {_MAX_RELEASE_BYTES >> 20} MB safety cap")

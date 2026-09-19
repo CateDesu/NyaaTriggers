@@ -1245,10 +1245,10 @@ def test_graphql_401_via_real_transport():
     class FakeResp:
         def __init__(self, status, body):
             self.status = status
-            self._body = body
+            self._body = io.BytesIO(body)
 
         def read(self, n=-1):
-            return self._body
+            return self._body.read(n)
 
         def __enter__(self):
             return self

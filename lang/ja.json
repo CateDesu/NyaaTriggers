@@ -108,6 +108,7 @@
   "Could not find an IINACT log folder. Is IINACT installed?": "IINACTのログフォルダが見つかりません。IINACTはインストールされていますか？",
   "Could not import that sound:\n{error}": "そのサウンドをインポートできませんでした:\n{error}",
   "Could not install voice dependencies. Check your connection, folder permissions and free disk space, then click Download to retry. Callouts keep using espeak.": "音声の依存関係をインストールできませんでした。接続、フォルダの権限、ディスクの空き容量を確認し、「ダウンロード」で再試行してください。それまではespeakを使用します。",
+  "Could not open that folder:\n{error}": "そのフォルダを開けませんでした:\n{error}",
   "Could not read that file:\n{error}": "そのファイルを読み込めませんでした:\n{error}",
   "Could not restart automatically: {error}\n\nPlease close and reopen NyaaTriggers to finish the update.": "自動で再起動できませんでした: {error}\n\n更新を完了するには NyaaTriggers を手動で閉じて開き直してください。",
   "Could not save Default: {error}": "デフォルトを保存できませんでした: {error}",

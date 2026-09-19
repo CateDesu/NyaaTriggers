@@ -686,30 +686,37 @@ def load_zone_map(existing: list[dict]) -> dict[str, str]:
     return {fight: c.most_common(1)[0][0] for fight, c in counts.items()}
 
 
-def convert_xml(xml_path: Path, zone_map: dict[str, str]) -> list[dict]:
+MAX_XML_BYTES = 16 * 1024 * 1024
+
+
+def convert_xml(xml_path: Path, zone_map: dict[str, str], *,
+                content: bytes | None = None, strict: bool = False) -> list[dict]:
     try:
-        size = xml_path.stat().st_size
-        # Bound XML input size to limit parser memory use.
-        if size > 16 * 1024 * 1024:
-            print(f"  SKIP (too large): {xml_path.name}", file=sys.stderr)
-            return []
+        if content is None:
+            with xml_path.open("rb") as source:
+                content = source.read(MAX_XML_BYTES + 1)
+        if len(content) > MAX_XML_BYTES:
+            raise ValueError("The XML file exceeds the 16 MiB import limit")
         # Scan the whole file for DTDs, including after long comments. Remove NULs to
         # recognize UTF-16 declarations.
-        head = xml_path.read_bytes().replace(b'\x00', b'')
+        head = content.replace(b'\x00', b'')
         if b'<!DOCTYPE' in head or b'<!ENTITY' in head:
             # Refuse DTDs because ElementTree expands their entities.
-            print(f"  SKIP (DOCTYPE/ENTITY declaration): {xml_path.name}", file=sys.stderr)
-            return []
-        tree = ET.parse(xml_path)
+            raise ValueError("DOCTYPE and ENTITY declarations are not supported")
+        root = ET.fromstring(content)
+        if strict and (root.tag != 'TriggernometryExport' or root.find('ExportedFolder') is None):
+            raise ValueError("The file is not a Triggernometry folder export")
     # These errors cover unsupported encoding declarations.
     except (OSError, ET.ParseError, LookupError, ValueError) as e:
+        if strict:
+            raise
         print(f"  SKIP (parse error): {xml_path.name}: {e}", file=sys.stderr)
         return []
 
     results = []
     key_counts: dict[str, int] = {}
     suffixed = 0
-    for folder_path, trigger in walk_xml(tree.getroot()):
+    for folder_path, trigger in walk_xml(root):
         if _SKIP_PATH_RE.search(folder_path):
             continue
         pairs = extract_ids(trigger.attrib.get('RegularExpression', ''))

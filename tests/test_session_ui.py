@@ -91,6 +91,15 @@ class SessionUiTests(unittest.TestCase):
     def test_window_icon_loads_from_bundled_assets(self):
         self.assertFalse(self.window.windowIcon().isNull())
 
+    def test_fflogs_signal_ignores_an_older_request_and_keeps_zero_percentile(self):
+        window = self.window
+        window._fflogs_request_id = 2
+        window._fflogs_signal.emit(2, {"amount": 1000, "percent": 0})
+        self.assertIn("1.0k", window._fflogs_lbl.text())
+        self.assertIn("(0%)", window._fflogs_lbl.text())
+        window._fflogs_signal.emit(1, {"amount": 2000, "percent": 50})
+        self.assertIn("1.0k", window._fflogs_lbl.text())
+
     def test_oversized_saved_volumes_allow_startup_and_unmute(self):
         settings = deepcopy(self.window._settings)
         for value, master, alert in ((10**400, 100, 50), (1e308, 200, 100), (-1e308, 0, 0)):
@@ -469,6 +478,23 @@ class SessionUiTests(unittest.TestCase):
         self.assertEqual(window._active_profile_id, profile["id"])
         self.assertEqual(path.read_text(), "broken default")
         self.assertIn("Default could not be loaded", window._profile_status.text())
+
+    @unittest.skipUnless(os.name == "posix" and os.geteuid() != 0, "Needs directory permissions")
+    def test_unreadable_profile_directory_does_not_replace_default(self):
+        trigger, profile = self.saved_profile()
+        self.window._refresh_profiles(profile["id"])
+        self.window._profile_apply.click()
+        folder = self.window._profiles_dir
+        original = (folder / (DEFAULT_PROFILE_ID + ".json")).read_bytes()
+        folder.chmod(0)
+        try:
+            window = self.restart_profile_window()
+            self.assertEqual(window._active_profile_id, profile["id"])
+            self.assertEqual(window._triggers[0].tts_text, "Tank setup")
+            self.assertIn("Default could not be loaded", window._profile_status.text())
+        finally:
+            folder.chmod(0o700)
+        self.assertEqual((folder / (DEFAULT_PROFILE_ID + ".json")).read_bytes(), original)
 
     def test_missing_active_profile_returns_to_default_on_restart(self):
         trigger, profile = self.saved_profile()

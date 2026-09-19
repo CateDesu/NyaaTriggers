@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -152,6 +153,20 @@ def _atomic_write_json(path: "Path", data, *, indent: "int | None" = None) -> No
         raise
 
 
+def _atomic_write_bytes(path: "Path", payload: bytes) -> None:
+    """Replace a file only after its complete contents have reached disk."""
+    fd, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def _fsync_file(path: "Path") -> None:
     """Flush a temporary file before atomic replacement."""
     with open(path, "r+b") as f:
@@ -182,7 +197,7 @@ def _repo_download_version() -> "str | None":
                 bundled.exists() and bundled.stat().st_mtime_ns > _REPO_TRIGGERS_VERSION.stat().st_mtime_ns
                 for bundled in (TRIGGERS_FILE, RETIRED_FILE)):
             return None
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     return v if isinstance(v, str) else None
 
@@ -251,7 +266,7 @@ def canonical_zone_name(zone_id: int) -> str:
             data = json.loads(ZONE_NAMES_FILE.read_text(encoding="utf-8"))
             _zone_names_cache = {str(k): v for k, v in data.items()
                                  if isinstance(v, str)} if isinstance(data, dict) else {}
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, AttributeError, RecursionError):
             _zone_names_cache = {}
     try:
         return _zone_names_cache.get(str(int(zone_id)), "")
@@ -276,12 +291,46 @@ def cactbot_timeline_for_zone(zone_id: int) -> "tuple[str, str]":
                    and isinstance(v.get("tag"), str)
                    and isinstance(v.get("txt_path"), str)
             } if isinstance(data, dict) else {}
-        except (OSError, ValueError, AttributeError):
+        except (OSError, ValueError, AttributeError, RecursionError):
             _cactbot_tl_cache = {}
     try:
         return _cactbot_tl_cache.get(str(int(zone_id)), ())
     except (TypeError, ValueError):
         return ()
+
+
+class _PhrasePattern:
+    """Match literal fragments in order without backtracking through token values."""
+
+    def __init__(self, parts):
+        self.parts = tuple(parts)
+
+    def match(self, text: str) -> bool:
+        if not text.startswith(self.parts[0]):
+            return False
+        position = len(self.parts[0])
+        for part in self.parts[1:-1]:
+            found = text.find(part, position)
+            if found < 0:
+                return False
+            position = found + len(part)
+        suffix = self.parts[-1]
+        # Preserve the former pattern's allowance for a final newline.
+        return (text.endswith(suffix, position)
+                or text.endswith("\n") and text.endswith(suffix, position, len(text) - 1))
+
+
+def _split_phrase_tokens(text: str) -> list[str]:
+    parts = []
+    start = 0
+    while True:
+        left = text.find("{", start)
+        right = text.find("}", left + 1) if left >= 0 else -1
+        if right < 0:
+            parts.append(text[start:])
+            return parts
+        parts.append(text[start:left])
+        start = right + 1
 
 
 def _compile_phrase_patterns(phrases: dict) -> list:
@@ -291,20 +340,17 @@ def _compile_phrase_patterns(phrases: dict) -> list:
     matching unrelated callouts.
     """
     simple = re.compile(r"^\{\w+\}$")
-    has_token = re.compile(r"\{[^}]*\}")
     out = []
     for en, ja in phrases.items():
-        if not has_token.search(en):
+        parts = _split_phrase_tokens(en)
+        if len(parts) == 1:
             continue
-        if simple.search(en) or has_token.search(ja):
+        if simple.search(en) or len(_split_phrase_tokens(ja)) > 1:
             continue
-        literal = re.sub(r"\{[^}]*\}", "", en)
+        literal = "".join(parts)
         if len(re.sub(r"[\W_]+", "", literal)) < 6:
             continue                       # Reject patterns with too little identifying text.
-        parts = re.split(r"(\{[^}]*\})", en)
-        pat = [".*?" if (p.startswith("{") and p.endswith("}") and len(p) > 1) else re.escape(p)
-               for p in parts]
-        out.append((re.compile("^" + "".join(pat) + "$", re.DOTALL), ja))
+        out.append((_PhrasePattern(parts), ja))
     return out
 
 MAX_ABILITY_LINES = 200

@@ -74,7 +74,7 @@ class ConnectionMixin:
             cfg = Path.home() / ".xlcore" / "pluginConfigs" / "IINACT.json"
         try:
             conf = json.loads(cfg.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             conf = {}
         raw = conf.get("LogFilePath") if isinstance(conf, dict) else None
         if isinstance(raw, str) and raw.strip():

@@ -75,13 +75,15 @@ class InstanceTabMixin:
         """Apply cached or live zone metadata. Resolve ID only updates immediately and
         retain the ID for sidecar restarts. _apply_zone handles duplicate name events.
         """
-        if zone_name:
-            self._apply_zone(zone_name, zone_id)
+        if zone_name or (zone_id and self._current_zone_id and zone_id != self._current_zone_id):
+            self._apply_zone(zone_name or canonical_zone_name(zone_id), zone_id)
         else:
             track_zone = getattr(self, "_track_activity_zone", None)
             if track_zone is not None:
                 track_zone("", zone_id)
             self._current_zone_id = zone_id
+            if zone_id:
+                self._set_zone_aliases(self._current_zone, zone_id)
             if zone_id and getattr(self, "_cactbot_mode", False):
                 self._redetect_zone_fight()
 
@@ -151,13 +153,14 @@ class InstanceTabMixin:
             self._current_zone_id = zone_id
         else:
             prev_zone_id = 0
+        changed_id = bool(zone_id and prev_zone_id and zone_id != prev_zone_id)
         meter = getattr(self, "_dps_meter", None)
         if meter is not None:
-            meter.set_zone_metadata(zone)
+            meter.set_zone_metadata(zone, zone_changed=changed_id and not raw_zone)
         if raw_zone:
             # Raw zone boundaries clear DPS even when the zone name repeats.
             self._plugin_link.send_clear()
-        if zone == self._current_zone and not raw_zone:
+        if zone == self._current_zone and not raw_zone and not changed_id:
             # The zone ID and name can arrive in either order. Rebuild aliases when a
             # late or corrected ID changes the canonical name.
             if zone_id and (self._current_zone_id != prev_zone_id

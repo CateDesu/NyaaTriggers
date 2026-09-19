@@ -4,7 +4,6 @@ from collections import Counter
 from pathlib import Path
 import math
 import os
-import shutil
 import tempfile
 import threading
 
@@ -198,7 +197,11 @@ class VoiceTabMixin:
             ac._USER_SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
             dest = ac._USER_SOUNDS_DIR / src.name
             if dest.resolve() != src.resolve():
-                shutil.copy2(src, dest)
+                with src.open("rb") as sound:
+                    payload = sound.read(_MAX_SOUND_BYTES + 1)
+                if len(payload) > _MAX_SOUND_BYTES:
+                    raise OSError("The sound file grew beyond the import limit")
+                ac._atomic_write_bytes(dest, payload)
         except OSError as exc:
             ac.QMessageBox.warning(self, _("Import SFX"),
                                 _("Could not import that sound:\n{error}").format(error=exc))
@@ -407,7 +410,12 @@ class VoiceTabMixin:
 
     def _open_voices_folder(self) -> None:
         """Open the user voice directory that survives program updates."""
-        ac._USER_VOICES_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            ac._USER_VOICES_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            ac.QMessageBox.warning(self, _("Open voices folder"),
+                                  _("Could not open that folder:\n{error}").format(error=exc))
+            return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(ac._USER_VOICES_DIR)))
 
     def _populate_voice_combo(self) -> None:
