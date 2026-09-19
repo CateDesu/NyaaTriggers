@@ -20,6 +20,7 @@ class StatusTimerRunner(QObject):
         self.key = (trigger.id, effect_id, source_id, target_id)
         self._captured = dict(captured)
         self._on_complete = on_complete
+        self._cancelled = False
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._fire)
@@ -37,9 +38,13 @@ class StatusTimerRunner(QObject):
                 and self.target_id == target_id)
 
     def cancel(self) -> None:
+        self._cancelled = True
         self._timer.stop()
 
     def _fire(self) -> None:
+        if self._cancelled:
+            return
+        self.cancel()
         try:
             self._on_complete(self, self._captured)
         except Exception:  # noqa: BLE001

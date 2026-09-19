@@ -90,6 +90,28 @@ def envelope(kind, **payload):
 
 
 class TelestoRelayTests(unittest.TestCase):
+    def test_drawing_replacement_in_a_bundle_keeps_callbacks_and_cleanup(self):
+        received = []
+        with FakeTelesto() as peer:
+            relay = TriggernometryTelesto(received.append, self.fail, peer.url)
+            relay.start()
+            try:
+                request = envelope("EnableDoodle", name="circle", type="circle", notifyonexpiry=True)
+                post(relay.url, request)
+                peer.next("EnableDoodle")
+                replacement = {"type": "Bundle", "payload": [
+                    envelope("DisableDoodle", name="circle"), request]}
+                self.assertEqual(post(relay.url, replacement)[0], 200)
+                drawing = peer.next("EnableDoodle")["payload"]
+                self.assertIn(drawing["name"], relay._owned_drawings)
+                self.assertEqual(post(drawing["notifyonexpiry"], {
+                    "notificationid": drawing["name"], "notificationtype": "doodleexpired"})[0], 200)
+                self.assertEqual(len(received), 1)
+                post(relay.url, replacement)
+            finally:
+                relay.close(wait=True)
+            self.assertFalse(peer.drawings)
+
     def test_invalid_bundle_keeps_the_existing_subscription(self):
         received, errors = [], []
         with FakeTelesto() as peer:

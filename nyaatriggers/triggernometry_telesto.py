@@ -255,6 +255,9 @@ class TriggernometryTelesto:
         elif kind == "unsubscribe":
             self._owned_subscriptions.discard(payload["id"])
         elif kind == "disabledoodle":
+            # A later command in the bundle may have activated this name again.
+            if payload["name"] in self._drawings.values():
+                return
             self._owned_drawings.discard(payload["name"])
             self._drawing_notifications.discard(payload["name"])
             self._drawing_expiry.pop(payload["name"], None)

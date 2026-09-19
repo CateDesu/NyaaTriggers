@@ -761,8 +761,9 @@ def _system_speak(text: str, volume: float = 1.0, speed: float = 1.0,
                 cmd += ["-l", "ja"]
             if _run_speak_proc(cmd, linux_text, stdin_text=False, gen=gen):
                 return True
-        if shutil.which("espeak"):
-            cmd = ["espeak", "-s", str(max(80, int(175 * speed))),
+        backend = next((name for name in ("espeak-ng", "espeak") if shutil.which(name)), None)
+        if backend:
+            cmd = [backend, "-s", str(max(80, int(175 * speed))),
                    "-a", str(max(0, min(200, int(round(vol * 100)))))]
             if jp:
                 cmd += ["-v", "ja"]

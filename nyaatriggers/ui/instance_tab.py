@@ -140,8 +140,7 @@ class InstanceTabMixin:
         return any(_safe_search(rx, z) for z in self._zone_aliases if z)
 
     def _apply_zone(self, zone: str, zone_id: int = 0, *, raw_zone: bool = False) -> None:
-        """Apply a zone change and reset its state. Duplicate reports from log and metadata
-        events do not repeat teardown.
+        """Reset on raw zone boundaries while preserving repeated zone metadata.
         """
         track_zone = getattr(self, "_track_activity_zone", None)
         if track_zone is not None:
@@ -157,7 +156,7 @@ class InstanceTabMixin:
         if raw_zone:
             # Raw zone boundaries clear DPS even when the zone name repeats.
             self._plugin_link.send_clear()
-        if zone == self._current_zone:
+        if zone == self._current_zone and not raw_zone:
             # The zone ID and name can arrive in either order. Rebuild aliases when a
             # late or corrected ID changes the canonical name.
             if zone_id and (self._current_zone_id != prev_zone_id
@@ -166,8 +165,6 @@ class InstanceTabMixin:
             if zone_id and self._current_zone_id != prev_zone_id:
                 # A changed ID can also select a different cactbot timeline.
                 self._redetect_zone_fight()
-            if raw_zone:
-                self._push_timeline_to_plugin()
             return
         self._current_zone = zone
         if not zone_id:
@@ -286,10 +283,10 @@ class InstanceTabMixin:
         if fields[0] == "01" and len(fields) > 3:
             self._apply_zone(fields[3], _hex_id(fields[2]), raw_zone=True)
 
-        # Cancel pending warnings on loss or wipe regardless of the local trigger
-        # switch. Arming remains gated below.
-        if fields[0] == "30":
-            self._cancel_status_timers_for_loss(fields)
+        # A refresh replaces the previous duration even when its new values no longer
+        # match the trigger. Only matching gains below can arm another warning.
+        if fields[0] in ("26", "30"):
+            self._cancel_status_timers_for_status(fields)
         elif (fields[0] == "33" and len(fields) > 3
               and fields[3].upper() == "4000000F"):
             # ActorControl stores the wipe command at field 3, before data0.
@@ -458,7 +455,7 @@ class InstanceTabMixin:
             t._last_fired[cooldown_key] = now
         self._fire(t, captured)
 
-    def _cancel_status_timers_for_loss(self, fields: list[str]) -> None:
+    def _cancel_status_timers_for_status(self, fields: list[str]) -> None:
         eff, src, tgt = self._status_keys(fields)
         for r in list(self._status_timers):
             if r.matches_loss(eff, src, tgt):

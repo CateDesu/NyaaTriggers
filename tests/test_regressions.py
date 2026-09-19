@@ -1692,7 +1692,7 @@ class _StatusStub(_Stub):
         super().__init__(triggers)
         self.cancelled = []
 
-    def _cancel_status_timers_for_loss(self, fields):
+    def _cancel_status_timers_for_status(self, fields):
         self.cancelled.append(fields)
 
     def _umad_chain_line(self, fields):

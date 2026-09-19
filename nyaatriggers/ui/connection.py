@@ -140,6 +140,7 @@ class ConnectionMixin:
         """Apply a known primary player from cached or live metadata without overwriting
         the name with an empty value. Pass the ID to the meter too.
         """
+        self._me_id = f"{_char_id:08X}" if 0x10000000 <= _char_id < 0x11000000 else ""
         name = name.strip()
         if name and name != self._me_name:
             self._set_me_name(name)

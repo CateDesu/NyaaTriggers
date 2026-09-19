@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QDialog, QInputDialog, QMenu, QTableWidgetItem, QTreeWidgetItem, QTreeWidgetItemIterator,
 )
 
-from nyaatriggers.trigger_engine import Trigger
+from nyaatriggers.trigger_engine import Trigger, _as_bool
 from nyaatriggers.trigger_profiles import merge_local_choices
 from nyaatriggers.trigger_dialog import TriggerDialog
 from nyaatriggers.tts import set_readings
@@ -32,6 +32,13 @@ from nyaatriggers import app_common as ac
 from nyaatriggers.app_common import (
     _CALLOUTS_JA_MAX_BYTES, _CALLOUT_CLAIM_S, _C_EN, _C_FIGHT, _C_NAME, _C_RE, _C_TTS, _C_TYPE, _C_ZONE, _FIGHT_TREE, _GENERAL_TAB, _GUEST_CALLOUT_DEFER_MS, _GUEST_SEVERITY_RANK, _ITEM_ID_ROLE, _ITEM_TYPE_ROLE, _SECTION_ROLE, _TREE_FIGHTS, _VERSION, _as_strset, _atomic_write_json, _compile_phrase_patterns, _fsync_file, _next_bad_name, _repo_download_version, _watched_trigger_files,
 )
+
+
+def _read_local_triggers():
+    data = json.loads(ac.TRIGGERS_LOCAL_FILE.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("triggers", []), list):
+        raise ValueError("Invalid local trigger file")
+    return data
 
 
 class TriggersTabMixin:
@@ -114,7 +121,7 @@ class TriggersTabMixin:
         raw = None
         if ac.TRIGGERS_LOCAL_FILE.exists():
             try:
-                raw = json.loads(ac.TRIGGERS_LOCAL_FILE.read_text(encoding="utf-8"))
+                raw = _read_local_triggers()
             except (OSError, ValueError, KeyError, TypeError, RecursionError):
                 self._handle_local_corrupt()
         if isinstance(raw, dict):
@@ -127,7 +134,7 @@ class TriggersTabMixin:
                 # Apply slim enabled overrides directly. from_dict would invent missing
                 # trigger content.
                 if d.get("id") and set(d.keys()) <= {"id", "enabled"}:
-                    enabled_overrides[str(d["id"])] = bool(d.get("enabled", True))
+                    enabled_overrides[str(d["id"])] = _as_bool(d.get("enabled"), True)
                 else:
                     local_triggers.append(Trigger.from_dict(d))
             # Accept only string IDs so malformed entries cannot break loading or
@@ -235,7 +242,7 @@ class TriggersTabMixin:
         # Recheck before saving because an external editor may have corrupted the file
         # since the last poll.
         try:
-            json.loads(ac.TRIGGERS_LOCAL_FILE.read_text(encoding="utf-8"))
+            _read_local_triggers()
         except FileNotFoundError:
             pass
         except (OSError, ValueError, RecursionError):
@@ -1259,6 +1266,9 @@ class TriggersTabMixin:
     def _set_trigger_enabled(self, trigger: Trigger, enabled: bool) -> None:
         trigger.enabled = enabled
         if not enabled:
+            for runner in list(getattr(self, "_status_timers", ())):
+                if runner.trigger is trigger:
+                    self._drop_status_timer(runner)
             for runner in list(getattr(self, "_seq_runners", ())):
                 if runner.trigger is trigger:
                     self._drop_seq_runner(runner)
