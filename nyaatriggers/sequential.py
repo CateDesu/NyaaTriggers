@@ -25,9 +25,11 @@ class SequentialRunner(QObject):
         self.cooldown_key = cooldown_key
         self._cancelled = False
         self._delay_deadline = None
+        self._step_deadline = None
         self._step = 0  # index into trigger.sequence, step 0 is the first subsequent step
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._expire)
         self._arm_timer()
 
@@ -104,26 +106,26 @@ class SequentialRunner(QObject):
             timeout_ms = 10000
         if not 1 <= timeout_ms <= 2**31 - 1:
             timeout_ms = 10000
-        self._timer.start(timeout_ms)
+        self._step_deadline = time.monotonic() + timeout_ms / 1000
+        self._start_timer(self._step_deadline)
 
     def _arm_delay(self) -> None:
         self._delay_deadline = time.monotonic() + self.trigger.delay_s
-        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._start_delay_timer()
+        self._start_timer(self._delay_deadline)
 
-    def _start_delay_timer(self) -> None:
-        remaining = max(0.0, self._delay_deadline - time.monotonic())
+    def _start_timer(self, deadline: float) -> None:
+        remaining = max(0.0, deadline - time.monotonic())
         self._timer.start(math.ceil(min(remaining * 1000, 2**31 - 1)))
 
     def _expire(self) -> None:
         if self._cancelled:
             return
         try:
-            if self._delay_deadline is not None:
-                if time.monotonic() < self._delay_deadline:
-                    self._start_delay_timer()
-                else:
-                    self._on_complete(self, self._captured)
+            deadline = self._delay_deadline if self._delay_deadline is not None else self._step_deadline
+            if time.monotonic() < deadline:
+                self._start_timer(deadline)
+            elif self._delay_deadline is not None:
+                self._on_complete(self, self._captured)
             else:
                 self._on_expire(self)
         except Exception as exc:

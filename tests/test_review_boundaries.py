@@ -3,16 +3,20 @@
 from contextlib import ExitStack
 import json
 from pathlib import Path
+import sys
 import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+from urllib.parse import parse_qs, urlsplit
 
 from tests.test_callout_review_fixes import Host
 from tests.test_data_safety import TriggerHost
 from nyaatriggers import app_common as ac, tts
+from nyaatriggers.cactbot_reader import CactbotReader
 from nyaatriggers.main_window import MainWindow
+from nyaatriggers.sequential import SequentialRunner
 from nyaatriggers.status_timer import StatusTimerRunner
 from nyaatriggers.timeline_engine import TimelineEngine
 from nyaatriggers.timeline_parser import parse
@@ -102,7 +106,7 @@ class CalloutBoundaryTests(unittest.TestCase):
 
     def test_local_controls_stop_local_timelines_and_preserve_cactbot_timelines(self):
         for cactbot in (False, True):
-            for action in ("_toggle_global_local", "_reset_all_to_default"):
+            for action in ("_toggle_global_local", "_reset_all_to_default", "_set_local_enabled"):
                 with self.subTest(cactbot=cactbot, action=action):
                     host = self.host
                     host._cactbot_mode = cactbot
@@ -117,7 +121,10 @@ class CalloutBoundaryTests(unittest.TestCase):
                     host._timeline.start()
                     self.addCleanup(host._timeline.reset)
                     host.frames.clear()
-                    getattr(host, action)()
+                    if action == "_set_local_enabled":
+                        host._set_local_enabled(False)
+                    else:
+                        getattr(host, action)()
                     self.assertEqual(host._timeline.is_active(), cactbot)
                     if cactbot:
                         self.assertTrue(all(frame["c"] != "clear" for frame in host.frames))
@@ -138,9 +145,26 @@ class CalloutBoundaryTests(unittest.TestCase):
             runner._fire()
             done.assert_called_once()
 
-    def test_guest_callouts_do_not_survive_empty_wipes_or_zone_boundaries(self):
-        from PyQt6.QtTest import QTest
+    def test_early_sequence_timeout_still_allows_a_followup_before_the_deadline(self):
+        now = [100.0]
+        done, expired = Mock(), Mock()
+        trigger = Trigger(sequence=[{"log_type": "21", "ability_id": "ABCD", "timeout_s": 10}])
+        with patch("time.monotonic", side_effect=lambda: now[0]):
+            runner = SequentialRunner(trigger, {}, done, expired)
+            self.addCleanup(runner.cancel)
+            now[0] = 109.9
+            runner._expire()
+            expired.assert_not_called()
+            now[0] = 109.99
+            self.assertTrue(runner.try_advance(["21", "ts", "40000001", "Boss", "ABCD"]))
+            done.assert_called_once()
+            waiting = SequentialRunner(trigger, {}, done, expired)
+            self.addCleanup(waiting.cancel)
+            now[0] += 10
+            waiting._expire()
+            expired.assert_called_once_with(waiting)
 
+    def guest_host(self):
         host = self.host
         del host._clear_callout_dedup
         host._triggers_enabled = True
@@ -151,6 +175,12 @@ class CalloutBoundaryTests(unittest.TestCase):
         host._flush_guest = MainWindow._flush_guest.__get__(host)
         host._flush_guest_deferred = MainWindow._flush_guest_deferred.__get__(host)
         self.addCleanup(host._clear_callout_dedup)
+        return host
+
+    def test_guest_callouts_do_not_survive_empty_wipes_or_zone_boundaries(self):
+        from PyQt6.QtTest import QTest
+
+        host = self.guest_host()
         host._status_lbl = Mock()
         host._conn_btn = Mock()
         for boundary in ("zone", "same_zone", "wipe", "disconnect", "metadata"):
@@ -171,6 +201,30 @@ class CalloutBoundaryTests(unittest.TestCase):
                     host._apply_zone("Old Arena", 100)
                 QTest.qWait(ac._GUEST_CALLOUT_DEFER_MS + 60)
                 self.assertEqual(speak.call_count, int(boundary == "metadata"))
+
+    def test_turning_local_off_cancels_already_queued_timeline_speech(self):
+        from PyQt6.QtTest import QTest
+
+        host = self.guest_host()
+        host._cactbot_mode = False
+        host._official_ids = set()
+        host._engine_inventory = []
+        host._src_collapsed = {}
+        host._refresh_table = lambda: None
+        host._update_fight_controls = lambda: None
+        for action in ("_toggle_global_local", "_reset_all_to_default", "_set_local_enabled"):
+            with self.subTest(action=action), patch("nyaatriggers.main_window.speak") as speak:
+                host._local_enabled = True
+                host._global_local_on_flag = True
+                host._clear_callout_dedup()
+                host._on_timeline_tts("Move away")
+                self.assertTrue(host._pending_guests)
+                if action == "_set_local_enabled":
+                    host._set_local_enabled(False)
+                else:
+                    getattr(host, action)()
+                QTest.qWait(ac._GUEST_CALLOUT_DEFER_MS + 60)
+                speak.assert_not_called()
 
 
 class TriggerFileBoundaryTests(unittest.TestCase):
@@ -303,6 +357,15 @@ class TriggerEditorBoundaryTests(unittest.TestCase):
 
 
 class SystemVoiceBoundaryTests(unittest.TestCase):
+    def test_failed_espeak_ng_uses_a_working_legacy_backend(self):
+        with patch("platform.system", return_value="Linux"), \
+                patch("shutil.which", side_effect=lambda name: name if name in ("espeak-ng", "espeak") else None), \
+                patch.object(tts, "_jp_auto", True), \
+                patch.object(tts, "_run_speak_proc", side_effect=[False, True]) as speak:
+            self.assertTrue(tts._system_speak("全体攻撃", reading="ぜんたいこうげき"))
+            self.assertEqual([call.args[0][0] for call in speak.call_args_list], ["espeak-ng", "espeak"])
+            self.assertTrue(all(call.args[1] == "ぜんたいこうげき" for call in speak.call_args_list))
+
     def test_espeak_ng_installation_can_speak_japanese(self):
         with patch("platform.system", return_value="Linux"), \
                 patch("shutil.which", side_effect=lambda name: "/usr/bin/espeak-ng" if name == "espeak-ng" else None), \
@@ -314,6 +377,34 @@ class SystemVoiceBoundaryTests(unittest.TestCase):
             self.assertEqual(command[0], "espeak-ng")
             self.assertEqual(command[-2:], ["-v", "ja"])
             self.assertEqual(spoken, "ぜんたいこうげき")
+
+
+class CactbotUrlBoundaryTests(unittest.TestCase):
+    def test_reader_keeps_url_options_and_replaces_the_feed_before_the_fragment(self):
+        from PyQt6 import QtCore
+
+        ws_url = "ws://127.0.0.1:10501/ws?token=a&mode=b"
+        base = "http://localhost/raidboss.html"
+        for url in (base, base + "#display", base + "?lang=ja&OVERLAY_WS=ws%3A%2F%2Fold%2F#display"):
+            with self.subTest(url=url):
+                page = Mock()
+                engine = SimpleNamespace(QWebEnginePage=Mock(return_value=page),
+                                         QWebEngineProfile=Mock(), QWebEngineScript=Mock(),
+                                         QWebEngineSettings=Mock())
+                with patch.dict(sys.modules, {"PyQt6.QtWebEngineCore": engine,
+                                               "PyQt6.QtWebChannel": SimpleNamespace(QWebChannel=Mock())}), \
+                        patch.object(QtCore, "QFile") as file:
+                    file.return_value.readAll.return_value = b""
+                    reader = CactbotReader()
+                    try:
+                        reader.start(ws_url, url)
+                        loaded = urlsplit(page.load.call_args.args[0].toString())
+                        self.assertEqual(parse_qs(loaded.query).get("OVERLAY_WS"), [ws_url])
+                        original = urlsplit(url)
+                        self.assertEqual(loaded.fragment, original.fragment)
+                        self.assertEqual(parse_qs(loaded.query).get("lang"), parse_qs(original.query).get("lang"))
+                    finally:
+                        reader.stop()
 
 
 if __name__ == "__main__":

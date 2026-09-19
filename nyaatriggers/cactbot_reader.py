@@ -257,9 +257,11 @@ class CactbotReader(QObject):
         self._page.loadFinished.connect(self._on_load_finished)
         self._page.renderProcessTerminated.connect(self._on_render_process_terminated)
 
-        ws_param = urllib.parse.quote(ws_url, safe="")
-        sep = "&" if "?" in cactbot_url else "?"
-        load_url = f"{cactbot_url}{sep}OVERLAY_WS={ws_param}"
+        parts = urllib.parse.urlsplit(cactbot_url)
+        query = [(key, value) for key, value in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+                 if key != "OVERLAY_WS"]
+        query.append(("OVERLAY_WS", ws_url))
+        load_url = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
         self._active = True
         self.status.emit(True, "Loading cactbot...")
         self._page.load(QUrl(load_url))
