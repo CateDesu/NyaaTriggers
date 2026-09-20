@@ -115,6 +115,17 @@ class FeedMetadataTests(unittest.TestCase):
         self.assertEqual(players, [(0x10000001, "Player")])
         self.assertEqual(client._player_id, 0x10000001)
 
+    def test_raw_player_identity_reaches_later_recordings_and_combatants(self):
+        client = WSClient()
+        client._on_message('{"type":"ChangePrimaryPlayer","charID":268435457,"charName":"Old"}')
+        client._on_message('{"type":"LogLine","rawLine":"02|ts|10000002|New|"}')
+        state = [json.loads(message) for message in client.state_snapshot()]
+        player = next(message for message in state if message["type"] == "ChangePrimaryPlayer")
+        with self.subTest(consumer="recordings"):
+            self.assertEqual((player["charID"], player["charName"]), (0x10000002, "New"))
+        with self.subTest(consumer="combatants"):
+            self.assertEqual(client._player_id, 0x10000002)
+
     def test_ids_outside_the_qt_range_cannot_wrap_into_other_ids(self):
         client = WSClient()
         for kind, key, signal in (("ChangeZone", "zoneID", client.zone_changed),

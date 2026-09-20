@@ -415,8 +415,9 @@ class AutomarkersTabMixin:
             elif len(self._automark_pending) < 16:
                 # Retry after party refresh because the triggering gain will not repeat.
                 if not any(p[0] == tgt_id and p[1] == marker
+                           and p[5] == rfight
                            for p in self._automark_pending):
-                    self._automark_pending.append((tgt_id, marker, tgt_name, now, status_key))
+                    self._automark_pending.append((tgt_id, marker, tgt_name, now, status_key, rfight))
         # Prune expired cooldown keys during long sessions.
         if len(self._automark_cooldowns) > 256:
             self._automark_cooldowns = {
@@ -695,11 +696,19 @@ class AutomarkersTabMixin:
         return pending
 
     def _dispatch_umad_chain_actions(self, actions) -> None:
+        fight = (getattr(self, "_current_fight_tag", "") or "").casefold()
+        if fight and fight != _UMAD_FIGHT_TAG_CF:
+            self._umad_chain_reset()
+            return
         self._umad_chain_pending = self._dispatch_mark_actions(
             actions, self._umad_chain_pending,
             getattr(self, "_umad_chain_pending_since", None))
 
     def _dispatch_umad_gaze_actions(self, actions) -> None:
+        fight = (getattr(self, "_current_fight_tag", "") or "").casefold()
+        if fight and fight != _UMAD_FIGHT_TAG_CF:
+            self._umad_gaze_reset()
+            return
         self._umad_gaze_pending = self._dispatch_mark_actions(
             actions, self._umad_gaze_pending,
             getattr(self, "_umad_gaze_pending_since", None))
@@ -816,19 +825,25 @@ class AutomarkersTabMixin:
         if not self._automark_pending:
             return
         now = time.monotonic()
+        fight = (self._current_fight_tag or "").casefold()
         keep: list = []
-        for actor, marker, name, queued_at, status_key in self._automark_pending:
-            if now - queued_at > 30.0:
+        sent = set()
+        for pending in self._automark_pending:
+            actor, marker, name, queued_at, status_key, rule_fight = pending
+            if now - queued_at > 30.0 or (rule_fight and fight and rule_fight != fight):
+                continue
+            if (actor, marker) in sent:
                 continue
             player_key = "me" if self._is_me_actor(actor, name) else actor
             live = self._automark_active.get(player_key)
             if live is not None and live != status_key:
                 continue   # Do not replace another rule's current sign.
             if not self._mark_player(actor, marker, name):
-                keep.append((actor, marker, name, queued_at, status_key))
+                keep.append(pending)
             else:
+                sent.add((actor, marker))
                 self._automark_active[player_key] = status_key
-        self._automark_pending = keep
+        self._automark_pending = [entry for entry in keep if (entry[0], entry[1]) not in sent]
 
     def _apply_automark_state(self) -> None:
         """Apply saved Telesto settings. Refresh party slots on enable and clear engine and

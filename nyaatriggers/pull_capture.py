@@ -156,6 +156,8 @@ class PullCapture(QObject):
         if changed or zone_id:
             self._zone_id = zone_id
         if not changed:
+            if self._in_pull:
+                self._fight, self._zone = self.context()
             return
         if self._in_pull:
             self._finalize("reset")
@@ -179,7 +181,7 @@ class PullCapture(QObject):
         self.set_recording(False)
 
     def _begin(self) -> None:
-        self._fight, self._zone = self.context()
+        self._fight, self._zone = ("", "") if self._awaiting_zone_metadata else self.context()
         folder = self._log_dir / _sanitize(self._fight or self._zone or "Unknown")
         try:
             folder.mkdir(parents=True, exist_ok=True)

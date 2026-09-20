@@ -138,6 +138,17 @@ class TimelineEngine(QObject):
         self._timer.stop()
         self._fired.clear()
 
+    def resume(self, fields: list[str], elapsed: float) -> None:
+        """Restore an observed start without speaking missed cues."""
+        blocked = self.blockSignals(True)
+        try:
+            self.process_line(fields)
+            if self._active:
+                self._t0 -= elapsed
+                self._tick()
+        finally:
+            self.blockSignals(blocked)
+
     def feed_status_changed(self, connected: bool, _msg: str = "") -> None:
         """Reset on feed loss to stop stale callouts. Combat ending does not reset the
         clock because fights can have intermissions.
@@ -174,7 +185,8 @@ class TimelineEngine(QObject):
         self._check_syncs(fields)
 
 
-    def _is_combat_start(self, fields: list[str]) -> bool:
+    @staticmethod
+    def _is_combat_start(fields: list[str]) -> bool:
         # InCombat 260 also starts the clock for targets such as striking dummies that
         # never cast.
         if fields[0] == "260":

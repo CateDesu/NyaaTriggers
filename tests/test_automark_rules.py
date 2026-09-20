@@ -222,7 +222,7 @@ class ZoneWin:
         self._current_zone_id = 111
         self._zone_aliases = ["Old Zone"]
         self._automark_pairs = StatusPairs([])
-        self._automark_pending = [(P1, "attack1", "n", 0.0, "644")]
+        self._automark_pending = [(P1, "attack1", "n", 0.0, "644", "")]
         self._automark_active = {P1: "644"}
         self._actor_jobs = {1: 2}
         self._umad_actor_names = {1: "n"}

@@ -63,6 +63,7 @@ class SessionTrackingMixin:
         if not connected:
             self._combat_known = False
             self._death_recap.reset()
+            self._death_recap.zone = ""
             self._prog_sessions.feed_lost()
         self._prog_tab.tick()
 

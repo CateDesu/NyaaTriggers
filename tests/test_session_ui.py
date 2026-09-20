@@ -207,11 +207,11 @@ class SessionUiTests(unittest.TestCase):
         fresh_actor = int(PLAYER, 16) + 2
         window._actor_jobs[old_actor] = 19
         window._umad_actor_names[old_actor] = "Old player"
-        window._automark_pending.append((f"{old_actor:08X}", "attack1", "Old player", 0.0, "ABC"))
+        window._automark_pending.append((f"{old_actor:08X}", "attack1", "Old player", 0.0, "ABC", ""))
         window._ws.status_changed.emit(False, "Disconnected")
         window._ws.status_changed.emit(True, "Connected")
         window._on_ws_party_jobs({fresh_actor: 21})
-        fresh_mark = (f"{fresh_actor:08X}", "attack2", "New player", 0.0, "DEF")
+        fresh_mark = (f"{fresh_actor:08X}", "attack2", "New player", 0.0, "DEF", "")
         window._automark_pending.append(fresh_mark)
         window._ws.zone_changed.emit(2, "New duty")
         with self.subTest(state="jobs"):
@@ -239,6 +239,386 @@ class SessionUiTests(unittest.TestCase):
             window._ws.zone_changed.emit(2, "New duty")
             self.line(cast)
             self.assertEqual(fire.call_count, 2)
+
+    def test_capture_uses_confirmed_duty_after_late_reconnect_metadata(self):
+        self.connect()
+        window = self.window
+        cap = window._pull_capture
+        cap._log_dir = self.temp / "captures"
+        cap.set_recording(True)
+        window._triggers = [Trigger(fight="New fight", zone_regex="New duty")]
+        window._ws._on_disconnected()
+        window._ws.status_changed.emit(True, "Connected")
+        window._ws._on_message(json.dumps({"type": "LogLine", "rawLine": "|".join(ability())}))
+        path = cap._path
+        self.assertTrue(cap._in_pull)
+        window._ws._on_message(json.dumps({"type": "ChangeZone", "zoneID": 2, "zoneName": "New duty"}))
+        window._ws._on_message(json.dumps({"type": "InCombat", "inACTCombat": False, "inGameCombat": False}))
+        meta = json.loads(path.with_suffix(".meta.json").read_text())
+        self.assertEqual((meta["fight"], meta["zone"]), ("New fight", "New duty"))
+
+    def test_capture_without_reconnect_metadata_stays_unknown(self):
+        self.connect()
+        window = self.window
+        cap = window._pull_capture
+        cap._log_dir = self.temp / "captures"
+        cap.set_recording(True)
+        window._ws._on_disconnected()
+        window._ws.status_changed.emit(True, "Connected")
+        window._ws._on_message(json.dumps({"type": "LogLine", "rawLine": "|".join(ability())}))
+        path = cap._path
+        cap.close()
+        meta = json.loads(path.with_suffix(".meta.json").read_text())
+        self.assertEqual((meta["fight"], meta["zone"]), ("", ""))
+        self.assertEqual(path.parent.name, "Unknown")
+
+    def test_capture_metadata_corrections_do_not_relabel_a_finished_pull(self):
+        self.connect()
+        window = self.window
+        window._ws.zone_changed.emit(1, "Test duty")
+        cap = window._pull_capture
+        cap._log_dir = self.temp / "captures"
+        cap.set_recording(True)
+        window._ws._on_message(json.dumps({"type": "LogLine", "rawLine": "|".join(ability())}))
+        path = cap._path
+        window._ws.zone_changed.emit(1, "Corrected duty")
+        self.assertTrue(cap._in_pull)
+        window._ws.zone_changed.emit(2, "Next duty")
+        self.assertFalse(cap._in_pull)
+        self.assertEqual(json.loads(path.with_suffix(".meta.json").read_text())["zone"], "Corrected duty")
+
+    def test_automarkers_allow_fresh_duty_before_reconnect_metadata(self):
+        self.connect()
+        window = self.window
+        window._settings["telesto_enabled"] = True
+        window._triggers = [Trigger(fight="Old fight", zone_regex="Test duty")]
+        window._redetect_zone_fight()
+        window._automark_rules = [{"status": "ABC", "marker": "attack1", "fight": "New fight"}]
+        window._ws._on_disconnected()
+        window._ws.status_changed.emit(True, "Connected")
+        window._redetect_zone_fight()
+        with patch.object(window, "_mark_player", return_value=True) as mark:
+            self.line(["26", "ts", "ABC", "Status", "30", "40000001", "Boss", PLAYER, "Player"])
+            mark.assert_called_once()
+
+    def test_specialized_automarkers_accept_unknown_duty_then_restore_the_filter(self):
+        from nyaatriggers.umad_chains import RELEVANT_IDS, GAZE_FOLLOWUP_IDS
+        self.connect()
+        window = self.window
+        window._settings["telesto_enabled"] = True
+        window._umad_chain_enabled = window._umad_gaze_enabled = True
+        window._triggers = [Trigger(fight="Other", zone_regex="Test duty")]
+        window._redetect_zone_fight()
+        window._ws._on_disconnected()
+        window._ws.status_changed.emit(True, "Connected")
+        status = ["26", "ts", next(iter(RELEVANT_IDS)), "Chain", "30", "40000001", "Boss", PLAYER, "Player"]
+        gaze = list(status)
+        gaze[2] = next(iter(window._umad_gaze.ids))
+        cast = ["20", "ts", "40000001", "Boss", next(iter(GAZE_FOLLOWUP_IDS)), "Followup"]
+        with patch.object(window._umad_chains, "on_gain", return_value=[]) as chain_gain, \
+                patch.object(window._umad_gaze, "on_gain", return_value=[]) as gaze_gain, \
+                patch.object(window._umad_gaze, "on_followup", return_value=[]) as followup:
+            for fields in (status, gaze, cast):
+                self.line(fields)
+            for call in (chain_gain, gaze_gain, followup):
+                call.assert_called_once()
+            window._ws.zone_changed.emit(1, "Test duty")
+            for fields in (status, gaze, cast):
+                self.line(fields)
+            for call in (chain_gain, gaze_gain, followup):
+                call.assert_called_once()
+
+    def test_reconnect_mark_refresh_restores_clearing_before_the_old_cooldown_expires(self):
+        self.connect()
+        window = self.window
+        window._settings["telesto_enabled"] = True
+        window._automark_clear_on_loss = True
+        window._automark_rules = [{"status": "ABC", "marker": "attack1"}]
+        status = ["26", "ts", "ABC", "Status", "30", "40000001", "Boss", PLAYER, "Player"]
+        with patch("time.monotonic", side_effect=self.clock), \
+                patch.object(window, "_mark_player", return_value=True) as mark, \
+                patch.object(window, "_clear_player", return_value=True) as clear:
+            self.line(status)
+            mark.assert_called_once()
+            window._ws._on_disconnected()
+            window._ws.status_changed.emit(True, "Connected")
+            window._ws.zone_changed.emit(1, "Test duty")
+            window._ws.primary_player.emit(int(PLAYER, 16), "Player")
+            self.clock.value += 1
+            self.line(status)
+            with self.subTest(action="refresh"):
+                self.assertEqual(mark.call_count, 2)
+            self.line(["30", *status[1:]])
+            with self.subTest(action="clear"):
+                clear.assert_called_once()
+
+    def test_queued_automarkers_respect_the_confirmed_duty(self):
+        self.connect()
+        window = self.window
+        window._settings["telesto_enabled"] = True
+        window._triggers = [Trigger(fight="Old", zone_regex="Test duty"),
+                            Trigger(fight="New", zone_regex="New duty")]
+        window._automark_rules = [{"status": "ABC", "marker": marker, "fight": fight}
+                                 for fight, marker in (("Old", "attack1"), ("New", "attack2"), ("", "attack3"))]
+        window._ws._on_disconnected()
+        window._ws.status_changed.emit(True, "Connected")
+        with patch.object(window, "_mark_player", return_value=False):
+            self.line(["26", "ts", "ABC", "Status", "30", "40000001", "Boss", PLAYER, "Player"])
+        self.assertEqual(len(window._automark_pending), 3)
+        window._ws.zone_changed.emit(2, "New duty")
+        with patch.object(window, "_mark_player", return_value=True) as mark:
+            window._retry_automark_pending()
+            self.assertEqual([call.args[1] for call in mark.call_args_list], ["attack2", "attack3"])
+        self.assertFalse(window._automark_pending)
+
+    def test_queued_umad_markers_respect_late_duty_metadata(self):
+        from nyaatriggers.umad_chains import ACCRETION, CRUST, GAZE_FOLLOWUP_IDS
+        self.connect()
+        window = self.window
+        window._settings["telesto_enabled"] = True
+        window._umad_chain_enabled = window._umad_gaze_enabled = True
+        window._triggers = [Trigger(fight="Other", zone_regex="Test duty|New duty"),
+                            Trigger(fight="UMAD", zone_regex="Dancing Mad|UMAD")]
+        for kind, metadata in product(("chain", "gaze"), (None, (2, "New duty"), (1363, "UMAD"))):
+            with self.subTest(kind=kind, metadata=metadata):
+                window._ws._on_disconnected()
+                window._ws.status_changed.emit(True, "Connected")
+                with patch.object(window, "_mark_player", return_value=False):
+                    if kind == "gaze":
+                        self.line(["20", "ts", "40000001", "Boss", next(iter(GAZE_FOLLOWUP_IDS)), "Followup"])
+                    for index, actor in enumerate((PLAYER, "10FF0002")):
+                        effects = ((ACCRETION, f"{0xBBC + index:X}", CRUST) if kind == "chain"
+                                   else (next(iter(window._umad_gaze.ids)),))
+                        for effect in effects:
+                            self.line(["26", "ts", effect, "Status", "30", "40000001", "Boss", actor, "Player"])
+                pending = getattr(window, f"_umad_{kind}_pending")
+                self.assertTrue(pending)
+                if metadata is not None:
+                    window._ws.zone_changed.emit(*metadata)
+                with patch.object(window, "_mark_player", return_value=True) as mark:
+                    getattr(window, f"_retry_umad_{kind}_pending")()
+                    self.assertEqual(mark.call_count, 0 if metadata == (2, "New duty") else len(pending))
+                self.assertFalse(getattr(window, f"_umad_{kind}_pending"))
+
+    def test_queued_rules_keep_matching_marks_and_cancel_lost_statuses(self):
+        self.connect()
+        window = self.window
+        window._settings["telesto_enabled"] = True
+        window._triggers = [Trigger(fight="Old", zone_regex="Test duty"),
+                            Trigger(fight="New", zone_regex="New duty")]
+        status = ["26", "ts", "ABC", "Status", "30", "40000001", "Boss", PLAYER, "Player"]
+        for metadata, shared_marker, lost in product((None, (1, "Test duty"), (2, "New duty")),
+                                                     (False, True), (False, True)):
+            with self.subTest(metadata=metadata, shared_marker=shared_marker, lost=lost):
+                window._automark_rules = [{"status": "ABC", "marker": "attack1" if shared_marker else marker,
+                                          "fight": fight}
+                                         for fight, marker in (("Old", "attack1"), ("New", "attack2"), ("", "attack3"))]
+                window._ws._on_disconnected()
+                window._ws.status_changed.emit(True, "Connected")
+                with patch.object(window, "_mark_player", return_value=False):
+                    self.line(status)
+                    self.assertEqual(len(window._automark_pending), 3)
+                    window._retry_automark_pending()
+                    self.assertEqual(len(window._automark_pending), 3)
+                if metadata is not None:
+                    window._ws.zone_changed.emit(*metadata)
+                if lost:
+                    self.line(["30", *status[1:]])
+                expected = (["attack1", "attack3"] if metadata == (1, "Test duty") else
+                            ["attack2", "attack3"] if metadata == (2, "New duty") else
+                            ["attack1", "attack2", "attack3"])
+                if shared_marker:
+                    expected = ["attack1"]
+                if lost:
+                    expected = []
+                with patch.object(window, "_mark_player", return_value=True) as mark:
+                    window._retry_automark_pending()
+                    self.assertEqual([call.args[1] for call in mark.call_args_list], expected)
+                self.assertFalse(window._automark_pending)
+
+    def test_a_successful_shared_mark_drops_earlier_failed_retries(self):
+        self.connect()
+        window = self.window
+        window._settings["telesto_enabled"] = True
+        window._automark_rules = [{"status": "ABC", "marker": "attack1", "fight": fight}
+                                 for fight in ("Old", "New", "")]
+        window._ws._on_disconnected()
+        window._ws.status_changed.emit(True, "Connected")
+        with patch.object(window, "_mark_player", return_value=False):
+            self.line(["26", "ts", "ABC", "Status", "30", "40000001", "Boss", PLAYER, "Player"])
+        self.assertEqual(len(window._automark_pending), 3)
+        with patch.object(window, "_mark_player", side_effect=[False, True]) as mark:
+            window._retry_automark_pending()
+            self.assertEqual(mark.call_count, 2)
+        self.assertFalse(window._automark_pending)
+
+    def test_reconnect_death_does_not_inherit_the_previous_zone(self):
+        self.connect()
+        window = self.window
+        window._ws._on_disconnected()
+        window._ws.status_changed.emit(True, "Connected")
+        self.line(ability())
+        self.line(["25", "ts", PLAYER, "Player"])
+        self.assertEqual(window._death_recap.deaths[0]["zone"], "")
+        window._ws.zone_changed.emit(2, "New duty")
+        self.line(["25", "ts", "10FF0002", "Other"])
+        self.assertEqual(window._death_recap.deaths[0]["zone"], "New duty")
+        self.assertEqual(window._death_recap.deaths[1]["zone"], "")
+
+    def test_reconnect_cannot_restart_the_previous_duty_timeline(self):
+        from nyaatriggers.timeline_parser import parse
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._timeline.load(parse('1 "Old duty call"'))
+        window._on_in_combat(True, True)
+        self.assertTrue(window._timeline.is_active())
+        window._ws._on_disconnected()
+        window._ws.status_changed.emit(True, "Connected")
+        window._ws._on_message(json.dumps({"type": "InCombat", "inACTCombat": True, "inGameCombat": True}))
+        with patch.object(window, "_emit_guest_callout") as callout:
+            with patch("time.monotonic", return_value=window._timeline._t0 + 2):
+                window._timeline._tick()
+            callout.assert_not_called()
+
+    def test_reconnect_restores_the_confirmed_timeline_in_either_metadata_order(self):
+        from nyaatriggers.ui.timeline_tab import TimelineTabMixin
+        window = self.window
+        window._local_enabled = True
+        window._cactbot_mode = False
+        window._load_timeline_for_zone = TimelineTabMixin._load_timeline_for_zone.__get__(window)
+        window._triggers = [Trigger(fight="Old", zone_regex="Test duty"),
+                            Trigger(fight="New", zone_regex="New duty")]
+        for fight in ("Old", "New"):
+            (self.temp / f"{fight}.txt").write_text(f'1 "{fight} cue"\n')
+        with patch.object(ac, "TIMELINES_DIR", self.temp), \
+                patch.object(ac, "_BUNDLE_TIMELINES_DIR", self.temp):
+            for zone, order in product(((1, "Test duty"), (2, "New duty")),
+                                       permutations(("zone", "combat"))):
+                with self.subTest(zone=zone, order=order):
+                    self.connect()
+                    window._on_in_combat(True, True)
+                    window._ws._on_disconnected()
+                    with patch.object(window._plugin_link, "send_timeline") as schedule, \
+                            patch.object(window, "_emit_guest_callout") as callout:
+                        window._ws.status_changed.emit(True, "Connected")
+                        schedule.assert_not_called()
+                        for kind in order:
+                            if kind == "zone":
+                                window._ws.zone_changed.emit(*zone)
+                            else:
+                                window._ws.in_combat.emit(True, True)
+                        expected = "Old cue" if zone[0] == 1 else "New cue"
+                        self.assertTrue(window._timeline.is_active())
+                        with patch("time.monotonic", return_value=window._timeline._t0 + 2):
+                            window._timeline._tick()
+                        callout.assert_called_once_with(expected, "info")
+                        self.assertTrue(schedule.called)
+                        self.assertEqual(schedule.call_args.args, ([(1.0, expected)],))
+
+    def test_late_zone_keeps_the_actual_combat_flags_for_timeline_sync(self):
+        from nyaatriggers.timeline_parser import parse
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._timeline.load(parse('0 "ACT sync" InCombat { inACTCombat: "1" } jump 30\n1 "Game cue"'))
+        window._ws._on_disconnected()
+        window._ws.status_changed.emit(True, "Connected")
+        window._ws.in_combat.emit(False, True)
+        with patch.object(window, "_emit_guest_callout") as callout:
+            window._ws.zone_changed.emit(1, "Test duty")
+            callout.assert_not_called()
+            self.assertTrue(window._timeline.is_active())
+            self.assertLess(window._timeline.current_time(), 1)
+
+    def test_late_zone_preserves_the_observed_timeline_start(self):
+        from nyaatriggers.timeline_parser import parse
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        for kind in ("combat", "ability", "raw combat"):
+            with self.subTest(kind=kind):
+                window._ws._on_disconnected()
+                window._ws.status_changed.emit(True, "Connected")
+                window._timeline.load(parse('1 "Missed cue"\n5 "Current cue"'))
+                with patch("time.monotonic", side_effect=self.clock), \
+                        patch.object(window, "_emit_guest_callout") as callout:
+                    self.clock.value = 1000
+                    if kind == "combat":
+                        window._ws.in_combat.emit(True, True)
+                    elif kind == "raw combat":
+                        self.line(["260", "ts", "1", "1"])
+                    else:
+                        self.line(["20", "ts", "40000001", "Boss", "ABCD", "Cast", PLAYER, "Player"])
+                    self.clock.value = 1002
+                    window._ws.zone_changed.emit(1, "Test duty")
+                    window._timeline._tick()
+                    callout.assert_not_called()
+                    self.clock.value = 1005.1
+                    window._timeline._tick()
+                    callout.assert_called_once_with("Current cue", "info")
+
+    def test_late_zone_keeps_timeline_loops_running(self):
+        from nyaatriggers.timeline_parser import parse
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._ws._on_disconnected()
+        window._ws.status_changed.emit(True, "Connected")
+        window._timeline.load(parse('1 "Loop cue"\n2 "--loop--" forcejump 0'))
+        with patch("time.monotonic", side_effect=self.clock), \
+                patch.object(window, "_emit_guest_callout") as callout:
+            self.clock.value = 1000
+            window._ws.in_combat.emit(True, True)
+            self.clock.value = 1003
+            window._ws.zone_changed.emit(1, "Test duty")
+            callout.assert_not_called()
+            self.clock.value += 1.1
+            window._timeline._tick()
+            callout.assert_called_once_with("Loop cue", "info")
+
+    def test_late_zone_discards_timeline_starts_at_boundaries(self):
+        from nyaatriggers.timeline_parser import parse
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        for boundary in ("wipe", "idle", "disconnect", "raw zone"):
+            with self.subTest(boundary=boundary):
+                window._ws._on_disconnected()
+                window._ws.status_changed.emit(True, "Connected")
+                window._timeline.load(parse('1 "Old cue"'))
+                window._ws.in_combat.emit(True, True)
+                if boundary == "wipe":
+                    self.line(["33", "ts", "0", "4000000F"])
+                elif boundary == "idle":
+                    window._ws.in_combat.emit(False, False)
+                elif boundary == "disconnect":
+                    window._ws._on_disconnected()
+                    window._ws.status_changed.emit(True, "Connected")
+                else:
+                    self.line(["01", "ts", "1", "Test duty"])
+                window._ws.zone_changed.emit(1, "Test duty")
+                self.assertFalse(window._timeline.is_active())
+
+    def test_late_zone_applies_the_starting_ability_sync_before_elapsed_time(self):
+        from nyaatriggers.timeline_parser import parse
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._ws._on_disconnected()
+        window._ws.status_changed.emit(True, "Connected")
+        window._timeline.load(parse('30 "--sync--" StartsUsing { id: "ABCD" } window 60,60\n35 "Next cue"'))
+        with patch("time.monotonic", side_effect=self.clock), \
+                patch.object(window, "_emit_guest_callout") as callout:
+            self.clock.value = 1000
+            self.line(["20", "ts", "40000001", "Boss", "ABCD", "Cast", PLAYER, "Player"])
+            self.clock.value = 1002
+            window._ws.zone_changed.emit(1, "Test duty")
+            self.assertEqual(window._timeline.current_time(), 32)
+            callout.assert_not_called()
+            self.clock.value += 3.1
+            window._timeline._tick()
+            callout.assert_called_once_with("Next cue", "info")
 
     def test_reconnect_uses_name_fallback_until_fresh_player_identity(self):
         self.connect()

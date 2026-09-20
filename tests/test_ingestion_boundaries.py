@@ -524,6 +524,17 @@ class CaptureBoundaries(unittest.TestCase):
         zones = [frame for frame in frames if frame.get("type") == "ChangeZone"]
         self.assertEqual(zones, [{"type": "ChangeZone", "zoneID": 1226, "zoneName": "New zone"}])
 
+    def test_raw_player_updates_recording_state_after_the_buffer_expires(self):
+        self.ws._on_message(json.dumps({"type": "ChangePrimaryPlayer", "charID": 0x10000001, "charName": "Old"}))
+        self.send("02|ts|10000002|New|")
+        with patch.object(pull_capture, "_PRE_PULL_SECONDS", .01):
+            QTest.qWait(30)
+            self.begin()
+        self.capture.close()
+        frames = [json.loads(line) for line in next(self.folder.rglob("*.jsonl")).read_text().splitlines()]
+        players = [frame for frame in frames if frame.get("type") == "ChangePrimaryPlayer"]
+        self.assertEqual(players, [{"type": "ChangePrimaryPlayer", "charID": 0x10000002, "charName": "New"}])
+
 
 class FeedBoundaries(unittest.TestCase):
     def test_raw_and_broadcast_zone_lines_update_replay_without_duplicate_signals(self):

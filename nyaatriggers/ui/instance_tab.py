@@ -14,6 +14,7 @@ from nyaatriggers.sequential import SequentialRunner
 from nyaatriggers.status_timer import StatusTimerRunner
 from nyaatriggers.telesto_client import _actor_int
 from nyaatriggers.dps_meter import METER_LOG_TYPES
+from nyaatriggers.timeline_engine import TimelineEngine
 
 from nyaatriggers import app_common as ac
 from nyaatriggers.app_common import (
@@ -101,6 +102,9 @@ class InstanceTabMixin:
                 self._ws.request_combatants_once()
         else:
             self._awaiting_zone_metadata = True
+            self._pending_timeline_start = None
+            self._in_game_combat = False
+            self._current_fight_tag = ""
             self._me_id = ""
             self._status_lbl.setText(f"● {msg}")
             self._status_lbl.setStyleSheet("color:#f38ba8; font-weight:bold;")
@@ -167,6 +171,8 @@ class InstanceTabMixin:
                    bool(zone and self._current_zone and zone != self._current_zone))
         # Feed loss already cleared old work before this metadata arrived.
         first_metadata = getattr(self, "_awaiting_zone_metadata", False)
+        pending_start = getattr(self, "_pending_timeline_start", None)
+        self._pending_timeline_start = None
         self._awaiting_zone_metadata = False
         if first_metadata and not raw_zone:
             self._current_zone = ""
@@ -189,6 +195,13 @@ class InstanceTabMixin:
                 self._zone_lbl.setText(self._zone_banner_text())
                 self._refresh_zone_column()
                 self._redetect_zone_fight()
+            if first_metadata:
+                self._push_timeline_to_plugin()
+            if (first_metadata and pending_start is not None
+                    and (getattr(self, "_cactbot_mode", False)
+                         or (self._local_enabled and self._global_local_on_flag))):
+                started, fields = pending_start
+                self._timeline.resume(fields, max(0.0, time.monotonic() - started))
             return
         self._current_zone = zone
         if not zone_id:
@@ -223,11 +236,17 @@ class InstanceTabMixin:
         self._automark_pairs.reset()
         self._automark_pending.clear()
         self._automark_active.clear()
+        self._automark_cooldowns = {}
 
     @pyqtSlot(bool, bool)
     def _on_in_combat(self, act: bool, game: bool) -> None:
         was = self._in_game_combat
         self._in_game_combat = game
+        if getattr(self, "_awaiting_zone_metadata", False):
+            if game and getattr(self, "_pending_timeline_start", None) is None:
+                self._pending_timeline_start = (time.monotonic(), ["260", "", "1" if act else "0", "1"])
+            elif not game:
+                self._pending_timeline_start = None
         track_combat = getattr(self, "_track_combat", None)
         if track_combat is not None:
             track_combat(act, game)
@@ -243,9 +262,10 @@ class InstanceTabMixin:
                 ac.log_drop("session-tracking", f"{exc!r}")
         # Feed synthetic combat state to start timelines even for targets that never
         # cast. Cactbot schedules use the same engine.
-        if (getattr(self, "_cactbot_mode", False)
-                or (getattr(self, "_local_enabled", True)
-                    and getattr(self, "_global_local_on_flag", True))):
+        if (not getattr(self, "_awaiting_zone_metadata", False)
+                and (getattr(self, "_cactbot_mode", False)
+                     or (getattr(self, "_local_enabled", True)
+                         and getattr(self, "_global_local_on_flag", True)))):
             # Try loading an empty schedule at combat start in case zone resolution was
             # delayed.
             if game and not was and not self._timeline.upcoming():
@@ -318,6 +338,7 @@ class InstanceTabMixin:
             self._cancel_status_timers_for_status(fields)
         elif (fields[0] == "33" and len(fields) > 3
               and fields[3].upper() == "4000000F"):
+            self._pending_timeline_start = None
             # ActorControl stores the wipe command at field 3, before data0.
             self._clear_status_timers()
             self._clear_callout_dedup()
@@ -367,10 +388,15 @@ class InstanceTabMixin:
             except Exception as exc:  # noqa: BLE001
                 ac.log_drop("umad", f"{exc!r} on {raw[:140]!r}")
 
-        # Cactbot timelines still need log input while local callouts are disabled.
-        if (getattr(self, "_cactbot_mode", False)
-                or (self._local_enabled
-                    and getattr(self, "_global_local_on_flag", True))):
+        if (getattr(self, "_awaiting_zone_metadata", False)
+                and getattr(self, "_pending_timeline_start", None) is None
+                and TimelineEngine._is_combat_start(fields)):
+            self._pending_timeline_start = (time.monotonic(), fields)
+        # Cactbot timelines also run while local callouts are off.
+        if (not getattr(self, "_awaiting_zone_metadata", False)
+                and (getattr(self, "_cactbot_mode", False)
+                     or (self._local_enabled
+                         and getattr(self, "_global_local_on_flag", True)))):
             self._timeline.process_line(fields)
         if self._local_enabled:
             # Completion already removes the sequence runner.
@@ -550,6 +576,9 @@ class InstanceTabMixin:
 
     def _redetect_zone_fight(self) -> None:
         """Reload the timeline only when the resolved fight changes."""
+        if getattr(self, "_awaiting_zone_metadata", False):
+            self._current_fight_tag = ""
+            return
         # Keep the local fight tag separate from the cactbot timeline cache tag.
         self._current_fight_tag = (self._fight_tag_for_zone(self._match_zone)[0]
                                    if self._match_zone else "")

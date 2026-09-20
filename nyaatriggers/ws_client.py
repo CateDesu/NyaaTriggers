@@ -336,6 +336,16 @@ class WSClient(QObject):
                     # Raw zone changes must also reach later recordings and sidecars.
                     self._state_cache["changezone"] = json.dumps({
                         "type": "ChangeZone", "zoneID": zone_id, "zoneName": fields[3]})
+        elif fields[0] == "02" and len(fields) > 3 and len(fields[2]) <= 8:
+            try:
+                player_id = int(fields[2], 16)
+            except ValueError:
+                pass
+            else:
+                if 0x10000000 <= player_id < 0x11000000:
+                    self._player_id = player_id
+                    self._state_cache["changeprimaryplayer"] = json.dumps({
+                        "type": "ChangePrimaryPlayer", "charID": player_id, "charName": fields[3]})
         self.log_line.emit(raw)
 
     def _schedule_reconnect(self) -> None:

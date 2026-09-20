@@ -77,9 +77,10 @@ class TimelineTabMixin:
         """Push the current schedule when its mode is enabled. Preserve cactbot bars while
         local callouts are off.
         """
-        if (getattr(self, "_cactbot_mode", False)
-                or (getattr(self, "_local_enabled", True)
-                    and getattr(self, "_global_local_on_flag", True))):
+        if (not getattr(self, "_awaiting_zone_metadata", False)
+                and (getattr(self, "_cactbot_mode", False)
+                     or (getattr(self, "_local_enabled", True)
+                         and getattr(self, "_global_local_on_flag", True)))):
             self._plugin_link.send_timeline(self._timeline.upcoming())
         else:
             self._plugin_link.send_clear(keep_dps=True)
