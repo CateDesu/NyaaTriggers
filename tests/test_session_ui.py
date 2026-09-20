@@ -521,6 +521,7 @@ class SessionUiTests(unittest.TestCase):
         for index in range(1100):
             window._queue_timeline_event(["20", str(index), "40000001", "Boss", "ABCD"])
         self.assertEqual(len(window._pending_timeline_events), 1024)
+        self.assertEqual(window._pending_timeline_events[0][1], ["260", "", "1", "1"])
         self.assertEqual(window._pending_timeline_events[-1][1][1], "1099")
 
     def test_disabling_timelines_discards_events_waiting_for_a_schedule(self):
@@ -538,6 +539,64 @@ class SessionUiTests(unittest.TestCase):
                 else:
                     window._reset_all_to_default()
                 self.assertFalse(window._pending_timeline_events)
+
+    def test_long_timeline_backlog_keeps_the_observed_combat_start(self):
+        from nyaatriggers.timeline_parser import parse
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        for start, sync in product(("combat", "cast"), (False, True)):
+            with self.subTest(start=start, sync=sync), patch("time.monotonic", side_effect=self.clock), \
+                    patch.object(window, "_emit_guest_callout") as callout:
+                window._ws._on_disconnected()
+                window._timeline.load(parse('1 "Missed cue"\n5 "Next cue"\n'
+                                            '30 "--sync--" StartsUsing { id: "FFFF" } window 60\n'
+                                            '35 "Synced cue"'))
+                self.clock.value = 1000
+                if start == "combat":
+                    window._ws.in_combat.emit(True, True)
+                else:
+                    self.line(["20", "ts", "40000001", "Boss", "ABCD", "Cast"])
+                for index in range(1100):
+                    self.clock.value = 1000 + index / 1000
+                    self.line(["21", "ts", PLAYER, "Player", "ABCD", "Attack"])
+                if sync:
+                    self.clock.value = 1001.5
+                    self.line(["20", "ts", "40000001", "Boss", "FFFF", "Sync"])
+                self.clock.value = 1002
+                window._ws.zone_changed.emit(1, "Test duty")
+                self.assertTrue(window._timeline.is_active())
+                self.assertEqual(window._timeline.current_time(), 30.5 if sync else 2)
+                callout.assert_not_called()
+                self.clock.value = 1006.6 if sync else 1005.1
+                window._timeline._tick()
+                callout.assert_called_once_with("Synced cue" if sync else "Next cue", "info")
+
+    def test_loading_a_timeline_with_pending_history_keeps_the_current_combat_cue(self):
+        from nyaatriggers.ui.timeline_tab import TimelineTabMixin
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._triggers = [Trigger(fight="Late", zone_regex="Test duty")]
+        window._load_timeline_for_zone = TimelineTabMixin._load_timeline_for_zone.__get__(window)
+        with patch.object(ac, "TIMELINES_DIR", self.temp), \
+                patch.object(ac, "_BUNDLE_TIMELINES_DIR", self.temp), \
+                patch("time.monotonic", side_effect=self.clock), \
+                patch.object(window, "_emit_guest_callout") as callout:
+            self.clock.value = 1000
+            self.line(["20", "ts", "40000001", "Boss", "ABCD", "Cast"])
+            self.assertTrue(window._pending_timeline_events)
+            (self.temp / "Late.txt").write_text('5 "Combat sync" InCombat { inGameCombat: "1" } window 10\n8 "Next cue"')
+            self.clock.value = 1001
+            window._ws.in_combat.emit(True, True)
+            callout.assert_called_once_with("Combat sync", "info")
+            self.assertEqual(window._timeline.current_time(), 5)
+            self.assertFalse(window._pending_timeline_events)
+            window._ws.in_combat.emit(True, True)
+            callout.assert_called_once_with("Combat sync", "info")
+            self.clock.value = 1004.1
+            window._timeline._tick()
+            self.assertEqual([call.args[0] for call in callout.call_args_list], ["Combat sync", "Next cue"])
 
     def test_late_zone_replays_syncs_after_the_initial_combat_event(self):
         from nyaatriggers.timeline_parser import parse

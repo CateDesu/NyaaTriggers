@@ -242,9 +242,8 @@ class InstanceTabMixin:
         was = self._in_game_combat
         self._in_game_combat = game
         fields = ["260", "", "1" if act else "0", "1" if game else "0"]
-        waiting = (getattr(self, "_awaiting_zone_metadata", False)
-                   or bool(getattr(self, "_pending_timeline_events", None)))
-        if waiting:
+        waiting = getattr(self, "_awaiting_zone_metadata", False)
+        if waiting or not game:
             self._queue_timeline_event(fields)
         track_combat = getattr(self, "_track_combat", None)
         if track_combat is not None:
@@ -591,7 +590,8 @@ class InstanceTabMixin:
         if sum(len(value) for value in fields) > 16384:
             return
         if len(pending) >= 1024:
-            del pending[0]
+            # Keep the observed start when trimming sync history.
+            del pending[1]
         pending.append((time.monotonic(), fields))
 
     def _redetect_zone_fight(self) -> None:
