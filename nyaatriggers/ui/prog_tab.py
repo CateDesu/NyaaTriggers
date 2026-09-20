@@ -309,6 +309,8 @@ class ProgTab(QWidget):
 
     def start_session(self):
         window = self.window
+        if window._awaiting_zone_metadata:
+            return
         try:
             self.session = self.sessions.start(window._current_zone, window._current_zone_id,
                                                window._current_zone,
@@ -351,6 +353,7 @@ class ProgTab(QWidget):
             self.chart.tooltips = tooltips
         self.refresh_phase_details()
         self.start_button.setEnabled(active is None and self.window._connected
+                                     and not self.window._awaiting_zone_metadata
                                      and self.window._current_zone_id > 0
                                      and self.window._combat_known)
         self.end_button.setEnabled(active is not None)

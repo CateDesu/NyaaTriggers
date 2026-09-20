@@ -101,6 +101,7 @@ class InstanceTabMixin:
                 self._ws.request_combatants_once()
         else:
             self._awaiting_zone_metadata = True
+            self._me_id = ""
             self._status_lbl.setText(f"● {msg}")
             self._status_lbl.setStyleSheet("color:#f38ba8; font-weight:bold;")
             self._conn_btn.setText(_("Connect"))
@@ -109,6 +110,9 @@ class InstanceTabMixin:
             self._clear_status_timers()
             self._clear_seq_runners()
             self._clear_callout_dedup()
+            # Empty pulls have no meter callback to clear their cooldowns.
+            for trigger in getattr(self, "_triggers", ()):
+                trigger._last_fired.clear()
             self._clear_actor_state()
             meter = getattr(self, "_dps_meter", None)
             if meter is not None:
@@ -141,6 +145,14 @@ class InstanceTabMixin:
     def _zone_matches(self, rx) -> bool:
         """Match a compiled zone pattern against every current name."""
         return any(_safe_search(rx, z) for z in self._zone_aliases if z)
+
+    def _trigger_zone_matches(self, trigger: Trigger) -> bool:
+        """Allow unknown zones and otherwise require a matching zone name."""
+        if (not trigger.zone_regex or not self._zone_aliases
+                or getattr(self, "_awaiting_zone_metadata", False)):
+            return True
+        rx = compile_user_regex(trigger.zone_regex, re.IGNORECASE)
+        return rx is not None and self._zone_matches(rx)
 
     def _apply_zone(self, zone: str, zone_id: int = 0, *, raw_zone: bool = False) -> None:
         """Reset on raw zone boundaries while preserving repeated zone metadata.
@@ -372,14 +384,8 @@ class InstanceTabMixin:
                              f"trigger loop exceeded {_DISPATCH_BUDGET_S:g}s; "
                              f"remaining triggers skipped on {raw[:140]!r}")
                     break
-                # Allow zone filters before the zone is known. The ability matcher still
-                # applies.
-                if t.zone_regex and self._zone_aliases:
-                    # Use the shared compile cache for repeated checks across many
-                    # patterns.
-                    rx = compile_user_regex(t.zone_regex, re.IGNORECASE)
-                    if rx is None or not self._zone_matches(rx):
-                        continue
+                if not self._trigger_zone_matches(t):
+                    continue
 
                 key = t.cooldown_key(fields[2] if len(fields) > 2 else "")
                 if (t.delay_s > 0 and not t.sequence
@@ -460,7 +466,8 @@ class InstanceTabMixin:
         # Check mode and object identity before firing so disabled, replaced or deleted
         # triggers cannot speak.
         if (not self._local_enabled or not t.enabled
-                or not any(x is t for x in self._triggers)):
+                or not any(x is t for x in self._triggers)
+                or not self._trigger_zone_matches(t)):
             return
         # Apply cooldown when the warning fires. Gains bypass it so refreshes can rearm
         # timers.

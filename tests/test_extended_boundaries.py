@@ -269,6 +269,48 @@ with patch.object(ac.QFileDialog, "getOpenFileName", return_value=(str(source), 
         warning.assert_not_called()
         success.assert_called_once()
 
+    @unittest.skipUnless(os.name == "posix", "Needs byte based filename limits")
+    def test_long_pack_names_remain_importable_after_suffixes_and_collisions(self):
+        content = b'<TriggernometryExport><ExportedFolder Name="New"/></TriggernometryExport>'
+        for index, filename in enumerate(("a" * 255, "a" * 251 + ".xml",
+                                           "\u732b" * 83 + "ab.xml")):
+            with self.subTest(filename=filename):
+                source = self.root / filename
+                source.write_bytes(content)
+                packs = self.root / str(index)
+                packs.mkdir()
+                previous = packs / filename
+                if source.suffix:
+                    previous.write_bytes(b"Previous export")
+                failure, success, warning = self.import_pack(source, packs)
+                failure.assert_not_called()
+                warning.assert_not_called()
+                success.assert_called_once()
+                imports = [path for path in packs.glob("*.xml") if path.read_bytes() == content]
+                self.assertEqual(len(imports), 1)
+                if source.suffix:
+                    self.assertEqual(previous.read_bytes(), b"Previous export")
+
+    def test_pack_collision_counter_can_grow_and_managed_packs_can_be_reimported(self):
+        source = self.root / ("a" * 251 + ".XML")
+        content = b'<TriggernometryExport><ExportedFolder Name="New"/></TriggernometryExport>'
+        source.write_bytes(content)
+        packs = self.root / "packs"
+        packs.mkdir()
+        for _ in range(12):
+            failure, success, warning = self.import_pack(source, packs)
+            failure.assert_not_called()
+            warning.assert_not_called()
+            success.assert_called_once()
+        imports = list(packs.iterdir())
+        self.assertEqual(len(imports), 12)
+        self.assertTrue(all(path.read_bytes() == content for path in imports))
+        failure, success, warning = self.import_pack(imports[0], packs)
+        failure.assert_not_called()
+        warning.assert_not_called()
+        success.assert_called_once()
+        self.assertEqual(set(packs.iterdir()), set(imports))
+
     def test_xml_input_limits_apply_to_the_validated_snapshot(self):
         source = self.root / "pack.xml"
         source.write_bytes(b"A different file")

@@ -1138,6 +1138,8 @@ class _Stub:
     """Duck-typed window for MainWindow._dispatch_log_line (unbound), the same
     approach as the trigger-store window above."""
 
+    _trigger_zone_matches = mw.MainWindow._trigger_zone_matches
+
     def __init__(self, triggers):
         self._dps_meter = type("M", (), {"process": lambda s, f, r: None})()
         self._pet_ids = set()

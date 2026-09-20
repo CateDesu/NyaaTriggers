@@ -33,6 +33,9 @@ class SessionTrackingMixin:
         if events is None:
             return
         self._prog_events = None
+        # Confirm the duty before adding fresh feed events to the retained session.
+        if getattr(self, "_awaiting_zone_metadata", False):
+            return
         snapshot = self._dps_meter.full_snapshot() if self._prog_sessions.needs_phase_snapshot(fields) else None
         started, ended = self._prog_sessions.process_event(
             fields, events, self._prog_event_time, snapshot)
@@ -53,7 +56,8 @@ class SessionTrackingMixin:
     def _track_combat(self, act, game):
         self._begin_activity_event()
         self._combat_known = True
-        self._prog_sessions.combat(game)
+        if not getattr(self, "_awaiting_zone_metadata", False):
+            self._prog_sessions.combat(game)
 
     def _track_activity_connection(self, connected, message):
         if not connected:
@@ -72,6 +76,8 @@ class SessionTrackingMixin:
         known_ids = bool(zone_id and self._current_zone_id)
         changed_name = zone and self._death_recap.zone and zone != self._death_recap.zone
         first_metadata = getattr(self, "_awaiting_zone_metadata", False)
+        if first_metadata and self._combat_known:
+            self._prog_sessions.combat(self._in_game_combat)
         if not first_metadata and (changed_id or (not known_ids and changed_name)):
             self._death_recap.reset()
         if first_metadata or zone or changed_id:

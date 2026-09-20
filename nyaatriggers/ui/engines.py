@@ -3,6 +3,7 @@
 from pathlib import Path
 import html
 import json
+import os
 import sys
 from collections import deque
 
@@ -1070,14 +1071,18 @@ class EnginesMixin:
             try:
                 packs = _tn_packs_dir()
                 src = Path(path)
-                filename = src.name if src.suffix.lower() == ".xml" else src.stem + ".xml"
-                target = packs / filename
-                if target.exists() and target.resolve() != src.resolve():
-                    # Keep exports with the same basename by adding a counter.
-                    n = 2
-                    while (packs / f"{target.stem}_{n}{target.suffix}").exists():
-                        n += 1
-                    target = packs / f"{target.stem}_{n}{target.suffix}"
+                suffix = src.suffix if src.suffix.lower() == ".xml" else ".xml"
+                n = 1
+                while True:
+                    ending = suffix if n == 1 else f"_{n}{suffix}"
+                    stem = src.stem
+                    # Leave room for the suffix and counter without splitting Unicode.
+                    while len(os.fsencode(stem + ending)) > 255:
+                        stem = stem[:-1]
+                    target = packs / (stem + ending)
+                    if not target.exists() or target.resolve() == src.resolve():
+                        break
+                    n += 1
                 ac._atomic_write_bytes(target, xml_bytes)
                 staged = True
             except Exception as exc:  # noqa: BLE001

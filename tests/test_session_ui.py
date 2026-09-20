@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from contextlib import ExitStack
 from copy import deepcopy
-from itertools import permutations
+from itertools import permutations, product
 import json
 from pathlib import Path
 import tempfile
@@ -221,6 +221,178 @@ class SessionUiTests(unittest.TestCase):
         with self.subTest(state="pending marks"):
             self.assertEqual(window._automark_pending, [fresh_mark])
         self.assertEqual(window._actor_jobs[fresh_actor], 21)
+
+    def test_reconnect_discards_old_cooldowns_and_keeps_fresh_ones(self):
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._triggers = [Trigger(ability_id="ABCD", cooldown_s=60)]
+        cast = ["20", "ts", "40000001", "Boss", "ABCD", "Cast", PLAYER, "Player"]
+        with patch.object(window, "_fire") as fire:
+            self.line(cast)
+            self.assertEqual(fire.call_count, 1)
+            self.assertIsNone(window._dps_meter.current)
+            window._ws.status_changed.emit(False, "Disconnected")
+            window._ws.status_changed.emit(True, "Connected")
+            self.line(cast)
+            self.assertEqual(fire.call_count, 2)
+            window._ws.zone_changed.emit(2, "New duty")
+            self.line(cast)
+            self.assertEqual(fire.call_count, 2)
+
+    def test_reconnect_uses_name_fallback_until_fresh_player_identity(self):
+        self.connect()
+        window = self.window
+        window._ws.status_changed.emit(False, "Disconnected")
+        window._ws.status_changed.emit(True, "Connected")
+        new_player = int(PLAYER, 16) + 1
+        with patch.object(window._telesto_client, "mark_self", return_value=True) as mark_self, \
+                patch.object(window._telesto_client, "mark_actor", return_value=False) as mark_actor:
+            self.assertTrue(window._mark_player(f"{new_player:08X}", "attack1", "Player"))
+            mark_self.assert_called_once_with("attack1")
+            mark_actor.assert_not_called()
+            window._ws.primary_player.emit(new_player, "Player")
+            self.assertFalse(window._is_me_actor(PLAYER, "Player"))
+
+    def test_reconnect_does_not_filter_new_callouts_using_the_previous_zone(self):
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._triggers = [Trigger(ability_id="ABCD", zone_regex="New duty", delay_s=60)]
+        window._ws.status_changed.emit(False, "Disconnected")
+        window._ws.status_changed.emit(True, "Connected")
+        self.line(["20", "ts", "40000001", "Boss", "ABCD", "Cast", PLAYER, "Player"])
+        self.assertEqual(len(window._seq_runners), 1)
+        runner, = window._seq_runners
+        window._ws.zone_changed.emit(2, "New duty")
+        self.assertEqual(window._seq_runners, [runner])
+        window._triggers.append(Trigger(ability_id="DCBA", zone_regex="Test duty", delay_s=60))
+        self.line(["20", "ts", "40000001", "Boss", "DCBA", "Cast", PLAYER, "Player"])
+        self.assertEqual(window._seq_runners, [runner])
+
+    def test_pending_callouts_respect_the_zone_once_it_is_known(self):
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        zones = ("Test duty", "New duty", "Light-heavyweight M1", "")
+        for kind, metadata in product(("delay", "sequence", "status"),
+                                      (None, (2, "New duty"), (1226, "Localized duty"))):
+            with self.subTest(kind=kind, metadata=metadata):
+                window._ws.status_changed.emit(False, "Disconnected")
+                window._ws.status_changed.emit(True, "Connected")
+                if kind == "status":
+                    settings = {"log_type": "26", "ability_id": "ABC", "expiry_warn_s": 5}
+                    fields = ["26", "ts", "ABC", "Status", "30", "40000001", "Boss", PLAYER, "Player"]
+                else:
+                    settings = {"ability_id": "ABCD", "delay_s": 2}
+                    fields = ["20", "ts", "40000001", "Boss", "ABCD", "Cast", PLAYER, "Player"]
+                    if kind == "sequence":
+                        settings.update(delay_s=0, sequence=[{"log_type": "20", "ability_id": "DCBA"}])
+                window._triggers = [Trigger(zone_regex=zone, cooldown_s=0, **settings)
+                                    for zone in zones]
+                with patch("time.monotonic", side_effect=self.clock), patch.object(window, "_fire") as fire:
+                    self.line(fields)
+                    self.assertEqual(len(window._seq_runners) + len(window._status_timers), len(zones))
+                    if metadata is not None:
+                        window._ws.zone_changed.emit(*metadata)
+                    if kind == "sequence":
+                        self.line(["20", "ts", "40000001", "Boss", "DCBA", "Next", PLAYER, "Player"])
+                    else:
+                        self.clock.value += 31
+                        for runner in list(window._seq_runners):
+                            runner._expire()
+                        for runner in list(window._status_timers):
+                            runner._fire()
+                    expected = zones if metadata is None else (
+                        ("New duty", "") if metadata[0] == 2 else ("Light-heavyweight M1", ""))
+                    self.assertEqual([call.args[0].zone_regex for call in fire.call_args_list], list(expected))
+                    self.assertFalse(window._seq_runners)
+                    self.assertFalse(window._status_timers)
+
+    def test_reconnect_does_not_add_an_unconfirmed_duty_to_the_previous_session(self):
+        self.connect()
+        window = self.window
+        window._prog_tab.start_button.click()
+        session = window._prog_sessions.current
+        window._ws.status_changed.emit(False, "Disconnected")
+        window._ws.status_changed.emit(True, "Connected")
+        window._ws.primary_player.emit(int(PLAYER, 16), "Player")
+        window._ws.in_combat.emit(False, False)
+        window._ws.in_combat.emit(True, True)
+        self.line(ability())
+        window._ws.zone_changed.emit(2, "New duty")
+        self.assertIsNone(window._prog_sessions.current)
+        self.assertEqual(session["pulls"], [])
+        self.assertIsNotNone(window._dps_meter.current)
+
+    def test_session_start_waits_for_fresh_zone_metadata_after_reconnect(self):
+        self.connect()
+        window = self.window
+        window._ws.status_changed.emit(False, "Disconnected")
+        window._ws.status_changed.emit(True, "Connected")
+        window._ws.in_combat.emit(False, False)
+        window._prog_tab.tick()
+        with self.subTest(action="button"):
+            self.assertFalse(window._prog_tab.start_button.isEnabled())
+        with self.subTest(action="start"):
+            window._prog_tab.start_session()
+            self.assertIsNone(window._prog_sessions.current)
+        window._ws.zone_changed.emit(2, "New duty")
+        window._prog_tab.tick()
+        self.assertTrue(window._prog_tab.start_button.isEnabled())
+        window._prog_tab.start_button.click()
+        self.assertEqual(window._prog_sessions.current["zone_id"], 2)
+
+    def test_phase_markers_before_reconnect_metadata_do_not_start_old_session_pulls(self):
+        previous = self.phase_pull()
+        window = self.window
+        session = window._prog_sessions.current
+        window._ws.status_changed.emit(False, "Disconnected")
+        window._ws.status_changed.emit(True, "Connected")
+        window._ws.primary_player.emit(int(PLAYER, 16), "Player")
+        window._ws.in_combat.emit(True, True)
+        self.line(marker(0))
+        self.line(ability())
+        window._ws.zone_changed.emit(2, "New duty")
+        self.assertEqual(session["pulls"], [previous])
+
+    def test_same_duty_reconnect_resumes_after_idle_and_zone_in_either_order(self):
+        self.connect()
+        window = self.window
+        window._prog_tab.start_button.click()
+        session = window._prog_sessions.current
+        for index, order in enumerate(permutations(("zone", "idle", "player")), start=1):
+            with self.subTest(order=order):
+                window._ws.status_changed.emit(False, "Disconnected")
+                window._ws.status_changed.emit(True, "Connected")
+                actions = {
+                    "zone": lambda: window._ws.zone_changed.emit(1, "Test duty"),
+                    "idle": lambda: window._ws.in_combat.emit(False, False),
+                    "player": lambda: window._ws.primary_player.emit(int(PLAYER, 16), "Player"),
+                }
+                for kind in order:
+                    actions[kind]()
+                self.pull()
+                self.assertIs(window._prog_sessions.current, session)
+                self.assertEqual(len(session["pulls"]), index)
+                self.assertTrue(session["pulls"][-1]["complete"])
+
+    def test_phase_tracking_resumes_on_a_fresh_pull_after_zone_confirmation(self):
+        self.phase_pull()
+        window = self.window
+        session = window._prog_sessions.current
+        window._ws.status_changed.emit(False, "Disconnected")
+        window._ws.status_changed.emit(True, "Connected")
+        window._ws.primary_player.emit(int(PLAYER, 16), "Player")
+        window._ws.in_combat.emit(True, True)
+        self.line(marker(0))
+        window._ws.zone_changed.emit(1363, "UMAD")
+        window._ws.in_combat.emit(False, False)
+        window._ws.in_combat.emit(True, True)
+        self.line(marker(0))
+        self.line(ability())
+        self.assertEqual(len(session["pulls"]), 2)
+        self.assertEqual(session["pulls"][-1]["phase_tracking"]["observations"][0]["phase"], "p1")
 
     def test_oversized_saved_volumes_allow_startup_and_unmute(self):
         settings = deepcopy(self.window._settings)

@@ -43,7 +43,8 @@ class TimelineTabMixin:
         # Check mode and object identity so disabled, replaced or deleted triggers
         # cannot complete stale sequences.
         if (not self._local_enabled or not trigger.enabled
-                or not any(x is trigger for x in self._triggers)):
+                or not any(x is trigger for x in self._triggers)
+                or not self._trigger_zone_matches(trigger)):
             return
         self._fire(trigger, captured)
 
