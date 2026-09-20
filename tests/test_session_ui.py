@@ -101,6 +101,30 @@ class SessionUiTests(unittest.TestCase):
         window._fflogs_signal.emit(1, {"amount": 2000, "percent": 50})
         self.assertIn("1.0k", window._fflogs_lbl.text())
 
+    def test_a_cancelled_fflogs_lookup_clears_the_fetching_label(self):
+        window = self.window
+        for reason in ("missing title", "missing credentials"):
+            with self.subTest(reason=reason):
+                window._settings.update(fflogs_name="Player", fflogs_server="Server",
+                                        fflogs_client_id="test", fflogs_client_secret="test")
+                with patch("nyaatriggers.ui.dps_tab.threading.Thread"):
+                    window._maybe_fetch_fflogs("Arena")
+                old_request = window._fflogs_request_id
+                self.assertEqual(window._fflogs_lbl.text(), "FFLogs: fetching…")
+                if reason == "missing credentials":
+                    window._settings["fflogs_client_id"] = ""
+                window._maybe_fetch_fflogs("" if reason == "missing title" else "Arena")
+                window._fflogs_signal.emit(old_request, {"amount": 2000, "percent": 50})
+                self.assertEqual(window._fflogs_lbl.text(), "FFLogs: no data")
+                cancelled_request = window._fflogs_request_id
+                window._settings["fflogs_client_id"] = "test"
+                with patch("nyaatriggers.ui.dps_tab.threading.Thread"):
+                    window._maybe_fetch_fflogs("New arena")
+                window._fflogs_signal.emit(cancelled_request, None)
+                self.assertEqual(window._fflogs_lbl.text(), "FFLogs: fetching…")
+                window._fflogs_signal.emit(window._fflogs_request_id, {"amount": 3000, "percent": 0})
+                self.assertEqual(window._fflogs_lbl.text(), "FFLogs best: 3.0k rDPS (0%)")
+
     def test_zone_name_correction_keeps_live_recap_history(self):
         self.connect()
         self.line(["26", "ts", "123", "Status", "30", PLAYER, "Player", PLAYER, "Player"])
@@ -207,11 +231,11 @@ class SessionUiTests(unittest.TestCase):
         fresh_actor = int(PLAYER, 16) + 2
         window._actor_jobs[old_actor] = 19
         window._umad_actor_names[old_actor] = "Old player"
-        window._automark_pending.append((f"{old_actor:08X}", "attack1", "Old player", 0.0, "ABC", ""))
+        window._automark_pending.append((f"{old_actor:08X}", "attack1", "Old player", 0.0, "ABC", "", {}))
         window._ws.status_changed.emit(False, "Disconnected")
         window._ws.status_changed.emit(True, "Connected")
         window._on_ws_party_jobs({fresh_actor: 21})
-        fresh_mark = (f"{fresh_actor:08X}", "attack2", "New player", 0.0, "DEF", "")
+        fresh_mark = (f"{fresh_actor:08X}", "attack2", "New player", 0.0, "DEF", "", {})
         window._automark_pending.append(fresh_mark)
         window._ws.zone_changed.emit(2, "New duty")
         with self.subTest(state="jobs"):
@@ -451,6 +475,88 @@ class SessionUiTests(unittest.TestCase):
             window._retry_automark_pending()
             self.assertEqual(mark.call_count, 2)
         self.assertFalse(window._automark_pending)
+
+    def test_queued_marks_do_not_survive_rule_removal_or_reassignment(self):
+        self.connect()
+        window = self.window
+        window._settings["telesto_enabled"] = True
+        for action, restore in product(("remove", "reassign"), (False, True)):
+            with self.subTest(action=action, restore=restore):
+                window._clear_actor_state()
+                window._automark_rules = [
+                    {"status": "ABC", "marker": "attack1", "scope": "party"},
+                    {"status": "DEF", "marker": "attack2", "scope": "party"},
+                ]
+                window._refresh_automark_rules_list()
+                window._automark_rules_list.setCurrentRow(0)
+                with patch.object(window, "_mark_player", return_value=False):
+                    for effect, actor in (("ABC", PLAYER), ("DEF", "10FF0002")):
+                        self.line(["26", "ts", effect, "Status", "30", "40000001", "Boss", actor, "Player"])
+                self.assertEqual(len(window._automark_pending), 2)
+                original = window._automark_rules[0].copy()
+                if action == "remove":
+                    window._on_automark_remove_rule()
+                    if restore:
+                        window._automark_rules.append(original)
+                else:
+                    combo = window._automark_assign_combo
+                    combo.setCurrentIndex(combo.findData("attack3"))
+                    window._on_automark_assign_marker()
+                    if restore:
+                        combo.setCurrentIndex(combo.findData("attack1"))
+                        window._on_automark_assign_marker()
+                with patch.object(window, "_mark_player", return_value=True) as mark:
+                    window._retry_automark_pending()
+                    self.assertEqual([(call.args[0], call.args[1]) for call in mark.call_args_list],
+                                     [("10FF0002", "attack2")])
+                self.assertFalse(window._automark_pending)
+
+    def test_a_shared_marker_retry_survives_the_other_status_expiring(self):
+        self.connect()
+        window = self.window
+        window._settings["telesto_enabled"] = True
+        window._automark_rules = [
+            {"status": effect, "marker": "attack1", "scope": "party"}
+            for effect in ("ABC", "DEF")
+        ]
+        status = ["26", "ts", "ABC", "Status", "30", "40000001", "Boss", PLAYER, "Player"]
+        with patch.object(window, "_mark_player", return_value=False):
+            for _ in range(20):
+                self.line(status)
+                self.line([*status[:2], "DEF", *status[3:]])
+        self.assertEqual(len(window._automark_pending), 2)
+        self.line(["30", *status[1:]])
+        with patch.object(window, "_mark_player", return_value=True) as mark:
+            window._retry_automark_pending()
+            mark.assert_called_once_with(PLAYER, "attack1", "Player")
+        self.assertFalse(window._automark_pending)
+
+    def test_engine_marker_actions_cancel_conflicting_rule_retries(self):
+        self.connect()
+        window = self.window
+        window._settings["telesto_enabled"] = True
+        window._automark_rules = [
+            {"status": effect, "marker": marker, "scope": "party"}
+            for effect, marker in (("ABC", "attack1"), ("DEF", "attack3"), ("123", "attack2"))
+        ]
+        for kind, engine, succeeds in product(("mark", "clear"), ("chain", "gaze"), (False, True)):
+            with self.subTest(kind=kind, engine=engine, succeeds=succeeds):
+                window._clear_actor_state()
+                with patch.object(window, "_mark_player", return_value=False):
+                    for effect, actor in (("ABC", PLAYER), ("DEF", "10FF0002"), ("123", "10FF0003")):
+                        self.line(["26", "ts", effect, "Status", "30", "40000001", "Boss", actor, "Player"])
+                with patch.object(window, "_mark_player", return_value=succeeds), \
+                        patch.object(window, "_clear_player", return_value=succeeds):
+                    action = (kind, PLAYER, "attack3") if kind == "mark" else (kind, PLAYER)
+                    getattr(window, f"_dispatch_umad_{engine}_actions")([action])
+                self.assertEqual(getattr(window, f"_umad_{engine}_pending"), [] if succeeds else [action])
+                with patch.object(window, "_mark_player", return_value=True) as mark:
+                    window._retry_automark_pending()
+                    expected = [("10FF0003", "attack2")]
+                    if kind == "clear":
+                        expected.insert(0, ("10FF0002", "attack3"))
+                    self.assertEqual([(call.args[0], call.args[1]) for call in mark.call_args_list], expected)
+                self.assertFalse(window._automark_pending)
 
     def test_reconnect_death_does_not_inherit_the_previous_zone(self):
         self.connect()

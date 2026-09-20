@@ -327,6 +327,7 @@ class AutomarkersTabMixin:
         synced, added, removed = self._sync_umad_preset_rules(self._automark_rules)
         if added or removed:
             self._automark_rules = synced
+            self._cancel_changed_rule_marks()
             self._settings["automark_rules"] = self._automark_rules
             self._save_settings()
             self._refresh_automark_rules_list()
@@ -415,9 +416,10 @@ class AutomarkersTabMixin:
             elif len(self._automark_pending) < 16:
                 # Retry after party refresh because the triggering gain will not repeat.
                 if not any(p[0] == tgt_id and p[1] == marker
-                           and p[5] == rfight
+                           and p[4] == status_key and p[6] == rule
                            for p in self._automark_pending):
-                    self._automark_pending.append((tgt_id, marker, tgt_name, now, status_key, rfight))
+                    self._automark_pending.append((tgt_id, marker, tgt_name, now, status_key, rfight,
+                                                   rule.copy()))
         # Prune expired cooldown keys during long sessions.
         if len(self._automark_cooldowns) > 256:
             self._automark_cooldowns = {
@@ -665,6 +667,8 @@ class AutomarkersTabMixin:
             return pending
         for action in actions:
             kind, actor = action[0], action[1]
+            if kind not in ("mark", "clear"):
+                continue
             name = self._umad_name_of(actor)
             # An engine mark replaces rule ownership so a later rule loss cannot clear
             # it.
@@ -673,6 +677,10 @@ class AutomarkersTabMixin:
                 active.pop(actor, None)
                 if self._is_me_actor(actor, name):
                     active.pop("me", None)
+            rule_pending = getattr(self, "_automark_pending", None)
+            if rule_pending:
+                rule_pending[:] = [p for p in rule_pending
+                                   if p[0] != actor and not (kind == "mark" and p[1] == action[2])]
             if kind == "mark":
                 marker = action[2]
                 pending = [p for p in pending
@@ -681,8 +689,6 @@ class AutomarkersTabMixin:
             elif kind == "clear":
                 pending = [p for p in pending if p[1] != actor]
                 sent = self._clear_player(actor, name)
-            else:
-                continue
             if not sent and len(pending) < 16:
                 pending.append(action)
                 if since is not None:
@@ -752,6 +758,7 @@ class AutomarkersTabMixin:
         row = lst.currentRow()
         if 0 <= row < len(self._automark_rules):
             del self._automark_rules[row]
+            self._cancel_changed_rule_marks()
             self._settings["automark_rules"] = self._automark_rules
             self._save_settings()
             self._refresh_automark_rules_list()
@@ -775,10 +782,15 @@ class AutomarkersTabMixin:
         if not (0 <= row < len(self._automark_rules)):
             return
         self._automark_rules[row]["marker"] = self._automark_assign_combo.currentData() or ""
+        self._cancel_changed_rule_marks()
         self._settings["automark_rules"] = self._automark_rules
         self._save_settings()
         self._refresh_automark_rules_list()
         lst.setCurrentRow(row)   # Preserve the rule when a refresh clears table selection.
+
+    def _cancel_changed_rule_marks(self) -> None:
+        self._automark_pending = [p for p in self._automark_pending
+                                  if p[6] in self._automark_rules]
 
     def _on_automark_uri_changed(self) -> None:
         uri = (self._automark_uri_edit.text() or "").strip() or DEFAULT_TELESTO_URI
@@ -829,8 +841,9 @@ class AutomarkersTabMixin:
         keep: list = []
         sent = set()
         for pending in self._automark_pending:
-            actor, marker, name, queued_at, status_key, rule_fight = pending
-            if now - queued_at > 30.0 or (rule_fight and fight and rule_fight != fight):
+            actor, marker, name, queued_at, status_key, rule_fight, rule = pending
+            if (rule not in self._automark_rules or now - queued_at > 30.0
+                    or (rule_fight and fight and rule_fight != fight)):
                 continue
             if (actor, marker) in sent:
                 continue

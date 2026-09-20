@@ -1,6 +1,7 @@
 """Compare delayed timeline recovery with uninterrupted event delivery."""
 
 from itertools import product
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -65,6 +66,62 @@ class TimelineRecoveryTests(unittest.TestCase):
             engine.resume([(1000, COMBAT)])
             self.assertEqual(engine.current_time(), 0.5)
             self.assertLess(tick.call_count, 10)
+
+    def test_fractional_jumps_preserve_elapsed_recovery_time(self):
+        for jump, expected, cue in ((0, 0.6, 1), (1.1, 1.5, 1.9), (10, 15.2, 16)):
+            with self.subTest(jump=jump):
+                engine = TimelineEngine()
+                engine.load(parse(f'{cue} "Cue"\n2.3 "--jump--" forcejump {jump}'))
+                self.addCleanup(engine.reset)
+                spoken = []
+                engine.tts.connect(spoken.append)
+                now = [1007.5]
+                with patch("time.monotonic", side_effect=lambda: now[0]):
+                    engine.resume([(1000, COMBAT)])
+                    self.assertAlmostEqual(engine.current_time(), expected)
+                    self.assertEqual(spoken, [])
+                    now[0] += cue - expected + 0.01
+                    engine._tick()
+                    engine._tick()
+                    self.assertEqual(spoken, ["Cue"])
+
+    def test_fractional_recovery_finishes_at_a_loop_boundary(self):
+        engine = TimelineEngine()
+        engine.load(parse('2.3 "--jump--" forcejump 1.1'))
+        self.addCleanup(engine.reset)
+        tick = engine._tick
+        calls = []
+
+        def bounded_tick():
+            calls.append(None)
+            self.assertLess(len(calls), 20)
+            tick()
+
+        with patch("time.monotonic", return_value=1003.5), \
+                patch.object(engine, "_tick", side_effect=bounded_tick):
+            engine.resume([(1000, COMBAT)])
+            self.assertAlmostEqual(engine.current_time(), 1.1)
+
+    def test_fractional_loops_keep_time_after_a_large_skip(self):
+        for jump, elapsed, expected in ((0, 1000000.5, 1.9), (1.1, 1000.5, 2.1)):
+            with self.subTest(jump=jump):
+                engine = TimelineEngine()
+                engine.load(parse(f'2.3 "--jump--" forcejump {jump}'))
+                self.addCleanup(engine.reset)
+                with patch("time.monotonic", return_value=1000 + elapsed), \
+                        patch.object(engine, "_tick", wraps=engine._tick) as tick:
+                    engine.resume([(1000, COMBAT)])
+                    self.assertAlmostEqual(engine.current_time(), expected, places=6)
+                    self.assertLess(tick.call_count, 20)
+
+    def test_umad_recovery_keeps_elapsed_time_after_the_phase_jump(self):
+        engine = TimelineEngine()
+        schedule = Path(__file__).resolve().parents[1] / "timelines" / "UMAD.txt"
+        engine.load(parse(schedule.read_text()))
+        self.addCleanup(engine.reset)
+        with patch("time.monotonic", return_value=1390.1):
+            engine.resume([(1000.1, COMBAT)])
+            self.assertAlmostEqual(engine.current_time(), 500.8)
 
     def test_recovery_keeps_existing_signal_blocking(self):
         engine = TimelineEngine()

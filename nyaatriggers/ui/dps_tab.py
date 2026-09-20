@@ -265,7 +265,10 @@ class DpsTabMixin:
         self._fflogs_request_id = getattr(self, "_fflogs_request_id", 0) + 1
         request_id = self._fflogs_request_id
         lbl = getattr(self, "_fflogs_lbl", None)
-        if not title or lbl is None or not self._fflogs_configured():
+        if lbl is None:
+            return
+        if not title or not self._fflogs_configured():
+            lbl.setText(_("FFLogs: no data"))
             return
         self._fflogs_request_context = self._fflogs_context()
         char, server, region, cid, secret = self._fflogs_request_context

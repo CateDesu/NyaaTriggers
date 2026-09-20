@@ -168,9 +168,10 @@ class TimelineEngine(QObject):
                 period = self._replay_now - previous
                 if period <= 0:
                     break
-                skipped = ((now - self._replay_now) // period) * period
+                skipped = max(0.0, ((now - self._replay_now) // period) * period)
                 self._replay_now += skipped
                 self._t0 += skipped
+                self._replay_now = max(self._replay_now, self._t0 + self._entries[jump].time)
             seen[state] = self._replay_now
             self._tick()
         self._replay_now = now
@@ -316,9 +317,9 @@ class TimelineEngine(QObject):
     def _tick(self) -> None:
         if not self._active:
             return
-        t = self.current_time()
+        now = self._now()
         for i, entry in enumerate(self._entries):
-            if i in self._fired or entry.time > t:
+            if i in self._fired or self._t0 + entry.time > now:
                 continue
             self._fire(i, entry)
             if entry.force_jump and entry.jump is not None:
