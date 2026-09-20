@@ -33,6 +33,7 @@ _SYNC_TYPES: dict[str, tuple[tuple[str, ...], dict[str, int]]] = {
     "MapEffect":        (("257",),     {"flags": 3, "location": 4}),
     "BattleTalk2":      (("267",),     {"instanceContentTextId": 5, "npcNameId": 4}),
 }
+SYNC_LOG_TYPES = frozenset(lt for types, _fields in _SYNC_TYPES.values() for lt in types)
 
 
 def _check_sync_type_collisions() -> None:
@@ -85,6 +86,7 @@ class TimelineEngine(QObject):
         self._active = False
         self._t0: float = 0.0
         self._fired: set[int] = set()
+        self._replay_now = None
 
         self._timer = QTimer(self)
         self._timer.setInterval(50)
@@ -128,7 +130,7 @@ class TimelineEngine(QObject):
         self._entries = []
 
     def start(self) -> None:
-        self._t0 = _time.monotonic()
+        self._t0 = self._now()
         self._fired.clear()
         self._active = True
         self._timer.start()
@@ -138,16 +140,44 @@ class TimelineEngine(QObject):
         self._timer.stop()
         self._fired.clear()
 
-    def resume(self, fields: list[str], elapsed: float) -> None:
-        """Restore an observed start without speaking missed cues."""
+    def resume(self, events: list[tuple[float, list[str]]]) -> None:
+        """Replay timing without speaking missed cues."""
         blocked = self.blockSignals(True)
         try:
-            self.process_line(fields)
-            if self._active:
-                self._t0 -= elapsed
-                self._tick()
+            self.reset()
+            for observed, fields in events:
+                self._advance_replay(observed)
+                self.process_line(fields)
+            self._advance_replay(_time.monotonic())
         finally:
+            self._replay_now = None
             self.blockSignals(blocked)
+
+    def _advance_replay(self, now: float) -> None:
+        seen = {}
+        while self._active:
+            jump = next((i for i, entry in enumerate(self._entries)
+                         if i not in self._fired and entry.force_jump
+                         and entry.jump is not None and self._t0 + entry.time <= now), None)
+            if jump is None:
+                break
+            self._replay_now = max(self._now(), self._t0 + self._entries[jump].time)
+            state = (jump, frozenset(self._fired))
+            previous = seen.get(state)
+            if previous is not None:
+                period = self._replay_now - previous
+                if period <= 0:
+                    break
+                skipped = ((now - self._replay_now) // period) * period
+                self._replay_now += skipped
+                self._t0 += skipped
+            seen[state] = self._replay_now
+            self._tick()
+        self._replay_now = now
+        self._tick()
+
+    def _now(self) -> float:
+        return _time.monotonic() if self._replay_now is None else self._replay_now
 
     def feed_status_changed(self, connected: bool, _msg: str = "") -> None:
         """Reset on feed loss to stop stale callouts. Combat ending does not reset the
@@ -157,11 +187,14 @@ class TimelineEngine(QObject):
             self.reset()
 
     def current_time(self) -> float:
-        return (_time.monotonic() - self._t0) if self._active else 0.0
+        return (self._now() - self._t0) if self._active else 0.0
 
     def is_active(self) -> bool:
         """Whether the fight clock is running."""
         return self._active
+
+    def has_schedule(self) -> bool:
+        return bool(self._entries)
 
     def upcoming(self) -> list[tuple[float, str]]:
         """Return the full display schedule as time and label pairs."""
@@ -260,7 +293,7 @@ class TimelineEngine(QObject):
         entry that caused the jump so duplicate sync lines cannot speak it again.
         """
         old_t = self.current_time()
-        self._t0 = _time.monotonic() - target
+        self._t0 = self._now() - target
         if target < old_t:
             self._fired = {i for i in self._fired if self._entries[i].time <= target}
             # Cactbot skips callouts at the sync point as well as those before it.

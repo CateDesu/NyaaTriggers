@@ -316,7 +316,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._ws.primary_player.connect(self._on_ws_primary_player)
         self._ws.zone_changed.connect(self._on_ws_zone_changed)
         self._connected = False
-        self._pending_timeline_start = None
+        self._pending_timeline_events = []
         self._in_game_combat = False
         # Only timelines marked reset-on-combat-end reset on combat exit. Other fights
         # may have intermissions outside combat.

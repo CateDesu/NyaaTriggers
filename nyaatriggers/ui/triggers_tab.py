@@ -1066,6 +1066,7 @@ class TriggersTabMixin:
         self._settings["global_local_on"] = False
         self._settings["global_tv_on"] = False
         if not getattr(self, "_cactbot_mode", False):
+            self._pending_timeline_events = []
             self._timeline.reset()
             self._clear_callout_dedup()
         self._push_timeline_to_plugin()
@@ -1363,6 +1364,7 @@ class TriggersTabMixin:
             # Stop the separate local timeline clock too. Preserve cactbot bars while
             # that mode is active.
             if not getattr(self, "_cactbot_mode", False):
+                self._pending_timeline_events = []
                 self._timeline.reset()
                 self._clear_callout_dedup()
             self._push_timeline_to_plugin()
@@ -1425,6 +1427,7 @@ class TriggersTabMixin:
             self._clear_callout_dedup()
             # Reset the local clock while preserving an active Cactbot timeline.
             if not getattr(self, "_cactbot_mode", False):
+                self._pending_timeline_events = []
                 self._timeline.reset()
             # Clear the stopped local clock from the plugin while preserving the cactbot
             # schedule if active.

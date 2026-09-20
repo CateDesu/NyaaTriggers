@@ -14,7 +14,7 @@ from nyaatriggers.sequential import SequentialRunner
 from nyaatriggers.status_timer import StatusTimerRunner
 from nyaatriggers.telesto_client import _actor_int
 from nyaatriggers.dps_meter import METER_LOG_TYPES
-from nyaatriggers.timeline_engine import TimelineEngine
+from nyaatriggers.timeline_engine import SYNC_LOG_TYPES, TimelineEngine
 
 from nyaatriggers import app_common as ac
 from nyaatriggers.app_common import (
@@ -102,7 +102,7 @@ class InstanceTabMixin:
                 self._ws.request_combatants_once()
         else:
             self._awaiting_zone_metadata = True
-            self._pending_timeline_start = None
+            self._pending_timeline_events = []
             self._in_game_combat = False
             self._current_fight_tag = ""
             self._me_id = ""
@@ -171,8 +171,8 @@ class InstanceTabMixin:
                    bool(zone and self._current_zone and zone != self._current_zone))
         # Feed loss already cleared old work before this metadata arrived.
         first_metadata = getattr(self, "_awaiting_zone_metadata", False)
-        pending_start = getattr(self, "_pending_timeline_start", None)
-        self._pending_timeline_start = None
+        if raw_zone or (changed and not first_metadata):
+            self._pending_timeline_events = []
         self._awaiting_zone_metadata = False
         if first_metadata and not raw_zone:
             self._current_zone = ""
@@ -197,11 +197,10 @@ class InstanceTabMixin:
                 self._redetect_zone_fight()
             if first_metadata:
                 self._push_timeline_to_plugin()
-            if (first_metadata and pending_start is not None
-                    and (getattr(self, "_cactbot_mode", False)
-                         or (self._local_enabled and self._global_local_on_flag))):
-                started, fields = pending_start
-                self._timeline.resume(fields, max(0.0, time.monotonic() - started))
+            if first_metadata and changed and self._mute_until_zone:
+                self._mute_btn.setChecked(False)
+            if getattr(self, "_pending_timeline_events", None):
+                self._resume_timeline_events()
             return
         self._current_zone = zone
         if not zone_id:
@@ -242,11 +241,11 @@ class InstanceTabMixin:
     def _on_in_combat(self, act: bool, game: bool) -> None:
         was = self._in_game_combat
         self._in_game_combat = game
-        if getattr(self, "_awaiting_zone_metadata", False):
-            if game and getattr(self, "_pending_timeline_start", None) is None:
-                self._pending_timeline_start = (time.monotonic(), ["260", "", "1" if act else "0", "1"])
-            elif not game:
-                self._pending_timeline_start = None
+        fields = ["260", "", "1" if act else "0", "1" if game else "0"]
+        waiting = (getattr(self, "_awaiting_zone_metadata", False)
+                   or bool(getattr(self, "_pending_timeline_events", None)))
+        if waiting:
+            self._queue_timeline_event(fields)
         track_combat = getattr(self, "_track_combat", None)
         if track_combat is not None:
             track_combat(act, game)
@@ -270,8 +269,9 @@ class InstanceTabMixin:
             # delayed.
             if game and not was and not self._timeline.upcoming():
                 self._load_timeline_for_zone(self._match_zone)
-            self._timeline.process_line(
-                ["260", "", "1" if act else "0", "1" if game else "0"])
+            self._timeline.process_line(fields)
+            if not waiting and not self._timeline.has_schedule():
+                self._queue_timeline_event(fields)
         # Sample timelines can opt into reset on combat end. Real fight intermissions
         # must preserve the clock.
         if was and not game and self._timeline_reset_on_combat_end:
@@ -338,7 +338,7 @@ class InstanceTabMixin:
             self._cancel_status_timers_for_status(fields)
         elif (fields[0] == "33" and len(fields) > 3
               and fields[3].upper() == "4000000F"):
-            self._pending_timeline_start = None
+            self._pending_timeline_events = []
             # ActorControl stores the wipe command at field 3, before data0.
             self._clear_status_timers()
             self._clear_callout_dedup()
@@ -389,9 +389,11 @@ class InstanceTabMixin:
                 ac.log_drop("umad", f"{exc!r} on {raw[:140]!r}")
 
         if (getattr(self, "_awaiting_zone_metadata", False)
-                and getattr(self, "_pending_timeline_start", None) is None
-                and TimelineEngine._is_combat_start(fields)):
-            self._pending_timeline_start = (time.monotonic(), fields)
+                or getattr(self, "_pending_timeline_events", None)
+                or ((getattr(self, "_cactbot_mode", False)
+                     or (self._local_enabled and getattr(self, "_global_local_on_flag", True)))
+                    and not self._timeline.has_schedule())):
+            self._queue_timeline_event(fields)
         # Cactbot timelines also run while local callouts are off.
         if (not getattr(self, "_awaiting_zone_metadata", False)
                 and (getattr(self, "_cactbot_mode", False)
@@ -573,6 +575,24 @@ class InstanceTabMixin:
         """Reload changed trigger files and recheck current fight resolution."""
         self._maybe_reload_triggers()
         self._redetect_zone_fight()
+
+    def _queue_timeline_event(self, fields: list[str]) -> None:
+        if fields[0] not in SYNC_LOG_TYPES:
+            return
+        if fields[0] == "260" and len(fields) > 3 and fields[3] == "0":
+            self._pending_timeline_events = []
+            return
+        if not hasattr(self, "_pending_timeline_events"):
+            self._pending_timeline_events = []
+        pending = self._pending_timeline_events
+        if not pending and not TimelineEngine._is_combat_start(fields):
+            return
+        fields = fields[:9]
+        if sum(len(value) for value in fields) > 16384:
+            return
+        if len(pending) >= 1024:
+            del pending[0]
+        pending.append((time.monotonic(), fields))
 
     def _redetect_zone_fight(self) -> None:
         """Reload the timeline only when the resolved fight changes."""

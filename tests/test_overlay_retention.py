@@ -26,7 +26,8 @@ class OverlayHost(DpsTabMixin, InstanceTabMixin, TimelineTabMixin):
         self._local_enabled = False
         self._seq_runners = []
         self._timeline = SimpleNamespace(
-            upcoming=lambda: [], process_line=lambda fields: None, reset=lambda: None)
+            upcoming=lambda: [], has_schedule=lambda: True,
+            process_line=lambda fields: None, reset=lambda: None)
         self._automark_rules = []
         self._automark_pending = {}
         self._automark_active = {}

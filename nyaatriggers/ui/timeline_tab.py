@@ -85,6 +85,17 @@ class TimelineTabMixin:
         else:
             self._plugin_link.send_clear(keep_dps=True)
 
+    def _resume_timeline_events(self) -> None:
+        pending = getattr(self, "_pending_timeline_events", [])
+        if not pending or getattr(self, "_awaiting_zone_metadata", False):
+            return
+        if not (self._cactbot_mode or (self._local_enabled and self._global_local_on_flag)):
+            self._pending_timeline_events = []
+            return
+        if self._timeline.has_schedule():
+            self._pending_timeline_events = []
+            self._timeline.resume(pending)
+
     def _load_timeline_for_zone(self, zone: str, *, preserve_time: bool = False) -> None:
         if not preserve_time:
             self._timeline.reset()
@@ -158,6 +169,8 @@ class TimelineTabMixin:
         self._timeline_from_cactbot = from_cactbot
         # Replace the plugin schedule on load or clear, respecting the current mode.
         self._push_timeline_to_plugin()
+        if getattr(self, "_pending_timeline_events", None):
+            self._resume_timeline_events()
 
     def _fetch_cactbot_timeline(self, tag: str, rel: str) -> None:
         """Download a cactbot timeline to the writable cache in the background and signal

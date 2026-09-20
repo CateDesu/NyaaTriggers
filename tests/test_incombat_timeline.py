@@ -73,6 +73,7 @@ def make_window():
     w._in_game_combat = False
     w._timeline_reset_on_combat_end = False
     w._timeline = TimelineEngine()
+    w._queue_timeline_event = lambda fields: MainWindow._queue_timeline_event(w, fields)
     w._plugin_link = FakeLink()
     # _on_in_combat also feeds the DPS meter (settings-gated). Provide both.
     w._settings = {"dps_meter_enabled": True}

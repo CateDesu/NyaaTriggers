@@ -481,6 +481,177 @@ class SessionUiTests(unittest.TestCase):
                 window._timeline._tick()
             callout.assert_not_called()
 
+    def test_new_duty_after_reconnect_ends_a_zone_mute(self):
+        self.connect()
+        window = self.window
+        with patch("nyaatriggers.ui.voice_tab.set_master_volume"):
+            window._mute_until_next_zone()
+            window._ws._on_disconnected()
+            window._ws.status_changed.emit(True, "Connected")
+            window._ws.zone_changed.emit(2, "New duty")
+            self.assertFalse(window._mute_btn.isChecked())
+            self.assertFalse(window._mute_until_zone)
+
+    def test_same_duty_reconnect_and_other_mutes_stay_muted(self):
+        self.connect()
+        window = self.window
+        with patch("nyaatriggers.ui.voice_tab.set_master_volume"):
+            window._mute_until_next_zone()
+            window._ws._on_disconnected()
+            window._ws.zone_changed.emit(1, "Localized duty")
+            self.assertTrue(window._mute_btn.isChecked())
+            for mode in ("manual", "timer"):
+                with self.subTest(mode=mode):
+                    window._mute_btn.setChecked(False)
+                    if mode == "timer":
+                        window._mute_for_minutes(5)
+                    else:
+                        window._mute_btn.setChecked(True)
+                    window._ws._on_disconnected()
+                    window._ws.zone_changed.emit(window._current_zone_id + 1, "Other duty")
+                    self.assertTrue(window._mute_btn.isChecked())
+
+    def test_pending_timeline_history_is_bounded_and_ignores_unrelated_lines(self):
+        window = self.window
+        window._ws._on_disconnected()
+        window._queue_timeline_event(["260", "", "1", "1"])
+        window._queue_timeline_event(["02", "", PLAYER, "Player"])
+        window._queue_timeline_event(["20", "", "40000001", "X" * 16385])
+        self.assertEqual(len(window._pending_timeline_events), 1)
+        for index in range(1100):
+            window._queue_timeline_event(["20", str(index), "40000001", "Boss", "ABCD"])
+        self.assertEqual(len(window._pending_timeline_events), 1024)
+        self.assertEqual(window._pending_timeline_events[-1][1][1], "1099")
+
+    def test_disabling_timelines_discards_events_waiting_for_a_schedule(self):
+        self.connect()
+        window = self.window
+        for control in ("local", "global", "reset"):
+            with self.subTest(control=control):
+                window._local_enabled = True
+                window._global_local_on_flag = True
+                window._pending_timeline_events = [(1000, ["260", "", "1", "1"])]
+                if control == "local":
+                    window._set_local_enabled(False)
+                elif control == "global":
+                    window._toggle_global_local()
+                else:
+                    window._reset_all_to_default()
+                self.assertFalse(window._pending_timeline_events)
+
+    def test_late_zone_replays_syncs_after_the_initial_combat_event(self):
+        from nyaatriggers.timeline_parser import parse
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._ws._on_disconnected()
+        window._timeline.load(parse('30 "--sync--" StartsUsing { id: "ABCD" } window 60,60\n35 "Next cue"'))
+        with patch("time.monotonic", side_effect=self.clock), \
+                patch.object(window, "_emit_guest_callout") as callout:
+            self.clock.value = 1000
+            window._ws.in_combat.emit(True, True)
+            self.clock.value = 1002
+            self.line(["20", "ts", "40000001", "Boss", "ABCD", "Cast", PLAYER, "Player"])
+            self.clock.value = 1005
+            window._ws.zone_changed.emit(1, "Test duty")
+            self.assertEqual(window._timeline.current_time(), 33)
+            callout.assert_not_called()
+            self.clock.value = 1007.1
+            window._timeline._tick()
+            callout.assert_called_once_with("Next cue", "info")
+
+    def test_late_zone_keeps_elapsed_time_after_timeline_loops(self):
+        from nyaatriggers.timeline_parser import parse
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._ws._on_disconnected()
+        window._timeline.load(parse('1 "Loop cue"\n2 "--loop--" forcejump 0'))
+        with patch("time.monotonic", side_effect=self.clock), \
+                patch.object(window, "_emit_guest_callout") as callout:
+            self.clock.value = 1000
+            window._ws.in_combat.emit(True, True)
+            self.clock.value = 1004.5
+            window._ws.zone_changed.emit(1, "Test duty")
+            self.assertEqual(window._timeline.current_time(), 0.5)
+            callout.assert_not_called()
+            self.clock.value = 1005.1
+            window._timeline._tick()
+            callout.assert_called_once_with("Loop cue", "info")
+
+    def test_raw_combat_exit_cancels_the_unconfirmed_timeline_start(self):
+        from nyaatriggers.timeline_parser import parse
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._ws._on_disconnected()
+        window._timeline.load(parse('1 "Old cue"'))
+        self.line(["260", "ts", "1", "1"])
+        self.line(["260", "ts", "0", "0"])
+        window._ws.zone_changed.emit(1, "Test duty")
+        self.assertFalse(window._timeline.is_active())
+
+    def test_late_zone_name_restores_timing_after_an_unknown_zone_id(self):
+        from nyaatriggers.ui.timeline_tab import TimelineTabMixin
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._load_timeline_for_zone = TimelineTabMixin._load_timeline_for_zone.__get__(window)
+        window._triggers = [Trigger(fight="Late", zone_regex="Late duty")]
+        (self.temp / "Late.txt").write_text('5 "Next cue"\n')
+        window._ws._on_disconnected()
+        with patch("time.monotonic", side_effect=self.clock), \
+                patch.object(ac, "TIMELINES_DIR", self.temp), \
+                patch.object(ac, "_BUNDLE_TIMELINES_DIR", self.temp), \
+                patch.object(window, "_emit_guest_callout") as callout:
+            self.clock.value = 1000
+            window._ws.in_combat.emit(True, True)
+            self.clock.value = 1001
+            window._ws.zone_changed.emit(99999, "")
+            self.clock.value = 1002
+            window._ws.zone_changed.emit(99999, "Late duty")
+            self.assertTrue(window._timeline.is_active())
+            self.assertEqual(window._timeline.current_time(), 2)
+            callout.assert_not_called()
+            self.clock.value = 1005.1
+            window._timeline._tick()
+            callout.assert_called_once_with("Next cue", "info")
+
+    def test_downloaded_timeline_recovers_combat_after_zone_confirmation(self):
+        from nyaatriggers.ui.timeline_tab import TimelineTabMixin
+        window = self.window
+        window._cactbot_mode = True
+        window._local_enabled = False
+        window._load_timeline_for_zone = TimelineTabMixin._load_timeline_for_zone.__get__(window)
+        with patch("time.monotonic", side_effect=self.clock), \
+                patch.object(ac, "TIMELINES_DIR", self.temp), \
+                patch.object(ac, "_BUNDLE_TIMELINES_DIR", self.temp), \
+                patch.object(window, "_cactbot_zone_entry", return_value=("Late", "late.txt")), \
+                patch.object(window, "_fetch_cactbot_timeline"):
+            self.clock.value = 1000
+            window._ws.zone_changed.emit(99999, "Late duty")
+            self.clock.value = 1001
+            window._ws.in_combat.emit(True, True)
+            self.clock.value = 1003
+            (self.temp / "Late.cactbot.cache.txt").write_text('5 "Next cue"\n')
+            window._on_cactbot_timeline_ready("Late")
+            self.assertTrue(window._timeline.is_active())
+            self.assertEqual(window._timeline.current_time(), 2)
+
+    def test_timeline_loaded_at_combat_start_keeps_the_current_callout(self):
+        from nyaatriggers.ui.timeline_tab import TimelineTabMixin
+        self.connect()
+        window = self.window
+        window._local_enabled = True
+        window._load_timeline_for_zone = TimelineTabMixin._load_timeline_for_zone.__get__(window)
+        window._triggers = [Trigger(fight="Ready", zone_regex="Test duty")]
+        (self.temp / "Ready.txt").write_text('0 "Pull started" InCombat { inGameCombat: "1" } jump 30\n35 "Next cue"')
+        with patch.object(ac, "TIMELINES_DIR", self.temp), \
+                patch.object(ac, "_BUNDLE_TIMELINES_DIR", self.temp), \
+                patch.object(window, "_emit_guest_callout") as callout:
+            window._on_in_combat(True, True)
+            callout.assert_called_once_with("Pull started", "info")
+
     def test_reconnect_restores_the_confirmed_timeline_in_either_metadata_order(self):
         from nyaatriggers.ui.timeline_tab import TimelineTabMixin
         window = self.window
@@ -574,6 +745,9 @@ class SessionUiTests(unittest.TestCase):
             window._ws.zone_changed.emit(1, "Test duty")
             callout.assert_not_called()
             self.clock.value += 1.1
+            window._timeline._tick()
+            callout.assert_not_called()
+            self.clock.value += 1
             window._timeline._tick()
             callout.assert_called_once_with("Loop cue", "info")
 

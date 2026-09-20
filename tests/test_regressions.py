@@ -1148,7 +1148,9 @@ class _Stub:
         self._settings = {}
         self._local_enabled = True
         self.timeline_calls = 0
-        self._timeline = type("T", (), {"process_line": lambda s, f: setattr(self, "timeline_calls", self.timeline_calls + 1)})()
+        self._timeline = type("T", (), {
+            "has_schedule": lambda s: True,
+            "process_line": lambda s, f: setattr(self, "timeline_calls", self.timeline_calls + 1)})()
         self._seq_runners = []
         self._triggers = triggers
         self._zone_aliases = []
