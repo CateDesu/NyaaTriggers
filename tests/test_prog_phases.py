@@ -1,6 +1,7 @@
 """Phase evidence, logical attempts, and durable observations."""
 
 from copy import deepcopy
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -77,8 +78,8 @@ class PhaseTests(unittest.TestCase):
     def restart(self):
         return ProgSessions(self.directory, self.clock, definitions=(self.definition,))
 
-    def test_umad_candidates_are_not_enabled(self):
-        self.assertIsNone(definition_for(UMAD_ZONE, DEFINITIONS))
+    def test_umad_definition_is_available_only_in_its_duty(self):
+        self.assertEqual(definition_for(UMAD_ZONE, DEFINITIONS).phases, UMAD_PHASES)
         self.assertIsNone(definition_for(1, (self.definition,)))
 
     def test_confirmations_deduplicate_and_do_not_invent_earlier_times(self):
@@ -323,6 +324,195 @@ class PhaseTests(unittest.TestCase):
         self.line(marker(1))
         self.sessions.update_active(stale)
         self.assertEqual(self.sessions.attempt.segments[pull["id"]][2], 1)
+
+
+class UmadPhaseTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.clock = Clock()
+        self.sessions = ProgSessions(self.temp.name, self.clock)
+        self.meter = DpsMeter(self.clock)
+        self.meter.set_me("10000001")
+        self.events = []
+        self.meter.on_pull_start = lambda value: self.events.append(("start", value))
+        self.meter.on_pull_finish = lambda value: self.events.append(("finish", value))
+        self.session = self.sessions.start("UMAD", UMAD_ZONE, "Duty", False)
+
+    def dispatch(self, fields=()):
+        self.sessions.process_event(fields, self.events, self.clock(), self.meter.full_snapshot())
+        self.events.clear()
+
+    def combat(self, act, game=None):
+        game = act if game is None else game
+        self.sessions.combat(game)
+        self.meter.set_in_combat(act, game)
+        self.dispatch()
+
+    def line(self, fields):
+        self.meter.process(fields)
+        self.dispatch(fields)
+
+    def cast(self, ability_id, event="20", actor=BOSS):
+        self.line([event, "ts", actor, "Localized boss", ability_id, "Localized action"])
+
+    def begin(self):
+        self.combat(True)
+        self.line(ability(target="10000001"))
+        return self.session["pulls"][-1]
+
+    def wipe(self):
+        self.line(["33", "ts", "80000001", "4000000F"])
+
+    def test_recorded_umad_pulls_confirm_p4_without_false_p5(self):
+        path = Path(__file__).parent / "fixtures/prog/umad-2026-09-13.jsonl"
+        for raw in path.read_text().splitlines():
+            event = json.loads(raw)
+            self.clock.value = 1000 + event["at"]
+            if "combat" in event:
+                self.combat(*event["combat"])
+            else:
+                self.line(event["line"])
+        pulls = self.session["pulls"]
+        self.assertEqual(len(pulls), 5)
+        self.assertEqual([p["ending"] for p in pulls], ["wipe"] * 5)
+        self.assertEqual([p["phase_tracking"]["observations"][-1]["phase"] for p in pulls],
+                         ["p1", "p4", "p1", "p4", "p1"])
+        observations = pulls[1]["phase_tracking"]["observations"]
+        self.assertEqual([o["phase"] for o in observations], ["p1", "p2", "p3", "p4"])
+        self.assertAlmostEqual(observations[2]["at"], 385.0, delta=2)
+        for pull in pulls:
+            self.assertEqual(read_tracking(pull, UMAD_ZONE)[2], "")
+        self.sessions.end()
+        saved = ProgSessions(self.temp.name).sessions[0]
+        self.assertEqual(saved["pulls"], pulls)
+
+    def test_reused_actions_and_elapsed_time_do_not_confirm_p5(self):
+        pull = self.begin()
+        for ident in ("C403", "C24C", "C3F7", "C2DC"):
+            self.cast(ident)
+            self.clock.value += 10
+        self.cast("C24A")
+        for _ in range(8):
+            self.cast("C3FD", "21")
+        self.clock.value += 1800
+        self.sessions.update_active(self.meter.full_snapshot())
+        self.cast("BB40", actor=PLAYER)
+        observations = pull["phase_tracking"]["observations"]
+        self.assertEqual(observations[-1]["phase"], "p4")
+        self.cast("BB40")
+        first_p5 = deepcopy(observations[-1])
+        self.clock.value += 30
+        self.cast("BB40", "22")
+        self.cast("C403")
+        self.assertEqual(observations[-1], first_p5)
+        self.assertEqual([o["phase"] for o in observations], list(UMAD_PHASES))
+
+    def test_effect_confirmations_recover_missed_casts_without_inventing_times(self):
+        pull = self.begin()
+        self.clock.value += 450
+        self.cast("C3F7", "22")
+        self.cast("C24C", "21")
+        self.assertEqual([(o["phase"], o["at"]) for o in pull["phase_tracking"]["observations"]],
+                         [("p3", 450)])
+
+    def test_quick_wipe_without_phase_evidence_is_still_a_pull(self):
+        pull = self.begin()
+        self.clock.value += 2
+        self.combat(False)
+        self.clock.value += 3.5
+        self.wipe()
+        self.assertEqual(pull["ending"], "wipe")
+        self.assertEqual(pull["phase_tracking"]["observations"], [])
+        self.assertTrue(pull["complete"])
+        self.assertEqual(pull["duration"], 0)
+
+    def test_empty_encounter_does_not_skip_the_next_umad_pull(self):
+        self.combat(True)
+        self.clock.value += 2
+        self.combat(False)
+        self.assertEqual(self.session["pulls"], [])
+        self.assertTrue(self.sessions.ready)
+        pull = self.begin()
+        self.cast("C403")
+        self.assertEqual(self.session["pulls"], [pull])
+        self.assertEqual(pull["phase_tracking"]["observations"][0]["phase"], "p1")
+
+    def test_phase_only_combat_end_keeps_its_boundary_and_late_wipe(self):
+        self.combat(True)
+        self.clock.value += 4
+        self.cast("C403")
+        pull = self.session["pulls"][0]
+        self.clock.value += 2
+        self.combat(False)
+        self.assertEqual(pull["ending"], "combat-ended")
+        self.assertTrue(pull["complete"])
+        self.assertTrue(self.sessions.ready)
+        self.assertEqual(pull["duration"], 4)
+        death_deadline = self.sessions._recap_until
+        self.clock.value += 3.5
+        self.wipe()
+        self.assertEqual(pull["ending"], "wipe")
+        self.assertEqual(self.sessions._recap_until, death_deadline)
+        self.assertEqual(read_tracking(pull, UMAD_ZONE)[2], "")
+        saved = ProgSessions(self.temp.name).sessions[0]["pulls"][0]
+        self.assertEqual(saved, pull)
+        self.begin()
+        self.assertEqual(len(self.session["pulls"]), 2)
+
+    def test_midpull_start_and_reconnect_wait_for_a_new_pull(self):
+        self.sessions.end()
+        self.combat(True)
+        self.session = self.sessions.start("Late", UMAD_ZONE, "Duty", True)
+        self.cast("C403")
+        self.cast("C2DC")
+        self.assertEqual(self.session["pulls"], [])
+        self.combat(False)
+        first = self.begin()
+        self.cast("C403")
+        self.meter.feed_lost()
+        self.dispatch()
+        self.sessions.feed_lost()
+        self.combat(True)
+        self.cast("C2DC")
+        self.assertEqual(self.session["pulls"], [first])
+        self.combat(False)
+        second = self.begin()
+        self.cast("C403")
+        self.assertIsNot(first, second)
+        self.assertEqual(second["phase_tracking"]["observations"][0]["phase"], "p1")
+
+    def test_late_wipe_window_expires_and_does_not_extend_death_attribution(self):
+        pull = self.begin()
+        self.combat(False)
+        death_deadline = self.sessions._recap_until
+        self.clock.value += 3
+        self.wipe()
+        self.assertEqual(pull["ending"], "wipe")
+        self.assertEqual(self.sessions._recap_until, death_deadline)
+        self.wipe()
+        self.assertEqual(self.sessions._recap_until, death_deadline)
+        next_pull = self.begin()
+        self.combat(False)
+        self.clock.value += 3
+        self.sessions.pull_finished(self.meter._last_final)
+        self.clock.value += 3
+        self.wipe()
+        self.assertEqual(next_pull["ending"], "combat-ended")
+
+    def test_new_pull_and_feed_loss_clear_late_wipe_candidate(self):
+        first = self.begin()
+        self.combat(False)
+        second = self.begin()
+        self.wipe()
+        self.assertEqual(first["ending"], "combat-ended")
+        self.assertEqual(second["ending"], "wipe")
+        self.combat(False)
+        third = self.begin()
+        self.combat(False)
+        self.sessions.feed_lost()
+        self.wipe()
+        self.assertEqual(third["ending"], "combat-ended")
 
 
 if __name__ == "__main__":

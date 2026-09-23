@@ -196,6 +196,30 @@ refire = gain(e, A, SET1, 11.0)
 check("a re-gain after assignment does not re-fire or wipe marks",
       refire == [] and set(e.outstanding()) == {A, B})
 
+# A repeated status line just after the second pair is still the same phase.
+e = eng()
+wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
+wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0)
+check("second pair duplicate keeps all four gaze signs",
+      gain(e, A, SET1, 25.1) == [] and set(e.outstanding()) == {A, B, C, D})
+check("the other pair's duplicate also leaves signs in place",
+      gain(e, D, SET2, 25.2) == [] and set(e.outstanding()) == {A, B, C, D})
+
+late = eng()
+wave(late, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
+wave(late, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0)
+check("a later gain before status expiry still keeps the signs",
+      gain(late, C, SET2, 31.0) == [] and set(late.outstanding()) == {A, B, C, D})
+check("a gain after status expiry can start a new phase",
+      gain(late, C, SET2, 95.0) == [("clear", a) for a in (A, B, C, D)]
+      and late.outstanding() == [])
+
+e.on_followup(INFERNO, 26.0)
+acts = gain(e, A, SET1, 26.1) + gain(e, B, SET1, 26.2)
+check("a fresh tell still starts a new phase within the burst gap",
+      [a for a in acts if a[0] == "clear"] == [("clear", a) for a in (A, B, C, D)]
+      and marks(acts) == {A: BND1, B: BND2})
+
 # a fully resolved phase resets quietly, the next phase assigns
 e = eng()
 wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)

@@ -86,9 +86,10 @@ _STOP = object()
 
 
 class _QueuedFrame(dict):
-    def __init__(self, frame: dict, epoch: int):
+    def __init__(self, frame: dict, epoch: int, alert_epoch: int):
         super().__init__(frame)
         self.epoch = epoch
+        self.alert_epoch = alert_epoch
 
 
 # Frame builders
@@ -151,7 +152,8 @@ def ping_frame() -> dict:
 def dps_frame(enc, rows, show=True) -> dict:
     """Build a live or ended DPS frame. Rows contain name, job, DPS, share, HPS, local
     flag and deaths. Supply defaults for missing trailing fields and reject invalid
-    values. The optional hasDamage flag includes damage taken and survives DPS rounding.
+    values. A trailing object can supply additional combat statistics.
+    The optional hasDamage flag includes damage taken and survives DPS rounding.
     Endings include final values when enc is supplied.
     """
     if not show and enc is None:
@@ -176,10 +178,31 @@ def dps_frame(enc, rows, show=True) -> dict:
             if not all(math.isfinite(v) for v in vals):
                 raise ValueError("non-finite dps row value")
             clean_rows.append([str(name), str(job), *vals, is_self, deaths])
+            if len(row) > 7 and isinstance(row[7], dict):
+                details = {}
+                for key in ("damage", "healed", "healShare", "crit", "direct", "critDirect",
+                            "taken", "healingTaken", "heals", "overheal", "hits"):
+                    try:
+                        value = float(row[7][key])
+                        if math.isfinite(value) and value >= 0:
+                            details[key] = value
+                    except (KeyError, TypeError, ValueError, OverflowError):
+                        pass
+                clean_rows[-1].append(details)
         except (TypeError, ValueError, IndexError, OverflowError):
             # Skip rows whose integer fields cannot be converted.
             continue
     encounter = {"t": str(enc.get("t", "")), "d": str(enc.get("d", "")), "dps": dps}
+    for key in ("id", "zone"):
+        if isinstance(enc.get(key), str):
+            encounter[key] = enc[key]
+    for key in ("hps", "participants"):
+        try:
+            value = float(enc[key])
+            if math.isfinite(value) and value >= 0:
+                encounter[key] = int(value) if key == "participants" else value
+        except (KeyError, TypeError, ValueError, OverflowError):
+            pass
     if isinstance(enc.get("hasDamage"), bool):
         encounter["hasDamage"] = enc["hasDamage"]
     return {"c": "dps", "show": bool(show), "enc": encounter, "rows": clean_rows}
@@ -260,6 +283,7 @@ class PluginLink(QObject):
         self._port = int(port)
         self._enabled = bool(enabled)
         self._enabled_epoch = 0
+        self._alert_epoch = 0
         self._idle_ping_s = max(0.5, float(idle_ping_s))
         self._queue: "queue.Queue" = queue.Queue(maxsize=OUTBOX_CAPACITY)
         self._thread: "threading.Thread | None" = None
@@ -375,7 +399,20 @@ class PluginLink(QObject):
 
     def send_clear(self, *, keep_dps: bool = False) -> None:
         log_drop("plugin-tx", "clear", 0)
-        self._enqueue(clear_frame(keep_dps=keep_dps))
+        with self._lock:
+            self._alert_epoch += 1
+            q = self._queue
+            with q.mutex:
+                keep = [msg for msg in q.queue
+                        if not isinstance(msg, dict) or msg.get("c") != "alert"]
+                removed = len(q.queue) - len(keep)
+                q.queue.clear()
+                q.queue.extend(keep)
+                q.unfinished_tasks -= removed
+                if not q.unfinished_tasks:
+                    q.all_tasks_done.notify_all()
+                q.not_full.notify_all()
+            self._enqueue(clear_frame(keep_dps=keep_dps))
 
     def send_dps(self, enc, rows, show: bool = True) -> None:
         log_drop("plugin-tx-dps",
@@ -388,13 +425,12 @@ class PluginLink(QObject):
         with self._lock:
             if not self._enabled:
                 return
-            msg = _QueuedFrame(msg, self._enabled_epoch)
+            msg = _QueuedFrame(msg, self._enabled_epoch, self._alert_epoch)
             try:
                 self._queue.put_nowait(msg)
             except queue.Full:
-                # Evict a non-alert frame because alerts cannot be reconstructed after
-                # reconnect.
-                dropped = self._evict_oldest(self._queue)
+                # Preserve callouts and the clears that retire them.
+                dropped = self._evict_oldest(self._queue, msg)
                 if dropped is not None:
                     kind = dropped.get("c") if isinstance(dropped, dict) else "sentinel"
                     log_drop("plugin-drop",
@@ -402,37 +438,30 @@ class PluginLink(QObject):
                 try:
                     self._queue.put_nowait(msg)
                 except queue.Full:
-                    # Drop the new frame if only alerts remain or another producer took
-                    # the slot.
+                    # Keep existing alerts and clears when no slot is available.
                     log_drop("plugin-drop",
                              f"outbox full, dropped the new {msg.get('c', '?')} frame",
                              5.0)
 
     @staticmethod
-    def _evict_oldest(q: "queue.Queue") -> "dict | None":
-        """Remove the oldest non-alert frame while preserving retained order. Return None
-        if every frame is an alert.
-        """
-        keep = []
-        dropped = None
-        while True:
-            try:
-                msg = q.get_nowait()
-            except queue.Empty:
-                break
-            if dropped is None and not (isinstance(msg, dict)
-                                        and msg.get("c") == "alert"):
-                dropped = msg
-            else:
-                keep.append(msg)
-        for msg in keep:
-            try:
-                q.put_nowait(msg)
-            except queue.Full:
-                # Stop and retry producers may fill the queue without taking the enqueue
-                # lock.
-                log_drop("plugin-drop", "outbox refill overflowed; frame dropped")
-        return dropped
+    def _evict_oldest(q: "queue.Queue", incoming=None) -> "dict | None":
+        """Remove the oldest replaceable frame while preserving retained order."""
+        with q.mutex:
+            for index, msg in enumerate(q.queue):
+                protected = isinstance(msg, dict) and msg.get("c") in ("alert", "clear")
+                if (isinstance(msg, dict) and msg.get("c") == "clear"
+                        and incoming is not None and incoming.get("c") == "clear"
+                        and (msg.get("keepDps") or not incoming.get("keepDps"))):
+                    protected = False
+                if protected:
+                    continue
+                del q.queue[index]
+                q.unfinished_tasks -= 1
+                if not q.unfinished_tasks:
+                    q.all_tasks_done.notify_all()
+                q.not_full.notify()
+                return msg
+        return None
 
     def _set_connected(self, connected: bool, stopping=None) -> None:
         with self._lock:
@@ -529,13 +558,18 @@ class PluginLink(QObject):
         if not isinstance(msg, dict) or msg.get("c") != "alert":
             return
         with self._lock:
-            if (not self._enabled or
-                    getattr(msg, "epoch", self._enabled_epoch) != self._enabled_epoch):
+            if not self._frame_current(msg):
                 return
             try:
                 q.put_nowait(msg)
             except queue.Full:
                 log_drop("plugin-drop", "alert re-queue overflowed; callout dropped")
+
+    def _frame_current(self, msg) -> bool:
+        return (self._enabled
+                and getattr(msg, "epoch", self._enabled_epoch) == self._enabled_epoch
+                and (not isinstance(msg, dict) or msg.get("c") != "alert"
+                     or getattr(msg, "alert_epoch", self._alert_epoch) == self._alert_epoch))
 
     @staticmethod
     def _kill_socket(ws, done: threading.Event) -> None:
@@ -657,8 +691,7 @@ class PluginLink(QObject):
                         raise TimeoutError("game plugin did not answer its ping")
                     # Settings may change while waiting for a frame or draining replies.
                     with self._lock:
-                        if (not self._enabled or
-                                getattr(msg, "epoch", self._enabled_epoch) != self._enabled_epoch):
+                        if not self._frame_current(msg):
                             continue
                         if dialed != self._port:
                             self._retry_alert(q, msg)

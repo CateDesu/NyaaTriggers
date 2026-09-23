@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -158,6 +159,17 @@ def _log(msg: str) -> None:
 
 
 _STOP = object()
+
+
+def _snapshot_jar(jar: Path):
+    directory = tempfile.TemporaryDirectory(prefix="nyaa-triggevent-", ignore_cleanup_errors=True)
+    runtime_jar = Path(directory.name) / jar.name
+    try:
+        shutil.copyfile(jar, runtime_jar)
+    except BaseException:
+        directory.cleanup()
+        raise
+    return directory, runtime_jar
 
 
 def _find_java() -> str | None:
@@ -445,13 +457,14 @@ class TriggeventBridge(QObject):
     tts         = pyqtSignal(str, int)        # spoken text, generation
     status      = pyqtSignal(bool, str, int)  # active, message, generation
     phrase_seen = pyqtSignal(str)        # a callout phrase observed, for the override UI
-    inventory   = pyqtSignal(str)        # one-shot JSON [{id,name,fight,group,text}] of all engine callouts
+    inventory   = pyqtSignal(str, int)   # engine callouts and generation
     telesto     = pyqtSignal(str, int)   # Telesto automark connection status, "good"|"bad"|"unknown", generation
     ready       = pyqtSignal(int)        # sidecar is reading stdin, generation
     chain_failure = pyqtSignal(str, int)  # an engine chain died, the "Error in sequential trigger" line, generation
     combatants_request = pyqtSignal(object, int)
     recovery_progress = pyqtSignal(object, int)
     feed_overflow = pyqtSignal(int)
+    custom_status = pyqtSignal(bool, str, int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -459,6 +472,7 @@ class TriggeventBridge(QObject):
         self._recovery_gen = -1
         self._history_gen = -1
         self._catchup_gen = -1
+        self._custom_gen = -1
         self._overflow_gen = -1
         self._reader: threading.Thread | None = None
         self._errpump: threading.Thread | None = None
@@ -503,6 +517,13 @@ class TriggeventBridge(QObject):
     def set_disabled(self, ids) -> None:
         """Replace disabled IDs for the next callout without restarting."""
         self._disabled = frozenset(ids or ())
+
+    def supports_custom_triggers(self) -> bool:
+        return self._active and self._custom_gen == self._gen
+
+    def set_custom_triggers(self, triggers: list) -> None:
+        if self.supports_custom_triggers():
+            self._send_command({"nyaa_cmd": "custom_triggers", "triggers": triggers})
 
     def set_callout(self, cid: str, tts: str | None = None,
                     text: str | None = None, enable: bool | None = None) -> None:
@@ -609,10 +630,18 @@ class TriggeventBridge(QObject):
         if os.name == "posix" and _bundled_jre_dir() is not None:
             _make_bundled_jre_executable()
 
+        # Keep later class loads independent of rebuilds and engine updates.
+        try:
+            runtime_dir, runtime_jar = _snapshot_jar(jar)
+        except OSError as exc:
+            _log(f"cannot prepare engine: {exc!r}")
+            self.status.emit(False, f"Could not prepare Triggevent engine: {exc}", self._gen)
+            return
+
         # Use Xvfb for Swing initialization when available. Cap the heap at 512 MiB
         # because 256 MiB caused GC pauses and sequential trigger timeouts during long
         # encounters.
-        cmd = [java, "-Xmx512m", "-jar", str(jar)]
+        cmd = [java, "-Xmx512m", "-jar", str(runtime_jar)]
         xvfb = shutil.which("xvfb-run")
         if xvfb:
             # Use 24-bit visuals for reliable Swing initialization.
@@ -637,10 +666,12 @@ class TriggeventBridge(QObject):
         try:
             proc = subprocess.Popen(cmd, **popen_kwargs)
         except OSError as e:
+            runtime_dir.cleanup()
             _log(f"launch failed: {e!r}")
             self.status.emit(False, f"Failed to launch sidecar: {e}", self._gen)
             self._proc = None
             return
+        proc._nyaa_runtime_dir = runtime_dir
         _log(f"sidecar spawned pid={proc.pid}")
 
         wq = _ByteQueue(maxsize=10000)
@@ -753,6 +784,9 @@ class TriggeventBridge(QObject):
                     pass
             finally:
                 proc._nyaa_reaped = True
+                runtime_dir = proc.__dict__.pop("_nyaa_runtime_dir", None)
+                if runtime_dir is not None:
+                    runtime_dir.cleanup()
 
 
     def feed(self, raw_msg: str) -> None:
@@ -917,6 +951,8 @@ class TriggeventBridge(QObject):
                     self._history_gen = gen
                 if "catchup=1" in line:
                     self._catchup_gen = gen
+                if "custom=1" in line:
+                    self._custom_gen = gen
             self.ready.emit(gen)
 
     def _dispatch(self, msg: dict, seq_state: "dict | None" = None,
@@ -968,6 +1004,9 @@ class TriggeventBridge(QObject):
                 return
             active = bool(msg.get("active", self._active))
             self.status.emit(active, str(msg.get("message", "")), gen)
+        elif kind == "custom_triggers":
+            if self._gen_live(gen):
+                self.custom_status.emit(msg.get("ok") is True, str(msg.get("message", "")), gen)
         elif kind in ("recovery_checkpoint", "recovered"):
             if self._gen_live(gen):
                 self.recovery_progress.emit(msg, gen)
@@ -978,11 +1017,9 @@ class TriggeventBridge(QObject):
                     self.combatants_request.emit(ids, gen)
         elif kind == "inventory":
             triggers = msg.get("triggers")
-            if isinstance(triggers, list):
-                self.inventory.emit(json.dumps(triggers))
+            if self._gen_live(gen) and isinstance(triggers, list):
+                self.inventory.emit(json.dumps(triggers), gen)
         elif kind == "telesto":
-            # Ignore stale Telesto status. Keep inventory ungated because it remains
-            # useful after restart.
             if not self._gen_live(gen):
                 return
             st = str(msg.get("status", "unknown")).lower()

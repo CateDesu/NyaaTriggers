@@ -38,7 +38,7 @@ class ConnectionMixin:
             return
         self._update_plugin_link_status_label(connected, msg)
         if connected:
-            self._push_timeline_to_plugin()
+            self._push_timeline_to_plugin(reconnect=True)
 
     def _on_plugin_port_changed(self) -> None:
         """Save and apply changes to the overlay port."""

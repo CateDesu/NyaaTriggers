@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 triggers.local.json
+triggevent.custom.json
 triggers.experimental.json
 nyaatriggers.log
 nyaatriggers.crash.log*

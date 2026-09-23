@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-from nyaatriggers.telesto_client import DEFAULT_URI
+from nyaatriggers.telesto_client import DEFAULT_URI, read_telesto_response
 from nyaatriggers.trigger_engine import compile_user_regex
 
 MAX_BODY = 1 << 20
@@ -100,7 +100,10 @@ class TriggernometryTelesto:
         self._sending = threading.Lock()
         self._closed = threading.Event()
         self._subscriptions = {}
+        self._pending_subscriptions = {}
         self._drawings = {}
+        self._pending_drawings = {}
+        self._expired_pending_drawings = set()
         self._drawing_notifications = set()
         self._drawing_expiry = {}
         self._owned_subscriptions = set()
@@ -108,7 +111,6 @@ class TriggernometryTelesto:
         self._serial = 0
         self._server = None
         self._cleanup = None
-        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def start(self):
         self._server = _Server(self)
@@ -147,9 +149,9 @@ class TriggernometryTelesto:
                 raise ValueError("Invalid Telesto payload")
         if kind == "subscribe":
             name = self._name(payload, "id").lower()
-            if len(self._owned_subscriptions) >= MAX_RESOURCES:
-                raise ValueError("Too many memory subscriptions")
             previous = self._subscriptions.get(name)
+            if previous is None and len(self._owned_subscriptions) >= MAX_RESOURCES:
+                raise ValueError("Too many memory subscriptions")
             self._serial += 1
             qualified = self.prefix + str(self._serial)
             self._subscriptions[name] = qualified
@@ -163,10 +165,10 @@ class TriggernometryTelesto:
             payload["id"] = self._subscriptions.pop(name, self.prefix + "absent")
         elif kind == "enabledoodle":
             name = self._name(payload, "name")
-            if len(self._owned_drawings) >= MAX_RESOURCES:
+            qualified = self.prefix + name
+            if qualified not in self._owned_drawings and len(self._owned_drawings) >= MAX_RESOURCES:
                 raise ValueError("Too many drawings")
             self._serial += 1
-            qualified = self.prefix + name
             self._drawings[name] = qualified
             self._owned_drawings.add(qualified)
             payload["name"] = qualified
@@ -207,16 +209,13 @@ class TriggernometryTelesto:
     def _bundle(items):
         return {"version": 1, "id": 0, "type": "Bundle", "payload": items}
 
-    def _post(self, message):
+    def _post(self, message, *, cleanup=False):
         request = urllib.request.Request(
             self.uri, json.dumps(message, ensure_ascii=False).encode("utf-8"),
             {"Content-Type": "application/json"}, method="POST")
         try:
-            with self._opener.open(request, timeout=4) as response:
-                body = response.read(MAX_BODY + 1)
-                if len(body) > MAX_BODY:
-                    raise ValueError("Telesto response exceeds the size limit")
-                return response.status, body
+            stopping = threading.Event() if cleanup else self._closed
+            return read_telesto_response(request, 4, stopping, use_proxy=False, max_body=MAX_BODY)
         except urllib.error.HTTPError as exc:
             code = exc.code
             exc.close()
@@ -231,6 +230,25 @@ class TriggernometryTelesto:
             with self._lock:
                 if self._closed.is_set():
                     return 410, b""
+                orphaned_subscriptions = self._owned_subscriptions.difference(
+                    self._subscriptions.values())
+                orphaned_drawings = self._owned_drawings.difference(self._drawings.values())
+            if orphaned_subscriptions or orphaned_drawings:
+                cleanup = self._bundle(
+                    [self._disable("Unsubscribe", "id", value)
+                     for value in orphaned_subscriptions]
+                    + [self._disable("DisableDoodle", "name", value)
+                       for value in orphaned_drawings])
+                code, _ = self._post(cleanup)
+                if 200 <= code < 300:
+                    with self._lock:
+                        self._owned_subscriptions.difference_update(orphaned_subscriptions)
+                        self._owned_drawings.difference_update(orphaned_drawings)
+                else:
+                    return code, b""
+            with self._lock:
+                if self._closed.is_set():
+                    return 410, b""
                 fields = ("_subscriptions", "_drawings", "_drawing_expiry", "_drawing_notifications",
                           "_owned_subscriptions", "_owned_drawings")
                 previous = {field: getattr(self, field).copy() for field in fields}
@@ -240,10 +258,37 @@ class TriggernometryTelesto:
                     for field, value in previous.items():
                         setattr(self, field, value)
                     raise
+                self._pending_subscriptions = {
+                    resource: name for name, resource in previous["_subscriptions"].items()
+                    if self._subscriptions.get(name) != resource
+                }
+                self._pending_drawings = {
+                    resource: (name, previous["_drawing_expiry"].get(resource),
+                               resource in previous["_drawing_notifications"])
+                    for name, resource in previous["_drawings"].items()
+                    if (self._drawings.get(name) != resource
+                        or self._drawing_expiry.get(resource)
+                        != previous["_drawing_expiry"].get(resource))
+                }
+                self._expired_pending_drawings.clear()
             code, body = self._post(message)
-            if 200 <= code < 300:
-                with self._lock:
+            with self._lock:
+                if 200 <= code < 300:
                     self._release_removed(message)
+                else:
+                    self._subscriptions = previous["_subscriptions"]
+                    self._drawings = previous["_drawings"]
+                    self._drawing_expiry = previous["_drawing_expiry"]
+                    self._drawing_notifications = previous["_drawing_notifications"]
+                    self._owned_drawings.update(previous["_owned_drawings"])
+                    for resource in self._expired_pending_drawings:
+                        name = self._pending_drawings[resource][0]
+                        self._drawings.pop(name, None)
+                        self._drawing_expiry.pop(resource, None)
+                        self._drawing_notifications.discard(resource)
+                self._pending_subscriptions.clear()
+                self._pending_drawings.clear()
+                self._expired_pending_drawings.clear()
             return code, body
 
     def _release_removed(self, message):
@@ -272,19 +317,38 @@ class TriggernometryTelesto:
             resources = (self._drawings if message.get("notificationtype") == "doodleexpired"
                          else self._subscriptions)
             name = next((key for key, value in resources.items() if value == notification), None)
+            if name is None and resources is self._subscriptions:
+                name = self._pending_subscriptions.get(notification)
+            if name is None and resources is self._drawings:
+                pending = self._pending_drawings.get(notification)
+                name = pending[0] if pending else None
             if name is None:
                 return 410
             expected_path = (self._drawing_expiry.get(notification) if resources is self._drawings
                              else self.callback_path)
+            pending_expiry = None
             if path != expected_path:
-                return 410
+                if resources is not self._drawings:
+                    return 410
+                pending_expiry = self._pending_drawings.get(notification)
+                if pending_expiry is None or path != pending_expiry[1]:
+                    return 410
+                if notification in self._expired_pending_drawings:
+                    return 410
+                name = pending_expiry[0]
             message["notificationid"] = name
             if resources is self._drawings:
-                resources.pop(name, None)
-                self._drawing_expiry.pop(notification, None)
-                self._owned_drawings.discard(notification)
-                notify = notification in self._drawing_notifications
-                self._drawing_notifications.discard(notification)
+                if pending_expiry is not None:
+                    self._expired_pending_drawings.add(notification)
+                    notify = pending_expiry[2]
+                else:
+                    if notification in self._pending_drawings:
+                        self._expired_pending_drawings.add(notification)
+                    resources.pop(name, None)
+                    self._drawing_expiry.pop(notification, None)
+                    self._owned_drawings.discard(notification)
+                    notify = notification in self._drawing_notifications
+                    self._drawing_notifications.discard(notification)
                 if not notify:
                     return 200
             self.callback(json.dumps(message, ensure_ascii=False, separators=(",", ":")))
@@ -313,10 +377,13 @@ class TriggernometryTelesto:
                 items += [self._disable("DisableDoodle", "name", value)
                           for value in self._owned_drawings]
                 self._subscriptions.clear()
+                self._pending_subscriptions.clear()
                 self._drawings.clear()
+                self._pending_drawings.clear()
+                self._expired_pending_drawings.clear()
                 self._owned_subscriptions.clear()
                 self._owned_drawings.clear()
                 self._drawing_notifications.clear()
                 self._drawing_expiry.clear()
             if items:
-                self._post(self._bundle(items))
+                self._post(self._bundle(items), cleanup=True)

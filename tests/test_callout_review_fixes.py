@@ -188,6 +188,50 @@ class CalloutReviewFixTests(unittest.TestCase):
             runner._expire()
         self.assertEqual(self.speech.call_count, 2)
 
+    def test_status_casters_keep_independent_cooldowns_and_delays(self):
+        trigger = Trigger(log_type="26", ability_id="8D1", tts_text="Warning",
+                          cooldown_s=5, status_scope="any")
+        self.host._triggers = [trigger]
+
+        def status(source, name):
+            fields = ["26", "ts", "8D1", "Vulnerability", "60", source, name,
+                      "20001111", "Target", "01"]
+            self.host._dispatch_log_line(fields, "|".join(fields))
+
+        status("40000001", "Boss A")
+        status("40000002", "Boss B")
+        self.assertEqual(self.speech.call_count, 2)
+        self.assertEqual(set(trigger._last_fired), {"40000001", "40000002"})
+
+        trigger._last_fired.clear()
+        trigger.delay_s = 6
+        status("40000001", "Boss A")
+        status("40000002", "Boss B")
+        self.assertEqual({r.cooldown_key for r in self.host._seq_runners},
+                         {"40000001", "40000002"})
+        self.host._clear_seq_runners()
+
+        trigger.delay_s = 0
+        trigger.cooldown_scope = "trigger"
+        trigger._last_fired.clear()
+        status("40000001", "Boss A")
+        status("40000002", "Boss B")
+        self.assertEqual(self.speech.call_count, 3)
+
+    def test_status_expiry_reminders_stay_shared_across_casters(self):
+        trigger = Trigger(log_type="26", ability_id="8D1", tts_text="Refresh",
+                          cooldown_s=5, status_scope="any", expiry_warn_s=5)
+        self.host._triggers = [trigger]
+        for source in ("40000001", "40000002"):
+            fields = ["26", "ts", "8D1", "Vulnerability", "60", source,
+                      "Boss", "20001111", "Target", "01"]
+            self.host._dispatch_log_line(fields, "|".join(fields))
+        self.assertEqual(len(self.host._status_timers), 2)
+        for timer in list(self.host._status_timers):
+            self.host._on_status_timer(timer, timer._captured)
+        self.assertEqual(self.speech.call_count, 1)
+        self.assertEqual(set(trigger._last_fired), {"8D1"})
+
     def test_ignored_pending_events_do_not_extend_the_cooldown(self):
         self.host.dispatch("4879")
         runner, = self.host._seq_runners

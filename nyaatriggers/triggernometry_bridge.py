@@ -237,7 +237,7 @@ class TriggernometryBridge(QObject):
     tts       = pyqtSignal(str, int)        # spoken text, generation
     sound     = pyqtSignal(str, int, int)   # sound file path, volume 0-100, generation
     status    = pyqtSignal(bool, str, int)  # active, message, generation
-    inventory = pyqtSignal(str)        # one-shot JSON [{id,name,fight,text}] of editable UseTTS callouts
+    inventory = pyqtSignal(str, int)   # editable speech and engine generation
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -657,8 +657,8 @@ class TriggernometryBridge(QObject):
     def _dispatch(self, msg: dict, gen: "int | None" = None) -> None:
         kind = msg.get("t")
         # Reject output from old generations before dispatch and again in queued UI
-        # slots. Inventory remains useful across restarts.
-        if kind in ("callout", "sound", "status") and not self._gen_live(gen):
+        # slots.
+        if kind in ("callout", "sound", "status", "inventory") and not self._gen_live(gen):
             return
         if kind == "callout":
             tts = self._apply_replacements((msg.get("tts") or "").strip())
@@ -686,4 +686,4 @@ class TriggernometryBridge(QObject):
         elif kind == "inventory":
             triggers = msg.get("triggers")
             if isinstance(triggers, list):
-                self.inventory.emit(json.dumps(triggers))
+                self.inventory.emit(json.dumps(triggers), gen)

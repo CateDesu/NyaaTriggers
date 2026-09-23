@@ -133,6 +133,7 @@ _fake = _FakeSidecar()
 with mock.patch.object(tb, "_find_java", return_value="/usr/bin/java"), \
      mock.patch.object(tb, "_find_jar", return_value=Path("/tmp/x.jar")), \
      mock.patch.object(tb.shutil, "which", return_value=None), \
+     mock.patch.object(tb.shutil, "copyfile"), \
      mock.patch.object(tb.subprocess, "Popen", return_value=_fake), \
      mock.patch.object(tb.proc_env, "child_env", return_value={}), \
      mock.patch.object(tb, "_bundled_jre_dir", return_value=None):

@@ -194,8 +194,8 @@ class TransportChanges(unittest.TestCase):
 
     def test_telesto_endpoint_change_clears_roster_and_ignores_old_response(self):
         old, new = self.peer(TelestoPeer), self.peer(TelestoPeer)
-        old.party = [{"order": "0", "actor": "10000001"}]
-        new.party = [{"order": "0", "actor": "10000002"}]
+        old.party = [{"order": "1", "actor": "10000001"}]
+        new.party = [{"order": "1", "actor": "10000002"}]
         client = self.telesto(old)
         client.start()
         client.ping()
@@ -248,9 +248,9 @@ class TransportChanges(unittest.TestCase):
 
     def test_telesto_restart_while_an_old_request_is_blocked(self):
         old, new = self.peer(TelestoPeer), self.peer(TelestoPeer)
-        old.party = [{"order": "0", "actor": "10000001"}]
+        old.party = [{"order": "1", "actor": "10000001"}]
         old.release.clear()
-        new.party = [{"order": "0", "actor": "10000002"}]
+        new.party = [{"order": "1", "actor": "10000002"}]
         client = self.telesto(old)
         client.start()
         client.ping()

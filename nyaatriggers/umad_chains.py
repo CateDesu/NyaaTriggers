@@ -6,6 +6,8 @@ routing and marker actions. See docs/UMAD-DEBUFFS.md for status evidence.
 
 from __future__ import annotations
 
+import math
+
 # Normalize status IDs to uppercase hex without prefixes or leading zeros.
 ACCRETION = "644"
 CRUST = "154E"   # UMAD Primordial Crust uses 154E. TOP uses 645.
@@ -376,6 +378,7 @@ class CursedShriekPairs:
         self._set_t = 0.0                      # first gain time of the open set
         self._sets_done = 0                    # closed sets, assigned or not
         self._assigned: "dict[str, str]" = {}  # actor -> slot key while marked
+        self._active_until: "dict[str, float]" = {}
         self._last_event = 0.0
 
     def on_followup(self, effect_hex: str, now: float) -> "list[tuple]":
@@ -399,9 +402,7 @@ class CursedShriekPairs:
         return actions
 
     def on_gain(self, effect_hex: str, actor_id: str, duration, now: float) -> "list[tuple]":
-        """Handle a gaze gain. duration remains for compatibility but does not identify the
-        gaze type.
-        """
+        """Handle a gaze gain. Duration bounds repeats but does not identify gaze type."""
         if _norm_id(effect_hex) not in self._ids:
             return []
         actor_id = str(actor_id).strip().upper()
@@ -412,8 +413,12 @@ class CursedShriekPairs:
             actions += [("clear", a) for a in self.outstanding()]
             self.reset()
         elif self._sets_done >= GAZE_SETS:
-            # Gains after all sets close begin a new phase. Preserve a recently armed
-            # polarity from the new wave.
+            if (actor_id in self._assigned and self._polarity is None
+                    and (0 <= now - self._set_t <= BURST_GAP_S
+                         or now <= self._active_until.get(actor_id, 0.0))):
+                self._last_event = now
+                return actions
+            # A later gain starts a new phase. Keep a fresh tell from that wave.
             actions += [("clear", a) for a in self.outstanding()]
             armed = self._polarity if now - self._last_event <= STALE_S else None
             armed_t = self._polarity_t if armed is not None else 0.0
@@ -427,6 +432,8 @@ class CursedShriekPairs:
         # Discard an incomplete set after its burst gap. Preserve a tell armed after
         # that set opened because it belongs to the next wave.
         if self._set and now - self._set_t > BURST_GAP_S:
+            for actor in self._set:
+                self._active_until.pop(actor, None)
             self._set = []
             if self._polarity_t <= self._set_t:
                 self._polarity = None
@@ -435,12 +442,21 @@ class CursedShriekPairs:
         if not self._set:
             self._set_t = now
         self._set.append(actor_id)
+        self._active_until.pop(actor_id, None)
+        try:
+            remaining = float(duration)
+        except (TypeError, ValueError):
+            remaining = 0.0
+        if math.isfinite(remaining) and remaining > 0:
+            self._active_until[actor_id] = now + min(remaining, STALE_S)
         if len(self._set) < GAZE_PER_SET:
             return actions
         # A complete pair without a known polarity remains unmarked.
         polarity, self._polarity = self._polarity, None
         self._sets_done += 1
         if polarity is None:
+            for actor in self._set:
+                self._active_until.pop(actor, None)
             self._set = []
             return actions
         keys = (LOOK1, LOOK2) if polarity == LOOK1 else (AWAY1, AWAY2)
@@ -466,10 +482,12 @@ class CursedShriekPairs:
             # An incomplete set has no marks. Remove this carrier but preserve a tell
             # from the next wave.
             self._set.remove(actor_id)
+            self._active_until.pop(actor_id, None)
             if not self._set and self._polarity_t <= self._set_t:
                 self._polarity = None
         if actor_id in self._assigned:
             self._assigned.pop(actor_id)
+            self._active_until.pop(actor_id, None)
             return [("clear", actor_id)]
         return []
 
@@ -482,6 +500,8 @@ class CursedShriekPairs:
             return actions
         self._last_event = now
         if self._set and now - self._set_t > BURST_GAP_S:
+            for actor in self._set:
+                self._active_until.pop(actor, None)
             self._set = []
             if self._polarity_t <= self._set_t:
                 self._polarity = None

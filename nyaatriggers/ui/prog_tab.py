@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QHBoxLayou
 
 from nyaatriggers.locale_util import _
 from nyaatriggers.prog_session import summary
-from nyaatriggers.prog_phases import UMAD_ZONE, read_tracking
+from nyaatriggers.prog_phases import definition_for, read_tracking
 from nyaatriggers import theme
 
 PHASE_COLUMN = 3
@@ -38,10 +38,8 @@ def phase_details(pull, zone_id, definitions):
     if error:
         return _("Unavailable"), _("Phase data could not be read. Notes and recaps remain available."), []
     if data is None:
-        if "phase_tracking" not in pull:
+        if "phase_tracking" not in pull or definition_for(zone_id, definitions) is not None:
             return _("Not recorded"), _("Phase tracking was not recorded for this pull."), []
-        if zone_id == UMAD_ZONE:
-            return _("Not recorded"), _("UMAD phase tracking is awaiting verified combat recordings."), []
         return _("Not supported"), _("Phase tracking is not supported for this duty."), []
     observations = {o["phase"]: o for o in data["observations"]}
     furthest = max((definition.phases.index(p) for p in observations), default=-1)
@@ -187,7 +185,7 @@ class ProgTab(QWidget):
         self.start_button.clicked.connect(self.start_session)
         self.end_button.clicked.connect(self.end_session)
         self.table.itemSelectionChanged.connect(self.select_pull)
-        self.chart.selected.connect(self.table.selectRow)
+        self.chart.selected.connect(lambda index: self.table.selectRow(self.table.rowCount() - 1 - index))
         self.bookmark.toggled.connect(self.edit_pull)
         self.recap_button.clicked.connect(self.open_recaps)
         self.note.textChanged.connect(self.edit_pull)
@@ -217,8 +215,8 @@ class ProgTab(QWidget):
         self.table.blockSignals(True)
         pulls = self.session["pulls"] if self.session else []
         self.table.setRowCount(len(pulls))
-        for index, pull in enumerate(pulls):
-            values = [str(index + 1), f"{datetime.fromtimestamp(pull['started']):%H:%M:%S}",
+        for index, pull in enumerate(reversed(pulls)):
+            values = [str(len(pulls) - index), f"{datetime.fromtimestamp(pull['started']):%H:%M:%S}",
                       duration(pull["duration"]), self.phase_values(pull)[0], ending_label(pull["ending"]), str(pull["deaths"]),
                       "★" if pull["bookmark"] else ""]
             for column, value in enumerate(values):
@@ -226,7 +224,7 @@ class ProgTab(QWidget):
         self.table.blockSignals(False)
         self.chart.set_pulls(pulls)
         if pulls:
-            row = next((i for i, p in enumerate(pulls) if p["id"] == selected), len(pulls) - 1)
+            row = next((i for i, p in enumerate(reversed(pulls)) if p["id"] == selected), 0)
             self.table.selectRow(row)
         self.select_pull()
         self.tick()
@@ -235,7 +233,7 @@ class ProgTab(QWidget):
         self.flush()
         row = self.table.currentRow()
         pulls = self.session["pulls"] if self.session else []
-        self.pull = pulls[row] if 0 <= row < len(pulls) else None
+        self.pull = pulls[-1 - row] if 0 <= row < len(pulls) else None
         self.bookmark.blockSignals(True)
         self.note.blockSignals(True)
         self.bookmark.setEnabled(self.pull is not None)
@@ -330,15 +328,11 @@ class ProgTab(QWidget):
         self.sessions.check_phase_timeout()
         self.sessions.checkpoint()
         if active is not None and self.session is active and self.sessions.pending:
-            for row, pull in enumerate(active["pulls"]):
-                if pull["id"] == self.sessions.pending and row < self.table.rowCount():
-                    self.table.setItem(row, 2, QTableWidgetItem(duration(pull["duration"])))
-                    self.table.setItem(row, DEATHS_COLUMN, QTableWidgetItem(str(pull["deaths"])))
-                    self.chart.update()
-                    break
+            self.chart.update()
         if self.session is not None:
             tooltips = []
-            for row, pull in enumerate(self.session["pulls"]):
+            for index, pull in enumerate(self.session["pulls"]):
+                row = len(self.session["pulls"]) - 1 - index
                 phase, notice, _rows = self.phase_values(pull)
                 for column, value in ((DEATHS_COLUMN, str(pull["deaths"])),
                                       (PHASE_COLUMN, phase), (ENDING_COLUMN, ending_label(pull["ending"])),
@@ -349,7 +343,7 @@ class ProgTab(QWidget):
                 item = self.table.item(row, PHASE_COLUMN)
                 if item is not None:
                     item.setToolTip(notice)
-                tooltips.append(f"{row + 1} · {duration(pull['duration'])} · {phase} · {ending_label(pull['ending'])}")
+                tooltips.append(f"{index + 1} · {duration(pull['duration'])} · {phase} · {ending_label(pull['ending'])}")
             self.chart.tooltips = tooltips
         self.refresh_phase_details()
         self.start_button.setEnabled(active is None and self.window._connected

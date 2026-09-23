@@ -31,6 +31,8 @@ from nyaatriggers.triggevent_bridge import (
     TriggeventBridge, _log as _te_log, has_java as _te_has_java, has_jar as _te_has_jar,
 )
 from nyaatriggers.triggevent_recovery import TriggeventRecovery
+from nyaatriggers.ui.custom_triggevent import CustomTriggeventMixin
+from nyaatriggers.ui.triggernometry_editor import TriggernometryEditorMixin
 try:
     from nyaatriggers.triggernometry_bridge import TriggernometryBridge, has_packs as _tn_has_packs, \
         packs_dir as _tn_packs_dir, _log as _tn_log
@@ -48,15 +50,12 @@ from nyaatriggers.app_common import (
 )
 
 
-class EnginesMixin:
+class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
     def _init_engines(self) -> None:
         self._engine_inventory: list[dict] = []
-        # Discard malformed override entries before building the table.
         self._engine_text_overrides: dict = _as_text_overrides(self._settings.get("engine_text_overrides", {}))
-        # Saved Triggevent text edits are applied live and replayed on sidecar startup.
         self._triggevent_callout_edits: dict = _as_strdict(self._settings.get("triggevent_callout_edits", {}))
-        # Keep shipped wording separate from user edits so updated defaults can take
-        # effect.
+        # Keep shipped wording separate so new defaults can take effect.
         self._shipped_callout_defaults: dict = self._load_callout_defaults()
         self._triggevent_disabled: set[str] = _as_strset(self._settings.get("triggevent_disabled_triggers", []))
         self._triggernometry: "TriggernometryBridge | None" = None
@@ -66,18 +65,16 @@ class EnginesMixin:
         self._triggernometry_disabled: set[str] = _as_strset(self._settings.get("triggernometry_disabled_triggers", []))
         self._engine_disabled: dict = {"cactbot": self._cactbot_disabled, "triggevent": self._triggevent_disabled,
                                        "triggernometry": self._triggernometry_disabled}
-        # New engine triggers are enabled unless the user has disabled their IDs. Seen
-        # IDs are bookkeeping only.
+        # Seen IDs are bookkeeping. Only disabled IDs mute new triggers.
         self._engine_seen: dict = {
             "cactbot":        _as_strset(self._settings.get("cactbot_seen_triggers", [])),
             "triggevent":     _as_strset(self._settings.get("triggevent_seen_triggers", [])),
             "triggernometry": _as_strset(self._settings.get("triggernometry_seen_triggers", [])),
         }
+        self._init_custom_triggevent()
 
     def _build_cactbot_settings(self, layout) -> None:
-        """Build Cactbot controls. Its switch gates both callouts and cactbot timelines and
-        excludes local callouts.
-        """
+        """The Cactbot switch gates its callouts and timelines together."""
         self._settings_header(layout, _("Cactbot"))
 
         desc = QLabel(
@@ -108,8 +105,7 @@ class EnginesMixin:
         url_row.addWidget(self._cactbot_url_edit)
         layout.addLayout(url_row)
 
-        # Show the checklist after cactbot reports its triggers. Saved suppression works
-        # without the list.
+        # Saved suppression works before the checklist arrives.
         self._cactbot_trig_hdr = QLabel(_("<b>Per-trigger overrides</b>  (uncheck to silence a cactbot trigger)"))
         self._cactbot_trig_hdr.setVisible(False)
         layout.addWidget(self._cactbot_trig_hdr)
@@ -135,8 +131,7 @@ class EnginesMixin:
         if not CactbotReader.is_available():
             self._cactbot_btn.setEnabled(False)
             if getattr(sys, "frozen", False):
-                # Frozen builds bundle WebEngine, so a load failure needs system
-                # dependency advice.
+                # Frozen builds already bundle WebEngine. Report missing system dependencies.
                 self._cactbot_status_lbl.setText(_("● WebEngine failed to load"))
                 note = QLabel(
                     _("This build ships PyQt6-WebEngine, but it could not be "
@@ -156,8 +151,7 @@ class EnginesMixin:
             return
 
         self._cactbot_btn.toggled.connect(self._on_cactbot_toggled)
-        # Show live reader state because startup is deferred until after UI
-        # construction.
+        # Reader startup is deferred until after UI construction.
         self._set_cactbot_button(self._cactbot_mode)
 
     def _ensure_cactbot_reader(self) -> CactbotReader:
@@ -214,8 +208,7 @@ class EnginesMixin:
         self._settings["cactbot_enabled"] = self._cactbot_mode
         self._save_settings()
         self._set_cactbot_button(self._cactbot_mode)
-        # The Cactbot switch also selects timelines. Recheck the zone on every mode
-        # change.
+        # The Cactbot switch also selects timelines.
         if self._cactbot_mode != prev_mode:
             self._load_timeline_for_zone(self._match_zone)
 
@@ -229,6 +222,8 @@ class EnginesMixin:
             self._triggevent.status.connect(
                 lambda active, msg, gen: self._on_engine_sidecar_status("triggevent", active, msg, gen))
             self._triggevent.chain_failure.connect(self._on_engine_chain_failure)
+            self._triggevent.ready.connect(self._on_custom_triggevent_ready)
+            self._triggevent.custom_status.connect(self._on_custom_triggevent_status)
             self._triggevent_recovery = TriggeventRecovery(
                 self._triggevent, self._ws, self._find_iinact_log_dir, self)
             self._triggevent.combatants_request.connect(self._on_triggevent_combatants_request)
@@ -242,15 +237,10 @@ class EnginesMixin:
             self._ws.request_engine_combatants(ids)
 
     def _triggevent_engine_needed(self) -> bool:
-        """Whether the sidecar is available. It runs independently of callout and
-        automarker switches.
-        """
         return TriggeventBridge.is_available()
 
     def _reconcile_triggevent_engine(self) -> None:
-        """Start the sidecar if available. Callout handlers separately enforce the selected
-        mode. Startup failures leave the program usable.
-        """
+        """Run the sidecar independently of callout mode. Startup failure must not block the UI."""
         if not TriggeventBridge.is_available():
             return
         running = self._triggevent is not None and self._triggevent.is_active()
@@ -265,9 +255,7 @@ class EnginesMixin:
         self._update_automark_status_label()
 
     def _set_triggevent_enabled(self, enabled: bool) -> None:
-        """Set Triggevent callout mode without changing the engine lifecycle or native
-        automarkers.
-        """
+        """Change callouts without affecting engine lifecycle or native automarkers."""
         if enabled and not TriggeventBridge.is_available():
             self._triggevent_mode = False
             print("[triggevent] unavailable (need Java 17 + triggevent-core.jar)",
@@ -275,11 +263,11 @@ class EnginesMixin:
             return
         self._triggevent_mode = bool(enabled)
         self._reconcile_triggevent_engine()
+        self._sync_custom_triggevent()
 
     def _on_engine_sidecar_status(self, src: str, active: bool, msg: str,
                                   gen: "int | None" = None) -> None:
-        """Update the engine indicator and log its status. Off means a requested stop.
-        """
+        """Off means a requested stop."""
         # Reject queued status from an earlier engine generation.
         bridge = (getattr(self, "_triggevent", None) if src == "triggevent"
                   else getattr(self, "_triggernometry", None))
@@ -295,7 +283,6 @@ class EnginesMixin:
         self._update_engine_status_label()
 
     def _on_engine_chain_failure(self, line: str, gen: "int | None" = None) -> None:
-        """Count failed Triggevent chains on the status badge."""
         # Ignore buffered errors from a sidecar generation that has already stopped.
         if _stale_gen(getattr(self, "_triggevent", None), gen):
             return
@@ -323,7 +310,6 @@ class EnginesMixin:
         lbl.setVisible(True)
 
     def _note_triggevent_unavailable(self) -> None:
-        """Explain why engine rows are unavailable in a source installation."""
         if TriggeventBridge.is_available():
             return
         if not _te_has_jar():
@@ -334,8 +320,7 @@ class EnginesMixin:
             return
         self._engine_sidecar_state["triggevent"] = ("bad", msg)
         self._update_engine_status_label()
-        # Offer engine installation once for source checkouts. Skip modal prompts during
-        # offscreen tests.
+        # Offer installation once, except during offscreen tests.
         headless = QApplication.platformName() == "offscreen"
         if (not _te_has_jar() and not getattr(sys, "frozen", False) and not headless
                 and not self._settings.get("te_engine_offer_declined")):
@@ -351,8 +336,7 @@ class EnginesMixin:
 
     def _on_triggevent_callout(self, text: str, severity: str,
                                gen: "int | None" = None) -> None:
-        # Display text only. Speech arrives separately. Respect the callout mode and
-        # reject stale generations.
+        # Speech arrives separately. Reject stale generations and disabled callouts.
         if _stale_gen(getattr(self, "_triggevent", None), gen):
             return
         if not self._triggevent_mode:
@@ -394,8 +378,7 @@ class EnginesMixin:
                 br.configure_telesto(self._settings.get("telesto_uri"),
                                      self._settings.get("telesto_enabled", False))
                 br.start()
-                # Replay the cached zone after startup so zone filters work without
-                # another zone change.
+                # Zone filters need cached metadata after startup.
                 if self._current_zone:
                     br.feed_zone(self._current_zone_id, self._current_zone)
                 self._ws.set_combatant_polling(True)
@@ -432,15 +415,16 @@ class EnginesMixin:
         speak(self._localize_text(text), reading=self._reading_for(self._localize_text(text)))
 
     def _has_triggernometry_packs(self) -> bool:
-        """True if at least one Triggernometry pack has been imported."""
         try:
             return bool(_tn_has_packs())
         except Exception:  # noqa: BLE001
             return False
 
-    def _on_triggernometry_inventory(self, payload: str) -> None:
-        """Merge harvested editable Triggernometry callouts into the engine inventory.
-        """
+    def _on_triggernometry_inventory(self, payload: str, generation=None) -> None:
+        if getattr(self, "_triggernometry_reload_pending", False):
+            return
+        if generation is not None and _stale_gen(getattr(self, "_triggernometry", None), generation):
+            return
         try:
             items = json.loads(payload)
         except Exception as exc:  # noqa: BLE001
@@ -467,9 +451,7 @@ class EnginesMixin:
         self._replay_triggernometry_callout_edits()
 
     def _save_triggernometry_inventory_cache(self) -> None:
-        """Cache a nonempty Triggernometry inventory for startup. Remove stale cache data
-        after an empty harvest.
-        """
+        """Remove empty inventory caches so stale rows cannot return at startup."""
         tn = [e for e in self._engine_inventory if e.get("source") == "triggernometry"]
         try:
             if tn:
@@ -477,7 +459,6 @@ class EnginesMixin:
             else:
                 ac._TRIGGERNOMETRY_INVENTORY_CACHE.unlink(missing_ok=True)
         except OSError as exc:
-            # Log cache write failures even though the inventory can be regenerated.
             print(f"[NyaaTriggers] could not save the Triggernometry inventory cache: {exc}",
                   file=sys.stderr)
             ac.log_drop("save", f"triggernometry inventory cache: {exc}")
@@ -491,7 +472,6 @@ class EnginesMixin:
         if not isinstance(parsed, list) or not parsed:
             return
         self._engine_inventory = [e for e in self._engine_inventory if e.get("source") != "triggernometry"]
-        # Coerce cached fields before sorting and displaying them.
         for e in parsed:
             if not isinstance(e, dict):
                 continue
@@ -506,7 +486,6 @@ class EnginesMixin:
         self._record_engine_seen("triggernometry")
 
     def _replay_triggernometry_callout_edits(self) -> None:
-        """Replay saved Triggernometry text edits after startup."""
         bridge = getattr(self, "_triggernometry", None)
         if bridge is None:
             return
@@ -527,7 +506,6 @@ class EnginesMixin:
         self._save_settings()
         bridge = getattr(self, "_triggernometry", None)
         if bridge is not None:
-            # Use shipped wording as the default when available.
             shipped = self._shipped_callout_defaults.get("triggernometry", {}).get(tid)
             if shipped is not None:
                 bridge.set_callout(tid, tts=shipped, text=shipped)
@@ -535,10 +513,9 @@ class EnginesMixin:
                 bridge.reset_callout(tid)
         self._refresh_table()
 
-    def _on_triggevent_inventory(self, payload: str) -> None:
-        """Merge harvested Triggevent callouts into the engine inventory and refresh the
-        table.
-        """
+    def _on_triggevent_inventory(self, payload: str, generation=None) -> None:
+        if generation is not None and _stale_gen(getattr(self, "_triggevent", None), generation):
+            return
         try:
             items = json.loads(payload)
         except Exception as exc:  # noqa: BLE001
@@ -565,9 +542,7 @@ class EnginesMixin:
         self._apply_automark_state()
 
     def _save_triggevent_inventory_cache(self) -> None:
-        """Cache a nonempty Triggevent inventory. Remove empty cache data so the bundled
-        seed remains available.
-        """
+        """Remove empty caches so the bundled seed remains available."""
         tv = [e for e in self._engine_inventory if e.get("source") == "triggevent"]
         try:
             if tv:
@@ -575,15 +550,12 @@ class EnginesMixin:
             else:
                 ac._TRIGGEVENT_INVENTORY_CACHE.unlink(missing_ok=True)
         except OSError as exc:
-            # Log cache write failures even though the inventory can be regenerated.
             print(f"[NyaaTriggers] could not save the Triggevent inventory cache: {exc}",
                   file=sys.stderr)
             ac.log_drop("save", f"triggevent inventory cache: {exc}")
 
     def _load_cached_triggevent_inventory(self) -> None:
-        """Seed engine rows from the writable cache or bundled snapshot until a live
-        harvest arrives.
-        """
+        """Use the cache or bundled seed until a live harvest arrives."""
         tv = None
         for src in (ac._TRIGGEVENT_INVENTORY_CACHE, ac._TRIGGEVENT_INVENTORY_SEED):
             try:
@@ -645,7 +617,6 @@ class EnginesMixin:
                 self._set_triggers_enabled(True)
 
     def _on_cactbot_callout(self, text: str, severity: str) -> None:
-        # Deduplicate guest callouts against local triggers and other cactbot events.
         self._emit_guest_callout(text, severity)
 
     def _on_cactbot_status(self, active: bool, msg: str) -> None:
@@ -658,13 +629,11 @@ class EnginesMixin:
         reader = self._cactbot_reader
         if reader is not None and reader.is_active():
             return
-        # An asynchronous load failure must undo the earlier mute and clear the saved
-        # cactbot setting.
+        # Asynchronous failure must undo the mute and saved cactbot setting.
         self._set_triggers_enabled(True)
         self._show_cactbot_warning(msg)
 
     def _show_cactbot_warning(self, msg: str) -> None:
-        """Show cactbot startup failures in the shared banner."""
         if not hasattr(self, "_update_banner"):
             return
         self._update_banner_mode = "cactbot"
@@ -677,9 +646,7 @@ class EnginesMixin:
         self._update_banner.setVisible(True)
 
     def _on_cactbot_triggers_enumerated(self, payload: str) -> None:
-        """Populate the cactbot checklist after enumeration. Saved suppression works even
-        without a trigger list.
-        """
+        """Saved suppression works even before the checklist is available."""
         try:
             meta = json.loads(payload)
         except Exception as exc:  # noqa: BLE001
@@ -688,7 +655,6 @@ class EnginesMixin:
         if not isinstance(meta, list) or not meta:
             return
         self._cactbot_triggers_meta = meta
-        # Record new IDs before building checklist states so they appear enabled.
         self._engine_inventory = [e for e in self._engine_inventory if e.get("source") != "cactbot"]
         for entry in meta:
             if not isinstance(entry, dict):
@@ -743,16 +709,15 @@ class EnginesMixin:
             self._cactbot_disabled.discard(tid)
         self._settings["cactbot_disabled_triggers"] = sorted(self._cactbot_disabled)
         self._save_settings()
-        # Cactbot rereads disabled IDs on each trigger, so updates apply without a
-        # reload.
+        # Cactbot rereads disabled IDs on each trigger.
         if self._cactbot_reader is not None:
             self._cactbot_reader.set_disabled_triggers(self._cactbot_disabled)
         self._refresh_table()
 
     def _engine_fight_tag(self, e: dict) -> str:
-        """Map engine rows to local fight tags for grouping, using repository names or zone
-        names.
-        """
+        """Group engine rows using repository or zone names."""
+        if e.get("source") == "triggernometry" and e.get("fight") == "Unsorted":
+            return ""
         if e.get("source") == "triggevent":
             tag = REPO_TO_FIGHT.get(e.get("group") or "")
             if tag:
@@ -773,8 +738,7 @@ class EnginesMixin:
                      if e.get("source") == src and e.get("id") == tid), None)
 
     def _append_engine_row(self, e: dict) -> None:
-        """Add an engine row keyed by source and ID so local trigger handlers can skip it.
-        """
+        """Key engine rows by source and ID so local handlers skip them."""
         src = e.get("source", "")
         tid = e.get("id", "")
         if not tid:
@@ -834,9 +798,11 @@ class EnginesMixin:
         self._update_fight_controls()
 
     def _edit_engine_row(self, key: str) -> None:
-        """Edit Triggevent or Triggernometry callout text. Cactbot rows have no editable
-        output.
-        """
+        """Cactbot has no editable output text."""
+        custom = self._custom_triggevent_for_key(key)
+        if custom is not None:
+            self._edit_custom_triggevent(custom)
+            return
         src, tid = key.split(":", 1)
         inv = self._engine_entry_for_key(key) or {}
         edits = self._callout_edits_for(src)
@@ -854,8 +820,14 @@ class EnginesMixin:
             self._apply_callout_edit(src, tid, text)
 
     def _engine_row_context_menu(self, key: str, global_pos) -> None:
+        if self._custom_triggevent_for_key(key) is not None:
+            self._custom_triggevent_menu(key, global_pos)
+            return
         src, tid = key.split(":", 1)
         menu = QMenu(self._table)
+        definition_edit = None
+        if src == "triggernometry":
+            definition_edit = menu.addAction(_("Edit trigger and actions..."))
         edits = self._callout_edit_dict(src)
         if edits is not None:
             a_edit = menu.addAction(_("Edit spoken text..."))
@@ -863,7 +835,9 @@ class EnginesMixin:
             a_reset = menu.addAction(_("Reset to default"))
             a_reset.setEnabled(tid in edits)
             chosen = menu.exec(global_pos)
-            if chosen is a_edit:
+            if definition_edit is not None and chosen is definition_edit:
+                self._edit_triggernometry_definition(key)
+            elif chosen is a_edit:
                 self._edit_engine_row(key)
             elif chosen is a_test:
                 self._test_engine_callout(key)
@@ -885,7 +859,6 @@ class EnginesMixin:
             self._refresh_table()
 
     def _engine_text_for_key(self, key: str) -> str:
-        """Return the current callout text with overrides applied."""
         src, tid = key.split(":", 1)
         inv = self._engine_entry_for_key(key) or {}
         edits = self._callout_edits_for(src)
@@ -897,9 +870,12 @@ class EnginesMixin:
         return inv.get("text") or inv.get("name") or ""
 
     def _test_engine_callout(self, key: str) -> None:
+        custom = self._custom_triggevent_for_key(key)
+        if custom is not None:
+            self._test_custom_triggevent(custom)
+            return
         text = self._engine_text_for_key(key)
         if not _engine_preview_text(text):
-            # Use the callout name when dynamic tokens leave no text to preview.
             inv = self._engine_entry_for_key(key) or {}
             text = inv.get("name") or text
         self._speak_engine_preview(text)
@@ -912,7 +888,6 @@ class EnginesMixin:
             speak(localized, reading=self._reading_for(localized))
 
     def _edit_engine_text_dialog(self, title: str, label: str, initial: str):
-        """Edit callout text with a speech preview."""
         dlg = QDialog(self)
         dlg.setWindowTitle(title)
         dlg.setMinimumWidth(460)
@@ -941,8 +916,7 @@ class EnginesMixin:
         return text, accepted
 
     def _sync_cactbot_list_checkstate(self, tid: str) -> None:
-        """Keep the cactbot checklist and engine table aligned with the same disabled IDs.
-        """
+        """Keep the engine table and cactbot checklist on the same disabled IDs."""
         lst = getattr(self, "_cactbot_trig_list", None)
         if lst is None:
             return
@@ -959,7 +933,6 @@ class EnginesMixin:
         key = {"cactbot": "cactbot_disabled_triggers",
                "triggevent": "triggevent_disabled_triggers",
                "triggernometry": "triggernometry_disabled_triggers"}.get(src, src + "_disabled_triggers")
-        # Coerce IDs before sorting saved values.
         self._settings[key] = sorted(str(x) for x in self._engine_disabled.get(src, set()))
         self._save_settings()
 
@@ -968,12 +941,12 @@ class EnginesMixin:
             self._cactbot_reader.set_disabled_triggers(self._engine_disabled["cactbot"])
         elif src == "triggevent" and getattr(self, "_triggevent", None) is not None:
             self._triggevent.set_disabled(self._engine_disabled["triggevent"])
+            self._sync_custom_triggevent()
         elif src == "triggernometry" and getattr(self, "_triggernometry", None) is not None:
             self._triggernometry.set_disabled(self._engine_disabled["triggernometry"])
 
     def _record_engine_seen(self, src: str) -> None:
-        """Record IDs as they appear. New triggers stay enabled unless manually disabled.
-        """
+        """Newly discovered triggers stay enabled unless explicitly disabled."""
         if getattr(self, "_engine_seen", None) is None:
             return
         seen = self._engine_seen.setdefault(src, set())
@@ -1019,10 +992,8 @@ class EnginesMixin:
             bridge.set_callout(tid, tts=text, text=text)
 
     def _apply_engine_overrides(self, src: str) -> None:
-        """Combine row overrides and manual replacement rules for the reader or bridge.
-        """
-        # Only cactbot and Triggevent have manual replacement tables. Other sources use
-        # row overrides.
+        """Combine row overrides with manual replacement rules."""
+        # Only cactbot and Triggevent support manual replacement tables.
         manual_key = {"cactbot": "cactbot_replacements",
                       "triggevent": "triggevent_replacements"}.get(src)
         raw = self._settings.get(manual_key, []) if manual_key else []
@@ -1041,9 +1012,7 @@ class EnginesMixin:
             self._triggernometry.set_replacements(combined)
 
     def _import_triggernometry(self) -> None:
-        """Import a Triggernometry pack into managed storage. Use the sidecar when
-        available, otherwise convert supported simple triggers to disabled Local rows.
-        """
+        """Run imported packs in the sidecar, or fall back to disabled simple Local rows."""
         if _tn_convert_xml is None or _tn_zone_map is None:
             ac.QMessageBox.critical(
                 self, _("Import Triggernometry"),
@@ -1064,7 +1033,6 @@ class EnginesMixin:
                 self, _("Import Triggernometry"),
                 _("Could not read that file:\n{error}").format(error=exc))
             return
-        # Copy the pack into managed storage for scripted triggers.
         staged = False
         stage_failed = False
         if TriggernometryBridge is not None and _tn_packs_dir is not None:
@@ -1091,14 +1059,12 @@ class EnginesMixin:
                 ac.QMessageBox.warning(self, _("Import Triggernometry"),
                                       _("Could not write file:\n{error}").format(error=exc))
 
-        # Prefer running the pack in Triggernometry. Convert its simple subset to Local
-        # only when the engine cannot run it.
+        # Convert simple triggers only when the sidecar cannot run the pack.
         engine_available = (TriggernometryBridge is not None
                             and TriggernometryBridge.is_available())
         engine_path = staged and engine_available
         added: list[Trigger] = []
         if not engine_path:
-            # Count malformed entries as errors before duplicate checks.
             rows: list[Trigger] = []
             for d in converted:
                 try:
@@ -1160,17 +1126,12 @@ class EnginesMixin:
         ac.QMessageBox.information(self, _("Import Triggernometry"), "\n\n".join(parts))
 
     def _cactbot_zone_entry(self) -> "tuple[str, str]":
-        """Resolve the current zone through the cactbot timeline index only while Cactbot
-        is enabled. Its timelines drive the bars while the reader supplies callouts.
-        """
+        """Cactbot timelines require Cactbot mode."""
         if not self._cactbot_mode:
             return ()
         return cactbot_timeline_for_zone(self._current_zone_id)
 
     def _stop_sidecar(self, attr: str, wait: bool = False) -> None:
-        """Stop one optional sidecar by attribute name. Missing or None is
-        fine, fresh sessions and duck-typed test windows do not always have
-        them all."""
         client = getattr(self, attr, None)
         if client is None:
             return
@@ -1180,15 +1141,12 @@ class EnginesMixin:
             client.stop()
 
     def _request_sidecar_stop(self, attr: str) -> None:
-        """Signal one sidecar to begin stopping without joining its worker.
-        Pairs with _join_sidecar so two client joins at quit overlap."""
+        """Request all stops before joining so shutdown waits overlap."""
         client = getattr(self, attr, None)
         if client is not None:
             client.request_stop()
 
     def _join_sidecar(self, attr: str) -> None:
-        """Join one sidecar's worker after _request_sidecar_stop. Same 2 s
-        ceiling stop() used."""
         client = getattr(self, attr, None)
         if client is not None:
             client.join_stopped(2.0)

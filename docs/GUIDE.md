@@ -31,10 +31,11 @@ Windows and Linux release builds bundle the Python dependencies and English Pipe
 |---|---|
 | [IINACT](https://github.com/marzent/IINACT) | Running and connected to the game |
 | Python 3.11+ | System Python is fine |
-| PyQt6 | `sudo pacman -S python-pyqt6` / `sudo apt install python3-pyqt6 python3-pyqt6.qtwebsockets` / `pip install PyQt6`. Debian splits the WebSockets binding into its own package and the program needs it for the game feed. |
+| PyQt6 with Qt WebSockets | `sudo pacman -S python-pyqt6 qt6-websockets` / `sudo apt install python3-pyqt6 python3-pyqt6.qtwebsockets` / `pip install PyQt6`. The program needs Qt WebSockets for the game feed. |
 | piper-tts | Installed automatically on first launch into `~/.venv/ffxiv` |
 | Audio backend | `aplay` via `alsa-utils` |
 | PyQt6-WebEngine | Optional for cactbot in source runs. Use `sudo pacman -S python-pyqt6-webengine` or `pip install PyQt6-WebEngine`. Releases bundle it. |
+| packaging | Checks dependency versions during source updates. Installed by `setup.sh`; manually use `sudo pacman -S python-packaging` / `sudo apt install python3-packaging` / `pip install packaging`. |
 
 ---
 
@@ -79,6 +80,8 @@ Select a fight or folder to filter the table. Headers expand or collapse groups.
 
 **Callout delay.** The editor can wait before speaking, starting from the matching event or the final follow-up step. Wipes, zone changes, disconnects, and disabling the trigger or local callouts cancel pending delays. Reapply warnings use their own expiry timer instead.
 
+**Add.** Choose **Local trigger** for the existing editor, or **Triggevent callout** for the [sequence builder](#custom-triggevent-callouts).
+
 **Tree menu.** Right-click to create, rename, or delete Unsorted folders and subfolders. **New folder for a fight...** opens a searchable Savage, Ultimate, and Extreme picker. Deletion confirms how many triggers it will remove, including subfolders.
 
 The toolbar has row actions, global toggles, and **Reset to Default**. This reset only clears all trigger checkmarks; definitions and edited values are preserved.
@@ -95,6 +98,8 @@ Engine rows appear under their fight, tinted and tagged by source. Changes apply
 - Cactbot rows support muting only. Its switch, overrides, and page **URL** are in **Settings - Cactbot**. The default URL uses hosted raidboss; a local build can replace it. Source installs need PyQt6-WebEngine from [Requirements](#requirements).
 
 Simple cast-based engine triggers are bundled as editable Local rows. Complex imperative and Groovy triggers remain in the engine.
+
+Callouts created with the Triggevent builder open their sequence editor when double-clicked. Their row menu also offers Duplicate, Test speech, and Delete.
 
 ---
 
@@ -116,11 +121,47 @@ Some engine components construct Swing windows. On Linux, Xvfb supplies a hidden
 
 ---
 
+## Custom Triggevent callouts
+
+Choose **Triggers - Add - Triggevent callout** to build a sequence without writing a script. Enter a callout name, then type a fight name or abbreviation in **Fight**. Selecting a search result fills the fight folder and its Zone ID. Fights with several zones offer a separate result for each zone. Search uses the bundled fight and zone data and works offline.
+
+New callouts start without a fight. Leave the field blank, or clear it, to save under **Unsorted**. Unselected search text does not assign a fight. The Zone ID restricts where the callout runs, with `0` allowing any zone; you can still enter it manually.
+
+**Start when** matches a cast start, resolved ability, status gain or loss, absolute headmarker ID, or tether ID. IDs are hexadecimal and accept alternatives separated by `|`. Choose Anyone or Me for the event's target. Headmarker IDs are the raw IDs from the log and can vary between pulls in fights that use offsets.
+
+Add and reorder these steps:
+
+- **Event wait:** wait for another matching event. Its target can also be the starting event's target or source.
+- **Delay:** wait a number of seconds.
+- **Callout:** speak unconditionally, or choose between two texts using the starting event's ID, the latest matched event's ID, or statuses currently on you. A blank conditional branch stays silent. Status alternatives mean any listed status for the positive condition and none for the negative condition.
+
+For example, start on either of two debuffs on Me, wait for a boss cast, then choose “Go left” or “Go right” according to the starting debuff's ID. The starting event stays available even after that debuff disappears. Current-status conditions instead check the buffs present when the callout step runs.
+
+Speech accepts `{player}`, `{source}`, `{target}`, `{id}`, `{start.source}`, `{start.target}`, and `{start.id}`. The unprefixed event fields refer to the latest matched event. **Test speech** previews one text with sample values and does not test matching.
+
+The total sequence timeout includes all waits and delays. Each definition runs one sequence at a time and ignores new starting events while it is active. The builder supports up to 32 steps and a timeout up to 600 seconds. It provides conditional speech, not arbitrary calculations or nested script logic; existing Groovy scripts remain available for those cases.
+
+Save applies the definition to the running Triggevent engine. Edits, deletion, disabling the row, wipes, pull changes and zone changes cancel its pending sequence. Repeated announcements of the same zone preserve it. Connection recovery can reconstruct a sequence from the recorded pull without repeating historical speech. The existing Triggevent and Cactbot controls apply.
+
+Definitions are saved separately in `triggevent.custom.json` beside the program's other writable data. Include this file in backups; Local trigger import and export do not include it. Profiles save these rows' enabled choices, while their sequences and speech stay in the definition file. An unreadable or unsupported file blocks edits rather than replacing it. Older engine jars need **Settings - Program - Update Triggevent Engine** and a restart before builder callouts can run.
+
+---
+
 ## Triggernometry engine (WIP)
 
 Triggernometry runs conditions, shared variables, delayed actions, trigger chains, and C# `ExecuteScript` actions from imported XML packs. It starts when a pack is available and Cactbot is off. Live fight validation is still pending.
 
 **Import a pack** through **Settings - Data - Import Triggernometry**. Its triggers appear as editable Triggernometry rows. Without the engine, the importer converts only simple ability matches with plain speech to Local rows.
+
+**Create or edit a pack.** Choose **Triggers - Add - Triggernometry trigger** to create a native XML pack. **Add - Edit Triggernometry pack** opens an existing pack, including triggers without speech actions. A Triggernometry row's context menu also offers **Edit trigger and actions**. Double-clicking a row still edits only its spoken text.
+
+The editor has pages for the event source and regular expression, nested conditions, and actions. Actions include speech, scalar variables, delays, running or cancelling another trigger, and C# scripts. Delay expressions use milliseconds. **Run actions in order** makes each action follow the previous one. Choose **Called by another trigger** for a trigger that should only run through a chain. Named regex captures use `${name}`, shared variables use `${var:name}`, and your character is available through `${_me.name}`.
+
+Search **Pack fight** and select a result to fill the outer folder's zone restriction. Leaving a new pack unassigned puts its speech rows under Unsorted. Triggers in nested folders keep their own restrictions. Imported settings and unsupported actions remain intact; **Edit trigger XML** exposes settings outside the forms.
+
+Saving checks the pack with the bundled engine's XML types and .NET regular expressions before writing. The previous file is kept as `.xml.bak`. An external edit blocks saving until you reopen the pack. Saving reloads Triggernometry and clears its running sequences and variables; during combat, the reload waits until combat ends. Changed speech clears text overrides for the affected trigger. If any of its speech was muted, its updated speech stays muted. Cactbot mode keeps Triggernometry off.
+
+**Silent live check.** From a source checkout, run `python3 tools/validate_triggernometry_live.py` while the game and IINACT are connected. This starts a temporary engine with its own probe pack and checks live raw and formatted logs, player identity, HP, position, and zone. It produces a report without speaking or changing installed packs. This checks the feed and engine integration; encounter mechanics still require their own validation.
 
 **Update or remove a pack** while the program is closed by replacing or moving its XML in the [pack folder](../README.md#updating-and-saved-data), then restarting. Importing the same filename adds another copy.
 
@@ -155,6 +196,8 @@ The meter updates every second from the combat log. It shows per-player DPS, dam
 
 Select a death to review the previous 15 seconds of observed damage, healing, status changes, and statuses remaining at death. Self-heals and reflected damage follow their actual recipient. Instant-death effects have a separate label.
 
+Deaths and their events appear newest first. Drag the dividers to give the event table more room, or drag column edges to resize them. Long text wraps and is also available on hover.
+
 The recent view retains 80 deaths until the program closes. Zone changes and disconnects clear live observation buffers but preserve completed recaps. Wipes retain buffers until the next pull to capture late deaths. Observed buffs and healing between pulls also carry into the next recap.
 
 From Prog, **View death recaps** opens only the selected pull's saved deaths, identified by session, pull, and duty. **Back to Prog** returns to that pull and its notes; **Recent deaths** returns to live history. New deaths do not replace a saved view. Saved recaps survive restarts and are independent of the recent view's limit. Missing, older, or unreadable records show an explanation, and unreadable files are preserved.
@@ -165,13 +208,15 @@ Recaps describe the feed and cannot reconstruct exact HP. Healing includes overh
 
 **Start session** begins a named duty session after connection, duty identification, and the first combat-state message. Starting during combat waits for the next full pull.
 
-Each pull records its start, duration, ending, and deaths. The summary separates complete and interrupted attempts and shows the longest complete pull, total observed combat time, and session elapsed time. Click the duration chart to select a pull. Edit the session name above the table and add bookmarks or notes below it.
+Each pull records its start, duration, ending, and deaths. The pull table lists the newest first and keeps the original pull numbers. The summary separates complete and interrupted attempts and shows the longest complete pull, total observed combat time, and session elapsed time. Click the duration chart to select a pull. Edit the session name above the table and add bookmarks or notes below it.
 
-**Furthest phase** and **Phase confirmations** display saved observations. Times identify the first confirming event after pull start. Earlier phases established by later evidence have no invented time. Interrupted recordings retain their observations. Automatic UMAD tracking awaits verified recordings, so new UMAD pulls show **Not recorded** with an explanation. Older pulls also show **Not recorded**; unsupported duties show **Not supported**. Unreadable phase data does not hide notes or recaps.
+**Furthest phase** and **Phase confirmations** record UMAD progress from boss casts and ability events. Times identify the first confirming event after pull start. P5 requires Ultima Repeater because Ultima Upsurge also occurs in P4. Earlier phases established by later evidence have no invented time. Interrupted recordings retain their observations. Pulls without confirming events show **No confirmation**. Older pulls without phase data remain **Not recorded**; unsupported duties show **Not supported**. Unreadable phase data does not hide notes or recaps.
 
 **View death recaps** opens the selected attempt in Death Recap. Deaths save as they arrive, including during interrupted pulls. Late deaths can attach for two seconds after combat ends or a wipe. A new pull, disconnect, duty change, or session end closes that window. Starting midcombat skips the partial attempt and its recaps. An empty meter encounter with observed deaths remains reviewable as interrupted.
 
 **End session** or leaving the duty ends collection. Wipes and breaks stay in the session. A disconnect preserves the observed pull as interrupted and waits for a fresh pull after reconnecting. Interrupted attempts do not count toward longest complete pull. **Combat ended** does not establish a clear. Session controls leave the live meter and callouts running.
+
+A wipe signal received within five seconds of combat ending updates that pull's ending. This does not extend the two-second allowance for late deaths.
 
 Sessions save in `prog_sessions/`, independently of DPS recording and log rotation. Notes save after a typing pause and flush on shutdown. Active progress and elapsed time also save every 15 seconds. The session picker opens previous sessions after restart. Crash recovery retains the last successful save and marks unfinished sessions interrupted. Unreadable files are preserved and errors are shown.
 
@@ -268,7 +313,7 @@ The optional startup check and **Settings - Program - Check for Updates** look f
 
 | Installation | Update behavior |
 |---|---|
-| Git clone | Run `git pull --ff-only --tags`, install requirements with the program's Python, then restart. Tags keep the version label current. Blocking local edits are reported for manual resolution. |
+| Git clone | Run `git pull --ff-only --tags`, check Python requirements, then restart. Writable Python environments install requirements. Distribution-managed Python checks installed packages and reports missing ones for manual installation. Tags keep the version label current. If published commits were combined, a clean main checkout can follow the rewritten history when Git records its current commit in the upstream reflog. The previous checkout is saved under `refs/nyaa-update-backups/`. Local commits, tracked edits, and conflicting untracked files are preserved for manual resolution. |
 | Source copy without Git | **Download** opens the releases page for manual installation. |
 | Linux `.tar.gz` | Replace program files in place and restart, preserving settings, local triggers, and timelines. |
 | Windows `.zip` | A staged copy replaces files after exit, with a backup and automatic rollback if startup fails. |

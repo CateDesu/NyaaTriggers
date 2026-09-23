@@ -4,7 +4,7 @@ from datetime import datetime
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QListWidget,
-                             QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                             QPushButton, QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from nyaatriggers.locale_util import _
 from nyaatriggers import theme
@@ -45,24 +45,45 @@ class DeathRecapTabMixin:
         self._recap_notice.setWordWrap(True)
         layout.addWidget(self._recap_notice)
         split = QSplitter(Qt.Orientation.Horizontal)
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(6)
         self._recap_list = QListWidget()
         self._recap_list.setMinimumWidth(200)
         split.addWidget(self._recap_list)
-        detail = QWidget()
-        detail_layout = QVBoxLayout(detail)
+        self._recap_detail = QSplitter(Qt.Orientation.Vertical)
+        self._recap_detail.setChildrenCollapsible(False)
+        self._recap_detail.setHandleWidth(6)
         self._recap_statuses = QLabel(_("No deaths recorded yet."))
         self._recap_statuses.setWordWrap(True)
         self._recap_statuses.setTextFormat(Qt.TextFormat.PlainText)
-        detail_layout.addWidget(self._recap_statuses)
+        self._recap_statuses.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        statuses = QScrollArea()
+        statuses.setWidgetResizable(True)
+        statuses.setMinimumHeight(45)
+        statuses.setWidget(self._recap_statuses)
+        self._recap_detail.addWidget(statuses)
         self._recap_table = QTableWidget(0, 5)
         self._recap_table.setHorizontalHeaderLabels(
             [_("Time"), _("Event"), _("Source"), _("Ability or status"), _("Amount")])
         self._recap_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._recap_table.verticalHeader().hide()
-        self._recap_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        detail_layout.addWidget(self._recap_table)
-        split.addWidget(detail)
+        header = self._recap_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setMinimumSectionSize(60)
+        metrics = self._recap_table.fontMetrics()
+        event_width = max(metrics.horizontalAdvance(label) for label in
+                          (_("Event"), _("Damage"), _("Healing"), _("DoT"), _("HoT"),
+                           _("Status gained"), _("Status lost"), _("Instant death"))) + 24
+        for column, width in enumerate((80, max(140, event_width), 160, 240, 100)):
+            self._recap_table.setColumnWidth(column, width)
+        header.sectionResized.connect(self._recap_table.resizeRowsToContents)
+        self._recap_table.setMinimumHeight(140)
+        self._recap_detail.addWidget(self._recap_table)
+        self._recap_detail.setStretchFactor(1, 1)
+        self._recap_detail.setSizes([65, 400])
+        split.addWidget(self._recap_detail)
         split.setStretchFactor(1, 1)
+        split.setSizes([220, 800])
         layout.addWidget(split, 1)
         self._recap_list.currentRowChanged.connect(self._select_recap)
         self._death_recap.on_death = self._recap_added
@@ -164,9 +185,12 @@ class DeathRecapTabMixin:
                   "instant-death": _("Instant death")}
         events = death["events"]
         self._recap_table.setRowCount(len(events))
-        for row, event in enumerate(events):
+        for row, event in enumerate(reversed(events)):
             values = [f"{event['time']:.1f}s", labels[event["kind"]], event["source"],
                       event["name"], f"{event['amount']:,}" if event["amount"] is not None else ""]
             for column, value in enumerate(values):
-                self._recap_table.setItem(row, column, QTableWidgetItem(value))
-        self._recap_table.scrollToBottom()
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                self._recap_table.setItem(row, column, item)
+        self._recap_table.resizeRowsToContents()
+        self._recap_table.scrollToTop()

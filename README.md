@@ -96,8 +96,8 @@ The **Triggers** tab groups fights by content type and expansion. Search spans a
 | Source | What it runs | Controls |
 |---|---|---|
 | Local | Bundled and custom triggers, status reminders, and follow-up sequences | Edit abilities, zones, speech, sounds, and timing. |
-| Triggevent | Built-in callouts, EasyTriggers, and user Groovy scripts | Toggle callouts and edit spoken text. |
-| Triggernometry | Imported XML packs with conditions and scripts | Toggle triggers and edit spoken text. See [pack support](#triggernometry-packs). |
+| Triggevent | Built-in callouts, EasyTriggers, user Groovy scripts, and custom sequences | Toggle callouts, edit speech, or build custom sequences with conditions. |
+| Triggernometry | Native XML packs with conditions and scripts | Create and edit packs, toggle speech, and change wording. See [pack support](#triggernometry-packs). |
 | Cactbot | Raidboss callouts and timelines | Enable in **Settings - Cactbot** and mute individual callouts. |
 
 Engine callouts start enabled, including newly discovered ones. Local rows retain their saved choices. **Global - Local On/Off** and **Global - Triggevent On/Off** affect all fights. Global Local also controls local timelines. The **Local** and **Triggevent** checkboxes above the table affect only the selected fight's rows. Overlapping sources can produce duplicate calls.
@@ -106,9 +106,13 @@ Enabling Cactbot switches off Local, Triggevent, and Triggernometry callouts and
 
 Right-click a **Current Instance** log line to create a trigger, or a fight tree entry to create a folder. **Test Fire** previews a row. The toolbar's **Reset to Default** clears checkmarks. A bundled row's right-click **Reset to Default** restores that trigger's values. See the [editor guide](docs/GUIDE.md#triggers-tab).
 
+**Add - Triggevent callout** opens a visual builder for event waits, delays, and conditional speech. Search for a fight to fill its zone automatically, or leave it unassigned to save under Unsorted. It can remember an earlier debuff and use it to choose a later callout. See [custom Triggevent callouts](docs/GUIDE.md#custom-triggevent-callouts).
+
 ## Triggernometry packs
 
 Choose **Settings - Data - Import Triggernometry** to load an XML export, such as a [Paissa pack](https://github.com/paissaheavyindustries/Triggernometry-Triggers/tree/main/Repositories). Imported triggers appear under **Triggernometry** in the fight list.
+
+Use **Triggers - Add - Triggernometry trigger** to create a pack, or **Add - Edit Triggernometry pack** to edit one. The editor supports nested conditions, variables, delays, trigger chains, and C# scripts. Saves validate native XML and regex syntax, keep a backup, and wait until combat ends before reloading the engine. See the [editor guide](docs/GUIDE.md#triggernometry-engine-wip).
 
 Imports always add a copy, even with the same filename. To update or remove a pack, close the program, replace or move its XML in the [pack folder](#updating-and-saved-data), then restart.
 
@@ -128,7 +132,7 @@ The meter runs whenever the combat feed is connected. **Record encounters**, off
 
 In Prog, **Start session** begins collection once the duty and combat state are known. Starting during combat waits for the next full pull. **End session** or leaving the duty ends collection; wipes and breaks stay in the session. Interrupted attempts are listed separately. **Combat ended** does not mean a clear.
 
-Notes and death recaps save automatically, independently of DPS recording and log rotation. Select a pull and choose **View death recaps** to review it, including after restart. Recaps cannot reconstruct exact HP or events missed before connection. Automatic UMAD phase detection awaits verified recordings, so new UMAD pulls show **Not recorded**. See the [Prog guide](docs/GUIDE.md#prog-tab) for recording and recovery details.
+Notes and death recaps save automatically, independently of DPS recording and log rotation. Select a pull and choose **View death recaps** to review it, including after restart. Recaps cannot reconstruct exact HP or events missed before connection. UMAD phases are confirmed by boss casts and ability events. Older pulls without phase data remain **Not recorded**. See the [Prog guide](docs/GUIDE.md#prog-tab) for recording and recovery details.
 
 **Settings - FFLogs** can show your best recorded rDPS after a fight using your personal API client details, server, and region. **IINACT Logs** opens the raw logs for an FFLogs uploader. DPS summaries are separate files.
 
@@ -156,7 +160,7 @@ Automarkers use [Telesto](https://github.com/paissaheavyindustries/Telesto). Set
 
 ## Updating and saved data
 
-Use **Settings - Program - Check for Updates**, or leave the startup check enabled. The update banner offers installation when a new release is available. Packaged builds replace the program files and restart while preserving saved data. Git checkouts pull main with fast-forward updates and install changed Python requirements. A source copy without Git opens the download page instead. See [Updating](docs/GUIDE.md#updating) for installation details.
+Use **Settings - Program - Check for Updates**, or leave the startup check enabled. The update banner offers installation when a new release is available. Packaged builds replace the program files and restart while preserving saved data. Git checkouts pull main and check Python requirements. After published commits are combined, clean checkouts can follow the rewritten history with a saved Git backup. Local commits and tracked edits require manual resolution. Writable Python environments install them; distribution-managed Python reports missing packages for manual installation. A source copy without Git opens the download page instead. See [Updating](docs/GUIDE.md#updating) for installation details.
 
 **Settings - Data - Update Triggers** refreshes the bundled trigger set without replacing your custom triggers. **Restore from Repo** downloads that set again if it needs repair. **Export Triggers** and **Import Triggers** transfer local definitions and folders; importing replaces the current local set. Profiles are saved separately.
 
@@ -166,6 +170,7 @@ Most writable data lives beside `main.py` for source runs or beside the executab
 |---|---|
 | `nyaatriggers_settings.json` | Connection, voice, language, engine callout choices, and other settings |
 | `triggers.local.json` | Custom triggers, edited bundled triggers, folders, and saved overrides |
+| `triggevent.custom.json` | Definitions created with the Triggevent callout builder |
 | `trigger_profiles/` | Named profiles and the separate Default setup |
 | `dps_logs/` | Recorded DPS pull summaries |
 | `prog_sessions/` | Saved sessions, notes, and per-pull deaths under `recaps/` |

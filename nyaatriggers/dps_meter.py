@@ -122,7 +122,7 @@ class _Combatant:
 
     __slots__ = ("aid", "name", "job", "damage", "healed", "swings", "hits",
                  "crits", "dhits", "cdhits", "maxhit_name", "maxhit_amount",
-                 "deaths", "damagetaken", "first", "last")
+                 "deaths", "damagetaken", "healstaken", "heals", "first", "last")
 
     def __init__(self, aid: int, name: str = "", job: int = 0) -> None:
         self.aid = aid
@@ -139,6 +139,8 @@ class _Combatant:
         self.maxhit_amount = 0
         self.deaths = 0
         self.damagetaken = 0
+        self.healstaken = 0
+        self.heals = 0
         self.first: "float | None" = None   # own-activity window, for dps/hps
         self.last: "float | None" = None
 
@@ -595,6 +597,10 @@ class DpsMeter:
             elif kind == "heal":
                 if src is not None:
                     src.healed += amount
+                    if amount > 0:
+                        src.heals += 1
+                if tgt_key is not None and tgt_key == tid:
+                    self._combatant(enc, tgt_key, fields[7]).healstaken += amount
 
     def _on_dot_hot(self, fields: "list[str]") -> None:
         if len(fields) < 19:
@@ -658,6 +664,8 @@ class DpsMeter:
                                     fields[18] if app_key == app_id else "")
                 c.healed += amount
                 c.touch(now)
+            if tgt_key is not None and tgt_key == tid:
+                self._combatant(enc, tgt_key, fields[3]).healstaken += amount
 
     def _on_death(self, fields: "list[str]", now=None) -> None:
         if len(fields) <= 3:
@@ -695,6 +703,7 @@ class DpsMeter:
         players = sorted(enc.combatants.values(),
                          key=lambda c: c.damage, reverse=True)
         total_damage = sum(c.damage for c in players)
+        total_healing = sum(c.healed for c in players)
         total_deaths = sum(c.deaths for c in players)
         best = max(players, key=lambda c: c.maxhit_amount, default=None)
 
@@ -732,6 +741,9 @@ class DpsMeter:
                 "MAXHIT": maxhit,
                 "deaths": c.deaths,
                 "healed": c.healed,
+                "healed%": (c.healed / total_healing * 100.0) if total_healing else 0.0,
+                "healstaken": c.healstaken,
+                "heals": c.heals,
                 "enchps": c.healed / enc_per,
                 "ENCHPS": c.healed / enc_per,
                 "damagetaken": c.damagetaken,
@@ -749,6 +761,7 @@ class DpsMeter:
                 "has_damage": any(c.damage > 0 or c.damagetaken > 0 for c in players),
                 "dps": encdps,
                 "encdps": encdps,
+                "enchps": total_healing / max(1.0, dur),
                 "ENCDPS": encdps,
                 "maxhit": enc_maxhit,
                 "deaths": total_deaths,
@@ -779,10 +792,11 @@ class DpsMeter:
                            self._clock())
         return self._snapshot(empty, self._clock(), active=False)
 
-    def overlay_rows(self, snapshot=None) -> list:
+    def overlay_rows(self, snapshot=None, detailed=False) -> list:
         """Return overlay rows in descending ENCDPS order with name, job, DPS, damage
         share, HPS, local flag and deaths. A supplied snapshot can describe a finished pull.
-        Without one, return no rows outside an encounter.
+        Detailed rows append optional combat statistics. Without a snapshot, return no
+        rows outside an encounter.
         """
         if snapshot is None:
             if self.current is None:
@@ -793,5 +807,11 @@ class DpsMeter:
             rows.append([c["name"], c["Job"], round(c["encdps"], 1),
                          round(c["damage%"], 1), round(c["enchps"], 1),
                          c["is_self"], c["deaths"]])
+            if detailed:
+                names = {"damage": "damage", "healed": "healed", "healShare": "healed%",
+                         "crit": "crithit%", "direct": "DirectHitPct",
+                         "critDirect": "CritDirectHitPct", "taken": "damagetaken",
+                         "healingTaken": "healstaken", "heals": "heals", "hits": "hits"}
+                rows[-1].append({key: c[value] for key, value in names.items() if value in c})
         rows.sort(key=lambda r: r[2], reverse=True)
         return rows[:MAX_OVERLAY_ROWS]

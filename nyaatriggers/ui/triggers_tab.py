@@ -44,7 +44,6 @@ def _read_local_triggers():
 
 class TriggersTabMixin:
     def _load_retired_ids(self) -> set[str]:
-        """Read retired trigger IDs from strings or records with an ID and reason."""
         self._trigger_replacements = {}
         src = ac._REPO_RETIRED_FILE
         # Load downloaded retirements only when their version stamp matches the program.
@@ -79,8 +78,7 @@ class TriggersTabMixin:
         # Block local saves while the file is unreadable. Each reload checks again.
         self._local_corrupt = False
         official: list[Trigger] = []
-        # Use repository downloads only while their stamp matches the running version.
-        # Remove stale cache files after an update.
+        # Discard downloads whose stamp no longer matches the running version.
         _override = ac._REPO_TRIGGERS_FILE
         if _repo_download_version() != _VERSION:
             for _p in (ac._REPO_TRIGGERS_FILE, ac._REPO_RETIRED_FILE, ac._REPO_TRIGGERS_VERSION):
@@ -98,7 +96,6 @@ class TriggersTabMixin:
                 continue
             try:
                 data = json.loads(_src.read_text(encoding="utf-8"))
-                # Valid JSON must still contain a trigger list.
                 if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
                     raise ValueError("not a trigger list")
                 official = [Trigger.from_dict(d) for d in data if isinstance(d, dict)]
@@ -110,15 +107,13 @@ class TriggersTabMixin:
         # A stale download may still contain retired IDs.
         official = [t for t in official if t.id not in self._retired_ids]
         self._official_ids      = {t.id for t in official}
-        # Keep independent objects in the official snapshot. Local mutations must not
-        # change the baseline used to save overrides.
+        # Local edits must not mutate the save baseline.
         self._official_triggers = {t.id: Trigger.from_dict(t.to_dict()) for t in official}
 
         local_triggers: list[Trigger] = []
         enabled_overrides: dict[str, bool] = {}
         self._deleted_ids = set()
-        # Parse the local file once so an external write cannot mix versions within a
-        # load.
+        # Read once so external writes cannot mix versions.
         raw = None
         if ac.TRIGGERS_LOCAL_FILE.exists():
             try:
@@ -138,11 +133,8 @@ class TriggersTabMixin:
                     enabled_overrides[str(d["id"])] = _as_bool(d.get("enabled"), True)
                 else:
                     local_triggers.append(Trigger.from_dict(d))
-            # Accept only string IDs so malformed entries cannot break loading or
-            # sorting.
             self._deleted_ids = {x for x in _as_strset(raw.get("deleted"))
                                  if isinstance(x, str)}
-        # Carry saved wording and enabled choices to the surviving definitions.
         choices = {ident: {"enabled": enabled} for ident, enabled in enabled_overrides.items()}
         for trigger in local_triggers:
             choice = {"enabled": trigger.enabled, "text": trigger.tts_text}
@@ -162,7 +154,6 @@ class TriggersTabMixin:
                 trigger.enabled = choices[trigger.id]["enabled"]
                 if "text" in choices[trigger.id]:
                     trigger.tts_text = choices[trigger.id]["text"]
-        # Remove retired local triggers and tombstones before merging or saving.
         local_triggers = [t for t in local_triggers if t.id not in self._retired_ids]
         self._deleted_ids -= self._retired_ids
         self._local_ids = {t.id for t in local_triggers} | (
@@ -184,7 +175,7 @@ class TriggersTabMixin:
                     t.enabled = loc.enabled
                     merged.append(t)
                 else:
-                    merged.append(loc)   # Preserve the local edit.
+                    merged.append(loc)
                 continue
             if t.id in enabled_overrides:
                 t.enabled = enabled_overrides[t.id]
@@ -194,9 +185,8 @@ class TriggersTabMixin:
         for t in local_triggers:
             if t.id not in self._official_ids:
                 merged.append(t)
-        # Reuse unchanged live trigger objects so pending timers, sequences and
-        # cooldowns retain their identity. Changed triggers get new objects to
-        # invalidate old work.
+        # Reuse unchanged objects to preserve timers and cooldowns. Replace edited ones
+        # to invalidate old work.
         prev = {t.id: t for t in getattr(self, "_triggers", [])}
         for i, t in enumerate(merged):
             old = prev.get(t.id)
@@ -208,13 +198,11 @@ class TriggersTabMixin:
         if isinstance(raw, dict):
             folders = raw.get("folders", [])
             if isinstance(folders, list):
-                # Validate folder IDs and names before building the tree.
                 self._folders = [fo for fo in folders
                                  if isinstance(fo, dict)
                                  and isinstance(fo.get("id"), str)
                                  and isinstance(fo.get("name"), str)]
 
-        # Update watched file stamps after every load path.
         self._triggers_mtime = self._trigger_files_stamp()
         self._refresh_table()
 
@@ -258,7 +246,6 @@ class TriggersTabMixin:
                 td.pop("enabled", None)
                 od.pop("enabled", None)
                 if td == od:
-                    # Save only the toggle when content matches the bundled trigger.
                     if t.enabled != off.enabled:
                         records.append({"id": t.id, "enabled": t.enabled})
                     continue
@@ -279,7 +266,6 @@ class TriggersTabMixin:
                     current[i] if path == ac.TRIGGERS_LOCAL_FILE else previous[i]
                     for i, path in enumerate(_watched_trigger_files()))
         except (OSError, TypeError, ValueError) as exc:
-            # Keep edits in memory and report when the file cannot be saved.
             self._warn_save_failed(_("triggers"), exc)
             return False
         return True
@@ -322,7 +308,7 @@ class TriggersTabMixin:
         for cat, exps in _FIGHT_TREE:
             ci = QTreeWidgetItem([f"▶ {_(cat)}"])
             ci.setData(0, Qt.ItemDataRole.UserRole, None)
-            ci.setFlags(Qt.ItemFlag.ItemIsEnabled)   # not selectable
+            ci.setFlags(Qt.ItemFlag.ItemIsEnabled)
             f = ci.font(0); f.setBold(True); ci.setFont(0, f)
             ci.setSizeHint(0, QSize(0, 28))
             self._tree.addTopLevelItem(ci)
@@ -330,7 +316,7 @@ class TriggersTabMixin:
             for exp, fights in exps:
                 ei = QTreeWidgetItem([f"▶ {_(exp)}"])
                 ei.setData(0, Qt.ItemDataRole.UserRole, None)
-                ei.setFlags(Qt.ItemFlag.ItemIsEnabled)   # not selectable
+                ei.setFlags(Qt.ItemFlag.ItemIsEnabled)
                 f = ei.font(0); f.setItalic(True); ei.setFont(0, f)
                 ei.setSizeHint(0, QSize(0, 26))
                 ci.addChild(ei)
@@ -345,8 +331,7 @@ class TriggersTabMixin:
 
         self._build_custom_tree_section()
 
-        # Restore expansion by label path without arrow glyphs. Skip animation during
-        # the rebuild.
+        # Restore expansion without arrow glyphs or animation.
         self._tree.setAnimated(False)
         it = QTreeWidgetItemIterator(self._tree)
         while it.value():
@@ -379,9 +364,7 @@ class TriggersTabMixin:
         return False
 
     def _build_tbd_tree_section(self) -> None:
-        """Group fight tags missing from the curated tree under TBD without moving their
-        data.
-        """
+        """Show uncurated fights under TBD without moving their data."""
         tbd: dict[str, int] = {}
         for t in self._triggers:
             f = t.fight or ""
@@ -393,11 +376,20 @@ class TriggersTabMixin:
                                and bool(t.zone_regex.strip()))
             if is_official or is_zoned_custom:
                 tbd[f] = tbd.get(f, 0) + 1
+        for row in getattr(self, "_custom_triggevent", []):
+            fight = row["fight"]
+            if fight and fight not in _TREE_FIGHTS:
+                tbd[fight] = tbd.get(fight, 0) + 1
+        for row in self._engine_inventory:
+            if row.get("source") == "triggernometry":
+                fight = self._engine_fight_tag(row)
+                if fight and fight not in _TREE_FIGHTS:
+                    tbd[fight] = tbd.get(fight, 0) + 1
         if not tbd:
             return
         th = QTreeWidgetItem([f"▶ {_('TBD')}"])
         th.setData(0, Qt.ItemDataRole.UserRole, None)
-        th.setFlags(Qt.ItemFlag.ItemIsEnabled)   # Clicking toggles expansion.
+        th.setFlags(Qt.ItemFlag.ItemIsEnabled)
         f0 = th.font(0); f0.setBold(True); th.setFont(0, f0)
         th.setSizeHint(0, QSize(0, 28))
         self._tree.addTopLevelItem(th)
@@ -408,9 +400,7 @@ class TriggersTabMixin:
             th.addChild(fi)
 
     def _build_custom_tree_section(self) -> None:
-        """List custom triggers that have no usable fight leaf under Unsorted. Avoid
-        duplicating triggers already shown under a curated fight.
-        """
+        """Show custom triggers under Unsorted only when they have no usable fight leaf."""
         custom = [t for t in self._triggers
                   if t.id in self._local_ids and t.id not in self._official_ids
                   and (not t.zone_regex.strip() or not t.fight)
@@ -436,6 +426,11 @@ class TriggersTabMixin:
             key = t.fight if t.fight else _GENERAL_TAB
             if key not in folder_names:
                 grouped.setdefault(key, [])
+        if any(not row["fight"] for row in getattr(self, "_custom_triggevent", [])):
+            grouped.setdefault(_GENERAL_TAB, [])
+        if any(row.get("source") == "triggernometry" and not self._engine_fight_tag(row)
+               for row in self._engine_inventory):
+            grouped.setdefault(_GENERAL_TAB, [])
 
         for fight_key in sorted(grouped):
             fi = QTreeWidgetItem([_(fight_key) if fight_key == _GENERAL_TAB else fight_key])
@@ -539,7 +534,6 @@ class TriggersTabMixin:
         self._refresh_tree()
 
     def _create_fight_folder(self) -> None:
-        """Create a folder using the fight picker."""
         folder = self._pick_fight_folder()
         if not folder:
             return
@@ -572,7 +566,6 @@ class TriggersTabMixin:
             return
         old_name = folder["name"]
         folder["name"] = name
-        # Retag local triggers when their folder name changes.
         for t in self._triggers:
             if t.fight == old_name and t.id in self._local_ids \
                     and t.id not in self._official_ids:
@@ -627,7 +620,6 @@ class TriggersTabMixin:
         self._refresh_table()
 
     def _on_tree_item_clicked(self, item: QTreeWidgetItem, _col: int) -> None:
-        """Toggle expand/collapse on header items with a single click."""
         if not (item.flags() & Qt.ItemFlag.ItemIsSelectable):
             expanding = not item.isExpanded()
             item.setExpanded(expanding)
@@ -660,11 +652,14 @@ class TriggersTabMixin:
         query = self._search_edit.text().strip().lower()
         # Keep English names searchable alongside localized display text.
         trigger_map = {t.id: t for t in self._triggers} if query else {}
+        unsorted_engine_ids = {"triggevent:" + row["id"] for row in getattr(self, "_custom_triggevent", [])
+                               if not row["fight"]}
+        unsorted_engine_ids.update("triggernometry:" + row["id"] for row in self._engine_inventory
+                                   if row.get("source") == "triggernometry" and not self._engine_fight_tag(row))
         matches = 0
         header_rows: list[tuple[int, str]] = []
         section_has = {"general": False, "dot": False, "local": False,
                        "engine": False, "triggernometry": False}
-        # Batch row visibility changes into one repaint.
         self._table.setUpdatesEnabled(False)
         for row in range(self._table.rowCount()):
             en  = self._table.item(row, _C_EN)
@@ -692,15 +687,14 @@ class TriggersTabMixin:
             else:
                 hidden = fv != (fight or "")
                 if not hidden and local_only:
-                    hidden = tid not in self._local_ids or tid in self._official_ids
+                    hidden = (tid not in self._local_ids or tid in self._official_ids) and tid not in unsorted_engine_ids
                 elif not hidden and not local_only and fight == "":
-                    hidden = tid in self._local_ids and tid not in self._official_ids
+                    hidden = (tid in self._local_ids and tid not in self._official_ids) or tid in unsorted_engine_ids
             if not hidden:
                 section_has[section] = True
                 if not query and self._src_collapsed.get(section):
-                    hidden = True   # Keep headers visible when sections are collapsed.
+                    hidden = True
             self._table.setRowHidden(row, hidden)
-        # Hide section headers during search to show one result list.
         for row, key in header_rows:
             show = (not query) and section_has.get(key, False)
             self._table.setRowHidden(row, not show)
@@ -714,13 +708,12 @@ class TriggersTabMixin:
             self._search_count_lbl.setText("")
 
     def _refresh_table(self) -> None:
-        # Suppress repaints until the table is rebuilt, restoring them even on failure.
+        if hasattr(self, "_custom_triggevent"):
+            self._merge_custom_triggevent_inventory()
         prev = self._table.blockSignals(True)
         self._table.setUpdatesEnabled(False)
         try:
             self._table.setRowCount(0)
-            # Split General triggers into General and DoT sections. Expiry warnings
-            # identify DoT rows.
             generals = [t for t in self._triggers if not (t.fight or "") and not self._is_dot(t)]
             dots     = [t for t in self._triggers if not (t.fight or "") and self._is_dot(t)]
             others   = [t for t in self._triggers if (t.fight or "")]
@@ -771,7 +764,6 @@ class TriggersTabMixin:
             return item
 
         ability_display = t.ability_id if t.ability_id else t.ability_regex
-        # Localize visible cells while preserving stored English text.
         self._table.setItem(row, _C_NAME,  _ro(self._localized_name(t)))
         self._table.setItem(row, _C_FIGHT, _ro(t.fight))
         self._table.setItem(row, _C_TYPE,  _ro(t.log_type))
@@ -815,14 +807,10 @@ class TriggersTabMixin:
 
     @staticmethod
     def _pipe_parts(value: str) -> set[str]:
-        """Split pipe alternatives, trim whitespace and uppercase each value."""
         return {p.strip().upper() for p in str(value).split("|") if p.strip()}
 
     def _is_duplicate(self, t: Trigger) -> Trigger | None:
-        """Find a trigger with overlapping fight, types and matcher, ignoring case. Expand
-        alternatives for comparison and exclude empty matchers. Include matching IDs so
-        import collisions are reported.
-        """
+        """Compare fight and matcher without case sensitivity, including pipe alternatives."""
         key = self._matcher_key(t)
         if not key[1]:
             return None
@@ -845,9 +833,7 @@ class TriggersTabMixin:
         return None
 
     def _commit_new_trigger(self, t: Trigger) -> bool:
-        """Add and save a new trigger after duplicate handling. Return False if cancelled
-        or redirected to an existing trigger.
-        """
+        """Return False if cancelled or redirected to an existing trigger."""
         existing = self._is_duplicate(t)
         if existing is not None:
             box = ac.QMessageBox(self)
@@ -875,7 +861,6 @@ class TriggersTabMixin:
         return True
 
     def _open_trigger_for_edit(self, existing: Trigger) -> None:
-        """Edit an existing trigger by reference."""
         idx = next((i for i, x in enumerate(self._triggers) if x.id == existing.id), -1)
         if idx < 0:
             return
@@ -886,8 +871,7 @@ class TriggersTabMixin:
         dlg.deleteLater()
         if accepted:
             updated = dlg.get_trigger(existing_id=existing.id)
-            # Resolve the trigger by ID after the modal loop because a reload may have
-            # replaced the list.
+            # Modal dialogs can reload the trigger list. Resolve by ID.
             idx = next((i for i, x in enumerate(self._triggers) if x.id == existing.id), -1)
             if idx < 0:
                 return
@@ -910,8 +894,7 @@ class TriggersTabMixin:
         dlg.deleteLater()
         if accepted:
             updated = dlg.get_trigger(existing_id=t.id)
-            # Resolve the trigger by ID after the modal loop because a reload may have
-            # replaced the list.
+            # Modal dialogs can reload the trigger list. Resolve by ID.
             idx = next((i for i, x in enumerate(self._triggers) if x.id == t.id), -1)
             if idx < 0:
                 return
@@ -921,6 +904,11 @@ class TriggersTabMixin:
             self._save_triggers()
 
     def _duplicate_trigger(self) -> None:
+        if hasattr(self, "_custom_triggevent"):
+            custom = self._custom_triggevent_for_key(self._selected_row_key())
+            if custom is not None:
+                self._edit_custom_triggevent(custom, duplicate=True)
+                return
         t, _unused = self._selected_trigger()
         if t is None:
             return
@@ -934,6 +922,11 @@ class TriggersTabMixin:
         self._save_triggers()
 
     def _delete_trigger(self) -> None:
+        if hasattr(self, "_custom_triggevent"):
+            custom = self._custom_triggevent_for_key(self._selected_row_key())
+            if custom is not None:
+                self._delete_custom_triggevent(custom)
+                return
         t, _idx = self._selected_trigger()
         if t is None:
             return
@@ -1037,8 +1030,7 @@ class TriggersTabMixin:
         idx = next((i for i, x in enumerate(self._triggers) if x.id == t.id), -1)
         if idx < 0:
             return
-        # Copy the official snapshot before restoring it so future edits cannot mutate
-        # the save baseline.
+        # Do not let later edits mutate the save baseline.
         self._triggers[idx] = Trigger.from_dict(original.to_dict())
         self._local_ids.discard(t.id)
         self._refresh_table()
@@ -1080,13 +1072,10 @@ class TriggersTabMixin:
         self._update_fight_controls()
 
     def _callout_dedup_key(self, text: str) -> str:
-        """Normalize callout text for comparison across sources."""
         return " ".join(str(text).casefold().split())
 
     def _claim_callout(self, text: str) -> None:
-        """Claim text for a local callout and suppress matching guests within the window.
-        The caller handles speech and alerts.
-        """
+        """Reserve local text before emitting speech or alerts."""
         key = self._callout_dedup_key(text)
         now = time.monotonic()
         self._callout_claimed[key] = now + _CALLOUT_CLAIM_S
@@ -1103,10 +1092,7 @@ class TriggersTabMixin:
                 self._guest_claim_sev.pop(k, None)
 
     def _emit_guest_callout(self, text: str, severity: str = "info") -> None:
-        """Deduplicate guest callouts using localized text. Local triggers take precedence.
-        Matching guests share one callout at the highest severity. Emit immediately when
-        local triggers are off.
-        """
+        """Local calls take precedence. Matching guests share their highest severity."""
         if not text:
             return
         loc = self._localize_text(text)
@@ -1123,7 +1109,6 @@ class TriggersTabMixin:
             return
         pending = self._pending_guests.get(key)
         if pending is not None:
-            # Keep one pending timer and raise its severity.
             timer, prev = pending
             if (_GUEST_SEVERITY_RANK.get(severity, 0)
                     > _GUEST_SEVERITY_RANK.get(prev, 0)):
@@ -1143,7 +1128,6 @@ class TriggersTabMixin:
         timer.start(_GUEST_CALLOUT_DEFER_MS)
 
     def _clear_callout_dedup(self) -> None:
-        """Clear claims and pending guests at encounter boundaries."""
         for timer, _sev in list(self._pending_guests.values()):
             try:
                 timer.stop()
@@ -1155,7 +1139,6 @@ class TriggersTabMixin:
         self._guest_claim_sev.clear()
 
     def _load_callout_defaults(self) -> dict:
-        """Load shipped wording by source and trigger ID."""
         if not ac.CALLOUT_DEFAULTS_FILE.exists():
             return {}
         try:
@@ -1180,9 +1163,7 @@ class TriggersTabMixin:
         return None
 
     def _callout_edits_for(self, src: str) -> "dict | None":
-        """Merge shipped wording with user edits for reading. Use _apply_callout_edit to
-        change it.
-        """
+        """Merge defaults and edits for reading. Write through _apply_callout_edit."""
         user = self._callout_edit_dict(src)
         if user is None:
             return None
@@ -1201,9 +1182,7 @@ class TriggersTabMixin:
             self._reset_triggernometry_callout_edit(tid)
 
     def _load_cached_callouts_ja(self) -> None:
-        """Load Japanese callouts from the cache or bundle, preferring the newer version
-        then the larger map. Replace dictionaries atomically for active readers.
-        """
+        """Prefer newer translations, then the larger map. Replace reader snapshots atomically."""
         best_key, parsed = None, {}
         _clean = lambda m: {k: v for k, v in (m if isinstance(m, dict) else {}).items()
                             if isinstance(k, str) and isinstance(v, str) and v}
@@ -1229,15 +1208,12 @@ class TriggersTabMixin:
         self._callouts_readings = _clean(parsed.get("readings"))    # ja display -> kana reading
         self._callouts_names_ja = _clean(parsed.get("names"))       # id -> ja trigger name
         self._callouts_names_text_ja = _clean(parsed.get("names_text"))  # english name -> ja
-        # Compile tokenized phrase keys for resolved engine text. Try them only after
-        # exact lookup fails.
+        # Try resolved token patterns only after exact lookup fails.
         self._callouts_phrases_ja_patterns = _compile_phrase_patterns(self._callouts_phrases_ja)
-        set_readings(self._callouts_readings)   # Apply kana readings to every speech call.
+        set_readings(self._callouts_readings)
 
     def _refresh_callouts_ja_async(self) -> None:
-        """Refresh cached Japanese callouts in the background. Retain existing data on
-        failure and emit _callouts_ja_signal on completion.
-        """
+        """Retain translations on failure and signal completion through _callouts_ja_signal."""
         ref = "main"
         url = f"https://raw.githubusercontent.com/{updater.REPO}/{ref}/assets/callouts_ja.json"
 
@@ -1261,9 +1237,7 @@ class TriggersTabMixin:
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _on_callouts_ja_refreshed(self, changed: bool) -> None:
-        """Reload callout translations and repaint the table. UI locale catalogs are
-        separate.
-        """
+        """Refresh callout translations separately from UI locale catalogs."""
         if changed:
             self._load_cached_callouts_ja()
             self._refresh_table()
@@ -1279,16 +1253,17 @@ class TriggersTabMixin:
     def _fight_local_triggers(self, fight: str) -> list:
         out = [t for t in self._triggers if (t.fight or "") == fight]
         if fight == "":
-            # Limit the General checkbox to official untagged triggers. Custom ones
-            # appear under Unsorted.
+            # Custom untagged triggers belong under Unsorted.
             out = [t for t in out
                    if not (t.id in self._local_ids and t.id not in self._official_ids)]
         return out
 
     def _fight_tv_ids(self, fight: str) -> list:
+        unsorted_ids = {row["id"] for row in getattr(self, "_custom_triggevent", [])
+                        if not row["fight"]}
         return [e["id"] for e in self._engine_inventory
                 if e.get("source") == "triggevent" and e.get("id")
-                and self._engine_fight_tag(e) == fight]
+                and self._engine_fight_tag(e) == fight and e["id"] not in unsorted_ids]
 
     def _set_trigger_enabled(self, trigger: Trigger, enabled: bool) -> None:
         trigger.enabled = enabled
@@ -1311,7 +1286,6 @@ class TriggersTabMixin:
             self._save_triggers()
 
     def _set_sections_collapsed(self, collapsed: bool, *keys: str) -> None:
-        """Collapse or expand the named table source groups."""
         for k in keys:
             self._src_collapsed[k] = collapsed
 
@@ -1330,8 +1304,7 @@ class TriggersTabMixin:
                 if e.get("source") == "triggevent" and e.get("id")]
 
     def _toggle_global_tv(self) -> None:
-        # Use a stored direction so individual fight edits cannot change the next global
-        # toggle.
+        # Individual edits must not change the next global toggle direction.
         enable = not self._global_tv_on_flag
         self._global_tv_on_flag = enable
         self._settings["global_tv_on"] = enable
@@ -1358,7 +1331,6 @@ class TriggersTabMixin:
         self._save_triggers()
         self._save_settings()
         if enable:
-            # Restore the plugin schedule, respecting cactbot mode.
             self._push_timeline_to_plugin()
         else:
             # Stop the separate local timeline clock too. Preserve cactbot bars while
@@ -1386,7 +1358,6 @@ class TriggersTabMixin:
         self._update_fight_controls()
 
     def _append_group_header(self, key: str, label: str) -> None:
-        """Add a section header that toggles its source group."""
         row = self._table.rowCount()
         self._table.insertRow(row)
         bg = QBrush(QColor("#101013"))
@@ -1429,19 +1400,15 @@ class TriggersTabMixin:
             if not getattr(self, "_cactbot_mode", False):
                 self._pending_timeline_events = []
                 self._timeline.reset()
-            # Clear the stopped local clock from the plugin while preserving the cactbot
-            # schedule if active.
+            # Clear local bars while preserving any active cactbot schedule.
             self._push_timeline_to_plugin()
         else:
-            # Restore the plugin schedule when reenabling, subject to the global switch.
             self._push_timeline_to_plugin()
         self._settings["local_enabled"] = self._local_enabled
         self._save_settings()
 
     def _set_triggers_enabled(self, enabled: bool) -> None:
-        """Set the master mode for Local, Triggevent and Triggernometry callouts. Exclude
-        cactbot without stopping the background Triggevent engine.
-        """
+        """Switch editable callouts without stopping Triggevent automarkers."""
         self._triggers_enabled = bool(enabled)
         if enabled:
             # Clear the saved cactbot flag so it cannot restart on the next launch.
@@ -1454,7 +1421,6 @@ class TriggersTabMixin:
             self._set_triggernometry_enabled(enabled)
 
     def _on_callouts_localized_changed(self, state: int) -> None:
-        # Refresh visible translations as well as the spoken language.
         self._settings["callouts_localized"] = bool(state)
         self._save_settings()
         self._refresh_table()
@@ -1476,8 +1442,7 @@ class TriggersTabMixin:
             return
         path = dlg.selectedFiles()[0]
         try:
-            # Export through a sibling temporary file so interruption preserves the
-            # previous file.
+            # Preserve the previous export if interrupted.
             dest = Path(path)
             ac._atomic_write_bytes(dest, ac.TRIGGERS_LOCAL_FILE.read_bytes())
         except OSError as exc:
@@ -1495,10 +1460,8 @@ class TriggersTabMixin:
         try:
             imported = Path(path).read_bytes()
             data = json.loads(imported.decode("utf-8"))
-            # Require an object before checking for the triggers key.
             if not isinstance(data, dict) or "triggers" not in data:
                 raise ValueError(_("File is missing a 'triggers' key - not a NyaaTriggers export"))
-            # Require a trigger list before replacing the local file.
             trigs = data["triggers"]
             if not isinstance(trigs, list) or not all(isinstance(t, dict) for t in trigs):
                 raise ValueError(_("File's 'triggers' is not a list of triggers - not a NyaaTriggers export"))
@@ -1512,7 +1475,6 @@ class TriggersTabMixin:
         if answer != ac.QMessageBox.StandardButton.Yes:
             return
         try:
-            # Import through a sibling temporary file to avoid partial writes.
             tmp = ac.TRIGGERS_LOCAL_FILE.with_suffix(ac.TRIGGERS_LOCAL_FILE.suffix + ".tmp")
             tmp.write_bytes(imported)
             # Keep a backup because import replaces the complete local file.
@@ -1543,9 +1505,6 @@ class TriggersTabMixin:
         dlg.deleteLater()
 
     def _trigger_files_stamp(self) -> tuple:
-        """Return size and nanosecond modification time for watched files, or None when
-        missing.
-        """
         stamp = []
         for p in _watched_trigger_files():
             try:
@@ -1556,9 +1515,6 @@ class TriggersTabMixin:
         return tuple(stamp)
 
     def _maybe_reload_triggers(self) -> None:
-        """Reload changed trigger files through the normal merge path and refresh the
-        interface.
-        """
         stamp = self._trigger_files_stamp()
         # Keep checking blocked files even when size and timestamp are unchanged.
         if stamp == self._triggers_mtime and not getattr(self, "_local_corrupt", False):
@@ -1574,10 +1530,7 @@ class TriggersTabMixin:
         self._load_triggers()
 
     def _localized_callout(self, t: Trigger) -> str:
-        """Select a callout template for the active language while preserving substitution
-        tokens. Prefer translations by ID for unchanged official text, then phrase
-        translations. Preserve custom text.
-        """
+        """Translate unchanged official text by ID, then phrase. Preserve custom text and tokens."""
         if not self._settings.get("callouts_localized", active_locale() == "ja"):
             return t.tts_text
         official = getattr(self, "_official_triggers", {}).get(t.id)
@@ -1588,9 +1541,7 @@ class TriggersTabMixin:
         return self._callouts_phrases_ja.get(t.tts_text) or t.tts_text
 
     def _pick_fight_folder(self) -> str | None:
-        """Return the chosen folder, an empty string for uncategorised, or None on
-        cancellation.
-        """
+        """Return a folder, an empty string for uncategorised, or None on cancellation."""
         known = {t.fight for t in self._triggers if t.fight}
         catalog = fight_catalog.load_catalog(
             _FIGHT_TREE, known, ac._DATA_DIR / "fight_catalog.json")

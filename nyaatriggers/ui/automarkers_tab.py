@@ -26,21 +26,17 @@ from nyaatriggers.app_common import (
 
 class AutomarkersTabMixin:
     def _init_automarkers(self) -> None:
-        # Start the native Telesto client so marker tests and connection status work
-        # immediately.
+        # Tests and status checks work even with automarkers disabled.
         self._telesto_client = TelestoClient(
             uri=self._settings.get("telesto_uri", DEFAULT_TELESTO_URI),
             enabled=bool(self._settings.get("telesto_enabled", False)))
         self._telesto_client.status_changed.connect(self._on_telesto_client_status)
         self._telesto_client.start()
         QTimer.singleShot(1200, self._telesto_client.ping)
-        # Refresh party slots while automarkers are enabled. Zone changes refresh them
-        # immediately.
         self._telesto_party_timer = QTimer(self)
         self._telesto_party_timer.setInterval(10_000)
         self._telesto_party_timer.timeout.connect(self._refresh_telesto_party)
         self._telesto_party_timer.start()
-        # Load and coerce saved rule fields before matching or displaying them.
         raw_rules = self._settings.get("automark_rules")
         self._automark_rules = [
             {**r,
@@ -51,58 +47,45 @@ class AutomarkersTabMixin:
             for r in raw_rules if isinstance(r, dict)] \
             if isinstance(raw_rules, list) else []
         self._automark_cooldowns: dict = {}   # statusKey, target, marker to last fired monotonic time
-        # Retry marks whose party slots were unknown, retaining their age and status
-        # key.
+        # Retry unknown slots while retaining the original age and status key.
         self._automark_pending: list = []
         # Track which status placed each sign so only its own loss can clear it.
         self._automark_clear_on_loss = bool(self._settings.get("automark_clear_on_loss", True))
         self._automark_active: dict = {}
-        # Keep compound status tracking active even with rules disabled so enabling
-        # midfight has current state.
+        # Track statuses while disabled so enabling midfight has current state.
         self._automark_pairs = StatusPairs(
             p
             for token in ([h for h, _unused in _UMAD_AUTOMARK_PRESET]
                           + [str(r.get("status") or "") for r in self._automark_rules])
             for p in (_parse_compound(token) or ()))
-        # Cache UMAD chain roles from combatant lines, the party roster and live
-        # snapshots. Clear them on zone changes.
         self._actor_jobs: dict[int, int] = {}        # _actor_int value to ClassJob id
         self._umad_actor_names: dict[int, str] = {}  # _actor_int value to name, chain targets only
         self._umad_chain_enabled = bool(self._settings.get("umad_chain_enabled", False))
         self._umad_chains = BlackHoleChains(
             role_of=lambda aid: role_for_job(self._actor_jobs.get(_actor_int(aid))),
             markers=self._umad_chain_markers_from_settings())
-        # Retry chain actions with unknown party slots to keep visible signs aligned
-        # with engine state.
         self._umad_chain_pending: list = []
         # Track enqueue times separately without changing action tuples.
         self._umad_chain_pending_since: dict = {}
-        # Debounce incomplete chain queues after each relevant status event.
         self._umad_chain_flush_timer = QTimer(self)
         self._umad_chain_flush_timer.setSingleShot(True)
         self._umad_chain_flush_timer.setInterval(1200)
         self._umad_chain_flush_timer.timeout.connect(self._on_umad_chain_flush)
-        # UMAD gaze pairs use separate state and retries with the same Telesto transport
-        # as chains.
         self._umad_gaze_enabled = bool(self._settings.get("umad_gaze_enabled", False))
         self._umad_gaze = CursedShriekPairs(
             markers=self._umad_gaze_markers_from_settings(),
             slot_of=self._gaze_slot_of)
         self._umad_gaze_pending: list = []
-        self._umad_gaze_pending_since: dict = {}   # enqueue times, see _umad_chain_pending_since
+        self._umad_gaze_pending_since: dict = {}
         self._umad_gaze_flush_timer = QTimer(self)
         self._umad_gaze_flush_timer.setSingleShot(True)
         self._umad_gaze_flush_timer.setInterval(1200)
         self._umad_gaze_flush_timer.timeout.connect(self._on_umad_gaze_flush)
-        # Backfill jobs through party updates and combatant snapshots.
         self._ws.party_jobs.connect(self._on_ws_party_jobs)
         self._ws.combatants.connect(self._on_ws_combatants_jobs)
 
     def _build_automark_settings(self, layout) -> None:
-        """Build marker controls using the native Telesto client. Rules target self or a
-        resolved party slot on status gain. Test and Clear can send while automarkers
-        are disabled.
-        """
+        """Test and Clear can send while automarkers are disabled."""
         testing_note = QLabel(_("These automarkers need testing, please let me know."))
         testing_note.setWordWrap(True)
         testing_note.setStyleSheet("color: #8f8f9a; font-size: 11px;")
@@ -150,7 +133,6 @@ class AutomarkersTabMixin:
 
         rm_row = QHBoxLayout()
         rm_row.addWidget(QLabel(_("Marker:")))
-        # Unassigned rules remain inactive until a marker is chosen.
         self._automark_assign_combo = QComboBox()
         self._automark_assign_combo.addItem(_("(unassigned)"), "")
         for _label, _tok in TELESTO_MARKERS:
@@ -273,7 +255,6 @@ class AutomarkersTabMixin:
         self._umad_gaze.set_markers(markers)
 
     def _on_automark_test(self) -> None:
-        """Force the selected marker onto the local player for testing."""
         tok = (self._automark_test_combo.currentData()
                if hasattr(self, "_automark_test_combo") else None) or "attack1"
         self._telesto_client.configure(uri=self._settings.get("telesto_uri", DEFAULT_TELESTO_URI))
@@ -283,16 +264,13 @@ class AutomarkersTabMixin:
         self._telesto_client.clear_self(force=True)
 
     def _on_automark_clear_all(self) -> None:
-        """Clear markers from all eight party slots."""
         self._telesto_client.configure(uri=self._settings.get("telesto_uri", DEFAULT_TELESTO_URI))
         self._telesto_client.clear_all(force=True)
 
     @staticmethod
     def _sync_umad_preset_rules(rules: "list[dict]") -> "tuple[list[dict], int, int]":
-        """Sync UMAD rules with the preset, retaining assigned markers for surviving rules.
-        New rules start unassigned. Preserve other fights and return added and removed
-        counts.
-        """
+        """Retain assigned signs and other fights. New rules start unassigned.
+        Return added and removed counts."""
         preset_keys = {_canon_status(h) for h, _label in _UMAD_AUTOMARK_PRESET}
         synced: "list[dict]" = []
         seen_umad: "set[str]" = set()
@@ -301,8 +279,7 @@ class AutomarkersTabMixin:
             if (r.get("fight") or "").strip().casefold() != _UMAD_FIGHT_TAG_CF:
                 synced.append(r)
                 continue
-            # Use canonical compound keys so equivalent spellings retain the assigned
-            # marker.
+            # Equivalent compound spellings must retain their assigned marker.
             key = _canon_status((r.get("status") or "").strip())
             if key in preset_keys and key not in seen_umad:
                 seen_umad.add(key)
@@ -342,17 +319,13 @@ class AutomarkersTabMixin:
 
     @staticmethod
     def _norm_hex(s: str) -> str:
-        """Normalize status IDs for comparison."""
         s = s.strip().upper()
         if s.startswith("0X"):
             s = s[2:]
         return s.lstrip("0") or "0"
 
     def _match_automark_rules(self, fields: list[str]) -> None:
-        """Match automarker rules on status gain. Compound rules require both statuses and
-        share one canonical cooldown key. Retry unknown party slots without consuming
-        cooldown.
-        """
+        """Compound rules share a cooldown key. Unknown slots retry without consuming it."""
         if len(fields) < 9:
             return
         tc = getattr(self, "_telesto_client", None)
@@ -360,7 +333,7 @@ class AutomarkersTabMixin:
             return
         tgt_id = fields[7].strip().upper()
         if not tgt_id.startswith("10"):
-            return                                  # players only
+            return
         tgt_name = fields[8]
         eff_id_n = self._norm_hex(fields[2])
         eff_name = fields[3]
@@ -389,8 +362,7 @@ class AutomarkersTabMixin:
                 continue
             pair = _parse_compound(status)
             if pair is not None:
-                # Use the compound status key for cooldown so its two gains cannot fire
-                # twice.
+                # Compound gains must not consume two cooldowns.
                 if eff_id_n not in pair or not self._automark_pairs.holds_all(tgt_id, pair, now):
                     continue
                 status_key = "+".join(sorted(pair))
@@ -410,8 +382,6 @@ class AutomarkersTabMixin:
                 continue
             if self._mark_player(tgt_id, marker, tgt_name, is_me=is_me):
                 self._automark_cooldowns[key] = now
-                # Record the placing status for clear on loss. The latest mark owns the
-                # sign.
                 self._automark_active["me" if is_me else tgt_id] = status_key
             elif len(self._automark_pending) < 16:
                 # Retry after party refresh because the triggering gain will not repeat.
@@ -420,23 +390,19 @@ class AutomarkersTabMixin:
                            for p in self._automark_pending):
                     self._automark_pending.append((tgt_id, marker, tgt_name, now, status_key, rfight,
                                                    rule.copy()))
-        # Prune expired cooldown keys during long sessions.
         if len(self._automark_cooldowns) > 256:
             self._automark_cooldowns = {
                 k: v for k, v in self._automark_cooldowns.items() if now - v < 10.0}
 
     def _match_automark_unmark(self, fields: list[str]) -> None:
-        """Cancel queued marks when their status is lost. If clearing is enabled, remove a
-        sign only when that status still owns it.
-        """
+        """Clear a sign only if the lost status still owns it."""
         if len(fields) < 9:
             return
         tgt_id = fields[7].strip().upper()
         if not tgt_id.startswith("10"):
-            return                                  # players only
+            return
         key = "me" if self._is_me_actor(tgt_id, fields[8]) else tgt_id
-        # Cancel retries when their status is lost so stale marks cannot overwrite a
-        # newer sign.
+        # Cancel lost statuses before retries can overwrite newer marks.
         pending = getattr(self, "_automark_pending", None)
         if pending:
             eff_n = self._norm_hex(fields[2])
@@ -454,8 +420,6 @@ class AutomarkersTabMixin:
 
     @staticmethod
     def _make_marker_combo(current: "str | None" = None, width: int = 110) -> QComboBox:
-        """Build a marker selector, falling back to its first entry for unknown tokens.
-        """
         combo = QComboBox()
         for _label, _tok in TELESTO_MARKERS:
             combo.addItem(_(_label), _tok)
@@ -467,8 +431,7 @@ class AutomarkersTabMixin:
         return combo
 
     def _umad_name_of(self, actor_id) -> str:
-        """Return a cached actor name or an empty string. Actor ID zero remains valid.
-        """
+        """Actor ID zero remains valid."""
         aid = _actor_int(actor_id)
         return "" if aid is None else self._umad_actor_names.get(aid, "")
 
@@ -484,9 +447,7 @@ class AutomarkersTabMixin:
 
     def _mark_player(self, actor_id: str, marker: str, name: str = "",
                      is_me: "bool | None" = None) -> bool:
-        """Mark the local player directly or resolve another player's party slot. Return
-        False when resolution or enqueueing fails so callers can retry.
-        """
+        """Return False on unresolved slots or enqueue failure so callers can retry."""
         tc = self._telesto_client
         if tc is None:
             return False
@@ -497,7 +458,6 @@ class AutomarkersTabMixin:
         return tc.mark_actor(actor_id, marker)
 
     def _umad_chain_markers_from_settings(self) -> dict:
-        """Read valid chain marker tokens from settings, falling back to defaults."""
         markers = {}
         for key, default in (("dps", "attack1"), ("support", "attack2"),
                              ("accretion", "attack3")):
@@ -506,9 +466,7 @@ class AutomarkersTabMixin:
         return markers
 
     def _umad_chain_line(self, fields: list[str]) -> None:
-        """Route status gains and losses into enabled UMAD chains. Allow an unknown current
-        fight.
-        """
+        """Allow unknown current fights when routing UMAD statuses."""
         if not self._umad_chain_enabled or len(fields) < 9:
             return
         eff = self._norm_hex(fields[2])
@@ -521,10 +479,9 @@ class AutomarkersTabMixin:
             return
         tgt_id = fields[7].strip().upper()
         if not tgt_id.startswith("10"):
-            return                                # players only
+            return
         aid = _actor_int(tgt_id)
         if aid is not None and fields[8]:
-            # Cache chain target names until the player ID is known.
             self._umad_actor_names[aid] = fields[8]
         now = time.monotonic()
         if fields[0] == "26":
@@ -535,10 +492,7 @@ class AutomarkersTabMixin:
         self._dispatch_umad_chain_actions(actions)
 
     def _umad_chain_reset(self, clear_marks: bool = False, force: bool = False) -> None:
-        """Reset chains and pending retries. Optionally clear existing signs, forcing sends
-        when disabling automarkers. Zone changes skip clears because party slots may
-        have changed.
-        """
+        """Force clears when disabling. Skip zone-change clears because party slots may differ."""
         if clear_marks:
             for actor in self._umad_chains.outstanding():
                 self._clear_player(actor, self._umad_name_of(actor), force=force)
@@ -555,9 +509,7 @@ class AutomarkersTabMixin:
         self._dispatch_umad_chain_actions(self._umad_chains.flush(time.monotonic()))
 
     def _retry_umad_chain_pending(self) -> None:
-        """Retry chain actions after party refresh or debounce, retaining failures until
-        their age limit.
-        """
+        """Retain failed marks until their age limit."""
         if not self._umad_chain_pending:
             return
         since = getattr(self, "_umad_chain_pending_since", None)
@@ -575,12 +527,10 @@ class AutomarkersTabMixin:
         self._dispatch_umad_chain_actions(pending)
 
     def _gaze_slot_of(self, actor_id):
-        """Return the party slot for gaze ordering, or None before resolution."""
         tc = getattr(self, "_telesto_client", None)
         return tc.slot_of_actor(actor_id) if tc is not None else None
 
     def _umad_gaze_markers_from_settings(self) -> dict:
-        """Read valid gaze marker tokens from settings, falling back to defaults."""
         markers = {}
         for key, default in (("away1", "ignore1"), ("away2", "ignore2"),
                              ("look1", "bind1"), ("look2", "bind2")):
@@ -589,9 +539,7 @@ class AutomarkersTabMixin:
         return markers
 
     def _umad_gaze_line(self, fields: list[str]) -> None:
-        """Route status gains and losses into enabled UMAD gaze pairing. Followup casts
-        determine polarity. Allow an unknown current fight.
-        """
+        """Followup casts determine gaze polarity. Allow unknown current fights."""
         if not self._umad_gaze_enabled or len(fields) < 9:
             return
         eff = self._norm_hex(fields[2])
@@ -604,7 +552,7 @@ class AutomarkersTabMixin:
             return
         tgt_id = fields[7].strip().upper()
         if not tgt_id.startswith("10"):
-            return                                # players only
+            return
         aid = _actor_int(tgt_id)
         if aid is not None and fields[8]:
             self._umad_actor_names[aid] = fields[8]
@@ -621,9 +569,7 @@ class AutomarkersTabMixin:
         self._dispatch_umad_gaze_actions(actions)
 
     def _umad_gaze_reset(self, clear_marks: bool = False, force: bool = False) -> None:
-        """Reset gaze state and retries, optionally clearing signs. Force sends when
-        disabling automarkers and skip clears on zone changes.
-        """
+        """Force clears when disabling and skip them on zone changes."""
         if clear_marks:
             for actor in self._umad_gaze.outstanding():
                 self._clear_player(actor, self._umad_name_of(actor), force=force)
@@ -640,7 +586,6 @@ class AutomarkersTabMixin:
         self._dispatch_umad_gaze_actions(self._umad_gaze.flush(time.monotonic()))
 
     def _retry_umad_gaze_pending(self) -> None:
-        """Retry gaze actions after party refresh or debounce until their age limit."""
         if not self._umad_gaze_pending:
             return
         since = getattr(self, "_umad_gaze_pending_since", None)
@@ -659,10 +604,8 @@ class AutomarkersTabMixin:
 
     def _dispatch_mark_actions(self, actions, pending: list,
                                since: "dict | None" = None) -> list:
-        """Dispatch chain and gaze actions and return unresolved actions for retry. New
-        actions replace pending ones for the same actor. Moving a sign cancels its
-        previous pending mark. Record first enqueue times in since when provided.
-        """
+        """New actions replace pending actions for the actor or sign.
+        Return unresolved actions and preserve first enqueue times in since."""
         if not actions:
             return pending
         for action in actions:
@@ -670,8 +613,7 @@ class AutomarkersTabMixin:
             if kind not in ("mark", "clear"):
                 continue
             name = self._umad_name_of(actor)
-            # An engine mark replaces rule ownership so a later rule loss cannot clear
-            # it.
+            # Rule loss must not clear a newer engine mark.
             active = getattr(self, "_automark_active", None)
             if active:
                 active.pop(actor, None)
@@ -736,8 +678,7 @@ class AutomarkersTabMixin:
             fight_raw = (rule.get("fight") or "").strip()
             fight = fight_raw or _("Any fight")
             status = rule.get("status") or "?"
-            # Use known debuff names only for UMAD rules because IDs may overlap other
-            # fights.
+            # Debuff IDs can mean different things outside UMAD.
             if fight_raw.casefold() == _UMAD_FIGHT_TAG_CF:
                 label = _UMAD_STATUS_LABELS.get(_canon_status(status), "")
                 if label:
@@ -816,11 +757,9 @@ class AutomarkersTabMixin:
         self._telesto_client.ping()
 
     def _refresh_telesto_party(self) -> None:
-        """Refresh enabled Telesto party slots and retry unresolved marks."""
         tc = getattr(self, "_telesto_client", None)
         if tc is not None and self._settings.get("telesto_enabled"):
-            # Reapply the saved enabled state and probe so Telesto can recover after a
-            # connection failure.
+            # Reapply settings so Telesto can recover after connection failure.
             tc.set_enabled(True)
             tc.request_party_members(force=True)
             if self._umad_chain_enabled:
@@ -850,7 +789,7 @@ class AutomarkersTabMixin:
             player_key = "me" if self._is_me_actor(actor, name) else actor
             live = self._automark_active.get(player_key)
             if live is not None and live != status_key:
-                continue   # Do not replace another rule's current sign.
+                continue
             if not self._mark_player(actor, marker, name):
                 keep.append(pending)
             else:
@@ -859,16 +798,13 @@ class AutomarkersTabMixin:
         self._automark_pending = [entry for entry in keep if (entry[0], entry[1]) not in sent]
 
     def _apply_automark_state(self) -> None:
-        """Apply saved Telesto settings. Refresh party slots on enable and clear engine and
-        rule signs before disabling.
-        """
+        """Refresh slots on enable and clear engine and rule signs before disabling."""
         tc = getattr(self, "_telesto_client", None)
         if tc is None:
             return
         enabled = bool(self._settings.get("telesto_enabled", False))
         if not enabled:
-            # Clear signs before disabling the client. Force sends so cleanup can also
-            # recover from a disabled client.
+            # Force cleanup before disabling, even if the client is already disabled.
             self._umad_chain_reset(clear_marks=True, force=True)
             self._umad_gaze_reset(clear_marks=True, force=True)
             # Clear rule marks too. The me key uses clear_self instead of actor lookup.
@@ -895,9 +831,7 @@ class AutomarkersTabMixin:
         self._update_automark_status_label()
 
     def _on_telesto_client_status(self, reachable: bool, message: str, degraded: bool = False) -> None:
-        """Show native Telesto reachability. Use amber when the server responds but
-        commands fail.
-        """
+        """Amber means Telesto responds but commands fail."""
         # Queued signals may describe an endpoint that has since been replaced.
         state = self._telesto_client.last_status()
         if state is None:
@@ -916,13 +850,9 @@ class AutomarkersTabMixin:
 
     @staticmethod
     def _is_dot(t) -> bool:
-        """Identify triggers with expiry reminders for the DoT section."""
         return (getattr(t, "expiry_warn_s", 0) or 0) > 0
 
     def _umad_gaze_cast(self, fields: list[str]) -> None:
-        """Route UMAD Inferno and Tsunami casts to arm gaze polarity before status gains
-        arrive.
-        """
         if not self._umad_gaze_enabled or len(fields) < 5:
             return
         eff = self._norm_hex(fields[4])

@@ -1,6 +1,7 @@
 package gg.xp.nyaa;
 
 import gg.xp.reevent.events.BasicEventQueue;
+import gg.xp.reevent.events.BaseEvent;
 import gg.xp.reevent.events.EventContext;
 import gg.xp.reevent.events.EventDistributor;
 import gg.xp.reevent.events.EventMaster;
@@ -17,6 +18,8 @@ import gg.xp.xivsupport.events.actlines.events.BuffApplied;
 import gg.xp.xivsupport.events.ws.ActWsRawMsg;
 import gg.xp.xivsupport.events.state.RefreshCombatantsRequest;
 import gg.xp.xivsupport.events.state.RefreshSpecificCombatantsRequest;
+import gg.xp.xivsupport.events.state.XivState;
+import gg.xp.xivsupport.events.state.combatstate.StatusEffectRepository;
 import gg.xp.xivsupport.replay.PullRecovery;
 import gg.xp.xivsupport.replay.RecoveryClock;
 import gg.xp.xivsupport.replay.RecoveryQueue;
@@ -80,6 +83,7 @@ public final class TriggeventCore {
     private static volatile TelestoMain TELESTO;
     private static volatile AutoMarkServiceSelector AM_SELECTOR;
     private static PullRecovery RECOVERY;
+    private static EventMaster MASTER;
     private static boolean requestedAutomark;
     private static JsonNode automarkCommand;
     private static String recoveryStatus = "state_only";
@@ -104,7 +108,7 @@ public final class TriggeventCore {
             final EventMaster master = pico.getComponent(EventMaster.class);
 
             emitStatus(true, "Triggevent Engine ready");
-            diag("ready; reading WS messages on stdin; recovery=1; history=1; catchup=1");
+            diag("ready; reading WS messages on stdin; recovery=1; history=1; catchup=1; custom=1");
 
             // InitEvent handlers populate the callout registry synchronously. Drain any
             // queued followup work before publishing inventory.
@@ -207,6 +211,7 @@ public final class TriggeventCore {
         RECOVERY = new PullRecovery(clock, queue, pico.getComponent(EventMaster.class),
                 pico.getComponent(PrimaryLogSource.class));
         dist.registerHandler(RECOVERY);
+        MASTER = pico.getComponent(EventMaster.class);
         dist.registerHandler(CalloutEvent.class, TriggeventCore::onCallout);
         dist.registerHandler(TelestoStatusUpdatedEvent.class, TriggeventCore::onTelestoStatus);
         dist.registerHandler(RefreshCombatantsRequest.class, (c, e) -> requestCombatants(List.of()));
@@ -223,6 +228,8 @@ public final class TriggeventCore {
         }
 
         dist.acceptEvent(new InitEvent());                 // Runs startup Groovy scripts.
+        dist.registerHandler(BaseEvent.class, new CustomTriggers(pico.getComponent(XivState.class),
+                pico.getComponent(StatusEffectRepository.class)));
         pico.getComponent(EventMaster.class).start();
 
         // Select the none marker service by default. The higher priority keyboard
@@ -310,6 +317,9 @@ public final class TriggeventCore {
      * for free text that needs phrase overrides.
      */
     private static String calloutId(CalloutEvent ev) {
+        if (ev instanceof CustomTriggers.Callout custom) {
+            return custom.id;
+        }
         final CalloutTraceInfo trace = ev.getTrace();
         if (trace instanceof ModifiableCalloutTraceInfo mti) {
             return idForField(mti.getCalloutField());
@@ -324,6 +334,13 @@ public final class TriggeventCore {
     private static void handleCommand(JsonNode n) {
         try {
             final String cmd = n.path("nyaa_cmd").asText("");
+            if ("custom_triggers".equals(cmd)) {
+                CustomTriggers.Configure config = new CustomTriggers.Configure(n.path("triggers"));
+                MASTER.pushEventAndWait(config);
+                println(MAPPER.writeValueAsString(Map.of("t", "custom_triggers",
+                        "ok", config.error == null, "message", config.error == null ? "" : config.error)));
+                return;
+            }
             if ("pause_feed".equals(cmd)) {
                 applyAutomark(false);
                 RECOVERY.begin(RECOVERY.clock.now().toString());

@@ -73,7 +73,7 @@ class TimelineTabMixin:
             return cb[0]
         return _bare_fight_tag(self._fight_tag_for_zone(zone)[0]) if zone else ""
 
-    def _push_timeline_to_plugin(self) -> None:
+    def _push_timeline_to_plugin(self, *, reconnect: bool = False) -> None:
         """Push the current schedule when its mode is enabled. Preserve cactbot bars while
         local callouts are off.
         """
@@ -82,6 +82,8 @@ class TimelineTabMixin:
                      or (getattr(self, "_local_enabled", True)
                          and getattr(self, "_global_local_on_flag", True)))):
             self._plugin_link.send_timeline(self._timeline.upcoming())
+        elif reconnect:
+            self._plugin_link.send_timeline([])
         else:
             self._plugin_link.send_clear(keep_dps=True)
 

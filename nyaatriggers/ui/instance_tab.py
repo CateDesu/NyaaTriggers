@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QBrush, QColor, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import QMenu
 
-from nyaatriggers.trigger_engine import Trigger, compile_user_regex, _safe_search
+from nyaatriggers.trigger_engine import Trigger, compile_user_regex, cooldown_source_id, _safe_search
 from nyaatriggers.locale_util import _
 from nyaatriggers.sequential import SequentialRunner
 from nyaatriggers.status_timer import StatusTimerRunner
@@ -137,14 +137,14 @@ class InstanceTabMixin:
         """Show the client zone name and a differing English alias. Distinguish a connected
         feed whose zone is still unknown.
         """
-        if self._current_zone:
+        if not self._connected:
+            return _("◉  No instance")
+        if not self._awaiting_zone_metadata and self._current_zone:
             label = f"◉  {self._current_zone}"
             if self._match_zone and self._match_zone != self._current_zone:
                 label += f"   ·   {self._match_zone}"
             return label
-        if self._connected:
-            return _("◉  Instance unknown (connected mid-duty) - callouts are not zone-filtered")
-        return _("◉  No instance")
+        return _("◉  Instance unknown (connected mid-duty) - callouts are not zone-filtered")
 
     def _zone_matches(self, rx) -> bool:
         """Match a compiled zone pattern against every current name."""
@@ -228,6 +228,9 @@ class InstanceTabMixin:
 
     def _clear_actor_state(self) -> None:
         """Discard actors and pending marks whose loss events can no longer arrive."""
+        client = getattr(self, "_telesto_client", None)
+        if client is not None:
+            client.cancel_pending(clear_party=True)
         self._actor_jobs.clear()
         self._umad_actor_names.clear()
         self._umad_chain_reset()
@@ -277,6 +280,9 @@ class InstanceTabMixin:
             self._timeline.reset()
             self._plugin_link.send_clear(keep_dps=True)
             self._push_timeline_to_plugin()
+
+        if not game and getattr(self, "_triggernometry_reload_pending", False):
+            self._apply_pending_triggernometry_packs()
 
     @pyqtSlot(str)
     def _on_log_line(self, raw: str) -> None:
@@ -348,6 +354,9 @@ class InstanceTabMixin:
             # Restore the retained schedule immediately so the next pull has bars.
             self._push_timeline_to_plugin()
             self._clear_seq_runners()
+            client = getattr(self, "_telesto_client", None)
+            if client is not None:
+                client.cancel_pending()
             self._umad_chain_reset(clear_marks=True)
             self._umad_gaze_reset(clear_marks=True)
             self._automark_pairs.reset()
@@ -414,7 +423,7 @@ class InstanceTabMixin:
                 if not self._trigger_zone_matches(t):
                     continue
 
-                key = t.cooldown_key(fields[2] if len(fields) > 2 else "")
+                key = t.cooldown_key(cooldown_source_id(fields))
                 if (t.delay_s > 0 and not t.sequence
                         and any(r.trigger is t and r.cooldown_key == key
                                 for r in self._seq_runners)):

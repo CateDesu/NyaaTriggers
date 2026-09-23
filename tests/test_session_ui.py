@@ -1131,16 +1131,38 @@ class SessionUiTests(unittest.TestCase):
                 finally:
                     window.close()
 
-    def test_umad_without_verified_rules_is_explicitly_unavailable(self):
+    def test_umad_phase_confirmations_work_with_callouts_disabled(self):
+        self.connect()
+        self.window._on_ws_zone_changed(1363, "UMAD")
+        self.window._on_ws_primary_player(int(PLAYER, 16), "Player")
+        tab = self.window._prog_tab
+        tab.start_button.click()
+        self.window._on_in_combat(True, True)
+        self.line(ability())
+        for ability_id in ("C403", "C24C", "C3F7", "C2DC", "C24A"):
+            self.line(["20", "ts", "40000001", "Boss", ability_id, "Action"])
+            self.clock.value += 10
+        tab.tick()
+        self.assertEqual(tab.table.item(0, PHASE_COLUMN).text(), "P4")
+        self.assertEqual(tab.phase_table.rowCount(), 5)
+        self.assertEqual(tab.phase_table.item(4, 2).text(), "No confirmation")
+        self.window._on_in_combat(False, False)
+        self.clock.value += 3.5
+        self.line(["33", "ts", "80000001", "4000000F"])
+        tab.tick()
+        self.assertEqual(self.window._prog_sessions.current["pulls"][0]["ending"], "wipe")
+
+    def test_older_umad_pulls_keep_their_missing_phase_notice(self):
         self.connect()
         self.window._on_ws_zone_changed(1363, "UMAD")
         self.window._on_ws_primary_player(int(PLAYER, 16), "Player")
         tab = self.window._prog_tab
         tab.start_button.click()
         self.pull()
+        self.window._prog_sessions.current["pulls"][0]["phase_tracking"] = None
+        tab.tick()
         self.assertEqual(tab.table.item(0, PHASE_COLUMN).text(), "Not recorded")
-        self.assertIn("awaiting verified combat recordings", tab.phase_notice.text())
-        self.assertEqual(tab.phase_table.rowCount(), 0)
+        self.assertIn("was not recorded", tab.phase_notice.text())
 
     def test_live_phase_details_preserve_note_cursor_and_bookmark(self):
         pull = self.phase_pull()
@@ -1240,7 +1262,7 @@ class SessionUiTests(unittest.TestCase):
         tab.bookmark.setChecked(True)
         self.pull()
         self.assertEqual(tab.table.rowCount(), 2)
-        tab.table.selectRow(0)
+        tab.table.selectRow(1)
         self.assertEqual(tab.note.toPlainText(), "First clean towers")
         self.assertTrue(tab.bookmark.isChecked())
         self.line(["25", "ts", PLAYER, "Player"])
@@ -1577,6 +1599,80 @@ class SessionUiTests(unittest.TestCase):
         window._on_ws_zone_changed(2, "")
         self.assertIsNone(window._prog_sessions.current)
 
+    def test_newest_prog_pulls_keep_chart_selection_notes_and_live_values(self):
+        self.connect()
+        window = self.window
+        tab = window._prog_tab
+        tab.start_button.click()
+        self.pull()
+        first = tab.pull
+        tab.note.setPlainText("First pull note")
+        self.pull()
+        self.assertEqual([tab.table.item(row, 0).text() for row in range(2)], ["2", "1"])
+        self.assertIs(tab.pull, first)
+        self.assertEqual(tab.table.currentRow(), 1)
+        tab.chart.selected.emit(1)
+        second = tab.pull
+        self.assertIs(second, tab.session["pulls"][1])
+        self.assertEqual(tab.table.currentRow(), 0)
+        tab.note.setPlainText("Second pull note")
+        window._on_in_combat(True, True)
+        self.line(ability())
+        self.clock.value += 20
+        tab.tick()
+        self.assertEqual([tab.table.item(row, 0).text() for row in range(3)], ["3", "2", "1"])
+        self.assertEqual([tab.table.item(row, 2).text() for row in range(3)],
+                         ["00:00:20", "00:00:12", "00:00:12"])
+        self.assertIs(tab.pull, second)
+        self.assertEqual(tab.note.toPlainText(), "Second pull note")
+        self.assertEqual([tip.split(" · ")[0] for tip in tab.chart.tooltips], ["1", "2", "3"])
+        tab.chart.selected.emit(0)
+        self.assertIs(tab.pull, first)
+        self.assertEqual(tab.table.currentRow(), 2)
+        self.assertEqual(tab.note.toPlainText(), "First pull note")
+        tab.recap_button.click()
+        self.assertIn("Pull 1", window._recap_scope.text())
+        tab.pull = None
+        tab.refresh()
+        self.assertEqual(tab.table.currentRow(), 0)
+        self.assertIs(tab.pull, tab.session["pulls"][-1])
+
+    def test_recap_events_run_newest_first_and_details_resize(self):
+        self.connect()
+        window = self.window
+        window._prog_tab.start_button.click()
+        window._on_in_combat(True, True)
+        self.line(ability())
+        self.clock.value += 5
+        hit = ability()
+        hit[5] = "A long ability name that needs more room to remain readable"
+        self.line(hit)
+        self.clock.value += 2
+        self.line(["25", "ts", PLAYER, "Player"])
+        original = deepcopy(window._recap_records[0]["events"])
+        window._stack.setCurrentWidget(window._death_recap_tab)
+        window.show()
+        self.app.processEvents()
+        table = window._recap_table
+        self.assertEqual([table.item(row, 0).text() for row in range(2)], ["-2.0s", "-7.0s"])
+        self.assertEqual(table.item(0, 3).text(), hit[5])
+        self.assertEqual(table.item(0, 3).toolTip(), hit[5])
+        table.horizontalHeader().resizeSection(3, 130)
+        narrow_height = table.rowHeight(0)
+        table.horizontalHeader().resizeSection(3, 360)
+        self.assertLess(table.rowHeight(0), narrow_height)
+        window._select_recap(0)
+        self.assertEqual(table.columnWidth(3), 360)
+        self.assertEqual(table.verticalScrollBar().value(), 0)
+        self.assertEqual(window._recap_records[0]["events"], original)
+        detail = window._recap_detail
+        height = table.height()
+        detail.moveSplitter(detail.sizes()[0] + 60, 1)
+        self.app.processEvents()
+        self.assertLess(table.height(), height)
+        window._prog_tab.recap_button.click()
+        self.assertEqual([table.item(row, 0).text() for row in range(2)], ["-2.0s", "-7.0s"])
+
     def test_live_duration_and_name_edits_survive_new_pull(self):
         self.connect()
         window = self.window
@@ -1621,7 +1717,7 @@ class SessionUiTests(unittest.TestCase):
         restarted = ProgSessions(self.temp / "prog_sessions")
         window._prog_sessions = tab.sessions = restarted
         tab.refresh()
-        tab.table.selectRow(0)
+        tab.table.selectRow(1)
         tab.recap_button.click()
         self.assertEqual(window._recap_records[0]["name"], "First player")
         self.assertGreater(window._recap_table.rowCount(), 0)
@@ -1639,7 +1735,7 @@ class SessionUiTests(unittest.TestCase):
         self.line(["25", "ts", PLAYER, "Player"])
         self.assertGreater(window._recap_table.rowCount(), 0)
         self.pull()
-        tab.table.selectRow(1)
+        tab.table.selectRow(0)
         tab.recap_button.click()
         self.assertEqual(window._recap_table.rowCount(), 0)
         self.assertIn("No death recaps", window._recap_statuses.text())
@@ -2019,10 +2115,10 @@ class SessionUiTests(unittest.TestCase):
         tab.start_button.click()
         self.pull()
         self.pull()
-        tab.table.selectRow(0)
+        tab.table.selectRow(1)
         tab.note.setPlainText("First pull note")
         self.assertTrue(tab.save_timer.isActive())
-        tab.table.selectRow(1)
+        tab.table.selectRow(0)
         loaded = ProgSessions(self.temp / "prog_sessions").sessions[0]
         self.assertEqual([p["note"] for p in loaded["pulls"]], ["First pull note", ""])
         self.assertEqual(tab.note.toPlainText(), "")

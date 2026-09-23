@@ -65,9 +65,7 @@ from nyaatriggers.app_common import (
 )
 
 class _SidebarFrame(QFrame):
-    """Paint sidebar scenery behind the navigation controls. MainWindow schedules repaints
-    and pauses animation when the window loses focus.
-    """
+    """MainWindow pauses scenery animation while unfocused."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -121,9 +119,7 @@ class _SidebarFrame(QFrame):
         p.end()
 
 class _NavButton(QPushButton):
-    """Paint navigation borders and text effects that QSS cannot provide. QSS still
-    supplies the background and font.
-    """
+    """QSS supplies the background and font but cannot draw these text effects."""
 
     def paintEvent(self, _ev):
         opt = QStyleOptionButton()
@@ -155,7 +151,7 @@ class _NavButton(QPushButton):
             p.drawPixmap(icon_x, iy, icon_size.width(), icon_size.height(), pm)
         text_x = icon_x + icon_size.width() + 4
 
-        f = QFont(self.font())   # Keep the font supplied by QSS.
+        f = QFont(self.font())
         if self.isChecked():
             f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 105)
         fm = QFontMetricsF(f)
@@ -183,9 +179,7 @@ class _NavButton(QPushButton):
         p.end()
 
 class _BrandLabel(QLabel):
-    """Paint branding with a text halo and optional glow. Use the QSS font with custom
-    colour and spacing.
-    """
+    """Paint the text halo and glow using the QSS font."""
 
     def __init__(self, text, color, glow=False, spacing=100.0, parent=None):
         super().__init__(text, parent)
@@ -249,8 +243,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._current_zone: str = ""
         self._current_zone_id: int = 0   # retained for the Triggernometry zone replay
         self._awaiting_zone_metadata = True
-        # Use the canonical English zone for trigger matching when available. Keep the
-        # reported name in _current_zone for display.
+        # Match English zone patterns while displaying the reported name.
         self._match_zone: str = ""
         self._zone_aliases: tuple = ()
         # Resolve local identity from line 02, with the saved name as fallback.
@@ -263,9 +256,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._raw_capture: deque = deque(maxlen=MAX_RAW_CAPTURE)
 
         self._current_fight_tag: str = ""
-        # Reload the timeline only when periodic detection resolves a different fight.
         self._timeline_fight: str = ""
-        # File timestamps recorded by the last trigger load.
         self._triggers_mtime: tuple = ()
 
         self._timeline = TimelineEngine(self)
@@ -277,8 +268,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._cactbot_mode: bool = False
         # Distinguish deliberate reader shutdown from asynchronous page load failure.
         self._cactbot_teardown: bool = False
-        # Local triggers claim their callout text so duplicate guest callouts can be
-        # suppressed.
         self._callout_claimed: dict[str, float] = {}   # key to monotonic expiry
         # Deferred guest timers and severity. A popup may raise the severity of an
         # earlier cactbotSay message.
@@ -299,8 +288,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._cactbot_disabled: set[str] = set()
         self._cactbot_triggers_meta: list[dict] = []       # {id, name} rows from enumeration, if any
 
-        # Cactbot timelines follow the Cactbot switch alone. There is no separate
-        # timeline toggle.
+        # The Cactbot switch alone gates its timelines.
         self._local_enabled: bool = False
         self._cactbot_tl_fetching: set[str] = set()
         # Fetch state is updated from both the GUI and worker threads.
@@ -310,8 +298,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._ws.log_line.connect(self._on_log_line)
         self._ws.in_combat.connect(self._on_in_combat)
         self._ws.status_changed.connect(self._on_status_changed)
-        # Stop the timeline clock on feed loss so disconnected sessions cannot fire
-        # cues.
+        # Disconnected sessions must not fire timeline cues.
         self._ws.status_changed.connect(self._timeline.feed_status_changed)
         self._ws.primary_player.connect(self._on_ws_primary_player)
         self._ws.zone_changed.connect(self._on_ws_zone_changed)
@@ -328,7 +315,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._settings: dict = {}
         self._settings_load_warning = None
         self._load_settings()
-        # Capture raw pulls for replay when enabled in Settings.
         self._pull_capture = PullCapture(_DATA_DIR / "pull_logs", self,
                                          state_snapshot=self._ws.state_snapshot)
         self._pull_capture.context = lambda: (self._current_fight_tag, self._current_zone)
@@ -338,8 +324,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._ws.zone_changed.connect(self._pull_capture.on_zone_changed)
         self._ws.status_changed.connect(self._pull_capture.on_status_changed)
         self._pull_capture.set_recording(bool(self._settings.get("triggevent_record_pulls", False)))
-        # Set the locale and load callout translations before constructing widgets or
-        # firing triggers.
+        # Load translations before widgets and triggers use them.
         set_locale(effective_locale(self._settings.get("ui_language", "auto")))
         if self._settings_load_warning is not None:
             # Deferred from _load_settings so the dialog follows the locale.
@@ -370,13 +355,10 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._plugin_tick_timer.setInterval(250)
         self._plugin_tick_timer.timeout.connect(self._push_plugin_tick)
         self._plugin_tick_timer.start()
-        # Poll for updated triggers and fight detection so changes apply during the
-        # session. Unchanged files and fight tags require no reload.
         self._zone_redetect_timer = QTimer(self)
         self._zone_redetect_timer.setInterval(30_000)
         self._zone_redetect_timer.timeout.connect(self._poll_zone_and_triggers)
         self._zone_redetect_timer.start()
-        # Reject null or non-string character names from edited settings.
         char_name = self._settings.get("char_name")
         self._me_name = char_name if isinstance(char_name, str) else ""
         self._local_enabled = bool(self._settings.get("local_enabled", False))
@@ -388,11 +370,9 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._src_collapsed: dict = {"general": True, "dot": True, "local": True,
                                      "engine": True, "triggernometry": True}
         self._fight_cur: str = ""
-        # Track each global toggle independently of individual triggers. Local defaults
-        # on so existing configurations keep their timeline and feed behavior.
+        # Global toggles keep their direction across individual trigger edits.
         self._global_local_on_flag: bool = bool(self._settings.get("global_local_on", True))
         self._global_tv_on_flag: bool = bool(self._settings.get("global_tv_on", False))
-        # Load cached engine inventory before sidecars start.
         self._load_cached_triggevent_inventory()
         self._load_cached_triggernometry_inventory()
 
@@ -405,8 +385,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._dps_meter.on_pull_start = self._prog_pull_started
         self._dps_meter.on_pull_finish = self._prog_pull_finished
 
-        # Apply slider changes immediately and debounce settings writes. Flush pending
-        # writes on exit.
+        # Debounce settings writes and flush on exit.
         self._settings_save_timer = QTimer(self)
         self._settings_save_timer.setSingleShot(True)
         self._settings_save_timer.setInterval(400)
@@ -440,12 +419,10 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         # Warm Kokoro imports off the GUI thread to avoid a pause on voice selection.
         threading.Thread(target=kokoro_ready, daemon=True).start()
         _ensure_worker()
-        # Use the default volume if the saved value cannot be converted.
         try:
             vol = float(self._settings.get("master_volume", 1.0))
         except (TypeError, ValueError, OverflowError):
             vol = 1.0
-        # Reject nonfinite JSON numbers before clamping volume.
         if not math.isfinite(vol):
             vol = 1.0
         set_master_volume(vol)
@@ -466,8 +443,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         if TriggeventBridge.is_available():
             QTimer.singleShot(900, self._reconcile_triggevent_engine)
         else:
-            # Report missing engine dependencies instead of leaving the trigger section
-            # unexplained.
+            # Explain missing engine dependencies in the trigger section.
             QTimer.singleShot(1200, self._note_triggevent_unavailable)
         # Restore the selected callout source without stopping the automarker engine.
         if self._settings.get("cactbot_enabled") and CactbotReader.is_available():
@@ -475,8 +451,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         else:
             QTimer.singleShot(950, lambda: self._set_triggers_enabled(True))
 
-        # Schedule updates after construction. main.py retains rollback backups until
-        # boot verification succeeds.
+        # Rollback backups remain until main.py verifies startup.
         try:
             if self._settings.get("auto_check_updates", True):
                 QTimer.singleShot(2500, lambda: self._start_update_check(manual=False))
@@ -484,11 +459,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             print(f"[NyaaTriggers] update check scheduling failed: "
                   f"{exc!r}", file=sys.stderr)
 
-        # Refresh translations in the background. Keep bundled or cached data if the
-        # fetch fails.
         QTimer.singleShot(2800, self._refresh_callouts_ja_async)
 
-        # Source builds can update the engine in the background for the next launch.
         if self._settings.get("triggevent_auto_update", False):
             QTimer.singleShot(3000, self._maybe_update_triggevent)
 
@@ -555,7 +527,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         side.addWidget(brand_ver)
         side.addSpacing(18)
 
-        # Keep page insertion order consistent with navigation order.
         self._stack = QStackedWidget()
         self._stack.setObjectName("pageStack")
         self._nav_group = QButtonGroup(self)
@@ -610,12 +581,10 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._status_lbl = QLabel(_("● Disconnected"))
         self._status_lbl.setStyleSheet("color:#f38ba8; font-weight:bold;")
         conn.addWidget(self._status_lbl)
-        # Keep engine status hidden until a bridge reports.
         self._engine_status_lbl = QLabel("")
         self._engine_status_lbl.setStyleSheet("color:#8f8f9a; font-weight:bold;")
         self._engine_status_lbl.setVisible(False)
         conn.addWidget(self._engine_status_lbl)
-        # Show chain failures separately from engine disconnection.
         self._engine_chain_lbl = QLabel("")
         self._engine_chain_lbl.setStyleSheet("color:#f9e2af; font-weight:bold;")
         self._engine_chain_lbl.setVisible(False)
@@ -916,14 +885,12 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             b.setMaximumWidth(120)
             btn_bar.addWidget(b)
         btn_bar.addStretch()
-        self._add_btn.clicked.connect(self._add_trigger)
         self._edit_btn.clicked.connect(self._edit_trigger)
         self._dup_btn.clicked.connect(self._duplicate_trigger)
         self._del_btn.clicked.connect(self._delete_trigger)
         self._test_btn.clicked.connect(self._test_trigger)
 
         bulk_bar = QHBoxLayout()
-        # Global toggles update every fight and refresh their source controls.
         self._enable_btn  = QPushButton(_("Global - Triggevent On/Off"))
         self._disable_btn = QPushButton(_("Global - Local On/Off"))
         for b in (self._disable_btn, self._enable_btn):
@@ -939,6 +906,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._enable_btn.clicked.connect(self._toggle_global_tv)
         self._disable_btn.clicked.connect(self._toggle_global_local)
         trig_layout.addLayout(btn_bar)
+        self._setup_custom_triggevent_controls(trig_layout)
         trig_layout.addLayout(bulk_bar)
 
         search_bar = QHBoxLayout()
@@ -1093,7 +1061,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._dps_idle_combo.setToolTip(
             _("Pause and reset the on-screen meter after this much damage "
               "downtime. The recorded pull always keeps its full length."))
-        # Use the same validated idle timeout as the meter.
         idx = self._dps_idle_combo.findData(self._dps_idle_timeout)
         self._dps_idle_combo.setCurrentIndex(idx if idx >= 0 else 3)
         self._dps_idle_combo.currentIndexChanged.connect(self._on_dps_idle_changed)
@@ -1192,7 +1159,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         vol_corner_layout = QHBoxLayout(vol_corner)
         vol_corner_layout.setContentsMargins(0, 0, 0, 0)
         vol_corner_layout.setSpacing(6)
-        # Left click toggles mute. Right click offers timed mutes.
         self._mute_until_zone = False
         self._mute_timer = QTimer(self)
         self._mute_timer.setSingleShot(True)
@@ -1210,7 +1176,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             cur_vol = float(self._settings.get("master_volume", 1.0))
         except (TypeError, ValueError, OverflowError):
             cur_vol = 1.0
-        # Reject nonfinite values before converting to an integer.
         if not math.isfinite(cur_vol):
             cur_vol = 1.0
         self._vol_slider.setValue(int(max(0.0, min(2.0, cur_vol)) * 100))
@@ -1265,9 +1230,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
 
     def _dedup_speak_gate(self, last_spoken: dict, text: str,
                           window_s: float, prune_s: float) -> bool:
-        """Return true and record the text when an engine callout is allowed. Suppress only
-        immediate duplicates and prune expired claims.
-        """
+        """Claim engine text unless it was just spoken."""
         now = time.monotonic()
         key = text.casefold()
         if now - last_spoken.get(key, 0.0) < window_s:
@@ -1278,11 +1241,9 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         last_spoken[key] = now
         return True
 
-    # Defer guest callouts briefly so local triggers can claim matching text first. Emit
-    # guests immediately when local callouts are disabled.
+    # Give local triggers time to claim guest text when enabled.
 
     def _flush_guest(self, loc: str, severity: str, key: str) -> None:
-        """Emit localized guest text and record its claim."""
         speak(loc, reading=self._reading_for(loc))
         self._emit_alert(loc, severity)
         self._callout_claimed[key] = time.monotonic() + _CALLOUT_CLAIM_S
@@ -1327,9 +1288,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             play_sound(t.sound_file)
 
     def _teardown_step(self, label: str, fn) -> None:
-        """Run cleanup steps independently so one failure cannot skip the remaining
-        resources.
-        """
+        """One cleanup failure must not skip later resources."""
         try:
             fn()
         except Exception as exc:  # noqa: BLE001
@@ -1337,9 +1296,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
                   file=sys.stderr)
 
     def _stop_background_timers(self) -> None:
-        """Stop periodic and pending timers before tearing down their targets. Also used by
-        update restarts that bypass closeEvent.
-        """
+        """Also used by update restarts that bypass closeEvent."""
         step = self._teardown_step
         step("telesto party timer stop", lambda: self._telesto_party_timer.stop())
         step("mute timer stop", lambda: self._mute_timer.stop())
@@ -1368,9 +1325,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             step("ability filter timer stop", lambda: self._ability_filter_timer.stop())
             step("clear status timers", lambda: self._clear_status_timers())
             step("clear seq runners", lambda: self._clear_seq_runners())
-            # Flush debounced writes before the event loop exits.
             step("settings save flush", lambda: self._flush_pending_settings_save())
-            # Record an open encounter when closing during a fight.
             step("meter encounter finalize", lambda: self._finalize_live_encounter())
             step("cactbot reader stop", lambda: self._stop_cactbot_reader())
             step("triggevent stop", lambda: self._stop_sidecar("_triggevent"))

@@ -102,7 +102,7 @@ jobs:
             libgl1 libnss3 libasound2 mono-devel xvfb
       - name: Install Python dependencies
         run: |
-          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 websockets==16.1.1 regex==2026.7.19 numpy==2.3.5
+          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 websockets==16.1.1 regex==2026.7.19 packaging==26.3 numpy==2.3.5
       - name: Run test suite
         env:
           QT_QPA_PLATFORM: offscreen
@@ -169,9 +169,10 @@ jobs:
       - name: Verify engine recovery
         run: |
           sudo apt-get update && sudo apt-get install -y xvfb libegl1 libxkbcommon0 libgl1
-          pip install PyQt6==6.11.0 regex==2026.7.19
+          pip install PyQt6==6.11.0 regex==2026.7.19 packaging==26.3
           python3 triggevent-core/test_recovery.py --compare
           python3 triggevent-core/test_recovery_protocol.py
+          python3 triggevent-core/test_custom_triggers.py
 
       - name: Upload sidecar jar
         uses: actions/upload-artifact@v4
@@ -252,7 +253,10 @@ jobs:
       # Keep dependency versions in sync with requirements.txt and the voice installers.
       - name: Install dependencies
         run: |
-          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 piper-tts==1.6.0 pyinstaller==6.21.0 pillow==12.3.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1
+          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 piper-tts==1.6.0 pyinstaller==6.21.0 pillow==12.3.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1 packaging==26.3
+
+      - name: Verify source updates on Windows
+        run: python -m tests test_updater_integration
 
       # Stamp rolling builds with the release version so the updater recognizes them as
       # current.
@@ -366,6 +370,12 @@ jobs:
       - name: Zip release folder
         run: Compress-Archive -Path dist\NyaaTriggers -DestinationPath NyaaTriggers-windows.zip
 
+      - name: Verify packaged Windows update and restart
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          QT_QPA_PLATFORM: offscreen
+        run: python tools/check_packaged_update.py NyaaTriggers-windows.zip --version $env:VERSION
+
       - name: Write SHA-256 sidecar
         shell: bash
         run: sha256sum NyaaTriggers-windows.zip > NyaaTriggers-windows.zip.sha256
@@ -398,7 +408,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 piper-tts==1.6.0 pyinstaller==6.21.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1
+          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 piper-tts==1.6.0 pyinstaller==6.21.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1 packaging==26.3
 
       - name: Stamp rolling version into _VERSION
         if: needs.meta.outputs.rolling == 'true'
@@ -508,6 +518,12 @@ jobs:
         run: |
           cd dist
           tar -czf ../NyaaTriggers-linux.tar.gz NyaaTriggers
+
+      - name: Verify packaged Linux update and restart
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          QT_QPA_PLATFORM: offscreen
+        run: python tools/check_packaged_update.py NyaaTriggers-linux.tar.gz --version "$VERSION"
 
       - name: Write SHA-256 sidecar
         run: sha256sum NyaaTriggers-linux.tar.gz > NyaaTriggers-linux.tar.gz.sha256

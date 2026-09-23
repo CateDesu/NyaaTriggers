@@ -90,8 +90,8 @@ class FakeTelesto:
 
     def __init__(self):
         self.commands = []
-        self.party = [{"order": "0", "actor": "10FF0001"},
-                      {"order": "1", "actor": "10FF0002"}]
+        self.party = [{"order": "1", "actor": "10FF0001"},
+                      {"order": "2", "actor": "10FF0002"}]
         self.ok = True   # False answers every POST with HTTP 500
 
     def start(self):

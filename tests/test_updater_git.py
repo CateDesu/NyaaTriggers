@@ -47,7 +47,8 @@ def run_case(pull_rc=0, head_moves=True, pip_rc=0, pip_err="", with_req=True):
     orig = updater.subprocess.run
     updater.subprocess.run = fake_run
     try:
-        ok, msg = updater.apply_git(repo)
+        with patch.object(updater, "_externally_managed_python", return_value=False):
+            ok, msg = updater.apply_git(repo)
     finally:
         updater.subprocess.run = orig
     pip_calls = [c for c in calls if c[0] == sys.executable and "pip" in c]
@@ -72,6 +73,81 @@ ok, msg, pip_calls, tmp = run_case(head_moves=False)
 check("unchanged HEAD still installs requirements", ok and len(pip_calls) == 1)
 check("unchanged HEAD reports the dependency result", "dependencies are up to date" in msg)
 tmp.cleanup()
+
+# System-managed Python can use already installed packages without invoking pip.
+with tempfile.TemporaryDirectory() as td:
+    repo = Path(td)
+    (repo / "requirements.txt").write_text(
+        "required-example==1.2.3\nPyQt6-WebEngine==6.11.0\n", encoding="utf-8")
+    with patch.object(updater, "_externally_managed_python", return_value=True), \
+            patch.object(updater.metadata, "version", return_value="1.3.0"), \
+            patch.object(updater.subprocess, "run", side_effect=AssertionError("pip ran")):
+        managed_result = updater._install_requirements(repo)
+    check("managed Python accepts newer required packages and absent optional WebEngine",
+          managed_result == (True, ""))
+
+    with patch.object(updater, "_externally_managed_python", return_value=True), \
+            patch.object(updater.metadata, "version", return_value="1.0.0"), \
+            patch.object(updater.subprocess, "run", side_effect=AssertionError("pip ran")):
+        missing_result = updater._install_requirements(repo)
+    check("managed Python reports an old required package without calling pip",
+          missing_result is not None and not missing_result[0]
+          and "required-example" in missing_result[1])
+    with patch.object(updater, "_externally_managed_python", return_value=True), \
+            patch.object(updater.metadata, "version",
+                         side_effect=updater.metadata.PackageNotFoundError):
+        absent_result = updater._install_requirements(repo)
+    check("managed Python names an absent required package",
+          absent_result is not None and not absent_result[0]
+          and "required-example 1.2.3 is not installed" in absent_result[1])
+    with patch.object(updater, "_externally_managed_python", return_value=True), \
+            patch.object(updater, "_git_pull", return_value=_R(0, "Already up to date.")), \
+            patch.object(updater.metadata, "version", return_value="1.0.0"), \
+            patch.object(updater.subprocess, "run", side_effect=AssertionError("pip ran")):
+        managed_ok, managed_message = updater.apply_git(repo)
+    check("managed dependency failure gives a package manager repair path",
+          not managed_ok and "distribution's package manager" in managed_message
+          and "checking the Python dependencies failed" in managed_message
+          and "pip install -r" not in managed_message)
+
+for installed, expected in (
+        ("6.11.0", True), ("6.11", True), ("6.11.0.0", True),
+        ("6.11.0+dfsg1", True), ("6.11.0.post1", True),
+        ("1!6.0", True), ("6.12.0", True),
+        ("6.10.9", False), ("6.11.0rc1", False), ("6.11.0.dev1", False),
+        ("not-a-version", False)):
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td)
+        (repo / "requirements.txt").write_text("PyQt6==6.11.0\n", encoding="utf-8")
+        dist = repo / "PyQt6-6.11.0.dist-info"
+        dist.mkdir()
+        (dist / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: PyQt6\nVersion: {installed}\n",
+            encoding="utf-8")
+        sys.path.insert(0, td)
+        try:
+            with patch.object(updater, "_externally_managed_python", return_value=True), \
+                    patch.object(updater, "_git_pull", return_value=_R(0, "Already up to date.")), \
+                    patch.object(updater.subprocess, "run", side_effect=AssertionError("pip ran")):
+                version_ok, version_message = updater.apply_git(repo)
+        finally:
+            sys.path.pop(0)
+        check(f"managed Python handles installed version {installed}", version_ok == expected)
+        if installed == "not-a-version":
+            check("invalid package versions explain the comparison failure",
+                  "Could not compare" in version_message)
+
+with tempfile.TemporaryDirectory() as td:
+    repo = Path(td)
+    (repo / "requirements.txt").write_text("PyQt6==6.11.0\n", encoding="utf-8")
+    with patch.dict(sys.modules, {"packaging": None, "packaging.version": None}), \
+            patch.object(updater, "_externally_managed_python", return_value=True), \
+            patch.object(updater, "_git_pull", return_value=_R(0, "Already up to date.")), \
+            patch.object(updater.subprocess, "run", side_effect=AssertionError("pip ran")):
+        parser_ok, parser_message = updater.apply_git(repo)
+    check("missing version parser reports the required package",
+          not parser_ok and "packaging" in parser_message
+          and "distribution's package manager" in parser_message)
 
 # A failed pull never touches pip either.
 ok, msg, pip_calls, tmp = run_case(pull_rc=128)
@@ -195,7 +271,8 @@ def conflict_then_ok(argv, **kw):
 orig = updater.subprocess.run
 updater.subprocess.run = conflict_then_ok
 try:
-    ok, msg = updater.apply_git(repo)
+    with patch.object(updater, "_externally_managed_python", return_value=False):
+        ok, msg = updater.apply_git(repo)
 finally:
     updater.subprocess.run = orig
 check("stale cactbot conflicts self heal and the pull retries",

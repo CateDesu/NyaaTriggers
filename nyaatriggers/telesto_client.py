@@ -1,5 +1,5 @@
 """Queue marker commands through the Telesto HTTP endpoint. Resolve actor IDs to party
-slots using sorted GetPartyMembers responses and skip unknown targets. A worker sends
+slots using GetPartyMembers order and skip unknown targets. A worker sends
 commands serially with configured delays and reports connection failures.
 """
 
@@ -68,6 +68,102 @@ def _is_loopback_uri(uri: str) -> bool:
         return address.is_loopback
     except ValueError:
         return False
+
+
+def read_telesto_response(request, timeout: float, stopping: threading.Event,
+                          *, use_proxy=True, max_body=1 << 20, is_current=None) -> tuple[int, bytes]:
+    """Bound Telesto requests through headers and body and interrupt them on shutdown."""
+    done = threading.Event()
+    cancelled = threading.Event()
+    sockets = []
+    deadline = time.monotonic() + timeout
+
+    def request_cancelled():
+        return stopping.is_set() or (is_current is not None and not is_current())
+
+    def check_cancelled():
+        if request_cancelled() or cancelled.is_set() or time.monotonic() >= deadline:
+            raise TimeoutError("Telesto request cancelled" if request_cancelled()
+                               else "Telesto request deadline exceeded")
+
+    def connection_type(base):
+        class Connection(base):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                create_connection = self._create_connection
+
+                def connect_socket(*args, **kwargs):
+                    check_cancelled()
+                    sock = create_connection(*args, **kwargs)
+                    try:
+                        # Keep a handle while TLS takes ownership of the socket.
+                        sockets.append(sock.dup())
+                        check_cancelled()
+                    except BaseException:
+                        sock.close()
+                        raise
+                    return sock
+
+                self._create_connection = connect_socket
+
+            def connect(self):
+                check_cancelled()
+                super().connect()
+                try:
+                    check_cancelled()
+                except TimeoutError:
+                    self.close()
+                    raise
+
+            def send(self, data):
+                check_cancelled()
+                super().send(data)
+
+        return Connection
+
+    http_connection = connection_type(http.client.HTTPConnection)
+    https_connection = connection_type(http.client.HTTPSConnection)
+
+    class HttpHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(http_connection, req)
+
+    class HttpsHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(https_connection, req, context=self._context)
+
+    handlers = [HttpHandler(), HttpsHandler()]
+    if not use_proxy or _is_loopback_uri(request.full_url):
+        handlers.append(urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(*handlers)
+
+    def watch():
+        while not done.wait(0.02):
+            if not request_cancelled() and time.monotonic() < deadline:
+                continue
+            cancelled.set()
+            for sock in list(sockets):
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    watcher = threading.Thread(target=watch, daemon=True, name="TelestoDeadline")
+    watcher.start()
+    try:
+        check_cancelled()
+        with opener.open(request, timeout=timeout) as response:
+            check_cancelled()
+            body = response.read(max_body + 1)
+            check_cancelled()
+            if len(body) > max_body:
+                raise ValueError("Telesto response too large")
+            return response.getcode(), body
+    finally:
+        done.set()
+        watcher.join()
+        for sock in sockets:
+            sock.close()
 
 
 _STOP = object()
@@ -170,6 +266,8 @@ class TelestoClient(QObject):
         self._enabled = bool(enabled)
         self._command_epoch = 0
         self._endpoint_epoch = 0
+        self._encounter_epoch = 0
+        self._cleanup_epoch = 0
         self._delay_base = max(0, int(delay_base_ms))
         self._delay_plus = max(0, int(delay_plus_ms))
         self._timeout = float(timeout)
@@ -212,6 +310,15 @@ class TelestoClient(QObject):
 
     def set_enabled(self, enabled: bool) -> None:
         self.configure(enabled=enabled)
+
+    def cancel_pending(self, *, clear_party: bool = False) -> None:
+        """Cancel work from the previous encounter before queueing its cleanup."""
+        with self._lock:
+            self._encounter_epoch += 1
+            if clear_party:
+                self._cleanup_epoch += 1
+                self._slot_by_actor.clear()
+            self._discard_cancelled_commands()
 
     def is_enabled(self) -> bool:
         with self._lock:
@@ -295,10 +402,11 @@ class TelestoClient(QObject):
         """Resolve the actor's current party slot and queue a mark. Return false when the
         slot is unknown or queueing fails.
         """
-        slot = self.slot_of_actor(actor_id)
-        if not slot:
-            return False
-        return self.mark_slot(marker, slot, force=force)
+        with self._lock:
+            slot = self.slot_of_actor(actor_id)
+            if not slot:
+                return False
+            return self.mark_slot(marker, slot, force=force)
 
     def slot_of_actor(self, actor_id) -> "int | None":
         """Return the actor's current party slot, or None."""
@@ -313,18 +421,23 @@ class TelestoClient(QObject):
             return len(self._slot_by_actor)
 
     def clear_self(self, force: bool = False) -> bool:
-        return self.send_game_command("/mk clear <me>", force=force)
+        return self._enqueue(game_command_message("/mk clear <me>"),
+                             delay=True, force=force, cleanup=True)
 
     def clear_actor(self, actor_id, force: bool = False) -> bool:
         """Clear the actor's marker only when its party slot is known."""
-        slot = self.slot_of_actor(actor_id)
-        if not slot:
-            return False
-        return self.send_game_command(f"/mk clear <{int(slot)}>", force=force)
+        with self._lock:
+            slot = self.slot_of_actor(actor_id)
+            if not slot:
+                return False
+            return self._enqueue(game_command_message(f"/mk clear <{int(slot)}>"),
+                                 delay=True, force=force, cleanup=True)
 
     def clear_all(self, force: bool = False) -> None:
-        for n in range(1, 9):
-            self.send_game_command(f"/mk clear <{n}>", force=force)
+        with self._lock:
+            for n in range(1, 9):
+                self._enqueue(game_command_message(f"/mk clear <{n}>"),
+                              delay=True, force=force, cleanup=True)
 
     def request_party_members(self, force: bool = False) -> None:
         """Refresh the party mapping and connection status."""
@@ -334,23 +447,26 @@ class TelestoClient(QObject):
         """Probe reachability even while marking is disabled."""
         self.request_party_members(force=True)
 
-    def _enqueue(self, msg: dict, delay: bool, force: bool = False) -> bool:
+    def _enqueue(self, msg: dict, delay: bool, force: bool = False, cleanup: bool = False) -> bool:
         """Return false if disabled or the queue is full."""
         try:
             with self._lock:
                 if not force and not self._enabled:
                     return False
                 self._queue.put_nowait((msg, delay, force, self._command_epoch,
-                                       self._endpoint_epoch))
+                                       self._endpoint_epoch, self._encounter_epoch,
+                                       self._cleanup_epoch if cleanup else None))
         except queue.Full:
             log_drop("telesto-queue", "command queue full, dropping message")
             self.error.emit("Telesto command queue full; command dropped")
             return False
         return True
 
-    def _can_send(self, force: bool, epoch: int, endpoint: int) -> bool:
+    def _can_send(self, force: bool, epoch: int, endpoint: int, encounter: int,
+                  cleanup: int | None) -> bool:
         with self._lock:
             return (endpoint == self._endpoint_epoch
+                    and (encounter == self._encounter_epoch or cleanup == self._cleanup_epoch)
                     and (force or self._enabled and epoch == self._command_epoch))
 
     def _discard_cancelled_commands(self) -> None:
@@ -359,7 +475,7 @@ class TelestoClient(QObject):
         q = self._queue
         with q.mutex:
             keep = [item for item in q.queue
-                    if item is _STOP or self._can_send(item[2], item[3], item[4])]
+                    if item is _STOP or self._can_send(*item[2:])]
             removed = len(q.queue) - len(keep)
             if not removed:
                 return
@@ -385,17 +501,18 @@ class TelestoClient(QObject):
                 if stopping.is_set():
                     break
                 continue                       # stale sentinel from a previous generation
-            msg, delay, force, epoch, endpoint = item
-            if not self._can_send(force, epoch, endpoint):
+            msg, delay, force, epoch, endpoint, encounter, cleanup = item
+            if not self._can_send(force, epoch, endpoint, encounter, cleanup):
                 continue
             if delay:
                 self._sleep_command_delay(stopping)
             # Recheck shutdown after dequeue before issuing a request.
             if stopping.is_set():
                 break
-            if not self._can_send(force, epoch, endpoint):
+            if not self._can_send(force, epoch, endpoint, encounter, cleanup):
                 continue
             try:
+                self._request_context.command = (force, epoch, endpoint, encounter, cleanup)
                 self._request_context.endpoint = endpoint
                 self._post(msg)
             except Exception as exc:  # Continue processing after a failed command.
@@ -414,7 +531,7 @@ class TelestoClient(QObject):
     def _post(self, msg: dict) -> None:
         with self._lock:
             endpoint = getattr(self._request_context, "endpoint", self._endpoint_epoch)
-            if endpoint != self._endpoint_epoch:
+            if not self._response_current(endpoint):
                 return
             uri, timeout = self._uri, self._timeout
         body = json.dumps(msg).encode("utf-8")
@@ -449,101 +566,20 @@ class TelestoClient(QObject):
             log_drop("telesto-http", f"unreachable: {exc}")
 
     def _response_current(self, endpoint: int) -> bool:
+        command = getattr(self._request_context, "command", None)
         return (endpoint == self._endpoint_epoch
+                and (command is None or self._can_send(*command))
                 and not getattr(self._request_context, "stopping", self._stopping).is_set())
 
     def _read_response(self, request, timeout: float) -> tuple[int, bytes]:
         """Abort a stalled request even when its peer keeps sending bytes."""
         stopping = getattr(self._request_context, "stopping", self._stopping)
-        done = threading.Event()
-        cancelled = threading.Event()
-        connections = []
-        responses = []
-        deadline = time.monotonic() + timeout
-
-        def check_cancelled():
-            if stopping.is_set() or cancelled.is_set() or time.monotonic() >= deadline:
-                raise TimeoutError("Telesto request cancelled" if stopping.is_set()
-                                   else "Telesto request deadline exceeded")
-
-        def connection_type(base):
-            class Connection(base):
-                def __init__(self, *args, **kwargs):
-                    super().__init__(*args, **kwargs)
-                    connections.append(self)
-
-                def connect(self):
-                    check_cancelled()
-                    super().connect()
-                    try:
-                        check_cancelled()
-                    except TimeoutError:
-                        self.close()
-                        raise
-
-                def send(self, data):
-                    check_cancelled()
-                    super().send(data)
-
-                def getresponse(self):
-                    response = super().getresponse()
-                    # Redirect handlers can read the body before open returns.
-                    responses.append(response)
-                    return response
-            return Connection
-
-        http_connection = connection_type(http.client.HTTPConnection)
-        https_connection = connection_type(http.client.HTTPSConnection)
-
-        class HttpHandler(urllib.request.HTTPHandler):
-            def http_open(self, req):
-                return self.do_open(http_connection, req)
-
-        class HttpsHandler(urllib.request.HTTPSHandler):
-            def https_open(self, req):
-                return self.do_open(https_connection, req, context=self._context)
-
-        handlers = [HttpHandler(), HttpsHandler()]
-        if _is_loopback_uri(request.full_url):
-            handlers.append(urllib.request.ProxyHandler({}))
-        opener = urllib.request.build_opener(*handlers)
-
-        def watch():
-            while not done.wait(0.02):
-                if not stopping.is_set() and time.monotonic() < deadline:
-                    continue
-                cancelled.set()
-                sockets = [sock for conn in list(connections) if (sock := conn.sock) is not None]
-                for response in list(responses):
-                    try:
-                        sockets.append(response.fp.raw._sock)
-                    except AttributeError:
-                        pass
-                for sock in sockets:
-                    try:
-                        sock.shutdown(socket.SHUT_RDWR)
-                    except OSError:
-                        pass
-
-        watcher = threading.Thread(target=watch, daemon=True, name="TelestoDeadline")
-        watcher.start()
-        try:
-            check_cancelled()
-            with opener.open(request, timeout=timeout) as response:
-                check_cancelled()
-                body = response.read((1 << 20) + 1)
-                check_cancelled()
-                if len(body) > 1 << 20:
-                    raise ValueError("Telesto response too large")
-                return response.getcode(), body
-        finally:
-            done.set()
-            watcher.join()
+        command = getattr(self._request_context, "command", None)
+        is_current = (lambda: self._can_send(*command)) if command is not None else None
+        return read_telesto_response(request, timeout, stopping, is_current=is_current)
 
     def _update_party_slots(self, body: bytes) -> None:
-        """Sort valid party entries by order and map actors to consecutive slots. Keep the
-        previous mapping when the response is malformed.
-        """
+        """Use valid party order as the slot. Keep the prior map on an invalid roster."""
         try:
             data = json.loads(body.decode("utf-8", "replace"))
         except (ValueError, AttributeError):
@@ -557,26 +593,20 @@ class TelestoClient(QObject):
                 self._slot_by_actor = {}
             return
 
-        def _order(entry):
-            try:
-                return int(str(entry.get("order")).strip(), 16)
-            except (ValueError, AttributeError, TypeError):
-                return 1 << 30  # unparseable order sorts last
-
-        ordered = sorted((m for m in members if isinstance(m, dict)), key=_order)
         slots: "dict[int, int]" = {}
-        # Skip invalid actors without leaving gaps in slot numbers.
-        slot = 0
-        for entry in ordered:
+        seen_orders: set[int] = set()
+        for entry in members:
+            if not isinstance(entry, dict):
+                return
             aid = _actor_int(entry.get("actor"))
-            if aid is None:
-                continue
-            slot += 1
-            if slot > 8:
-                break
-            slots[aid] = slot
-        # Replace the map for every valid roster, even if no actor parsed. Stale slots
-        # could mark the wrong player.
+            try:
+                order = int(str(entry.get("order")).strip(), 16)
+            except (ValueError, AttributeError, TypeError):
+                return
+            if aid is None or not 1 <= order <= 8 or order in seen_orders or aid in slots:
+                return
+            seen_orders.add(order)
+            slots[aid] = order
         with self._lock:
             self._slot_by_actor = slots
 

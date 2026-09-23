@@ -38,6 +38,7 @@ class PhaseDefinition:
     rules: tuple[PhaseRule, ...]
     transitions: tuple[TransitionRule, ...] = ()
     verified: bool = False
+    continuous_combat: bool = False
 
     def __post_init__(self):
         if (not text_id(self.ident) or type(self.revision) is not int or self.revision < 1
@@ -67,10 +68,6 @@ class PhaseDefinition:
             raise ValueError("Verified definitions must cover every phase")
 
 
-# Add UMAD only after recorded feeds verify its phases and boundaries.
-DEFINITIONS: tuple[PhaseDefinition, ...] = ()
-
-
 def text_id(value):
     return isinstance(value, str) and 0 < len(value) <= 80 and value.isascii() and all(
         c.isalnum() or c in "_.-" for c in value)
@@ -78,6 +75,18 @@ def text_id(value):
 
 def seconds(value):
     return type(value) in (int, float) and 0 <= value <= MAX_SECONDS and math.isfinite(value)
+
+
+# C24A also occurs in P4. BB40 confirms P5 without counting repeated jumps.
+UMAD = PhaseDefinition(
+    "umad", 1, UMAD_ZONE, UMAD_PHASES,
+    tuple(PhaseRule(f"{phase}-{event}-{ability:x}", event, ability, phase)
+          for phase, ability in (("p1", 0xC403), ("p2", 0xC24C), ("p3", 0xC3F7),
+                                 ("p4", 0xC2DC), ("p5", 0xBB40))
+          for event in ("20", "21", "22")),
+    verified=True, continuous_combat=True,
+)
+DEFINITIONS: tuple[PhaseDefinition, ...] = (UMAD,)
 
 
 def definition_for(zone_id, definitions=DEFINITIONS):

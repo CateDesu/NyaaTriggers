@@ -4,10 +4,12 @@ transport.
 import json
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nyaatriggers.fflogs import FflogsClient
+from nyaatriggers.ui.dps_tab import DpsTabMixin
 
 FAILS = []
 
@@ -139,6 +141,29 @@ c = fresh_client(fake)
 res = c.fetch_best("Tini Poutini", "tonberry", "JP", "Everkeep")
 check("allStars fallback supplies the percent",
       res == {"percent": 71.5, "amount": None, "zone": "Everkeep"})
+
+
+class Label:
+    def __init__(self):
+        self.value = ""
+
+    def setText(self, value):
+        self.value = value
+
+
+label = Label()
+context = ("Player", "tonberry", "JP", "cid", "secret")
+ui = SimpleNamespace(_fflogs_request_id=1, _fflogs_lbl=label,
+                     _fflogs_request_context=context, _fflogs_context=lambda: context)
+DpsTabMixin._on_fflogs_result(ui, 1, res)
+check("a percentile-only FFLogs result remains visible",
+      label.value == "FFLogs best: 72%")
+DpsTabMixin._on_fflogs_result(ui, 1, {"amount": 3000, "percent": 0})
+check("a complete FFLogs result still shows rDPS and zero percentile",
+      label.value == "FFLogs best: 3.0k rDPS (0%)")
+DpsTabMixin._on_fflogs_result(ui, 1, {"amount": float("nan"), "percent": float("nan")})
+check("nonfinite FFLogs values show no data",
+      label.value == "FFLogs: no data")
 
 # zoneRankings arriving as a JSON string (some proxies double-encode).
 fake = FakeHTTP(rankings=json.dumps(RANKINGS))

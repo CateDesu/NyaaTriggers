@@ -74,8 +74,10 @@ class DpsTabMixin:
                 self._plugin_link.send_dps(
                     {"t": enc["title"], "d": enc["duration"],
                      "dps": round(enc["encdps"], 1),
+                     "id": enc.get("pull_id", ""), "zone": enc.get("CurrentZoneName", ""),
+                     "hps": enc.get("enchps", 0), "participants": len(snap["Combatant"]),
                      "hasDamage": enc["has_damage"]},
-                    self._dps_meter.overlay_rows(snap), show=True)
+                    self._dps_meter.overlay_rows(snap, detailed=True), show=True)
                 self._dps_overlay_live = True
             elif self._dps_overlay_live:
                 self._plugin_link.send_dps(None, [], show=False)
@@ -166,8 +168,10 @@ class DpsTabMixin:
         enc = snapshot.get("Encounter") or {}
         self._plugin_link.send_dps(
             {"t": enc["title"], "d": enc["duration"],
+             "id": enc.get("pull_id", ""), "zone": enc.get("CurrentZoneName", ""),
+             "hps": enc.get("enchps", 0), "participants": len(snapshot["Combatant"]),
              "dps": round(enc["encdps"], 1), "hasDamage": enc["has_damage"]},
-            self._dps_meter.overlay_rows(snapshot), show=False)
+            self._dps_meter.overlay_rows(snapshot, detailed=True), show=False)
         self._dps_overlay_live = False
         title = enc.get("title") or ""
         if title:
@@ -314,12 +318,17 @@ class DpsTabMixin:
             return
         amount = res.get("amount")
         percent = res.get("percent")
-        if not isinstance(amount, (int, float)) or not amount:
+        has_amount = type(amount) in (int, float) and math.isfinite(amount) and amount > 0
+        has_percent = type(percent) in (int, float) and math.isfinite(percent) and 0 <= percent <= 100
+        if not has_amount and not has_percent:
             lbl.setText(_("FFLogs: no data"))
+            return
+        if not has_amount:
+            lbl.setText(_("FFLogs best: {percent}%").format(percent=f"{percent:.0f}"))
             return
         best = f"{amount / 1000:.1f}k" if amount >= 1000 else f"{amount:,.0f}"
         text = _("FFLogs best: {best} rDPS").format(best=best)
-        if isinstance(percent, (int, float)):
+        if has_percent:
             text += f" ({percent:.0f}%)"
         lbl.setText(text)
 

@@ -1,10 +1,10 @@
 # Prog phase tracking and session comparisons
 
-Planned phase tracking and session comparisons. Existing session and recap behavior is documented in [Prog session overview](PROG-SESSION-DESIGN.md).
+UMAD phase tracking and planned session comparisons. Session and recap behavior is documented in [Prog session overview](PROG-SESSION-DESIGN.md).
 
 ## Implementation status
 
-Implemented: Furthest phase, confirmation details, optional saved phase data, and a logical attempt coordinator, tested with synthetic rules through feed dispatch and Prog. The live registry is empty. UMAD remains inactive pending verified recordings.
+Implemented: UMAD phase confirmations, pull details, persistence, and a logical attempt coordinator. Recorded pulls verify P1 through P4 and continuous combat across those phases. P5 uses Ultima Repeater from upstream fight data and has synthetic coverage pending a local P5 recording. See the [replay fixture](../tests/fixtures/prog/README.md).
 
 The coordinator supports transition evidence received before a combat drop,
 followed by a new meter encounter and the expected phase confirmation. A
@@ -12,23 +12,13 @@ transition can also complete without a combat drop. Other event orders remain
 uncertain. Do not enable a real definition whose captures require a different
 order until that order is implemented and covered by replay tests.
 
-Supported collection waits for a reset or an explicit initial-pull rule after
-a new encounter starts. A later phase after an intermission cannot establish
-a fresh full attempt. Deaths before collection is established remain in Recent
-deaths and are not retrospectively assigned to a prog pull.
+UMAD collection starts on a fresh encounter after observing idle combat state.
+Definitions with intermissions instead require a reset or explicit initial-pull
+rule. Midcombat starts and reconnects wait for a fresh attempt. Deaths before
+collection remain in Recent deaths without retrospective pull attribution.
 
-Session phase summaries and comparisons are still planned. The remaining
-sections specify the intended complete feature, including the evidence needed
-before UMAD activation.
-
-## Scope and delivery order
-
-1. Verify UMAD phase evidence and attempt boundaries against captured feeds.
-2. Add phase observations, persistence, and pull details for UMAD.
-3. Add comparisons between sessions in the same duty.
-
-The first release requires verified rules for P1 through P5 and every intervening boundary before enabling UMAD. Model development and testing can proceed while evidence is collected.
-
+Session phase summaries and comparisons remain planned. The sections below
+include their intended behavior alongside the implemented pull tracking.
 Mechanic milestones, automatic clear detection, manual phase corrections,
 exports, and comparisons across more than two sessions remain later work.
 
@@ -79,21 +69,20 @@ current local timelines identify UMAD as territory 1363. Each rule specifies:
 
 Use runtime actor IDs only within their attempt and resolve base IDs from the feed. Localized names, timeline positions, and trigger names cannot establish progress. Actor presence requires evidence that it confirms a phase, since actors can appear before activation.
 
-The following are investigation candidates from [the local UMAD
-timeline](../timelines/UMAD.txt), not approved detection rules:
+The active rules accept boss StartsUsing events, with Ability and AOEAbility
+events as fallbacks when a cast is missed:
 
-| Phase | Candidate evidence | Verification needed |
+| Phase | Ability ID | Action |
 | --- | --- | --- |
-| P1 | StartsUsing C403 | Establish phase context and repetition behavior |
-| P2 | Ability C24C | Check earliest reliable confirmation and alternate routes |
-| P3 | Abilities C2E2 or C2E3 | Check both actor orders and when the phase is established |
-| P4 | StartsUsing C2DC | Check phase entry and all supported preceding outcomes |
-| P5 | Ability C24A or BB40 | Check earliest reliable confirmation and repeated use |
+| P1 | C403 | Revolting Ruin III |
+| P2 | C24C | Ultimate Embrace |
+| P3 | C3F7 | Aero III Assault |
+| P4 | C2DC | Kefka Says |
+| P5 | BB40 | Ultima Repeater |
 
-The timeline reuses C554 and C555 in several phases and contains unresolved
-route and network-log notes. Its timing and labels alone cannot establish a
-safe detector. In particular, verify the apparent duty-ending routes around
-P2 before treating an ending message as an attempt boundary.
+C24A Ultima Upsurge occurs in both P4 and P5. Counting repeated C3FD middle
+jumps also depends on receiving every jump exactly once. Neither establishes
+a phase here. P5 confirmation waits for Ultima Repeater.
 
 A phase may have several verified confirming events. Keep the first accepted observation per phase and logical pull. A later event can confirm a missed opener, using that later event's time.
 
@@ -104,14 +93,13 @@ passes through those phases. Store only direct observations and derive that
 reach relationship from the pinned definition. Never invent earlier times.
 Ignore evidence for an earlier phase after a later phase has been confirmed,
 so delayed or reused events cannot supply a misleading earlier-phase time.
-If route verification does not support a linear P1 to P5 order, revise this
-definition and the reach calculation before enabling it.
 
 ## One logical pull across phase transitions
 
-The meter currently finalizes an encounter when either combat flag falls.
-Its idle display reset already preserves the full encounter. UMAD evidence
-must establish whether phase transitions produce additional combat edges.
+The meter finalizes an encounter when either combat flag falls. Recorded UMAD
+pulls remain in combat across P1 through P4, so its definition does not join
+meter encounters. The coordinator supports explicit transition rules for
+fights with verified intermissions.
 
 Prog owns logical attempt boundaries for supported tracking. Keep the first meter encounter ID as the pull ID for recaps, notes, and bookmarks. Map later encounters to it only across verified transitions, leaving the live meter lifecycle unchanged.
 
@@ -136,15 +124,17 @@ continuation. The evidence review must supply any such bound and its basis.
 
 On uncertain boundaries, preserve later observations as interrupted fragments
 when useful, but exclude them from rates until a fresh full attempt begins.
-Midcombat session starts and reconnects still wait for a fresh attempt. For
-UMAD, an intermission combat drop must not satisfy that wait. An explicit
-reset or verified initial-pull sequence must establish the fresh attempt.
+Midcombat session starts and reconnects still wait for a fresh attempt.
+Definitions with intermissions must require an explicit reset or verified
+initial-pull sequence instead of treating an intermission as a fresh start.
 
 Death recaps follow the logical pull through a verified transition. Reset the
 live observation buffer on a logical pull start, not on each meter segment.
 Retain the existing two-second late-death allowance after a final ending.
-It does not extend on duplicate endings or permit phase events to modify a
-finished attempt. New attempts and interruptions clear late attribution.
+Wipe signals have a separate five-second allowance because recorded resets
+arrive about three seconds after combat ends. Duplicate endings extend neither
+window. New attempts and interruptions clear late attribution. Phase events
+cannot modify a finished attempt.
 Keep phase-only attempts visible even if the meter would discard them as
 empty. Without a verified ending they remain interrupted or uncertain.
 
@@ -273,12 +263,10 @@ tracking problem in Prog.
 
 ## Acceptance evidence
 
-Before enabling the UMAD rules, retain sanitized replay fixtures covering
-every phase entry, alternate supported route, intermission combat edge, and
-fresh reset. Include negative evidence for reused IDs and the apparent P2
-ending routes. The current pull recorder also splits at combat drops, so
-inspect the consecutive capture files or a continuous feed when verifying
-cross-phase boundaries.
+The sanitized UMAD fixture covers five pulls, P1 through P4, repeated actions,
+and delayed wipes. P5 has synthetic coverage from upstream fight data. Retain
+a P5 recording and successful duty ending before introducing earlier P5
+confirmation, additional boundary rules, or automatic clear detection.
 
 Model tests must exercise duplicate and missing markers, a later unique phase
 without earlier markers, quick wipes, unexpected event order, joined meter
@@ -292,6 +280,5 @@ zero eligible pulls, and the 6/20 versus 3/15 comparison above. Verify that
 both views use identical denominators and show exclusion reasons. Check the
 layout at the supported minimum window size and with Japanese labels.
 
-Finish with a live UMAD validation against the replay expectations and run
-the translation catalog check after adding UI strings. Synthetic fixtures
-alone do not complete verification of the fight rules.
+Run the translation catalog check after changing UI strings. Extend recorded
+replays when new fight evidence becomes available.

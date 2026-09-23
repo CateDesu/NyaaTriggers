@@ -23,13 +23,11 @@ from queue import Queue, Empty, Full
 
 from nyaatriggers.paths import bundle_root, default_voice_dir
 
-# Restore system library paths before launching external speech tools.
 from nyaatriggers import proc_env
 from nyaatriggers.locale_util import has_japanese
 from nyaatriggers.drop_log import log_drop
 from nyaatriggers.http_fetch import open_response
 
-# Use NumPy when available and retain the Python PCM scaling fallback.
 try:
     import numpy as _np
 except Exception:
@@ -50,7 +48,6 @@ _BASE        = bundle_root()
 _VOICES      = _BASE / "voices"
 _PIPER_MODEL = default_voice_dir() / "en_US-arctic-medium.onnx"
 
-# Store downloaded models outside the frozen bundle so updates preserve them.
 _MODEL_DIR = (Path(sys.executable).parent / "voices"
               if getattr(sys, 'frozen', False) else _VOICES)
 
@@ -63,15 +60,12 @@ _piper_build_lock = threading.Lock()
 _piper_epoch: int = 0
 _proc_lock   = threading.Lock()
 _current_proc: "subprocess.Popen | None" = None
-# Distinguish deliberate interruption from synthesis failure so interrupted text is not
-# replayed.
+# Interrupted synthesis must not trigger fallback playback.
 _interrupted_proc: "subprocess.Popen | None" = None
 
-# Drop the oldest queued callout if the worker cannot keep up.
 _queue          = Queue(maxsize=64)
 # Serialize eviction and insertion so competing callers do not evict twice.
 _enqueue_lock   = threading.Lock()
-# Bound concurrent notification threads and playback processes.
 _notification_slots = threading.BoundedSemaphore(4)
 _worker_started = threading.Event()
 _worker_lock    = threading.Lock()
@@ -79,33 +73,26 @@ _master_volume: float = 1.0
 # Invalidate results still synthesizing when interrupt runs.
 _generation: int = 0
 
-# Windows defaults to the system voice so startup needs no model download.
 _engine: str = "system" if platform.system() == "Windows" else "piper"
 
-# Route Japanese text to a Japanese voice. An empty system voice token selects the OS
-# default.
 _jp_voice: str = ""
 _jp_auto: bool = True
 
-# Map displayed Japanese text to kana readings for speech engines that cannot read
-# kanji.
+# Kana readings for speech engines that cannot read kanji.
 _READINGS: dict = {}
 # Match the same ideographs as has_japanese so unsupported kanji can be removed before
 # espeak.
 _KANJI = re.compile(r"[\u3005\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002a6df\U0002a700-\U0002ceaf]")
 
-# Kokoro provides Japanese synthesis in process using ONNX and the espeak-ng phonemizer.
 _jp_neural: bool = False
 _jp_neural_voice: str = "jf_alpha"
 _kokoro = None
 _kokoro_failed = False   # sticky failed load marker, cleared when the model is re-downloaded
-# Cache import failures to avoid repeating expensive imports. Model setup clears the
-# marker.
+# Retry failed imports only after model setup.
 _kokoro_import_failed = False
 _kokoro_lock = threading.Lock()
 # Keep slow session construction separate from GUI settings locks.
 _kokoro_build_lock = threading.Lock()
-# Discard session builds invalidated by a voice setting change.
 _kokoro_epoch: int = 0
 
 
@@ -147,12 +134,9 @@ _KOKORO_SHA256 = {
     _KOKORO_VOICES: "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
 }
 
-# Bound downloads even when Content-Length is absent or incorrect.
 _KOKORO_MAX_BYTES = 1 << 30
 
-# Limit total transfer time independently of each socket read timeout.
 _KOKORO_DL_DEADLINE_S = 30 * 60
-# Enforce stalled transfer detection outside the blocking read.
 _KOKORO_DL_STALL_S = 60
 
 
@@ -165,10 +149,7 @@ def _unblock_reader(resp) -> None:
 
 
 def _venv_python() -> str:
-    """Use the configured voice interpreter, or the program interpreter when no voice
-    environment is set. Reject incomplete configured environments to avoid installing
-    into the wrong interpreter.
-    """
+    """Reject incomplete voice environments to avoid installing into the wrong interpreter."""
     venv = globals().get("_FFXIV_VENV")
     if venv:
         for cand in (venv / "bin" / "python", venv / "Scripts" / "python.exe"):
@@ -181,14 +162,11 @@ def _venv_python() -> str:
 
 
 def install_kokoro_deps(timeout: int = 1200) -> tuple[bool, str]:
-    """Install Kokoro dependencies into the voice environment for source runs. Return
-    success and the command output tail.
-    """
+    """Return success and the installer output tail."""
     if getattr(sys, "frozen", False):
         return True, "bundled"
     try:
-        # Keep this pin here because Kokoro is installed in the voice environment, not
-        # from requirements.txt.
+        # Kokoro uses the voice environment, outside requirements.txt.
         r = subprocess.run(
             [_venv_python(), "-m", "pip", "install", "--no-input", "--upgrade", "kokoro-onnx==0.4.7"],
             capture_output=True, text=True, timeout=timeout,
@@ -201,10 +179,7 @@ def install_kokoro_deps(timeout: int = 1200) -> tuple[bool, str]:
 
 
 def download_kokoro_model() -> bool:
-    """Download models into persistent storage using temporary files and atomic
-    replacement. Propagate directory creation errors so the UI can report permission
-    failures.
-    """
+    """Install model files atomically. Propagate directory creation errors."""
     tmp = None
     try:
         _MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -212,8 +187,7 @@ def download_kokoro_model() -> bool:
         print(f"[tts] kokoro model dir not writable: {exc!r}", file=sys.stderr)
         raise
     try:
-        # Remove abandoned temporary downloads. Check age even for live PIDs because
-        # process IDs can be reused.
+        # Check age even for live PIDs because they can be reused.
         for stale in _MODEL_DIR.glob("*.part"):
             try:
                 pid = int(stale.name.rsplit(".", 2)[1])
@@ -249,7 +223,6 @@ def download_kokoro_model() -> bool:
             deadline = time.monotonic() + _KOKORO_DL_DEADLINE_S
             headers_deadline = min(deadline, time.monotonic() + _KOKORO_DL_STALL_S)
             with open_response(req, 120, headers_deadline) as r, open(tmp, "wb") as f:
-                # Treat invalid Content-Length as unknown and retain the byte limit.
                 try:
                     total = int(r.headers.get("Content-Length", 0) or 0)
                 except ValueError:
@@ -301,15 +274,13 @@ def download_kokoro_model() -> bool:
                 if reader_error[0]:
                     raise reader_error[0]
                 got = progress[0]
-            # Check for short reads before installing the file because early EOF may not
-            # raise.
+            # Early EOF may not raise.
             if total and got < total:
                 raise OSError(f"short read: {got}/{total} bytes for {dest.name}")
             if digest.hexdigest() != _KOKORO_SHA256[dest]:
                 raise OSError(f"checksum mismatch for {dest.name}")
             os.replace(tmp, dest)
             tmp = None
-        # Allow loading to retry after model setup completes.
         global _kokoro_failed, _kokoro_import_failed
         _kokoro_failed = False
         _kokoro_import_failed = False
@@ -329,16 +300,13 @@ def set_jp_neural(enabled: bool, voice: str = "jf_alpha") -> None:
     _jp_neural = bool(enabled)
     _jp_neural_voice = voice or "jf_alpha"
     if not enabled:
-        # Release the loaded session and invalidate any build still in progress.
         with _kokoro_lock:
             _kokoro = None
             _kokoro_epoch += 1
 
 
 def kokoro_ready() -> bool:
-    """Check dependencies and both model files. Cache import failures until model setup
-    clears the marker.
-    """
+    """Cache dependency failures until model setup clears them."""
     global _kokoro_import_failed
     if not (_KOKORO_MODEL.exists() and _KOKORO_VOICES.exists()):
         return False
@@ -354,10 +322,8 @@ def kokoro_ready() -> bool:
 
 
 def _load_kokoro():
-    """Build Kokoro lazily and return None for fallback when unavailable. Cache failures
-    until model setup retries, retaining existing model files. Build outside the GUI
-    lock and publish only if the captured settings epoch remains current.
-    """
+    """Build outside the GUI lock and publish only for unchanged settings.
+    Cache failures until setup retries, returning None without deleting model files."""
     global _kokoro, _kokoro_failed
     if _kokoro is not None:
         return _kokoro
@@ -396,8 +362,7 @@ def _load_kokoro():
                     _kokoro_failed = True
                     _kokoro = None
             _log_once("kokoro-load", f"[tts] kokoro voice load failed: {exc!r}")
-            # Keep model files on load failure. Setup can clear the failure marker
-            # without downloading healthy files again.
+            # Setup retries must not redownload healthy models.
             log_drop("tts-kokoro",
                      "kokoro voice load failed; model files kept, "
                      "use the Download button to clear the failure, or delete "
@@ -419,16 +384,13 @@ def _load_kokoro():
 
 
 def _kokoro_synth(text: str, speed: float = 1.0) -> "bytes | None":
-    """Return synthesized Japanese WAV bytes, or None for system voice fallback. Use kana
-    readings with the espeak-ng phonemizer.
-    """
+    """Use kana for Japanese synthesis. Return None for system voice fallback."""
     global _kokoro, _kokoro_failed
     k = _load_kokoro()
     if k is None:
         return None
     try:
         import numpy as np
-        # Clamp speed to Kokoro's supported range before synthesis.
         ok, out = _synth_call(lambda: k.create(text, voice=_jp_neural_voice,
                                                speed=min(2.0, max(0.5, speed)), lang="ja"))
         if not ok:
@@ -456,15 +418,12 @@ def _kokoro_synth(text: str, speed: float = 1.0) -> "bytes | None":
 
 
 def set_jp_auto(on: bool) -> None:
-    """Route text containing Japanese characters to a Japanese voice."""
     global _jp_auto
     _jp_auto = bool(on)
 
 
 def set_readings(readings: dict) -> None:
-    """Replace the reading map as a whole. Workers hold a snapshot of the reference, so
-    published dictionaries must not be mutated.
-    """
+    """Workers retain snapshots, so never mutate a published reading map."""
     global _READINGS
     _READINGS = {k: v for k, v in (readings or {}).items()
                  if isinstance(k, str) and isinstance(v, str) and v}
@@ -479,9 +438,7 @@ def reading_for(text: str) -> "str | None":
 
 
 class _StampedItem(tuple):
-    """Capture the interrupt generation at enqueue time. Retain tuple equality for existing
-    callers.
-    """
+    """Carry the enqueue generation while preserving tuple equality."""
 
     def __new__(cls, item, gen):
         self = super().__new__(cls, item)
@@ -507,8 +464,7 @@ def _enqueue(item) -> None:
 
 
 def speak(text: str, volume: float = 1.0, speed: float = 1.0, reading: "str | None" = None) -> None:
-    """Queue speech without blocking. reading supplies kana for backends that need it.
-    """
+    """Queue speech. Supply kana through reading for backends that need it."""
     _ensure_worker()
     _enqueue(("tts", text, volume, speed, reading))
     depth = _queue.qsize()
@@ -522,15 +478,12 @@ def play_sound(path: str, volume: float = 1.0) -> None:
 
 
 def play_notification(path: str, volume: float = 1.0) -> None:
-    """Play notifications alongside speech on Linux. Windows file notifications use the
-    shared TTS queue because winsound has one channel. Ignore missing paths.
-    """
+    """Linux notifications overlap speech. Windows shares the single winsound channel."""
     if not path or not os.path.exists(path):
         return
     if platform.system() == "Windows":
         play_sound(path, volume)
         return
-    # Limit notifications when playback is slow or blocked.
     if not _notification_slots.acquire(blocking=False):
         log_drop("tts-notify", "notification chime dropped; too many plays in flight")
         return
@@ -543,9 +496,7 @@ def play_notification(path: str, volume: float = 1.0) -> None:
 
 
 def interrupt() -> None:
-    """Clear queued callouts and stop tracked playback. Already running synchronous
-    winsound audio finishes normally.
-    """
+    """Synchronous winsound playback cannot be interrupted."""
     global _generation
     # Hold the enqueue lock while clearing and incrementing the generation. Always
     # acquire it before the process lock to avoid a lock cycle.
@@ -567,7 +518,6 @@ def interrupt() -> None:
 
 
 def set_model(path: Path) -> None:
-    """Reload the selected Piper model on the next synthesis call."""
     global _PIPER_MODEL, _piper_voice, _piper_failed, _piper_epoch
     with _piper_lock:
         _PIPER_MODEL = Path(path)
@@ -577,9 +527,7 @@ def set_model(path: Path) -> None:
 
 
 def _purge_stale_venv_modules() -> None:
-    """Remove modules imported from previous voice environments. Updating sys.path alone
-    cannot replace already imported modules.
-    """
+    """Changing sys.path does not replace modules already imported from an old environment."""
     venv = globals().get("_FFXIV_VENV")
     if not venv:
         return
@@ -603,11 +551,9 @@ def set_venv_path(path: str) -> None:
     if getattr(sys, 'frozen', False):
         return
     new_venv = Path(path.strip()).expanduser() if path.strip() else Path.home() / ".venv" / "ffxiv"
-    # Update the interpreter selector used by the Kokoro installer too.
     _FFXIV_VENV = new_venv
     new_sps  = glob.glob(str(new_venv / "lib" / "python*" / "site-packages"))
     new_sps += glob.glob(str(new_venv / "Lib" / "site-packages"))
-    # Remove previous path entries so they cannot shadow the new environment.
     for old in _venv_sps:
         try:
             sys.path.remove(old)
@@ -619,7 +565,6 @@ def set_venv_path(path: str) -> None:
         if sp not in sys.path:
             sys.path.insert(0, sp)
             _venv_sps.append(sp)
-    # Purge imports still bound to the old environment before loading from the new one.
     _purge_stale_venv_modules()
     with _piper_lock:
         _piper_voice = None
@@ -632,7 +577,6 @@ _logged_once: set = set()
 
 
 def _log_once(key: str, msg: str) -> None:
-    """Log the first occurrence of each failure key."""
     if key not in _logged_once:
         _logged_once.add(key)
         print(msg, file=sys.stderr)
@@ -642,7 +586,7 @@ _aplay_missing_logged = False
 
 
 def _aplay_missing() -> None:
-    """Record missing aplay once in the drop log so frozen builds report the failure."""
+    """Report missing aplay once, including in frozen builds."""
     global _aplay_missing_logged
     if not _aplay_missing_logged:
         _aplay_missing_logged = True
@@ -656,9 +600,7 @@ _SYNTH_TIMEOUT_S = 60
 
 
 def _synth_call(fn):
-    """Run an ONNX operation on a daemon thread with a deadline. Return false and None on
-    timeout, and propagate exceptions from completed calls.
-    """
+    """Return False and None on timeout. Propagate completed call errors."""
     box: dict = {}
 
     def _run() -> None:
@@ -706,9 +648,7 @@ def _worker_loop() -> None:
 
 def _system_speak(text: str, volume: float = 1.0, speed: float = 1.0,
                   reading: "str | None" = None, gen: "int | None" = None) -> bool:
-    """Use a tracked system speech process. Fall back to Piper only for non-Japanese text
-    when no backend succeeds. Check the interrupt generation before spawning.
-    """
+    """Japanese must never fall back to an English Piper model."""
     if not text:
         return True
     system = platform.system()
@@ -731,7 +671,6 @@ def _system_speak(text: str, volume: float = 1.0, speed: float = 1.0,
             rate = max(-10, min(10, int(round((speed - 1.0) * 5))))
             sel = ""
             if jp and _jp_voice:
-                # Escape quotes even in enumerated voice names.
                 sel = f"$s.SelectVoice('{_jp_voice.replace(chr(39), chr(39) * 2)}');"
             elif jp:
                 sel = ("$s.SelectVoiceByHints("
@@ -750,8 +689,7 @@ def _system_speak(text: str, volume: float = 1.0, speed: float = 1.0,
             return _run_speak_proc(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
                 text, stdin_text=True, no_window=True, gen=gen) or jp
-        # Try available system backends in order. If all fail for Japanese, avoid
-        # passing it to an English Piper model.
+        # Do not fall back to English Piper if Japanese backends fail.
         import shutil
         if shutil.which("spd-say"):
             rate = max(-100, min(100, int((speed - 1.0) * 100)))
@@ -781,9 +719,7 @@ def _system_speak(text: str, volume: float = 1.0, speed: float = 1.0,
 
 def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool = False,
                     gen: "int | None" = None) -> bool:
-    """Track the speech process for interruption. Send text on stdin or as the final
-    argument, and reject stale generations before spawn.
-    """
+    """Track the child for interruption and reject stale generations before spawning."""
     global _current_proc, _interrupted_proc
     kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
                     "env": proc_env.child_env()}
@@ -791,8 +727,7 @@ def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool
         kwargs["creationflags"] = 0x08000000          # CREATE_NO_WINDOW
     if stdin_text:
         kwargs["stdin"] = subprocess.PIPE
-        # Use UTF-8 on both sides of stdin so Japanese works on non-Japanese Windows
-        # locales.
+        # Use UTF-8 even on non-Japanese Windows locales.
         kwargs["text"] = True
         kwargs["encoding"] = "utf-8"
         kwargs["errors"] = "replace"
@@ -864,10 +799,8 @@ def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool
 
 
 def _load_piper():
-    """Cache the Piper voice or its load failure until settings change. Build outside the
-    GUI lock and publish only if inputs still match. Return the instance so callers keep
-    it if a setter clears the global.
-    """
+    """Build outside the GUI lock and publish only for unchanged settings.
+    Return the instance so callers retain it if a setter clears the cache."""
     global _piper_voice, _piper_failed
     v = _piper_voice
     if v is not None:
@@ -887,15 +820,12 @@ def _load_piper():
             import onnxruntime
             from piper.config import PiperConfig
             from piper.voice import PiperVoice
-            # Disable ONNX thread spinning so an idle model does not consume CPU needed
-            # by the combat feed. Construct the session directly because PiperVoice.load
-            # uses default options.
+            # PiperVoice.load enables ONNX thread spinning, wasting CPU while idle.
             sess_options = onnxruntime.SessionOptions()
             sess_options.add_session_config_entry(
                 "session.intra_op.allow_spinning", "0")
             with open(f"{model}.json", "r", encoding="utf-8") as cfg:
                 config = PiperConfig.from_dict(json.load(cfg))
-            # Apply the synthesis deadline to session construction too.
             ok, session = _synth_call(lambda: onnxruntime.InferenceSession(
                 str(model),
                 sess_options=sess_options,
@@ -907,7 +837,6 @@ def _load_piper():
             voice = PiperVoice(config=config, session=session)
         except Exception as exc:  # noqa: BLE001
             with _piper_lock:
-                # Record failure only for the settings that started this build.
                 if _piper_epoch == epoch:
                     _piper_failed = True
                     print(f"[tts] piper voice load failed: {exc!r}", file=sys.stderr)
@@ -919,11 +848,9 @@ def _load_piper():
 
 
 def _scale_pcm(frames: bytes, sampwidth: int, volume: float) -> "bytes | None":
-    """Scale unsigned 8-bit or signed 16-bit PCM, using NumPy when available. Return None
-    for unsupported formats.
-    """
+    """Support unsigned 8-bit and signed 16-bit PCM. Return None for other formats."""
     if sampwidth == 2:                              # 16-bit signed
-        if len(frames) % 2:                         # Discard an incomplete sample.
+        if len(frames) % 2:
             frames = frames[:-1]
         if _np is not None:
             s = _np.frombuffer(frames, dtype="<i2").astype(_np.float64) * volume
@@ -949,9 +876,7 @@ def _scale_pcm(frames: bytes, sampwidth: int, volume: float) -> "bytes | None":
 
 
 def _apply_volume(wav_path: str, volume: float) -> bool:
-    """Scale supported PCM WAV files in place. Return false for unsupported or damaged
-    input so callers can retain native volume.
-    """
+    """Return False for unsupported or damaged WAV data so callers retain native volume."""
     try:
         with wave.open(wav_path, 'rb') as r:
             params = r.getparams()
@@ -968,9 +893,7 @@ def _apply_volume(wav_path: str, volume: float) -> bool:
 
 
 def _riff_wav_seconds(source) -> float:
-    """Read duration from RIFF chunks for float and extensible WAV formats. Return zero for
-    invalid data.
-    """
+    """Handle float and extensible WAV formats unsupported by wave. Return zero on failure."""
     try:
         src = io.BytesIO(source) if isinstance(source, bytes) else open(source, "rb")
         with src:
@@ -994,7 +917,6 @@ def _riff_wav_seconds(source) -> float:
                     fmt = src.read(16)
                     src.seek(skip - 16, 1)
                 elif hdr[:4] == b"data":
-                    # Limit declared chunk size to the bytes actually present.
                     data_size = min(chunk_size, max(0, size - src.tell()))
                     src.seek(skip, 1)
                 else:
@@ -1004,7 +926,6 @@ def _riff_wav_seconds(source) -> float:
             block = int.from_bytes(fmt[12:14], "little")
             bits = int.from_bytes(fmt[14:16], "little")
             if not block and channels and bits:
-                # Derive block alignment when the header omits it.
                 block = channels * bits // 8
             if not rate or not block:
                 return 0.0
@@ -1014,7 +935,7 @@ def _riff_wav_seconds(source) -> float:
 
 
 def _wav_seconds(source) -> float:
-    """Return WAV duration from a path or bytes, or zero when unreadable."""
+    """Return zero when duration cannot be read."""
     try:
         src = io.BytesIO(source) if isinstance(source, bytes) else source
         with wave.open(src, "rb") as w:
@@ -1025,9 +946,7 @@ def _wav_seconds(source) -> float:
 
 
 def _play_winsound(source, flags: int, gen: "int | None" = None) -> None:
-    """Run synchronous winsound playback with a bounded wait so a stalled driver cannot
-    hold the worker. Propagate errors from completed playback.
-    """
+    """Bound driver stalls and propagate completed playback errors."""
     import winsound
     box: dict = {}
 
@@ -1055,16 +974,13 @@ def _play_winsound(source, flags: int, gen: "int | None" = None) -> None:
 
 
 def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
-    """Play through a tracked aplay process. Check the interrupt generation under the
-    process lock before spawning.
-    """
+    """Check the interrupt generation under the process lock before spawning."""
     global _current_proc, _interrupted_proc
     system = platform.system()
     if system == "Windows":
         import winsound
         _play_winsound(wav_path, winsound.SND_FILENAME | winsound.SND_NODEFAULT, gen)
         return
-    # End option parsing before the path and capture playback errors for the drop log.
     player = ["aplay", "-q", "--", wav_path]
     with _proc_lock:
         if gen is not None and gen != _generation:
@@ -1082,8 +998,7 @@ def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
     err = b""
     timed_out = False
     started = time.monotonic()
-    # Derive the deadline from sound duration instead of cutting long files off at sixty
-    # seconds.
+    # Allow long sounds to finish.
     duration = _wav_seconds(wav_path)
     play_timeout = max(60.0, duration * 1.5 + 5)
     try:
@@ -1106,7 +1021,6 @@ def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
     if was_interrupted:
         return
     if timed_out:
-        # Log timeouts because a stalled audio device may produce no error output.
         log_drop("tts-playback",
                  f"aplay hung {play_timeout:.0f}s on the audio device; killed, callout had no audio")
         return
@@ -1125,14 +1039,11 @@ def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
                  "the device likely discarded the audio")
 
 
-# Limit sound copies so large or growing files cannot exhaust temporary storage.
 _MAX_SOUND_BYTES = 32 << 20
 
 
 def _copy_sound_to_tmp(path: str) -> "str | None":
-    """Copy a regular sound file to a temporary WAV while enforcing the size cap. Log and
-    return None for invalid, oversized or failed copies.
-    """
+    """Bound copies of growing files. Log failures and return None."""
     if not os.path.isfile(path):
         log_drop("tts-sound", f"not a regular file; not played: {path!r}")
         return None
@@ -1144,8 +1055,7 @@ def _copy_sound_to_tmp(path: str) -> "str | None":
         return None
     fd, tmp_path = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
-    # Recheck the byte limit while copying because the source may grow after its size
-    # check.
+    # The source may grow after the size check.
     total = 0
     ok = True
     try:
@@ -1206,8 +1116,6 @@ def _play_wav_file(path: str, volume: float = 1.0, gen: "int | None" = None) -> 
 
 
 def _notification_worker(path: str, volume: float) -> None:
-    """Play Linux file notifications with optional temporary volume scaling and cleanup.
-    """
     tmp_path = None
     try:
         effective = max(0.0, min(2.0, volume * _master_volume))
@@ -1253,11 +1161,8 @@ def _log_notification_result(result) -> None:
 
 
 def _play_wav_detached(wav_path: str) -> None:
-    """Play Linux notifications outside the tracked speech process so they overlap speech
-    and survive interrupt. Windows file notifications use the TTS queue instead.
-    """
+    """Linux notifications overlap speech and survive interruption."""
     try:
-        # Set the playback deadline from the sound duration.
         result = subprocess.run(["aplay", "-q", "--", wav_path],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                                 timeout=max(60.0, _wav_seconds(wav_path) * 1.5 + 5),
@@ -1272,9 +1177,6 @@ def _play_wav_detached(wav_path: str) -> None:
 
 def _play_wav_bytes(wav: "bytes | None", volume: float = 1.0,
                     gen: "int | None" = None) -> bool:
-    """Play bytes through the tracked path. Return false for fallback when no audio is
-    available.
-    """
     if not wav:
         return False
     wav_path = None
@@ -1299,9 +1201,7 @@ def _play_wav_bytes(wav: "bytes | None", volume: float = 1.0,
 
 def _kokoro_speak(text: str, volume: float = 1.0, speed: float = 1.0,
                   gen: "int | None" = None) -> bool:
-    """Synthesize Japanese with Kokoro using a kana reading when available. Return false
-    for system voice fallback.
-    """
+    """Return False for system voice fallback."""
     wav = _kokoro_synth(text, speed)
     if gen is not None and gen != _generation:
         # Treat interrupted synthesis as handled so it cannot trigger fallback.
@@ -1317,13 +1217,11 @@ def _pipeline(text: str, volume: float = 1.0, speed: float = 1.0,
         return
     if gen is None:
         gen = _generation
-    # Snapshot the reading map once. Setters replace the dictionary without mutating the
-    # published instance.
+    # Setters replace the map without mutating published snapshots.
     if reading is None:
         readings = _READINGS
         if readings:
             reading = readings.get(text)
-    # Try Kokoro with the kana reading before system voice fallback.
     if has_japanese(text) and _jp_neural and _kokoro_speak(reading or text, volume, speed, gen):
         return
     # Try the system voice when selected or required for Japanese. Japanese must never
@@ -1348,14 +1246,12 @@ def _pipeline(text: str, volume: float = 1.0, speed: float = 1.0,
         fd, wav_path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)
 
-        # Piper 1.4 uses SynthesisConfig for speed.
         syn_config = None
         if abs(speed - 1.0) > 0.01:
             from piper.config import SynthesisConfig
             syn_config = SynthesisConfig(length_scale=1.0 / max(0.1, speed))
 
-        # Synthesize in memory before creating a temporary file so a stalled thread
-        # cannot retain an undeletable Windows file handle.
+        # A stalled synthesis thread must not retain a Windows file handle.
         def _synth() -> bytes:
             buf = io.BytesIO()
             with wave.open(buf, "wb") as wf:

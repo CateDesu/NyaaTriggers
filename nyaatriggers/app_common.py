@@ -25,17 +25,13 @@ _ASSETS_DIR = _BUNDLE_DIR / "assets"
 _DATA_DIR   = data_root()
 TRIGGERS_FILE       = _ASSETS_DIR / "triggers.json"
 TRIGGERS_LOCAL_FILE = _DATA_DIR   / "triggers.local.json"
-# Retired IDs prevent locally edited copies of withdrawn triggers from being restored
-# during merge. Keep triggers.json as a list for older clients.
+# Retired IDs stop local edits from reviving withdrawn triggers.
 RETIRED_FILE        = _ASSETS_DIR / "retired.json"
-# Map numeric zone IDs to English names so shipped zone patterns match localized game
-# clients.
+# English aliases let zone patterns match localized clients.
 ZONE_NAMES_FILE     = _ASSETS_DIR / "zone_names.json"
-# Primary cactbot timeline lookup by zone ID, generated from cactbot source.
-# FIGHT_TO_CACTBOT_TXT is the fallback.
+# Generated zone ID index with FIGHT_TO_CACTBOT_TXT as fallback.
 CACTBOT_TIMELINES_FILE = _ASSETS_DIR / "cactbot_timelines.json"
-# Store downloads outside tracked assets. The version stamp lets a newer bundled trigger
-# set replace an older download.
+# Version stamps let newer bundled triggers replace cached downloads.
 _REPO_TRIGGERS_FILE    = _DATA_DIR / "triggers.repo.json"
 _REPO_RETIRED_FILE     = _DATA_DIR / "retired.repo.json"
 _REPO_TRIGGERS_VERSION = _DATA_DIR / "triggers.repo.version"
@@ -43,105 +39,79 @@ _REPO_TRIGGERS_BRANCH  = "main"
 
 
 def _watched_trigger_files() -> tuple:
-    """Files watched for trigger reload. Converter output is loaded at import and is not
-    watched.
-    """
+    """Converter output is loaded only at import."""
     return (TRIGGERS_FILE, _REPO_TRIGGERS_FILE, TRIGGERS_LOCAL_FILE)
-# Callout text defaults keyed by engine source and trigger ID. These can update wording
-# without rebuilding the engine.
+# Update callout wording without rebuilding engines.
 CALLOUT_DEFAULTS_FILE = _ASSETS_DIR / "callout_defaults.json"
 TIMELINES_DIR       = _DATA_DIR   / "timelines"
-# Bundled timelines are read only. Downloads and refreshes use distinct cache files in
-# TIMELINES_DIR.
+# Keep downloads separate from bundled timelines.
 _BUNDLE_TIMELINES_DIR = _BUNDLE_DIR / "timelines"
 _SETTINGS_FILE              = _DATA_DIR   / "nyaatriggers_settings.json"
 # Cached inventory lets trigger rows appear before the engine starts.
 _TRIGGEVENT_INVENTORY_CACHE = _DATA_DIR   / "triggevent_inventory.json"
-# Bundled fallback for fresh installs. Keep its filename distinct from the writable
-# cache.
+# Fresh installs use this seed until the writable cache is populated.
 _TRIGGEVENT_INVENTORY_SEED  = _BUNDLE_DIR / "triggevent_inventory.seed.json"
 # Triggernometry inventory has no bundled seed because packs are imported by users.
 _TRIGGERNOMETRY_INVENTORY_CACHE = _DATA_DIR / "triggernometry_inventory.json"
 # Imported sounds live with user data so updates preserve them.
 _USER_SOUNDS_DIR = _DATA_DIR / "sounds"
-# Keep imported voices outside the replaceable frozen bundle. Source runs share the
-# bundle and data directory.
+# Keep imported voices outside the replaceable bundle.
 _USER_VOICES_DIR = _DATA_DIR / "voices"
-# Japanese callout translations use a bundled fallback and a separate writable cache.
-# The cache takes priority.
+# Japanese callouts use the cache before the bundled fallback.
 _CALLOUTS_JA_BUNDLE = _ASSETS_DIR / "callouts_ja.json"
 _CALLOUTS_JA_CACHE  = _DATA_DIR   / "callouts_ja.cache.json"
 _CALLOUTS_JA_MAX_BYTES = 4_000_000
-# Limit response sizes before parsing or saving them.
 _REPO_JSON_MAX_BYTES = 8_000_000
 _TIMELINE_MAX_BYTES = 2_000_000
-# Use modification time as cache age. Serve expired timelines while refreshing them in
-# the background.
+# Serve stale timelines while refreshing in the background.
 _CACTBOT_TIMELINE_TTL_S = 7 * 24 * 3600
-# Suppress guest duplicates briefly after a local callout. A longer window would
-# suppress separate mechanics with the same text.
+# Longer claims could suppress separate mechanics with the same text.
 _CALLOUT_CLAIM_S = 0.5
-# Give local triggers time to claim matching text before emitting a guest. Skip the
-# delay when local callouts are disabled.
+# Give enabled local triggers time to claim guest text.
 _GUEST_CALLOUT_DEFER_MS = 200
-# Keep the highest guest severity when merging matching text. cactbotSay may arrive as
-# info before an alarm popup.
+# cactbotSay may arrive as info before an alarm popup.
 _GUEST_SEVERITY_RANK = {"info": 0, "alert": 1, "alarm": 2}
 _VERSION            = "1.4.0"
-# Display version includes source checkout details. Update checks keep using _VERSION.
 _DISPLAY_VERSION    = updater.display_version(_VERSION)
-# An ignored local marker replaces the displayed version with X.
 if (_DATA_DIR / ".nyaa-version-x").exists():
     _DISPLAY_VERSION = "X"
 
 
 def _as_dict(value) -> dict:
-    """Return a settings dictionary, or an empty one for other types."""
     return value if isinstance(value, dict) else {}
 
 
 def _as_strdict(value) -> dict:
-    """Keep only string keys with string values."""
     return {k: v for k, v in _as_dict(value).items()
             if isinstance(k, str) and isinstance(v, str)}
 
 
 def _as_text_overrides(value) -> dict:
-    """Keep string keys whose values are dictionaries of string fields."""
     return {k: v for k, v in _as_dict(value).items()
             if isinstance(k, str) and isinstance(v, dict)
             and all(isinstance(f, str) for f in v.values())}
 
 
 def _as_strset(value) -> set:
-    """Accept collections of string IDs only. Reject plain strings and mixed types so later
-    sorting is safe.
-    """
     if not isinstance(value, (list, set, tuple)):
         return set()
     return {x for x in value if isinstance(x, str)}
 
 
 def _as_str(value) -> str:
-    """Return an empty string for non-string values."""
     return value if isinstance(value, str) else ""
 
 
 def _atomic_write_json(path: "Path", data, *, indent: "int | None" = None) -> None:
-    """Write JSON to a unique sibling temporary file and replace the destination
-    atomically. A shared filesystem is required for atomic replacement. Propagate write
-    failures.
-    """
+    """Atomically replace JSON and propagate write failures."""
     tmp = path.with_suffix(path.suffix + f".{os.getpid()}.{threading.get_ident()}.tmp")
     payload = json.dumps(data, indent=indent, ensure_ascii=False)
     try:
-        # Settings can contain OAuth secrets, so create temporary files with owner
-        # access only.
+        # Settings may contain OAuth secrets.
         def _owner_only(p, flags):
             return os.open(p, flags, 0o600)
         with open(tmp, "w", encoding="utf-8", opener=_owner_only) as f:
             f.write(payload)
-            # Flush file data before replacing the destination.
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
@@ -154,7 +124,6 @@ def _atomic_write_json(path: "Path", data, *, indent: "int | None" = None) -> No
 
 
 def _atomic_write_bytes(path: "Path", payload: bytes) -> None:
-    """Replace a file only after its complete contents have reached disk."""
     fd, name = tempfile.mkstemp(prefix=".nyaa-", suffix=".tmp", dir=path.parent)
     tmp = Path(name)
     try:
@@ -168,15 +137,12 @@ def _atomic_write_bytes(path: "Path", payload: bytes) -> None:
 
 
 def _fsync_file(path: "Path") -> None:
-    """Flush a temporary file before atomic replacement."""
     with open(path, "r+b") as f:
         os.fsync(f.fileno())
 
 
 def _next_bad_name(path: "Path", cap: int = 100) -> "Path":
-    """Choose a bounded sequence of .bad backup names, reusing the last when the limit is
-    reached.
-    """
+    """Reuse the final backup name once the cap is reached."""
     candidate = path.with_name(path.name + ".bad")
     for n in range(1, cap):
         if not candidate.exists():
@@ -186,13 +152,9 @@ def _next_bad_name(path: "Path", cap: int = 100) -> "Path":
 
 
 def _repo_download_version() -> "str | None":
-    """Return the version associated with downloaded triggers, or None if its stamp is
-    unavailable.
-    """
     try:
         v = json.loads(_REPO_TRIGGERS_VERSION.read_text(encoding="utf-8"))
-        # Source updates may keep the same base version, so also compare bundle
-        # timestamps.
+        # Source updates may keep the same version.
         if not updater.is_frozen() and any(
                 bundled.exists() and bundled.stat().st_mtime_ns > _REPO_TRIGGERS_VERSION.stat().st_mtime_ns
                 for bundled in (TRIGGERS_FILE, RETIRED_FILE)):
@@ -203,9 +165,7 @@ def _repo_download_version() -> "str | None":
 
 
 def _sweep_stale_update_parts(tmpdir: "Path", older_than_s: float = 3600.0) -> None:
-    """Remove old temporary update downloads left by interrupted processes. Preserve recent
-    files that another instance may still be writing.
-    """
+    """Preserve recent downloads that another instance may still be writing."""
     cutoff = time.time() - older_than_s
     try:
         for part in Path(tmpdir).glob("NyaaTriggers-*.part"):
@@ -237,7 +197,6 @@ def _sweep_stale_update_parts(tmpdir: "Path", older_than_s: float = 3600.0) -> N
 
 
 def _hex_id(value: str) -> int:
-    """Parse a hexadecimal field, returning zero when invalid."""
     try:
         return int(str(value).strip(), 16)
     except (TypeError, ValueError):
@@ -334,11 +293,8 @@ def _split_phrase_tokens(text: str) -> list[str]:
 
 
 def _compile_phrase_patterns(phrases: dict) -> list:
-    """Compile phrase patterns for substituted Groovy tokens. Keep simple local tokens in
-    the exact lookup because _fire replaces them. Translation values must contain no
-    tokens, and patterns need at least six literal alphanumeric characters to avoid
-    matching unrelated callouts.
-    """
+    """Leave simple local tokens for _fire. Require token-free translations and six
+    literal alphanumeric characters to avoid unrelated matches."""
     simple = re.compile(r"^\{\w+\}$")
     out = []
     for en, ja in phrases.items():
@@ -349,18 +305,16 @@ def _compile_phrase_patterns(phrases: dict) -> list:
             continue
         literal = "".join(parts)
         if len(re.sub(r"[\W_]+", "", literal)) < 6:
-            continue                       # Reject patterns with too little identifying text.
+            continue
         out.append((_PhrasePattern(parts), ja))
     return out
 
 MAX_ABILITY_LINES = 200
 MAX_RAW_CAPTURE = 20000
 
-# Limit trigger matching time per log line to keep the GUI responsive. Log skipped work
-# when the budget expires.
+# Bound matching time to keep the GUI responsive.
 _DISPATCH_BUDGET_S = 1.0
 
-# Derive fallback timeline paths from converter targets.
 try:
     from nyaatriggers.convert_cactbot import TARGETS as _CB_TARGETS
     FIGHT_TO_CACTBOT_TXT = {
@@ -400,8 +354,6 @@ _SECTION_ROLE     = Qt.ItemDataRole.UserRole + 4   # str, row's source group, ge
 _GITHUB_URL  = "https://github.com/CateDesu/NyaaTriggers"
 _DISCORD_URL = "https://discord.com/invite/TQJrbZcgKF"
 
-# Voice models and matching JSON files placed in the voices directory appear in the
-# selector.
 _PIPER_VOICES_URL = "https://rhasspy.github.io/piper-samples/"
 
 # Match the Telesto engine endpoint default.
@@ -540,7 +492,7 @@ def _prefill_name_tts(raw_name: str, source: str = "", target: str = "",
     return name, name + suffix
 
 
-# Apply specific preview token substitutions before general ones.
+# Specific tokens must precede general patterns.
 _TV_PREVIEW_TOKENS = [
     (re.compile(r"\{event\.estimatedRemainingDuration[^{}]*\}", re.IGNORECASE), "5 seconds"),
     (re.compile(r"\{event\.target(?:\.[\w().]+)?\}", re.IGNORECASE), "you"),
@@ -570,9 +522,6 @@ def _voice_display(stem: str) -> str:
 
 
 def _engine_preview_text(s: str) -> str:
-    """Replace known engine tokens with sample values and remove remaining Groovy
-    placeholders.
-    """
     s = s or ""
     for pat, val in _TV_PREVIEW_TOKENS:
         s = pat.sub(val, s)
@@ -581,9 +530,7 @@ def _engine_preview_text(s: str) -> str:
 
 
 def _stale_gen(bridge, gen) -> bool:
-    """Reject queued payloads from an older bridge generation. Internal calls without a
-    generation remain valid.
-    """
+    """Reject stale bridge output while allowing internal calls without a generation."""
     return gen is not None and (bridge is None or gen != bridge.generation())
 
 

@@ -219,6 +219,14 @@ def _id_set(ability_id: str) -> frozenset:
     return frozenset(p.strip().upper() for p in ability_id.split("|") if p.strip())
 
 
+def cooldown_source_id(fields: list[str]) -> str:
+    """Read the caster ID from ability and status lines."""
+    if not fields:
+        return ""
+    index = 5 if fields[0] in _STATUS_TYPES else 2
+    return fields[index] if len(fields) > index else ""
+
+
 def _as_float(value, default: float) -> float:
     """Read a finite number or return the fallback."""
     if value is None or value == "":
@@ -462,11 +470,10 @@ class Trigger:
             if self.count_max > 0 and cnt > self.count_max:
                 return None
 
-        # Cooldown keys use field 2, which is the source for abilities and the effect
-        # for statuses. Expiry gains and losses bypass this check so they can reset
-        # timers. Timer firing applies the cooldown.
+        # Expiry gains and losses bypass cooldown so they can reset timers. Timer
+        # firing applies the shared reminder cooldown.
         if not (self.expiry_warn_s > 0 and lt in _STATUS_TYPES):
-            source_id = self.cooldown_key(fields[2] if len(fields) > 2 else "")
+            source_id = self.cooldown_key(cooldown_source_id(fields))
             now = time.monotonic()
             last_fired = self._last_fired.get(source_id)
             if last_fired is not None and now - last_fired < self.cooldown_s:

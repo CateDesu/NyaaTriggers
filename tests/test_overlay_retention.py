@@ -104,7 +104,8 @@ class OverlayRetentionTests(unittest.TestCase):
         self.assertIs(final['show'], False)
         self.assertEqual(final['enc']['dps'], 15000)
         self.assertIs(final['enc']['hasDamage'], True)
-        self.assertEqual(final['rows'], [['Player', 'MCH', 15000, 100, 0, True, 0]])
+        self.assertEqual([row[:7] for row in final['rows']], [['Player', 'MCH', 15000, 100, 0, True, 0]])
+        self.assertEqual(final['rows'][0][7]['damage'], 15000)
         self.assertEqual(self.host.frames[-2:], [{'c': 'clear', 'keepDps': True}] * 2)
 
     def test_short_pull_sends_its_result_without_a_live_damage_frame(self):
@@ -165,7 +166,7 @@ class OverlayRetentionTests(unittest.TestCase):
         self.assertEqual(final['enc']['dps'], 5000)
         snapshot = self.host._dps_history[0]['snapshot']
         self.host._dps_meter.set_me('10000002')
-        self.assertEqual(self.host._dps_meter.overlay_rows(snapshot), final['rows'])
+        self.assertEqual(self.host._dps_meter.overlay_rows(snapshot, detailed=True), final['rows'])
         self.assertTrue(final['rows'][0][5])
 
     def test_legacy_wipes_restore_final_values_in_each_callout_mode(self):

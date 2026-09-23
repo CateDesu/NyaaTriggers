@@ -170,16 +170,20 @@ def test_r1_cooldown_map_bounded():
     check("expired cooldown entries pruned on write", len(t2._last_fired) < 300)
 
 
-# Cooldown key case: _last_fired is shared with _on_status_timer
+# Status cooldowns use caster IDs and timer reminders use effect IDs.
 def test_r1_cooldown_key_uppercased():
     t3 = Trigger(log_type="26", tts_text="x", cooldown_s=5.0)
     line = ["26", "ts", "8d1", "Vulnerability Up", "60.0",
-            "40001234", "Boss", "10001111", "Player"]
+            "4000abcd", "Boss", "10001111", "Player"]
     check("lower-case effect id fires", t3.matches(line, me="Player") is not None)
-    check("cooldown keyed upper-case like the firing path",
-          "8D1" in t3._last_fired and "8d1" not in t3._last_fired)
+    check("status cooldown keyed by the upper-case caster ID",
+          "4000ABCD" in t3._last_fired and "8D1" not in t3._last_fired)
     check("same effect suppressed inside the cooldown",
           t3.matches(line, me="Player") is None)
+    other_caster = line.copy()
+    other_caster[5] = "4000DCBA"
+    check("another caster can call the same effect",
+          t3.matches(other_caster, me="Player") is not None)
 
 
 # from_dict: non-finite counts degrade like _as_float, never raise

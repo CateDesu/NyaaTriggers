@@ -1,10 +1,5 @@
-"""Update source and frozen NyaaTriggers installations without Qt. Git installs pull
-changes and refresh dependencies. Frozen installs replace the executable and runtime
-while preserving user data. Windows uses a staged process to wait for file locks, apply
-the update and check startup before keeping it. Other source copies open the releases
-page.
-"""
-
+"""Update source and packaged installations while preserving user data.
+Windows applies staged updates after exit and rolls back failed starts."""
 from __future__ import annotations
 
 import hashlib
@@ -15,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tempfile
 import time
@@ -25,6 +21,7 @@ import zipfile
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from importlib import metadata
 from pathlib import Path, PureWindowsPath
 
 from nyaatriggers.paths import source_root
@@ -37,29 +34,22 @@ LINUX_ASSET     = "NyaaTriggers-linux.tar.gz"
 WINDOWS_ASSET   = "NyaaTriggers-windows.zip"
 _USER_AGENT     = "NyaaTriggers"
 _BACKUP_SUFFIX  = ".nyaa-old"     # marks files left behind for next-launch cleanup
-# A normal launch writes this marker after startup. The staged Windows updater checks it
-# after swapping files.
+# The staged Windows updater checks this after startup.
 _BOOT_OK_MARKER = ".nyaa-boot-ok"
-# Keep update outcomes and the rejected build identity in the install directory. Logging
-# must not raise.
+# Keep recovery diagnostics beside the install. Logging must not raise.
 _UPDATE_LOG_NAME = "nyaatriggers-update.log"
 _REJECTED_NAME   = ".nyaa-update-rejected"
 _STAGED_VERSION_NAME = ".nyaa-update-version"
-# Stage updates beside the install directory for the handoff and later cleanup.
 _STAGING_PREFIX  = ".nyaa-update-"
 _STAGING_OWNER = ".nyaa-update-owner"
 _UPDATE_LOCK = ".nyaa-update.lock"
 _LINUX_PENDING = ".nyaa-linux-update"
-# Limit release downloads even when Content-Length is missing or incorrect.
 _MAX_DOWNLOAD_BYTES = 2 * 1024**3
-# Bound release API response size. A separate deadline bounds the read time.
 _MAX_RELEASE_BYTES = 4 << 20
-# Enforce stall and total deadlines outside the read because socket timeouts reset on
-# each received byte.
+# Socket read timeouts reset on each byte, so enforce total deadlines separately.
 _READ_STALL_S = 60
 _RELEASE_DEADLINE_S = 30
 _DOWNLOAD_DEADLINE_S = 3600
-# Cache the last release lookup so rate limited checks can still offer a known update.
 _RELEASE_CACHE_NAME = "latest_release.json"
 
 
@@ -88,7 +78,6 @@ class Release:
 
 
 def _raw_segments(s: str) -> list[str]:
-    """Split version segments without removing trailing zeroes."""
     s = s.strip()
     if s[:1] in ("v", "V"):
         s = s[1:]
@@ -96,13 +85,11 @@ def _raw_segments(s: str) -> list[str]:
 
 
 def _strip_v(tag: str) -> str:
-    """Remove exactly one leading v or V from a tag."""
     return tag[1:] if tag[:1] in ("v", "V") else tag
 
 
 def parse_version(s: str) -> tuple[int, ...]:
-    """Parse leading digits from each version segment and remove trailing zero segments.
-    """
+    """Ignore suffixes and trailing zero segments."""
     out: list[int] = []
     for seg in _raw_segments(s):
         digits = ""
@@ -117,14 +104,11 @@ def parse_version(s: str) -> tuple[int, ...]:
 
 
 def _has_suffix(s: str) -> bool:
-    """Whether a version segment contains a suffix or other nondigit text."""
     return any(not seg.isdigit() for seg in _raw_segments(s))
 
 
 def is_newer(remote: str, current: str) -> bool:
-    """Compare versions, preferring a final release over a suffixed version with the same
-    numbers.
-    """
+    """Prefer a final release over a suffixed version with the same numbers."""
     r, c = parse_version(remote), parse_version(current)
     if r != c:
         return r > c
@@ -142,7 +126,6 @@ def is_frozen() -> bool:
 
 
 def source_dir() -> Path:
-    """Return the source checkout directory when running unfrozen."""
     return source_root()
 
 
@@ -157,7 +140,6 @@ def install_kind() -> str:
 
 
 def can_self_apply(kind: str | None = None) -> bool:
-    """Whether this installation can apply updates itself."""
     return (kind or install_kind()) in ("git", "frozen-linux", "frozen-windows")
 
 
@@ -171,10 +153,7 @@ def _describe_label(base: str, out: str) -> str | None:
 
 
 def display_version(base: str, kind: str | None = None) -> str:
-    """Return the display version. Frozen builds use their stamp, git checkouts use a
-    matching rolling tag, and plain source copies add a source suffix. Failures return
-    base without affecting startup.
-    """
+    """Use a matching Git tag or source suffix for display. Fall back to base on failure."""
     kind = kind or install_kind()
     if kind == "source":
         return f"{base}-src"
@@ -195,7 +174,6 @@ def display_version(base: str, kind: str | None = None) -> str:
 
 
 def install_dir() -> Path:
-    """Return the directory to update."""
     if is_frozen():
         return Path(sys.executable).resolve().parent
     return source_dir()
@@ -217,9 +195,7 @@ def is_rejected_update(version: str, dest_dir: Path | None = None) -> bool:
 
 
 def mark_boot_ok() -> None:
-    """Write the frozen build's boot marker after Qt loads so the Windows updater can
-    confirm startup.
-    """
+    """Confirm Qt startup to the staged Windows updater."""
     if not is_frozen():
         return
     try:
@@ -254,15 +230,12 @@ def _parse_release(data: dict) -> Release:
 
 
 def fetch_latest_release(timeout: int = 8, channel: str = "stable") -> Release:
-    """Fetch and cache the latest stable release. Raise on network or parse failure,
-    including RateLimited for API limits. channel remains for compatibility and is
-    ignored.
-    """
+    """Cache stable releases. Raise on lookup failure, including RateLimited.
+    channel is retained for compatibility and ignored."""
     req = urllib.request.Request(API_LATEST_URL, headers={"User-Agent": _USER_AGENT})
     deadline = time.monotonic() + _RELEASE_DEADLINE_S
     try:
         with open_response(req, timeout, min(deadline, time.monotonic() + _READ_STALL_S)) as resp:
-            # Read in a helper so the caller can enforce the deadline.
             done = threading.Event()
             progress = [0]
             reader_error = [None]
@@ -304,8 +277,7 @@ def fetch_latest_release(timeout: int = 8, channel: str = "stable") -> Release:
                 f"Release info exceeded the {_MAX_RELEASE_BYTES >> 20} MB safety cap")
         data = json.loads(body)
     except urllib.error.HTTPError as exc:
-        # Handle both exhausted API budgets and secondary Retry-After limits through the
-        # cache. Close HTTPError because it is also a response object.
+        # Cache both primary and secondary rate limits. HTTPError also needs closing.
         exc.close()
         if exc.code == 429 or (exc.code == 403 and (exc.headers.get("X-RateLimit-Remaining") == "0"
                                                    or "Retry-After" in exc.headers)):
@@ -325,7 +297,6 @@ def _release_cache_path() -> Path:
 
 
 def _write_release_cache(release: Release) -> None:
-    """Try to save the release lookup for rate limit fallback."""
     path = _release_cache_path()
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
@@ -347,7 +318,6 @@ def _write_release_cache(release: Release) -> None:
 
 
 def read_cached_release() -> Release | None:
-    """Return the last cached release or None."""
     try:
         with _release_cache_path().open(encoding="utf-8") as cached:
             raw = cached.read(_MAX_RELEASE_BYTES + 1)
@@ -384,9 +354,8 @@ def asset_for_platform(release: Release) -> str | None:
 
 def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | None = None,
              timeout: int = 60, max_bytes: int | None = None) -> None:
-    """Download to a temporary file and rename on success. progress_cb receives downloaded
-    and total bytes, with total zero when unknown. Remove the partial file on failure.
-    """
+    """progress_cb receives downloaded and total bytes, with zero for an unknown total.
+    Remove partial files on failure."""
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     # Use a unique temporary file so concurrent downloads cannot truncate each other.
     part = dest.with_suffix(dest.suffix + f".{os.getpid()}.{threading.get_ident()}.part")
@@ -395,7 +364,6 @@ def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | Non
     deadline = time.monotonic() + _DOWNLOAD_DEADLINE_S
     try:
         with open_response(req, timeout, min(deadline, time.monotonic() + _READ_STALL_S)) as resp:
-            # Treat invalid lengths as unknown. The byte limit still applies.
             try:
                 total = int(resp.headers.get("Content-Length", 0) or 0)
             except ValueError:
@@ -409,7 +377,6 @@ def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | Non
                     raise OSError(
                         f"Not enough free space to download the update: need "
                         f"~{total >> 20} MB, have {free >> 20} MB free.")
-            # Read in a helper so the caller can enforce stall and total deadlines.
             done = threading.Event()
             progress = [0]
             reader_error = [None]
@@ -475,9 +442,7 @@ def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | Non
 
 def verify_release_asset(release: Release, asset_name: str, archive: Path,
                          timeout: int = 15) -> tuple[bool, str]:
-    """Check an archive against its published checksum sidecar. Missing, unreadable or
-    mismatched checksums fail verification.
-    """
+    """Fail verification for missing, unreadable or mismatched release checksums."""
     url = release.assets.get(asset_name + ".sha256")
     if not url:
         return False, "no checksum published for this release"
@@ -528,9 +493,7 @@ def _git_env() -> dict[str, str]:
 
 
 def git_covers_upstream(repo_dir: Path | None = None, timeout: int = 10) -> bool:
-    """Whether HEAD contains the upstream tip. Return False when this cannot be confirmed
-    so callers can use version comparison.
-    """
+    """Return False when ancestry cannot be confirmed so callers compare versions."""
     repo = str(repo_dir or source_dir())
 
     def _git(*args: str) -> "subprocess.CompletedProcess | None":
@@ -555,19 +518,57 @@ def git_covers_upstream(repo_dir: Path | None = None, timeout: int = 10) -> bool
     if tip is None or not tip.stdout.split():
         return False
     sha = tip.stdout.split()[0]
-    # An upstream tip already contained in HEAD has nothing new. An unfetched tip
-    # returns False.
     return _git("merge-base", "--is-ancestor", sha, "HEAD") is not None
 
 
+def _externally_managed_python() -> bool:
+    if sys.prefix != sys.base_prefix:
+        return False
+    stdlib = sysconfig.get_path("stdlib")
+    return bool(stdlib and (Path(stdlib) / "EXTERNALLY-MANAGED").is_file())
+
+
+def _system_requirement_issue(req: Path) -> str | None:
+    """Check the required source packages supplied by the system Python."""
+    try:
+        from packaging.version import InvalidVersion, Version
+    except ImportError:
+        return "The packaging module is required to check system Python dependencies."
+    for raw in req.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        match = re.fullmatch(
+            r"([A-Za-z0-9][A-Za-z0-9._-]*)==([A-Za-z0-9][A-Za-z0-9.!+_-]*)", line)
+        if match is None:
+            return f"Could not check requirement {line!r} with the system Python."
+        name, required = match.groups()
+        if re.sub(r"[-_.]+", "-", name).lower() == "pyqt6-webengine":
+            continue
+        try:
+            installed = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            return f"{name} {required} is not installed in the system Python."
+        try:
+            if Version(installed) < Version(required):
+                return f"{name} {installed} is older than the required {required}."
+        except InvalidVersion:
+            return f"Could not compare {name} versions {installed!r} and {required!r}."
+    return None
+
+
 def _install_requirements(repo_dir: Path) -> tuple[bool, str] | None:
-    """Install requirements with the running interpreter after a successful pull. Repeating
-    this step repairs a previously failed dependency update. Return None if no
-    requirements file exists, otherwise success and detail.
-    """
+    """Retry dependency setup even after an earlier successful pull.
+    Return None without requirements, otherwise success and detail."""
     req = repo_dir / "requirements.txt"
     if not req.is_file():
         return None
+    if _externally_managed_python():
+        try:
+            issue = _system_requirement_issue(req)
+        except (OSError, UnicodeError) as exc:
+            return False, str(exc)
+        return (False, issue) if issue else (True, "")
     try:
         r = subprocess.run(
             [sys.executable, "-m", "pip", "install",
@@ -583,8 +584,7 @@ def _install_requirements(repo_dir: Path) -> tuple[bool, str] | None:
 
 
 def _git_pull(repo_dir: Path) -> subprocess.CompletedProcess:
-    """Pull with tags and fast forward only, using English output for conflict parsing.
-    """
+    """Use English output so conflict parsing is stable."""
     return subprocess.run(
         ["git", "-C", str(repo_dir), "pull", "--ff-only", "--tags"],
         capture_output=True, text=True, timeout=180,
@@ -628,10 +628,53 @@ def _preserve_untracked(repo_dir: Path, rel_paths: list[str]) -> Path:
 
 
 def apply_git(repo_dir: Path | None = None) -> tuple[bool, str]:
-    """Pull changes and tags, then refresh dependencies. Move conflicting old timeline
-    downloads aside and retry once. Return success and a message.
-    """
+    """Serialize source updates and dependency installs for this checkout."""
     repo_dir = repo_dir or source_dir()
+    try:
+        with _update_lock(repo_dir):
+            return _apply_git(repo_dir)
+    except OSError as exc:
+        return False, f"Could not lock the checkout. Another update may be running: {exc}"
+
+
+def _recover_git_rewrite(repo_dir: Path, detail: str) -> str | None:
+    """Follow rewritten upstream history only from a clean published commit."""
+    if "Not possible to fast-forward" not in detail:
+        return None
+
+    def git(*args):
+        result = subprocess.run(
+            ["git", "-C", str(repo_dir), *args], capture_output=True, text=True,
+            timeout=30, encoding="utf-8", errors="replace", env=_git_env())
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip() or "git command failed")
+        return result.stdout.strip()
+
+    try:
+        if git("symbolic-ref", "--quiet", "HEAD") != "refs/heads/main":
+            return None
+        if git("status", "--porcelain", "--untracked-files=no"):
+            return None
+        upstream = git("rev-parse", "--symbolic-full-name", "@{upstream}")
+        if not upstream.startswith("refs/remotes/") or not upstream.endswith("/main"):
+            return None
+        head = git("rev-parse", "HEAD")
+        target = git("rev-parse", "@{upstream}")
+        published = git("reflog", "show", "-n", "50", "--format=%H", upstream).splitlines()
+        published.append(git("rev-parse", f"{upstream}@{{1}}"))
+        if head == target or head not in published:
+            return None
+        backup = f"refs/nyaa-update-backups/{uuid.uuid4().hex}"
+        git("update-ref", backup, head, "")
+        # Keep local files if they appeared while fetching.
+        git("reset", "--keep", target)
+        return f"Updated after upstream history changed. Previous checkout saved at {backup}."
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return None
+
+
+def _apply_git(repo_dir: Path) -> tuple[bool, str]:
+    """Preserve conflicting old timeline downloads and retry once. Return success and detail."""
     try:
         r = _git_pull(repo_dir)
     except FileNotFoundError:
@@ -650,6 +693,10 @@ def apply_git(repo_dir: Path | None = None) -> tuple[bool, str]:
             except Exception as exc:
                 return False, (f"Could not retry git pull: {exc}\n"
                                f"Saved timelines are in {repo_dir / '.nyaa-timeline-backups'}")
+        if r.returncode != 0:
+            recovered = _recover_git_rewrite(repo_dir, r.stderr.strip() or r.stdout.strip())
+            if recovered:
+                r = subprocess.CompletedProcess(r.args, 0, recovered, "")
     if r.returncode == 0:
         msg = r.stdout.strip() or "Updated."
         if cleared:
@@ -660,11 +707,20 @@ def apply_git(repo_dir: Path | None = None) -> tuple[bool, str]:
         if deps is not None:
             deps_ok, detail = deps
             if not deps_ok:
-                return False, (
-                    msg + "\n\nThe code was updated, but installing the Python "
-                    f"dependencies failed:\n{detail}\n"
+                managed = _externally_managed_python()
+                advice = (
+                    "Use your distribution's package manager to satisfy the "
+                    "requirements, then choose Install again, or use a virtual "
+                    "environment before restarting the program."
+                    if managed else
                     "Try Install again, or run `pip install -r requirements.txt` "
-                    "yourself before restarting the program.")
+                    "yourself before restarting the program."
+                )
+                action = "checking" if managed else "installing"
+                return False, (
+                    msg + f"\n\nThe code was updated, but {action} the Python "
+                    f"dependencies failed:\n{detail}\n"
+                    + advice)
             msg += "\n\nPython dependencies are up to date."
         return True, msg
     detail = (r.stderr.strip() or r.stdout.strip() or "unknown error")
@@ -679,7 +735,6 @@ def apply_git(repo_dir: Path | None = None) -> tuple[bool, str]:
 
 
 def _archive_app_root(extracted_to: Path) -> Path:
-    """Find the executable and runtime directory within an extracted archive."""
     if (extracted_to / "_internal").is_dir():
         return extracted_to
     nested = extracted_to / "NyaaTriggers"
@@ -716,9 +771,7 @@ def _update_lock(dest_dir: Path):
 
 
 def _safe_extract_tar(tar_path: Path, dest: Path) -> None:
-    """Extract a tar archive while rejecting paths and links outside the destination.
-    Preserve relative links within the bundled runtime.
-    """
+    """Reject escaping paths and links while preserving relative links within the runtime."""
     dest = dest.resolve()
     dest_s = str(dest)
 
@@ -751,7 +804,6 @@ def _safe_extract_tar(tar_path: Path, dest: Path) -> None:
 
 def apply_frozen_linux(tar_path: Path, dest_dir: Path | None = None,
                        exe_name: str | None = None) -> tuple[bool, str]:
-    """Apply one Linux update while holding the install lock."""
     dest_dir = (dest_dir or install_dir()).resolve()
     try:
         with _update_lock(dest_dir):
@@ -764,9 +816,7 @@ def apply_frozen_linux(tar_path: Path, dest_dir: Path | None = None,
 
 def _apply_frozen_linux(tar_path: Path, dest_dir: Path,
                         exe_name: str | None) -> tuple[bool, str]:
-    """Replace the Linux executable and runtime while preserving user data. Keep backups
-    for cleanup on the next launch and return success and a message.
-    """
+    """Preserve user data and leave backups for next-launch cleanup. Return success and detail."""
     dest_dir = (dest_dir or install_dir()).resolve()
     exe_name = exe_name or Path(sys.executable).name
     if Path(exe_name).name != exe_name or exe_name in ("", ".", "..", "_internal") or "\n" in exe_name:
@@ -776,8 +826,6 @@ def _apply_frozen_linux(tar_path: Path, dest_dir: Path,
 
     staging = None
     try:
-        # Staging can fail if the install parent is not writable. Return the failure
-        # through the usual result.
         staging = Path(tempfile.mkdtemp(prefix=_STAGING_PREFIX, dir=str(dest_dir.parent)))
         (staging / _STAGING_OWNER).write_text(str(dest_dir), encoding="utf-8")
         _safe_extract_tar(tar_path, staging)
@@ -828,8 +876,7 @@ def _apply_frozen_linux(tar_path: Path, dest_dir: Path,
             if internal_dst.exists():
                 os.replace(internal_dst, internal_backup)
                 internal_swapped = True
-            # Require a same filesystem rename. A mount boundary must fail rather than
-            # fall back to a partial copy.
+            # Cross-filesystem copies could leave a partial runtime.
             os.replace(str(new_internal), str(internal_dst))
 
             # Back up the executable before replacing it atomically so it is never
@@ -867,15 +914,13 @@ def _apply_frozen_linux(tar_path: Path, dest_dir: Path,
             shutil.rmtree(staging, ignore_errors=True)
 
 
-# Windows updates run from a staged copy after the installed process exits and releases
-# its executable and DLLs.
+# Windows locks the executable and DLLs until the installed process exits.
 
 _CREATE_NO_WINDOW = 0x08000000
 _DETACHED_PROCESS = 0x00000008
 
 
 def _safe_extract_zip(zip_path: Path, dest: Path) -> None:
-    """Extract a zip archive while rejecting paths outside the destination."""
     dest = dest.resolve()
     with zipfile.ZipFile(zip_path) as zf:
         for name in zf.namelist():
@@ -912,8 +957,6 @@ def apply_frozen_windows(zip_path: Path, dest_dir: Path | None = None,
 
     staging = None
     try:
-        # Allow space for extraction, the replacement copy and backups on the install
-        # volume.
         with zipfile.ZipFile(zip_path) as zf:
             unpacked = sum(i.file_size for i in zf.infolist())
         need = unpacked * 3 + (64 << 20)
@@ -971,9 +1014,7 @@ def apply_frozen_windows(zip_path: Path, dest_dir: Path | None = None,
 
 
 def _wait_for_pid_exit(pid: int, timeout: float = 90.0) -> bool:
-    """Wait for a process to exit and release file locks. Prefer a Windows process handle,
-    falling back to tasklist. Return False on timeout and True for nonpositive PIDs.
-    """
+    """Use a Windows handle or tasklist to confirm exit. Return False on timeout."""
     if pid <= 0:
         return True
     deadline = time.monotonic() + timeout
@@ -1015,9 +1056,8 @@ def _wait_for_pid_exit(pid: int, timeout: float = 90.0) -> bool:
             time.sleep(3.0)
             continue
         out = (r.stdout or "").lstrip()
-        # Accept exit only after a successful probe with no process row. Localized INFO
-        # messages can have a space before the colon. Errors or unexpected output leave
-        # the exit unconfirmed.
+        # Require a successful probe with no process row. Localized INFO permits a space
+        # before the colon.
         if r.returncode == 0 and (not out or out.startswith(("INFO:", "INFO :"))):
             time.sleep(1.5)
             return True
@@ -1026,9 +1066,6 @@ def _wait_for_pid_exit(pid: int, timeout: float = 90.0) -> bool:
 
 
 def _retry_locked(fn, attempts: int = 30, delay: float = 0.5):
-    """Retry temporary permission errors from file locks, raising the last error if retries
-    fail.
-    """
     for i in range(attempts):
         try:
             return fn()
@@ -1039,7 +1076,6 @@ def _retry_locked(fn, attempts: int = 30, delay: float = 0.5):
 
 
 def _install_looks_intact(dest_dir: Path, exe_dst: Path) -> bool:
-    """Check that the executable exists and the runtime directory is nonempty."""
     try:
         internal = dest_dir / "_internal"
         if not exe_dst.exists() or not internal.is_dir():
@@ -1050,8 +1086,6 @@ def _install_looks_intact(dest_dir: Path, exe_dst: Path) -> bool:
 
 
 def _relaunch_installed(exe_dst: Path, dest_dir: Path):
-    """Try to relaunch the installed executable detached and return its process handle.
-    """
     try:
         if exe_dst.exists():
             return subprocess.Popen([str(exe_dst)], cwd=str(dest_dir), close_fds=True,
@@ -1062,13 +1096,10 @@ def _relaunch_installed(exe_dst: Path, dest_dir: Path):
 
 
 def _relaunch_and_verify(exe_dst: Path, dest_dir: Path, grace: float = 25.0) -> bool:
-    """Relaunch the installed build and accept a boot marker or a process still alive at
-    the deadline. Reject failed starts and stale markers that cannot be cleared. Never
-    kill a process still starting.
-    """
+    """Accept a fresh boot marker or a process still alive at the deadline.
+    Never kill a process still starting."""
     marker = Path(dest_dir) / _BOOT_OK_MARKER
-    # Clear the old boot marker first. A marker that cannot be removed would falsely
-    # confirm startup.
+    # A stale marker would falsely confirm startup.
     try:
         _retry_locked(lambda: marker.unlink(missing_ok=True), attempts=3, delay=0.2)
     except OSError:
@@ -1100,9 +1131,7 @@ def _relaunch_and_verify(exe_dst: Path, dest_dir: Path, grace: float = 25.0) -> 
 def _rollback_windows_update(internal_swapped: bool, exe_swapped: bool,
                              internal_dst: Path, internal_bak: Path, internal_new: Path,
                              exe_dst: Path, exe_bak: Path, exe_new: Path) -> None:
-    """Restore both executable and runtime after a failed update. Move current files aside
-    and restore backups without raising.
-    """
+    """Restore executable and runtime backups without raising."""
     try:
         if exe_swapped and exe_bak.exists():
             if exe_dst.exists():
@@ -1113,7 +1142,6 @@ def _rollback_windows_update(internal_swapped: bool, exe_swapped: bool,
                     pass
             _retry_locked(lambda: os.replace(exe_bak, exe_dst))
     except Exception as exc:  # noqa: BLE001
-        # If restore fails, leave a recovery note naming the executable backup.
         _log_update(exe_dst.parent,
                     f"rollback failed to restore {exe_bak.name} ({exc}); "
                     "the install is broken, see RECOVER.txt")
@@ -1128,7 +1156,6 @@ def _rollback_windows_update(internal_swapped: bool, exe_swapped: bool,
                     pass
             _retry_locked(lambda: os.replace(internal_bak, internal_dst))
     except Exception as exc:  # noqa: BLE001
-        # If runtime restore fails, leave a recovery note naming its backup.
         _log_update(internal_dst.parent,
                     f"rollback failed to restore {internal_bak.name} ({exc}); "
                     "the install is broken, see RECOVER.txt")
@@ -1138,7 +1165,6 @@ def _rollback_windows_update(internal_swapped: bool, exe_swapped: bool,
 
 
 def _log_update(dest_dir: Path, msg: str) -> None:
-    """Try to append a timestamped update log entry."""
     try:
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
         with (Path(dest_dir) / _UPDATE_LOG_NAME).open("a", encoding="utf-8") as f:
@@ -1148,7 +1174,7 @@ def _log_update(dest_dir: Path, msg: str) -> None:
 
 
 def _drop_recover_note(dest_dir: Path, backup: Path, target: str) -> None:
-    """Try to write a recovery note naming the backup that must be restored manually."""
+    """Name the backup requiring manual recovery without raising."""
     kind = "folder" if target == "_internal" else "file"
     try:
         (Path(dest_dir) / "RECOVER.txt").write_text(
@@ -1170,7 +1196,6 @@ def _drop_recover_note(dest_dir: Path, backup: Path, target: str) -> None:
 
 
 def _mark_rejected(dest_dir: Path, staging_root: Path) -> str:
-    """Try to record the rejected release identity from staging."""
     version = "unknown"
     for candidate_path in (Path(staging_root) / "_internal" / "nyaatriggers.version",
                            Path(staging_root) / _STAGED_VERSION_NAME):
@@ -1202,9 +1227,7 @@ def _mark_rejected(dest_dir: Path, staging_root: Path) -> str:
 
 
 def _is_update_staging(dest_dir: Path, staging_root: Path) -> bool:
-    """Check that the resolved staging path is an updater directory beside the install or
-    its extracted program root.
-    """
+    """Accept only updater staging beside the install or its extracted program root."""
     for p in (staging_root, *staging_root.parents):
         if p.parent == dest_dir.parent:
             return p.name.startswith(_STAGING_PREFIX)
@@ -1219,7 +1242,6 @@ def _valid_windows_exe_name(name: str) -> bool:
 
 def finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
                           exe_name: str) -> None:
-    """Run the staged Windows swap with exclusive access to the install."""
     try:
         with _update_lock(Path(dest_dir).resolve()):
             _finish_windows_update(dest_dir, staging_root, old_pid, exe_name)
@@ -1229,13 +1251,10 @@ def finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
 
 def _finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
                            exe_name: str) -> None:
-    """Finish the staged Windows update after validating the handoff and waiting for the
-    old process. Prepare replacement files, swap with backups, and relaunch to check
-    startup. Restore backups on failure and never raise.
-    """
+    """Validate the handoff, wait for exit, then swap and verify startup.
+    Restore backups on failure without raising."""
     dest_dir = Path(dest_dir).resolve()
     staging_root = Path(staging_root).resolve()
-    # Validate the PID and staging location before accepting the command line handoff.
     if (old_pid <= 0 or not _valid_windows_exe_name(exe_name)
             or not _is_update_staging(dest_dir, staging_root)):
         _log_update(dest_dir, f"refused --apply-update: pid={old_pid}, staging "
@@ -1246,7 +1265,6 @@ def _finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
     new_exe = staging_root / exe_name
     internal_dst = dest_dir / "_internal"
     exe_dst = dest_dir / exe_name
-    # Use unique absent backup paths with the suffix recognized by cleanup.
     pid = os.getpid()
     internal_bak = dest_dir / f"_internal.{pid}{_BACKUP_SUFFIX}"
     internal_new = dest_dir / f"_internal.{pid}.new{_BACKUP_SUFFIX}"
@@ -1254,7 +1272,6 @@ def _finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
     exe_new = dest_dir / f"{exe_name}.{pid}.new{_BACKUP_SUFFIX}"
 
     if not _wait_for_pid_exit(old_pid):
-        # Leave the install untouched while the old process may still hold its files.
         _log_update(dest_dir, f"old process {old_pid} did not exit in time; "
                               "swap skipped, install untouched")
         _relaunch_installed(exe_dst, dest_dir)
@@ -1263,7 +1280,6 @@ def _finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
     internal_swapped = False
     exe_swapped = False
     try:
-        # Prepare replacement files beside the live install before swapping.
         _force_remove(internal_new)
         # A retry must overwrite files left by a failed copy.
         _retry_locked(lambda: shutil.copytree(new_internal, internal_new,
@@ -1290,8 +1306,6 @@ def _finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
             _relaunch_installed(exe_dst, dest_dir)
         return
 
-    # Check that the new build starts before keeping it. The staged process can restore
-    # the backups if startup fails.
     try:
         booted = _relaunch_and_verify(exe_dst, dest_dir)
     except Exception:  # noqa: BLE001
@@ -1325,7 +1339,6 @@ def _force_remove(path: Path) -> None:
 
 
 def _looks_like_update_staging(d: Path) -> bool:
-    """Check for an extracted update before removing a directory with a staging name."""
     try:
         root = _archive_app_root(d)
         return (root / "_internal").is_dir() or any(root.glob("*.exe"))
@@ -1344,9 +1357,6 @@ def cleanup_old_backups(dest_dir: Path | None = None) -> None:
 
 
 def _cleanup_old_backups(dest_dir: Path) -> None:
-    """Remove completed update backups, stale launcher temporary files and orphaned staging
-    directories.
-    """
     try:
         dest_dir = (dest_dir or install_dir()).resolve()
         live_internal = dest_dir / "_internal"
@@ -1366,8 +1376,6 @@ def _cleanup_old_backups(dest_dir: Path) -> None:
             if entry.name.startswith("_internal") and not internal_ok:
                 continue
             _force_remove(entry)
-        # Remove stale launcher temporary files while preserving recent copies from
-        # another update.
         cutoff = time.time() - 3600.0
         for part in dest_dir.glob("NyaaTriggers.sh.*.part"):
             try:
@@ -1376,8 +1384,6 @@ def _cleanup_old_backups(dest_dir: Path) -> None:
             except OSError:
                 pass
         for entry in dest_dir.parent.glob(f"{_STAGING_PREFIX}*"):
-            # Check the staging contents before removing a matching directory beside the
-            # install.
             if entry.is_dir() and not entry.is_symlink() and _looks_like_update_staging(entry):
                 try:
                     owner = entry / _STAGING_OWNER
@@ -1392,15 +1398,13 @@ def _cleanup_old_backups(dest_dir: Path) -> None:
 
 
 def relaunch_args() -> tuple[str, list[str]]:
-    """Return the executable and arguments for relaunching after an update."""
     if is_frozen():
         return sys.executable, [sys.executable, *sys.argv[1:]]
     return sys.executable, [sys.executable, *sys.argv]
 
 
 def relaunch() -> None:
-    """Replace the current process with a fresh instance. Never returns on
-    success."""
+    """Never returns on success."""
     exe, args = relaunch_args()
     # Windowed builds may have no stdout or stderr.
     if sys.stdout is not None:

@@ -244,6 +244,23 @@ class SessionTests(unittest.TestCase):
         self.combat(False)
         self.assertEqual(summary(session), {"pulls": 2, "interrupted": 0, "longest": 150, "combat": 170})
 
+    def test_delayed_wipe_without_phase_rules_keeps_original_deadlines(self):
+        session = self.start()
+        wipe = ["33", "ts", "80000001", "4000000F"]
+        for delay, expected in ((3.5, "wipe"), (6, "combat-ended")):
+            with self.subTest(delay=delay):
+                self.combat(True)
+                self.meter.process(ability())
+                self.combat(False)
+                deadline = self.sessions._recap_until
+                self.clock.value += 3
+                self.sessions.pull_finished(self.meter._last_final)
+                self.clock.value += delay - 3
+                self.meter.process(wipe)
+                self.sessions.process_event(wipe, [])
+                self.assertEqual(session["pulls"][-1]["ending"], expected)
+                self.assertEqual(self.sessions._recap_until, deadline)
+
     def test_mid_pull_start_and_reconnect_wait_for_idle(self):
         self.combat(True)
         self.meter.process(ability())

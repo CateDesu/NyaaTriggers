@@ -101,6 +101,8 @@ check("inferno wave gets the bind signs (by slot)",
       mm[A] == BND1 and mm[B] == BND2)
 check("tsunami wave gets the ignore signs (by slot)",
       mm[C] == IGN1 and mm[D] == IGN2)
+w.feed("26", CURSED_SHRIEK, A, dur="60.00")
+check("duplicate gaze gain after both pairs sends no clears", w.clears == [])
 
 # the second cast id of each element routes too
 w = FakeWindow()
