@@ -183,6 +183,7 @@ class CactbotReader(QObject):
         self._channel = None
         self._bridge = None
         self._active = False
+        self._ws_url = ""
         # Replace the rule list atomically so readers need no lock.
         self._replacements: list[dict] = []
         self._seen: dict[str, None] = {}      # ordered set of observed phrases
@@ -195,6 +196,9 @@ class CactbotReader(QObject):
     def is_active(self) -> bool:
         return self._active
 
+    def websocket_url(self) -> str:
+        return self._ws_url
+
     def start(self, ws_url: str, cactbot_url: str = DEFAULT_CACTBOT_URL,
               disabled_triggers=None) -> None:
         """Start cactbot with the IINACT URL and disabled trigger IDs. Requires WebEngine.
@@ -202,6 +206,7 @@ class CactbotReader(QObject):
         """
         if self._active:
             return
+        ws_url = ws_url.strip()
 
         # Custom URLs share the mixed content allowance needed for the local IINACT
         # feed. Warn for remote hosts and load the configured URL.
@@ -263,6 +268,7 @@ class CactbotReader(QObject):
         query.append(("OVERLAY_WS", ws_url))
         load_url = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
         self._active = True
+        self._ws_url = ws_url
         self.status.emit(True, "Loading cactbot...")
         self._page.load(QUrl(load_url))
 
@@ -276,6 +282,7 @@ class CactbotReader(QObject):
         """Clear active state and delete the browser objects so a later start can retry.
         """
         self._active = False
+        self._ws_url = ""
         # Clear observed phrases so a new session can emit them again.
         self._seen.clear()
         if self._page is not None:

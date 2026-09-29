@@ -94,7 +94,9 @@ class SidecarSafetyTests(unittest.TestCase):
                 stamp.write_bytes(b"\xff")
                 self.assertIsNone(tv._jar_built_from())
                 stamp.write_text("0123456789abcdef\n", encoding="ascii")
-                self.assertEqual(tv._jar_built_from(), "0123456789abcdef")
+                self.assertIsNone(tv._jar_built_from())
+                stamp.write_text('{"engine": "0123456789abcdef", "inputs": {}}\n')
+                self.assertEqual(tv._jar_built_from(), {"engine": "0123456789abcdef", "inputs": {}})
 
 
 if __name__ == "__main__":

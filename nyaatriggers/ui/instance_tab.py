@@ -12,6 +12,7 @@ from nyaatriggers.trigger_engine import Trigger, compile_user_regex, cooldown_so
 from nyaatriggers.locale_util import _
 from nyaatriggers.sequential import SequentialRunner
 from nyaatriggers.status_timer import StatusTimerRunner
+from nyaatriggers.tts import interrupt as tts_interrupt
 from nyaatriggers.telesto_client import _actor_int
 from nyaatriggers.dps_meter import METER_LOG_TYPES
 from nyaatriggers.timeline_engine import SYNC_LOG_TYPES, TimelineEngine
@@ -101,6 +102,8 @@ class InstanceTabMixin:
                 # Backfill jobs from live memory when connecting midfight.
                 self._ws.request_combatants_once()
         else:
+            if not getattr(self, "_cactbot_mode", False):
+                tts_interrupt()
             self._awaiting_zone_metadata = True
             self._pending_timeline_events = []
             self._in_game_combat = False
@@ -208,6 +211,8 @@ class InstanceTabMixin:
         self._set_zone_aliases(zone, zone_id)
         if not raw_zone:
             self._plugin_link.send_clear()
+        if not getattr(self, "_cactbot_mode", False):
+            tts_interrupt()
         self._clear_status_timers()
         self._clear_seq_runners()
         self._clear_callout_dedup()
@@ -343,6 +348,8 @@ class InstanceTabMixin:
             self._cancel_status_timers_for_status(fields)
         elif (fields[0] == "33" and len(fields) > 3
               and fields[3].upper() == "4000000F"):
+            if not getattr(self, "_cactbot_mode", False):
+                tts_interrupt()
             self._pending_timeline_events = []
             # ActorControl stores the wipe command at field 3, before data0.
             self._clear_status_timers()
@@ -430,7 +437,7 @@ class InstanceTabMixin:
                     # Ignore pending repeats before matching consumes their cooldown.
                     continue
 
-                m = t.matches(fields, me=self._me_name)
+                m = t.matches(fields, me=self._me_name, me_id=getattr(self, "_me_id", ""))
                 if m is None:
                     continue
 
@@ -445,6 +452,7 @@ class InstanceTabMixin:
                         on_expire=self._on_seq_expire,
                         parent=self,
                         cooldown_key=key,
+                        start_fields=fields,
                     )
                     self._seq_runners.append(runner)
                 elif t.expiry_warn_s > 0 and fields[0] == "26":
@@ -587,7 +595,9 @@ class InstanceTabMixin:
     def _queue_timeline_event(self, fields: list[str]) -> None:
         if fields[0] not in SYNC_LOG_TYPES:
             return
-        if fields[0] == "260" and len(fields) > 3 and fields[3] == "0":
+        if (fields[0] == "260" and len(fields) > 3 and fields[3] == "0"
+                and (getattr(self, "_awaiting_zone_metadata", False)
+                     or getattr(self, "_timeline_reset_on_combat_end", False))):
             self._pending_timeline_events = []
             return
         if not hasattr(self, "_pending_timeline_events"):

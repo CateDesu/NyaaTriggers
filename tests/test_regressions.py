@@ -970,13 +970,19 @@ def test_drop_log_failed_rotate_still_appends():
             drop_log._perms_tightened = False
 
 
-# both installers pin piper-tts
+# Both entry points use the shared pinned installer.
 def test_setup_installers_pin_piper():
     install_src = (REPO_DIR / "install.py").read_text(encoding="utf-8")
     main_src = (REPO_DIR / "main.py").read_text(encoding="utf-8")
 
-    check("install.py pins piper-tts", '"piper-tts==1.4.2"' in install_src)
-    check("main.py pins piper-tts", '"piper-tts==1.4.2"' in main_src)
+    import install
+    with tempfile.TemporaryDirectory() as temporary:
+        commands = []
+        install.prepare_voice_venv(Path(temporary) / "voice",
+                                   lambda args, timeout: commands.append(args))
+    check("shared installer pins piper-tts",
+          any("piper-tts==1.4.2" in command for command in commands))
+    check("main.py uses the shared voice installer", "install.prepare_voice_venv(" in main_src)
     check("install.py no longer uses unbounded urlretrieve",
           "urllib.request.urlretrieve" not in install_src)
 
@@ -1014,7 +1020,8 @@ def test_setup_install_voice_download():
         install.VOICE_ONNX_SHA256 = install._sha256(install.VOICE_FILE)
         fetched = []
         orig_urlopen = install.open_response
-        install.open_response = lambda url, timeout, deadline: (fetched.append(url), _FakeResp(b"{}"))[1]
+        voice_config = (REPO_DIR / "voices/en_US-arctic-medium.onnx.json").read_bytes()
+        install.open_response = lambda url, timeout, deadline: (fetched.append(url), _FakeResp(voice_config))[1]
         try:
             install.download_voice()
             check("present .onnx is not re-downloaded when only the .json is missing",
@@ -1949,7 +1956,7 @@ def test_te_update_stamp_gate():
             pass
 
     def run_once(behind, head, build_rc, stamp, remote_url=None, dirty=False,
-                 clean_works=True, has_origin=True, set_url_rc=0):
+                 has_origin=True, set_url_rc=0):
         """Run update_engine against a temp clone layout with git and the
         build scripted. Returns (ok, msg, build_calls, stamp_text, remote_calls,
         git ops in call order)."""
@@ -1960,14 +1967,15 @@ def test_te_update_stamp_gate():
         (et / ".git").mkdir(parents=True)
         build_sh = root / "build.sh"
         build_sh.write_text("#!/bin/sh\n", encoding="utf-8")
+        (root / "build.bat").write_text("@echo off\n")
+        (root / "pom.xml").write_text("<project/>\n")
+        (root / "src/main").mkdir(parents=True)
         (root / "target").mkdir()
+        (root / "target/triggevent-core.jar").write_bytes(b"fixture jar")
         stamp_p = root / "target" / "triggevent-core.jar.built-from"
-        if stamp is not None:
-            stamp_p.write_text(stamp, encoding="utf-8")
         builds = []
         remotes = []
         ops = []
-        state = {"dirty": dirty}
 
         def fake_run(argv, **kw):
             sub = argv[3:]
@@ -1983,16 +1991,15 @@ def test_te_update_stamp_gate():
                 return _R(0)
             if sub[0] == "fetch":
                 return _R(0)
+            if sub[0] == "merge-base":
+                assert sub == ["merge-base", "--is-ancestor", "HEAD", "origin/main"]
+                return _R(0)
             if sub[0] == "rev-list":
                 return _R(0, behind + "\n")
             if sub[0] == "rev-parse":
                 return _R(0, head + "\n")
             if sub[0] == "status":
-                return _R(0, " M triggers/DMU.java\n" if state["dirty"] else "")
-            if sub[0] == "checkout":
-                if sub[1:] == ["--", "."] and clean_works:
-                    state["dirty"] = False
-                return _R(0)
+                return _R(0, " M triggers/DMU.java\n" if dirty else "")
             if sub[0] == "merge":
                 return _R(0)
             raise AssertionError(f"unexpected git argv: {argv}")
@@ -2001,18 +2008,22 @@ def test_te_update_stamp_gate():
             builds.append(list(cmd))
             return _FakeBuild(build_rc)
 
-        orig = (tev._ET_DIR, tev._BUILD_SCRIPT, tev._JAR_STAMP,
+        orig = (tev._CORE_DIR, tev._ET_DIR, tev._BUILD_SCRIPT, tev._JAR_STAMP,
                 tev.shutil.which, tev.subprocess.run, tev.subprocess.Popen)
-        tev._ET_DIR, tev._BUILD_SCRIPT, tev._JAR_STAMP = et, build_sh, stamp_p
+        tev._CORE_DIR, tev._ET_DIR, tev._BUILD_SCRIPT, tev._JAR_STAMP = root, et, build_sh, stamp_p
         tev.shutil.which = lambda t: "/usr/bin/" + t
         tev.subprocess.run = fake_run
         tev.subprocess.Popen = fake_popen
         try:
+            if stamp is not None:
+                stamp_p.write_text(json.dumps({"engine": stamp.strip(),
+                                              "inputs": tev._wrapper_build_inputs()}))
             ok, msg = tev.update_engine("stable", manual=True)
         finally:
-            (tev._ET_DIR, tev._BUILD_SCRIPT, tev._JAR_STAMP,
+            (tev._CORE_DIR, tev._ET_DIR, tev._BUILD_SCRIPT, tev._JAR_STAMP,
              tev.shutil.which, tev.subprocess.run, tev.subprocess.Popen) = orig
-        stamp_text = stamp_p.read_text(encoding="utf-8") if stamp_p.exists() else None
+        stamp_text = (json.loads(stamp_p.read_text(encoding="utf-8"))["engine"] + "\n"
+                      if stamp_p.exists() else None)
         td.cleanup()
         return ok, msg, builds, stamp_text, remotes, ops
 
@@ -2056,19 +2067,10 @@ def test_te_update_stamp_gate():
           ok and "5 new commit(s)" in msg)
     check("a real update stamps the new HEAD", stamp_text == "ccc333\n")
 
-    # Patch era dirt is discarded before the merge, and the build then sees a
-    # clean tree.
+    # Preserve local edits before attempting an update.
     ok, msg, builds, stamp_text, _r6, ops = run_once("3", "ddd444", 0, None, dirty=True)
-    clean = ("checkout", "--", ".")
-    merge = ("merge", "--ff-only", "origin/main")
-    check("a dirty tree is cleaned before the merge",
-          clean in ops and merge in ops and ops.index(clean) < ops.index(merge))
-    check("a cleaned clone updates and stamps", ok and stamp_text == "ddd444\n")
-
-    # Refuse to build if cleanup leaves local changes.
-    ok, msg, builds, stamp_text, _r7, _o7 = run_once("0", "aaa111", 0, None,
-                                                     dirty=True, clean_works=False)
-    check("a tree that will not come clean refuses the build",
+    check("a dirty tree stops before fetching or merging", ops == [("status", "--porcelain")])
+    check("local changes refuse the build",
           not ok and "uncommitted changes" in msg)
     check("a refused build never starts", builds == [])
     check("a refused build writes no stamp", stamp_text is None)
@@ -2076,9 +2078,10 @@ def test_te_update_stamp_gate():
     # Leave local changes alone when the stamped jar is already current.
     ok, msg, builds, stamp_text, _r8, ops = run_once("0", "aaa111", 0, "aaa111\n",
                                                      dirty=True)
-    check("a current jar reports up to date with a dirty tree",
-          not ok and "already up to date" in msg)
-    check("a current jar never touches the tree", ("checkout", "--", ".") not in ops)
+    check("a current jar still reports local edits",
+          not ok and "uncommitted changes" in msg)
+    check("a current jar never touches the tree", ops == [("status", "--porcelain")])
+    check("a current jar keeps its stamp", stamp_text == "aaa111\n")
 
     # A clone with no origin gets one added at the fork, then fetches.
     ok, msg, builds, stamp_text, _r9, ops = run_once("0", "aaa111", 0, "aaa111\n",

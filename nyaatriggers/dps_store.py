@@ -1,14 +1,15 @@
 """Store pulls as JSONL with bounded retention. Roll files when a fight reaches its pull
 limit or adding a fight would exceed the distinct fight limit. Keep the active log in
-addition to the retained completed logs. Manage only top-level JSONL files.
+addition to the retained completed logs. Manage generated top-level JSONL files.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from nyaatriggers.drop_log import log_drop
@@ -24,6 +25,8 @@ _last_written: "Path | None" = None
 
 # Serialize appends, rollover and retention across encounter writer threads.
 _write_lock = threading.Lock()
+
+_LOG_NAME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}(?:_[0-9]{3})?\.jsonl")
 
 
 def write_pull(log_dir, data: dict, when: "datetime | None" = None) -> Path:
@@ -82,7 +85,7 @@ def enforce_retention(log_dir, max_logs: "int | None" = None,
     """
     if max_logs is None:
         max_logs = MAX_LOGS
-    files = sorted(Path(log_dir).glob("*.jsonl"))
+    files = _log_files(Path(log_dir))
     # Fall back to the newest filename when this process has no active file in the
     # directory.
     active = _last_written if _last_written in files \
@@ -97,17 +100,41 @@ def enforce_retention(log_dir, max_logs: "int | None" = None,
 
 def _current_log(log_dir: Path) -> "Path | None":
     """Return the last filename in sorted order."""
-    files = sorted(log_dir.glob("*.jsonl"))
+    files = _log_files(log_dir)
     return files[-1] if files else None
+
+
+def _log_files(log_dir: Path) -> list[Path]:
+    files = []
+    for path in log_dir.glob("*.jsonl"):
+        if not _LOG_NAME.fullmatch(path.name) or not path.is_file():
+            continue
+        try:
+            datetime.strptime(path.name[:19], "%Y-%m-%d_%H-%M-%S")
+        except ValueError:
+            continue
+        files.append(path)
+    return sorted(files)
 
 
 def _new_log(log_dir: Path, when: datetime) -> Path:
     base = f"{when:%Y-%m-%d_%H-%M-%S}"
-    for n in range(1000):
+    latest = _current_log(log_dir)
+    n = 0
+    # Keep name order after clock changes and pruning.
+    if latest is not None and base <= latest.name[:19]:
+        base = latest.name[:19]
+        n = int(latest.stem[20:] or "0") + 1
+    for _ in range(1000):
+        if n >= 1000:
+            base = (datetime.strptime(base, "%Y-%m-%d_%H-%M-%S")
+                    + timedelta(seconds=1)).strftime("%Y-%m-%d_%H-%M-%S")
+            n = 0
         # Zero padding preserves suffix order for rolls within the same second.
         path = log_dir / (f"{base}.jsonl" if n == 0 else f"{base}_{n:03d}.jsonl")
         if not path.exists():
             return path
+        n += 1
     raise OSError(f"could not allocate a log name in {log_dir}")
 
 

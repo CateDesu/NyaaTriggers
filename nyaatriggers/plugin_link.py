@@ -560,10 +560,15 @@ class PluginLink(QObject):
         with self._lock:
             if not self._frame_current(msg):
                 return
-            try:
-                q.put_nowait(msg)
-            except queue.Full:
-                log_drop("plugin-drop", "alert re-queue overflowed; callout dropped")
+            if q.full():
+                self._evict_oldest(q, msg)
+            with q.mutex:
+                if q.maxsize > 0 and len(q.queue) >= q.maxsize:
+                    log_drop("plugin-drop", "alert re-queue overflowed; callout dropped")
+                    return
+                q.queue.appendleft(msg)
+                q.unfinished_tasks += 1
+                q.not_empty.notify()
 
     def _frame_current(self, msg) -> bool:
         return (self._enabled

@@ -13,7 +13,7 @@ from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QFrame, QProgressBar, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 
-from nyaatriggers.tts import kokoro_ready, download_kokoro_model, install_kokoro_deps
+from nyaatriggers.tts import kokoro_ready, download_kokoro_model, install_kokoro_deps, resume as tts_resume
 from nyaatriggers.locale_util import _
 from nyaatriggers.triggevent_bridge import update_engine as _te_update_engine
 from nyaatriggers.plugin_link import plugin_supports_dps
@@ -522,6 +522,7 @@ class UpdaterUiMixin:
         try:
             updater.relaunch()
         except Exception as exc:  # noqa: BLE001
+            tts_resume()
             ac.QMessageBox.warning(
                 self, _("Restart failed"),
                 _("Could not restart automatically: {error}\n\n"

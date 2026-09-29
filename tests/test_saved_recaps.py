@@ -132,7 +132,8 @@ class SavedRecapTests(unittest.TestCase):
         loaded = ProgSessions(self.directory)
         saved = self.load(pull, loaded)[0][0]
         self.assertEqual(saved["id"], death["id"])
-        self.assertEqual(saved["statuses"], [{"name": "Vulnerability", "source": "Boss"}])
+        self.assertEqual(saved["statuses"], [{"name": "Vulnerability", "source": "Boss", "id": 0xABC,
+                                               "source_id": 0x40001234, "stacks": 0}])
         self.assertEqual(loaded.sessions[0]["state"], "interrupted")
 
     def test_failure_keeps_earlier_recaps_and_retries_across_pulls(self):

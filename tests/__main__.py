@@ -23,6 +23,7 @@ def main():
 
     environment = os.environ.copy()
     environment.setdefault("QT_QPA_PLATFORM", "offscreen")
+    environment.setdefault("NYAA_REPLAY_TEST", "1")
     github = environment.get("GITHUB_ACTIONS") == "true"
     failed = []
     for name in selected:

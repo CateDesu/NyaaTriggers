@@ -5,6 +5,7 @@
 // path and an optional log line.
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
@@ -20,6 +21,9 @@ static class Program
     static volatile int calloutCount = 0;
     static RealPlugin plug;
     static string currentZone = "";
+    static readonly object combatLock = new object();
+    static readonly Stopwatch encounterClock = new Stopwatch();
+    static bool inCombat;
 
     // Map stable callout IDs to live UseTTS actions for editing and suppression.
     static readonly Dictionary<string, Triggernometry.Action> _calloutActions = new Dictionary<string, Triggernometry.Action>();
@@ -73,14 +77,14 @@ static class Program
 
         RealPlugin.InstanceHook    = (n, t) => CombatantBridge.Instance();
         plug.ActInitedHook         = () => true;
-        plug.InCombatHook          = () => false;
+        plug.InCombatHook          = InCombat;
         plug.CurrentZoneHook       = () => currentZone;
         plug.ActiveEncounterHook   = () => "";
         plug.LastEncounterHook     = () => "";
-        plug.EncounterDurationHook  = () => 0.0;
+        plug.EncounterDurationHook  = EncounterDuration;
         plug.TtsPlaybackHook       = (text) => { if (string.IsNullOrWhiteSpace(text)) return; Interlocked.Increment(ref calloutCount); Out("{\"t\":\"callout\",\"tts\":" + J(text) + "}"); };
         plug.SoundPlaybackHook     = (file, vol) => Out("{\"t\":\"sound\",\"file\":" + J(file) + ",\"volume\":" + vol + "}");
-        plug.SetCombatStateHook    = b => { };
+        plug.SetCombatStateHook    = SetCombatState;
         plug.LogAllNetworkHook     = b => { };
         plug.UseDeucalionHook      = b => { };
         plug.ACTEncounterLogHook   = m => { };
@@ -154,6 +158,11 @@ static class Program
             string t = root.TryGetProperty("t", out el) ? el.GetString() : null;
             switch (t)
             {
+                case "combat":
+                    if (root.TryGetProperty("active", out el) &&
+                        (el.ValueKind == JsonValueKind.True || el.ValueKind == JsonValueKind.False))
+                        SetCombatState(el.GetBoolean());
+                    break;
                 case "log":
                     if (root.TryGetProperty("line", out el))
                     {
@@ -172,6 +181,16 @@ static class Program
                                 CombatantBridge.RaiseZoneChanged(zoneId, currentZone);
                             }
                         }
+                        else if (raw.StartsWith("02|"))
+                        {
+                            var f = raw.Split(new[] { '|' });
+                            uint playerId;
+                            if (f.Length > 3 && uint.TryParse(f[2],
+                                    System.Globalization.NumberStyles.HexNumber,
+                                    System.Globalization.CultureInfo.InvariantCulture, out playerId)
+                                    && playerId >= 0x10000000 && playerId < 0x11000000)
+                                CombatantBridge.SetPlayerId(playerId);
+                        }
                         FeedLog(raw, currentZone);
                     }
                     break;
@@ -185,6 +204,9 @@ static class Program
                     if (root.TryGetProperty("list", out el) && el.ValueKind == JsonValueKind.Array)
                         foreach (var c in el.EnumerateArray()) list.Add(ParseCombatant(c));
                     CombatantBridge.SetSnapshot(me, list.ToArray());
+                    break;
+                case "player":
+                    CombatantBridge.SetPlayerId(JU(root, "id"));
                     break;
                 case "endpoint":
                     if (root.TryGetProperty("body", out el) && el.ValueKind == JsonValueKind.String)
@@ -219,10 +241,37 @@ static class Program
 
     static void FeedLog(string raw, string zone)
     {
+        if (raw.StartsWith("260|"))
+        {
+            var fields = raw.Split('|');
+            if (fields.Length > 3 && (fields[2] == "0" || fields[2] == "1"))
+                SetCombatState(fields[2] == "1");
+        }
         // Network triggers receive the original line. Log triggers receive
         // the formatted line that ACT would deliver after parsing it.
         plug.BeforeLogLineRead(false, raw, zone);
         plug.OnLogLineRead(false, ActLogLine.Format(raw), zone);
+    }
+
+    static void SetCombatState(bool active)
+    {
+        lock (combatLock)
+        {
+            if (active == inCombat) return;
+            inCombat = active;
+            if (active) encounterClock.Restart();
+            else encounterClock.Reset();
+        }
+    }
+
+    static bool InCombat()
+    {
+        lock (combatLock) return inCombat;
+    }
+
+    static double EncounterDuration()
+    {
+        lock (combatLock) return encounterClock.Elapsed.TotalSeconds;
     }
 
     static uint JU(JsonElement c, string k) { JsonElement v; uint n; return (c.TryGetProperty(k, out v) && v.ValueKind == JsonValueKind.Number && v.TryGetUInt32(out n)) ? n : 0u; }

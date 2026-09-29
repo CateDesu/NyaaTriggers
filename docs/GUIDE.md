@@ -163,9 +163,9 @@ Saving checks the pack with the bundled engine's XML types and .NET regular expr
 
 **Silent live check.** From a source checkout, run `python3 tools/validate_triggernometry_live.py` while the game and IINACT are connected. This starts a temporary engine with its own probe pack and checks live raw and formatted logs, player identity, HP, position, and zone. It produces a report without speaking or changing installed packs. This checks the feed and engine integration; encounter mechanics still require their own validation.
 
-**Update or remove a pack** while the program is closed by replacing or moving its XML in the [pack folder](../README.md#updating-and-saved-data), then restarting. Importing the same filename adds another copy.
+**Update a pack** by importing its updated export. When the engine is available, matching packs ask for confirmation before replacement and save the previous XML with a `.bak` suffix. Identical imports reuse the existing copy. Separate packs can share a filename and receive separate files, but overlapping trigger IDs are rejected. **Remove a pack** by closing the program, moving its XML out of the [pack folder](../README.md#updating-and-saved-data), then restarting.
 
-**Compatibility.** FFXIVNetwork triggers receive raw network logs; Log triggers receive formatted ACT logs. Replays cover TOP player markers and wipe resets, Zelenia's Bloom sequence from the [Paissa packs](https://github.com/paissaheavyindustries/Triggernometry-Triggers/tree/main/Repositories), and a delayed callout's C# calculation. These checks cover selected mechanics. Legacy auras, direct game-memory reads from scripts, and ACT combat-state or encounter-duration hooks are unsupported.
+**Compatibility.** FFXIVNetwork triggers receive raw network logs; Log triggers receive formatted ACT logs. Combat-state and encounter-duration hooks use the IINACT feed. Replays cover TOP player markers and wipe resets, Zelenia's Bloom sequence from the [Paissa packs](https://github.com/paissaheavyindustries/Triggernometry-Triggers/tree/main/Repositories), and a delayed callout's C# calculation. These checks cover selected mechanics. Legacy auras and direct game-memory reads from scripts are unsupported.
 
 **Telesto.** Set **Telesto URL** in Automarkers to use pack memory subscriptions and drawings. Callback setup is automatic for local connections. These features run with Triggernometry; game commands and macros additionally require **Enable automarkers**. Stopping the engine removes its subscriptions and drawings, and stale callbacks are ignored. TOP Party Synergy and Pantokrator are covered by replays. Telesto performs the memory reads and drawing, so pack offsets must match the game version.
 
@@ -194,15 +194,29 @@ The meter updates every second from the combat log. It shows per-player DPS, dam
 
 ## Death Recap tab
 
-Select a death to review the previous 15 seconds of observed damage, healing, status changes, and statuses remaining at death. Self-heals and reflected damage follow their actual recipient. Instant-death effects have a separate label.
+Choose a player and death to review up to 60 seconds of observed damage, incoming healing, HP, shields, and the buffs and debuffs active at each event. Self-heals and reflected damage follow their actual recipient. Instant-death effects have a separate label.
 
-Deaths and their events appear newest first. Drag the dividers to give the event table more room, or drag column edges to resize them. Long text wraps and is also available on hover.
+Deaths and their events appear newest first. Times such as `-2.6s` are relative to death. Damage is blue, healing is green, and `!` marks a critical hit or heal. HP bars show health before the event, with confirmed healing in light green and shields in yellow. Standalone HP and shield updates show their current values. Hover a bar for its values or a status icon for its name, source, remaining duration, and stacks.
+
+Damage events also include Addle, Feint, Reprisal, Dismantled, Malodorous, Conked, and Candy Cane observed on the attacker, following [Death Recap's capture behavior](https://github.com/Kouzukii/ffxiv-deathrecap/blob/658ec3a19614f225e354b207ebba87aaf64943c7/Events/CombatEventCapture.cs). Their tooltips identify the attacker and the player who applied the effect. These remain separate from your own buffs and debuffs. Status tooltips include the game's description. Hover an amount to see damage type, critical hits, direct hits, blocks, or parries when recorded. `!!` marks a critical direct hit.
+
+**Filter buffs** uses checked boxes to hide individual statuses throughout the recap without deleting recorded data. Offensive buffs such as two-minute raid buffs and damage procs are hidden by default. Mitigation, shields, healing effects, Weakness, Damage Down, and other debuffs stay visible. Mixed offensive and defensive statuses and unknown encounter effects also stay visible. Search for a status, check it to hide it, or uncheck it to show it. **Show all statuses** clears the hide list; **Restore defaults** restores the offensive buff filter. Existing saved choices are preserved.
+
+**Damage**, **Healing**, **Buff changes**, **Debuff changes**, and **HP and shield updates** select which event rows appear. The change switches control gain and loss rows, leaving status icons on damage and healing rows visible. Gain rows show duration and the correct stacked icon. Buff and debuff categories come from game data. Unknown categories remain visible when either change switch is on. Internal statuses without a game icon are omitted. Separate change and health rows are off by default, and existing status-change preferences are preserved. These choices are saved. Drag the dividers or column edges to resize the view. Long text and status icons wrap.
+
+The program includes the game icons for the full action and status catalog, including status stack variants. They work offline. Icons for new entries can be fetched from [XIVAPI](https://v2.xivapi.com/docs/guides/assets/) and cached locally. See [recap icon data](RECAP-ICONS.md) for sources and refresh instructions.
 
 The recent view retains 80 deaths until the program closes. Zone changes and disconnects clear live observation buffers but preserve completed recaps. Wipes retain buffers until the next pull to capture late deaths. Observed buffs and healing between pulls also carry into the next recap.
 
 From Prog, **View death recaps** opens only the selected pull's saved deaths, identified by session, pull, and duty. **Back to Prog** returns to that pull and its notes; **Recent deaths** returns to live history. New deaths do not replace a saved view. Saved recaps survive restarts and are independent of the recent view's limit. Missing, older, or unreadable records show an explanation, and unreadable files are preserved.
 
-Recaps describe the feed and cannot reconstruct exact HP. Healing includes overheal, some ticks are aggregated, and statuses active before connection may be missing. Ability events may arrive before their effects resolve. See the [combat log format](https://github.com/OverlayPlugin/cactbot/blob/main/docs/LogGuide.md).
+**Saved pulls…** opens saved sessions and pulls directly from Death Recap. Use **Previous pull** and **Next pull** to browse adjacent attempts, then select a player and death in the list.
+
+**Open log…** reads an IINACT network `.log` file in the background with progress and cancellation. Browse all its deaths or select an inferred pull and player. Imported recaps use the original log timestamps, statuses, HP, and healing. Pull boundaries are inferred from combat activity and wipe signals, so their numbers can differ from Prog. Importing does not write to Prog or replace live recording. Cancelled or failed imports keep the current view. Imported details use temporary storage and are loaded one death at a time, beyond the live view's 80-death limit, up to 50,000 deaths per file. Return to recent deaths or open another source to release that storage. Reopen the source log after restarting the program. A growing log is read only up to its size when opened.
+
+Recaps describe the observed feed. Incoming healing amounts include overheal. The light green segment uses the observed HP rise at resolution, capped at the reported heal. Confirmed HP updates take precedence over ability snapshots that may be stale. Shields are rounded percentages of maximum HP. Some ticks are aggregated, and events missed before connection cannot be recovered. Status list updates recover buffs already active at connection. A recap retains at most 256 observations. Older saved recaps remain readable and show **Not recorded** for missing HP and per-event statuses. Ability events may arrive before their effects resolve. See the [combat log format](https://github.com/OverlayPlugin/cactbot/blob/main/docs/LogGuide.md).
+
+Unlike the in-game Death Recap plugin, this program reconstructs events from IINACT logs rather than reading the game directly. Reopen an original log to regenerate historical recaps with current parsing and attacker mitigation. Previously saved recaps cannot acquire details that were not recorded.
 
 ## Prog tab
 
@@ -242,7 +256,7 @@ Place party signs through [Telesto](https://github.com/paissaheavyindustries/Tel
 
 - **Connection:** set **Telesto URL**, default `http://localhost:45678/`, use **Test mark (on me)**, then select **Enable automarkers**.
 - **Rules:** unassigned rules do not fire. Select a rule and choose its **Marker**, or choose *(unassigned)* to disable it. **Load UMAD preset** adds the selected Dancing Mad Ultimate rules. **Remove the mark when the debuff falls off** is on by default. **Clear all party marks** clears every sign.
-- **UMAD sequences:** **black-hole chains** assign roaming signs to the P3 DPS, support, and Accretion cleanse queues, each with its own picker. **Cursed Shriek gaze pairs** assign P4 look-at and look-away signs using the wave's follow-up cast. Both suspend overlapping plain rules. See [UMAD debuff rules and evidence](UMAD-DEBUFFS.md).
+- **UMAD sequences:** **black-hole chains** assign roaming signs to the P3 DPS, support, and Accretion cleanse queues, each with its own picker. **Cursed Shriek gaze pairs** assign P4 look-at and look-away signs using Neo Exdeath's status VFX. When both pairs need the same signs, the later pair receives them after the first gaze ends. Both suspend overlapping plain rules. See [UMAD debuff rules and evidence](UMAD-DEBUFFS.md).
 
 ---
 

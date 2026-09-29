@@ -15,7 +15,7 @@ from nyaatriggers.telesto_client import (
 from nyaatriggers.umad_chains import (
     BlackHoleChains, RELEVANT_IDS as _UMAD_CHAIN_IDS, role_for_job, StatusPairs,
     parse_compound as _parse_compound, canon_status_key as _canon_status,
-    CursedShriekPairs, GAZE_FOLLOWUP_IDS as _UMAD_GAZE_FOLLOWUP_IDS,
+    CursedShriekPairs, GAZE_VFX_STATUS,
 )
 
 from nyaatriggers import app_common as ac
@@ -207,8 +207,8 @@ class AutomarkersTabMixin:
 
     def _on_automark_toggled(self, checked: bool) -> None:
         self._settings["telesto_enabled"] = bool(checked)
-        self._save_settings()
         self._apply_automark_state()
+        self._save_settings()
         self._telesto_client.ping()
 
     def _on_automark_col_toggled(self, checked: bool) -> None:
@@ -539,11 +539,11 @@ class AutomarkersTabMixin:
         return markers
 
     def _umad_gaze_line(self, fields: list[str]) -> None:
-        """Followup casts determine gaze polarity. Allow unknown current fights."""
+        """Route Neo Exdeath's VFX and the player gaze statuses."""
         if not self._umad_gaze_enabled or len(fields) < 9:
             return
         eff = self._norm_hex(fields[2])
-        if eff not in self._umad_gaze.ids:
+        if eff not in self._umad_gaze.ids and eff != GAZE_VFX_STATUS:
             return
         if not self._settings.get("telesto_enabled"):
             return
@@ -551,6 +551,12 @@ class AutomarkersTabMixin:
         if fight and fight != _UMAD_FIGHT_TAG_CF:
             return
         tgt_id = fields[7].strip().upper()
+        if eff == GAZE_VFX_STATUS:
+            if fields[0] == "26" and len(fields) > 9 and tgt_id.startswith("40"):
+                actions = self._umad_gaze.on_vfx(
+                    fields[9], time.monotonic(), event_id=(tgt_id, fields[1]))
+                self._dispatch_umad_gaze_actions(actions)
+            return
         if not tgt_id.startswith("10"):
             return
         aid = _actor_int(tgt_id)
@@ -582,8 +588,10 @@ class AutomarkersTabMixin:
     def _on_umad_gaze_flush(self) -> None:
         if not (self._umad_gaze_enabled and self._settings.get("telesto_enabled")):
             return
-        self._retry_umad_gaze_pending()
         self._dispatch_umad_gaze_actions(self._umad_gaze.flush(time.monotonic()))
+        self._retry_umad_gaze_pending()
+        if self._umad_gaze.needs_flush() or self._umad_gaze_pending:
+            self._umad_gaze_flush_timer.start()
 
     def _retry_umad_gaze_pending(self) -> None:
         if not self._umad_gaze_pending:
@@ -665,7 +673,8 @@ class AutomarkersTabMixin:
         """Retry the chain debounce when new job data can resolve an open queue."""
         chains = getattr(self, "_umad_chains", None)
         timer = getattr(self, "_umad_chain_flush_timer", None)
-        if chains is not None and timer is not None and chains.has_open_queues():
+        if (chains is not None and timer is not None and chains.has_open_queues()
+                and not timer.isActive()):
             timer.start()
 
     def _refresh_automark_rules_list(self) -> None:
@@ -856,12 +865,11 @@ class AutomarkersTabMixin:
         if not self._umad_gaze_enabled or len(fields) < 5:
             return
         eff = self._norm_hex(fields[4])
-        if eff not in _UMAD_GAZE_FOLLOWUP_IDS:
+        if eff != "C2DC":
             return
         if not self._settings.get("telesto_enabled"):
             return
         fight = (self._current_fight_tag or "").casefold()
         if fight and fight != _UMAD_FIGHT_TAG_CF:
             return
-        actions = self._umad_gaze.on_followup(eff, time.monotonic())
-        self._dispatch_umad_gaze_actions(actions)
+        self._umad_gaze_reset(clear_marks=True)

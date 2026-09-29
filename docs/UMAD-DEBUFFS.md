@@ -14,7 +14,7 @@ Compound entries such as `A+B` require both statuses on one player, in either ar
 |------|----------------------------|-------|-------|
 | 644+BBC | Accretion (1st in Line) | P3    | Compound: the Accretion carrier who cleanses first |
 | 644+BBD | Accretion (2nd in Line) | P3    | Compound: the Accretion carrier who cleanses second |
-| 15A7 | Cursed Shriek              | P4    | 2 pairs, one per Grand Cross wave; real: look away / fake: look at, told by the wave's Inferno or Tsunami |
+| 15A7 | Cursed Shriek              | P4    | 2 pairs, one per Grand Cross wave; real: look away / fake: look at, identified by Neo Exdeath's status VFX |
 | 15A8 | Forked Lightning           | P4    | 1 Sup+1 DPS; real: spread / fake: stack |
 | 15A9 | Compressed Water           | P4    | Stack marker |
 | 15AA | Acceleration Bomb          | P4    | Stop everything when it expires |
@@ -88,23 +88,25 @@ Each sign marks the earliest player in its queue who still has Crust. It advance
 
 ## P4 Cursed Shriek gaze pairing (look away vs look at)
 
-Checked on 2026-08-25 against IINACT logs from August 20, 23, and 25. The first two Grand Cross waves each apply a Cursed Shriek `15A7` pair, 15 seconds apart. Pair members share a timestamp. The first pair has a 60-second timer and the second 69 seconds. Either wave can be real or fake, so duration identifies the set but not gaze direction.
+The first two Grand Cross waves each apply a Cursed Shriek `15A7` pair, 15 seconds apart. Pair members share a timestamp. The first pair has a 60-second timer and the second 69 seconds. Either wave can be real or fake, including two real waves or two fake waves. Duration identifies the set but not gaze direction.
 
-A follow-up cast about four seconds before the gains identifies the wave. On the labeled 2026-08-25 23:05 pull, Inferno `BB1E/BB20` preceded the fake pair and Tsunami `BB1F/BB21` the real pair. **UMAD Cursed Shriek gaze pairs** uses that mapping in `CursedShriekPairs`:
+Neo Exdeath receives status `808` just before Grand Cross. Its hexadecimal extra field identifies the debuffs from that wave. **UMAD Cursed Shriek gaze pairs** reads this value in `CursedShriekPairs`:
 
-| Cast | Gaze | Default signs |
+| Status 808 extra field | Gaze | Default signs |
 |---|---|---|
-| Inferno | Fake, look at | bind1 and bind2 |
-| Tsunami | Real, look away | ignore1 and ignore2 |
+| 461 | Fake, look at | bind1 and bind2 |
+| 462 | Real, look away | ignore1 and ignore2 |
 
-The pair is numbered by party slot, with actor ID as fallback. Marking begins when both gains arrive after the identifying cast.
+Chaos's Inferno and Tsunami casts do not identify gaze direction. The old element mapping was incorrect. The VFX mapping matches the bundled Triggevent trigger and the 44 recorded pulls in [the replay fixture](../tests/fixtures/umad_gazes.json).
 
-- Missing cast evidence leaves the set unmarked.
-- An incomplete pair expires after the five-second burst gap. A third carrier discards the set.
+The pair is numbered by party slot, with actor ID as fallback. Marking begins when both gains arrive within 12 seconds of the identifying VFX.
+
+- Missing VFX evidence leaves the set unmarked.
+- An incomplete pair expires after the five-second burst gap.
+- If both waves need the same signs, the earlier pair keeps them until its gaze ends. The later pair then receives those signs.
 - The plain `15A7` preset rule is suspended while pairing is enabled.
-- Status loss clears that player's sign. A wipe or disabling the toggle clears all remaining signs.
+- Status loss or expiry clears that player's sign. A wipe, a new Kefka Says, or disabling the toggle clears all remaining signs and waiting assignments.
 - Unknown party slots delay marks until a roster refresh.
-- The Inferno/fake and Tsunami/real mapping rests on one labeled pull. Leave the toggle off if uncertain. `FAKE_FOLLOWUP_IDS` and `REAL_FOLLOWUP_IDS` hold the mapping for future verification.
 
 ## IDs shared by name
 

@@ -6,7 +6,7 @@ set "HERE=%~dp0"
 if not defined EVENT_TRIGGER_DIR set "EVENT_TRIGGER_DIR=%HERE%event-trigger"
 if not defined EVENT_TRIGGER_REPO set "EVENT_TRIGGER_REPO=https://github.com/CateDesu/event-trigger.git"
 REM Keep the engine commit pin in sync with build.sh.
-if not defined EVENT_TRIGGER_REF set "EVENT_TRIGGER_REF=06015a947b5b8c7d67f4863b8033e1c14e185494"
+if not defined EVENT_TRIGGER_REF set "EVENT_TRIGGER_REF=64b7e0641e080b9af66d924cb1b617f04f513a3c"
 
 where java >nul 2>nul || (echo ERROR: JDK 17 not found - run: winget install EclipseAdoptium.Temurin.17.JDK & exit /b 1)
 where mvn  >nul 2>nul || (echo ERROR: Maven not found - run: winget install Apache.Maven & exit /b 1)
@@ -43,8 +43,11 @@ call mvn -q -Dmaven.test.skip=true -pl :actimport,:xivsupport,:trigger-support,:
 popd
 
 echo ^>^> building triggevent-core.jar
+set "ET_COMMIT="
+for /f %%i in ('git -C "%EVENT_TRIGGER_DIR%" rev-parse HEAD') do set "ET_COMMIT=%%i"
+if not defined ET_COMMIT exit /b 1
 pushd "%HERE%"
-call mvn -q -Dmaven.test.skip=true clean package || (popd & exit /b 1)
+call mvn -q -Dmaven.test.skip=true "-Dnyaa.engine.commit=%ET_COMMIT%" clean package || (popd & exit /b 1)
 popd
 
 echo.

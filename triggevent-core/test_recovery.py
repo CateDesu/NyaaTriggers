@@ -29,7 +29,8 @@ def delivered_trace(output):
             raise SystemExit("FAIL delivered callout sequence is incomplete")
         bridge._dispatch(message, state, 1)
     expected_spoken = [(m.get("tts") or "").strip() for m in messages if (m.get("tts") or "").strip()]
-    expected_shown = [((m.get("text") or "").strip() or (m.get("tts") or "").strip()) for m in messages]
+    expected_shown = [((m.get("text") or "").strip() or (m.get("tts") or "").strip())
+                      for m in messages if not m.get("tts_only")]
     if spoken != expected_spoken or shown != [text for text in expected_shown if text]:
         raise SystemExit("FAIL callouts were lost in the Python bridge")
     return [{"id": m.get("id") or "", "tts": m.get("tts") or "", "text": m.get("text") or "",

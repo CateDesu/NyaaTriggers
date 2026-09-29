@@ -9,6 +9,8 @@ python3 -m tests
 The runner uses a separate Python process for each suite and defaults Qt to
 offscreen mode. This keeps module patches and Qt state from leaking between
 suites. The release workflow uses the same runner.
+Replay tests keep automatic support logging disabled. Diagnostic suites write to
+temporary files and check both useful evidence and excluded personal information.
 
 Run selected suites with:
 
@@ -32,3 +34,13 @@ completion count includes suites with skips, so check their output for coverage.
 
 Pytest collects only the suites listed in `conftest.py`. Use `python3 -m tests`
 for a complete run because many scripts perform their checks during import.
+
+After building the engine jar, verify its diagnostic protocol with:
+
+```bash
+python3 triggevent-core/test_diagnostics.py
+```
+
+The engine fork's `CrossFightFaultInjectionTest` replays UMAD, M1S, M2S and FRU
+with missing or delayed mechanic inputs. It compares callout text, timing and
+counts against recorded expectations, including local deaths and raises.

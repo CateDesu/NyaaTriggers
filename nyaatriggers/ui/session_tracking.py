@@ -87,3 +87,4 @@ class SessionTrackingMixin:
     def _finish_activity(self):
         self._prog_tab.flush()
         self._prog_sessions.end(self._dps_meter.full_snapshot(), "program-closed")
+        self._prog_sessions.flush_pending()

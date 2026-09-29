@@ -259,6 +259,51 @@ class RelayBoundaries(unittest.TestCase):
             finally:
                 relay.close(wait=True)
 
+    def test_unrelated_request_failure_keeps_expired_drawings_retired(self):
+        for notify in (False, True):
+            with self.subTest(notify=notify), FakeTelesto() as peer, \
+                    patch.object(triggernometry_telesto, "MAX_RESOURCES", 1):
+                received = []
+                relay = TriggernometryTelesto(received.append, self.fail, peer.url)
+                relay.start()
+                try:
+                    self.assertEqual(post(relay.url, envelope(
+                        "EnableDoodle", name="circle", type="circle", notifyonexpiry=notify))[0], 200)
+                    old = peer.next("EnableDoodle")["payload"]
+                    entered, release = threading.Event(), threading.Event()
+                    result = []
+
+                    def delayed(_message):
+                        entered.set()
+                        release.wait(2)
+                        return 503, b""
+
+                    expiry = {"notificationid": old["name"], "notificationtype": "doodleexpired"}
+                    with patch.object(relay, "_post", side_effect=delayed):
+                        worker = threading.Thread(target=lambda: result.append(post(
+                            relay.url, envelope("GetPartyMembers"))), daemon=True)
+                        worker.start()
+                        try:
+                            self.assertTrue(entered.wait(2))
+                            peer.drawings.pop(old["name"])
+                            self.assertEqual(post(old["notifyonexpiry"], expiry)[0], 200)
+                            self.assertEqual(post(old["notifyonexpiry"], expiry)[0], 410)
+                        finally:
+                            release.set()
+                            worker.join(2)
+                    self.assertFalse(worker.is_alive())
+                    self.assertEqual(result[0][0], 503)
+                    self.assertEqual(post(old["notifyonexpiry"], expiry)[0], 410)
+                    self.assertEqual(len(received), int(notify))
+                    self.assertFalse(relay._drawings)
+                    self.assertEqual(post(relay.url, envelope(
+                        "EnableDoodle", name="fresh", type="circle"))[0], 200)
+                    self.assertEqual(set(peer.drawings), {relay.prefix + "fresh"})
+                    self.assertEqual(relay._owned_drawings, {relay.prefix + "fresh"})
+                finally:
+                    relay.close(wait=True)
+                self.assertFalse(peer.drawings)
+
     def test_subscription_replacement_at_capacity_keeps_the_limit(self):
         with FakeTelesto() as peer, patch.object(triggernometry_telesto, "MAX_RESOURCES", 2):
             relay = TriggernometryTelesto(lambda _: None, lambda _: None, peer.url)

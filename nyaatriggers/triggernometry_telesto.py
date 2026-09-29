@@ -94,6 +94,7 @@ class TriggernometryTelesto:
         self.report = report
         self.uri = uri if isinstance(uri, str) and uri else DEFAULT_URI
         self.commands_enabled = bool(commands_enabled)
+        self._command_epoch = 0
         self.prefix = "nyaa-tn-" + uuid.uuid4().hex + "-"
         self.callback_path = "/callback/" + uuid.uuid4().hex + "/"
         self._lock = threading.RLock()
@@ -123,7 +124,20 @@ class TriggernometryTelesto:
 
     def configure(self, commands_enabled):
         with self._lock:
+            if self.commands_enabled and not commands_enabled:
+                self._command_epoch += 1
             self.commands_enabled = bool(commands_enabled)
+
+    def _commands_current(self, epoch):
+        with self._lock:
+            return self.commands_enabled and epoch == self._command_epoch
+
+    @staticmethod
+    def _has_commands(message):
+        kind = str(message.get("type", "")).lower()
+        if kind == "bundle":
+            return any(TriggernometryTelesto._has_commands(item) for item in message["payload"])
+        return kind in ("executecommand", "macro")
 
     def _name(self, payload, key):
         name = payload.get(key)
@@ -131,7 +145,7 @@ class TriggernometryTelesto:
             raise ValueError(f"Invalid {key}")
         return name
 
-    def _prepare(self, message, depth=0):
+    def _prepare(self, message, depth=0, command_epoch=None):
         if depth > 16 or not isinstance(message, dict):
             raise ValueError("Invalid Telesto envelope")
         kind = str(message.get("type", "")).lower()
@@ -139,9 +153,11 @@ class TriggernometryTelesto:
         if kind == "bundle":
             if not isinstance(payload, list) or len(payload) > 512:
                 raise ValueError("Invalid Telesto bundle")
-            message["payload"] = [self._prepare(item, depth + 1) for item in payload]
+            message["payload"] = [self._prepare(item, depth + 1, command_epoch) for item in payload]
             return message
-        if kind in ("executecommand", "macro") and not self.commands_enabled:
+        if kind in ("executecommand", "macro") and (
+                not self.commands_enabled
+                or command_epoch is not None and command_epoch != self._command_epoch):
             self.report("Triggernometry command skipped because automarkers are off")
             return {"version": 1, "id": message.get("id", 0), "type": "Bundle", "payload": []}
         if kind in ("subscribe", "unsubscribe", "enabledoodle", "disabledoodle", "disabledoodleregex"):
@@ -209,13 +225,15 @@ class TriggernometryTelesto:
     def _bundle(items):
         return {"version": 1, "id": 0, "type": "Bundle", "payload": items}
 
-    def _post(self, message, *, cleanup=False):
+    def _post(self, message, *, cleanup=False, command_epoch=None):
         request = urllib.request.Request(
             self.uri, json.dumps(message, ensure_ascii=False).encode("utf-8"),
             {"Content-Type": "application/json"}, method="POST")
         try:
             stopping = threading.Event() if cleanup else self._closed
-            return read_telesto_response(request, 4, stopping, use_proxy=False, max_body=MAX_BODY)
+            is_current = (lambda: self._commands_current(command_epoch)) if command_epoch is not None else None
+            return read_telesto_response(request, 4, stopping, use_proxy=False,
+                                         max_body=MAX_BODY, is_current=is_current)
         except urllib.error.HTTPError as exc:
             code = exc.code
             exc.close()
@@ -226,6 +244,8 @@ class TriggernometryTelesto:
             return 502, b""
 
     def forward(self, message):
+        with self._lock:
+            command_epoch = self._command_epoch if self.commands_enabled else -1
         with self._sending:
             with self._lock:
                 if self._closed.is_set():
@@ -253,7 +273,7 @@ class TriggernometryTelesto:
                           "_owned_subscriptions", "_owned_drawings")
                 previous = {field: getattr(self, field).copy() for field in fields}
                 try:
-                    message = self._prepare(copy.deepcopy(message))
+                    message = self._prepare(copy.deepcopy(message), command_epoch=command_epoch)
                 except Exception:
                     for field, value in previous.items():
                         setattr(self, field, value)
@@ -266,12 +286,12 @@ class TriggernometryTelesto:
                     resource: (name, previous["_drawing_expiry"].get(resource),
                                resource in previous["_drawing_notifications"])
                     for name, resource in previous["_drawings"].items()
-                    if (self._drawings.get(name) != resource
-                        or self._drawing_expiry.get(resource)
-                        != previous["_drawing_expiry"].get(resource))
                 }
                 self._expired_pending_drawings.clear()
-            code, body = self._post(message)
+            if self._has_commands(message):
+                code, body = self._post(message, command_epoch=command_epoch)
+            else:
+                code, body = self._post(message)
             with self._lock:
                 if 200 <= code < 300:
                     self._release_removed(message)

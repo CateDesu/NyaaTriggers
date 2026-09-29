@@ -1,6 +1,8 @@
 """Recovery ordering, log matching and the combatant request protocol."""
 
+from contextlib import ExitStack
 import json
+import sys
 import os
 from pathlib import Path
 import tempfile
@@ -12,6 +14,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QTest
 from nyaatriggers.triggevent_bridge import TriggeventBridge, _ByteQueue
 from nyaatriggers.triggevent_recovery import TriggeventRecovery
+from nyaatriggers import diagnostics
 from nyaatriggers.ws_client import WSClient
 
 _app = QApplication.instance() or QApplication([])
@@ -283,7 +286,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(batch[0]["nyaa_cmd"], "recover_begin")
         self.assertTrue(recovery._live)
 
-    def test_polling_and_engine_requests_use_triggevent_response_tags(self):
+    def test_polling_and_engine_requests_use_owned_response_tags(self):
         ws = WSClient()
         sent = []
         with patch.object(ws._ws, "isValid", return_value=True), \
@@ -291,15 +294,15 @@ class RecoveryTests(unittest.TestCase):
             ws.set_engine_combatant_polling(True)
             ws.set_combatant_polling(False)
             self.assertTrue(ws._poll_timer.isActive())
-            self.assertEqual(sent[-1], {"call": "getCombatants", "rseq": "allCombatants"})
+            self.assertEqual(sent[-1], {"call": "getCombatants", "rseq": "nyaa:allCombatants:2:"})
             ws.request_engine_combatants([10, 20])
             ws.request_engine_combatants([20, 30])
             ws._flush_combatant_requests()
-            self.assertEqual(sent[-1], {"call": "getCombatants", "rseq": "specificCombatants", "ids": [10, 20, 30]})
+            self.assertEqual(sent[-1], {"call": "getCombatants", "rseq": "nyaa:specificCombatants:3:", "ids": [10, 20, 30]})
             ws.request_engine_combatants([10])
             ws.request_engine_combatants([])
             ws._flush_combatant_requests()
-            self.assertEqual(sent[-1]["rseq"], "allCombatants")
+            self.assertEqual(sent[-1]["rseq"], "nyaa:allCombatants:4:")
             ws.set_engine_combatant_polling(False)
             self.assertFalse(ws._poll_timer.isActive())
 
@@ -308,13 +311,132 @@ class RecoveryTests(unittest.TestCase):
         bridge._active = True
         ws = WSClient()
         recovery = TriggeventRecovery(bridge, ws, lambda: None)
-        with patch.object(bridge, "start") as start, patch.object(bridge, "stop") as stop:
+        with patch.object(bridge, "start") as start, patch.object(bridge, "stop", wraps=bridge.stop) as stop:
             recovery._connection(True, "Connected")
             start.assert_not_called()
             recovery._connection(False, "Disconnected")
+            self.assertFalse(bridge.is_active())
             recovery._connection(True, "Connected")
             start.assert_called_once()
             stop.assert_called_once()
+
+
+class RecoveryDiagnosticsTests(unittest.TestCase):
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        directory = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
+        self.log = directory / "diagnostics.log"
+        self.stack.enter_context(patch.object(diagnostics, "_LOG_FILE", self.log))
+        self.stack.enter_context(patch.object(diagnostics, "_ENABLED", True))
+        self.stack.enter_context(patch("nyaatriggers.triggevent_recovery._log"))
+        self.private = "PrivateSentinel /home/PrivatePerson token=PrivateSecret"
+
+    def manager(self, *, generation=1, recovery=True, history=True, catchup=True, folder=None):
+        bridge = TriggeventBridge()
+        bridge._active = True
+        bridge._gen = generation
+        bridge._recovery_gen = generation if recovery else -1
+        bridge._history_gen = generation if history else -1
+        bridge._catchup_gen = generation if catchup else -1
+        ws = WSClient()
+        manager = TriggeventRecovery(bridge, ws, lambda: folder)
+        self.addCleanup(lambda: manager._progress_timer.stop())
+        manager._on_status(True, self.private, generation)
+        return bridge, ws, manager
+
+    def rows(self):
+        text = self.log.read_text() if self.log.exists() else ""
+        for secret in ("PrivateSentinel", "PrivatePerson", "PrivateSecret"):
+            self.assertNotIn(secret, text)
+        return [row["data"] for line in text.splitlines()
+                if (row := json.loads(line))["event"] == "recovery_state"]
+
+    def test_state_fallbacks_preserve_their_fixed_reason(self):
+        cases = (
+            ({"recovery": False}, False, "recovery_unsupported"),
+            ({}, False, "no_local_log"),
+            ({"history": False, "folder": self.private}, False, "history_unsupported"),
+            ({"folder": self.private}, True, "invalid_world_state"),
+        )
+        for generation, (options, invalid_zone, reason) in enumerate(cases, 1):
+            with self.subTest(reason=reason):
+                bridge, ws, manager = self.manager(generation=generation, catchup=False, **options)
+                zone_frame = json.dumps({"type": "ChangeZone", "zoneID": self.private if invalid_zone else 0x553})
+                player_frame = json.dumps({"type": "ChangePrimaryPlayer", "charID": 0x10000001})
+                ws._on_message(zone_frame)
+                ws._on_message(player_frame)
+                raw = frame(log(0, "0038|" + self.private))
+                manager.feed(raw)
+                manager._on_ready(generation)
+                fallback = [row for row in self.rows() if row["gen"] == generation and row["state"] == "fallback"]
+                self.assertEqual(len(fallback), 1)
+                self.assertEqual(fallback[0]["reason"], reason)
+                self.assertEqual((fallback[0]["pending_frames"], fallback[0]["pending_bytes"]),
+                                 (3, sum(map(sys.getsizeof, (zone_frame, player_frame, raw)))))
+                self.assertTrue(manager._live)
+
+    def test_history_catchup_and_live_handoff_are_distinct(self):
+        bridge, ws, manager = self.manager()
+        raw = frame(log(0, "0038|" + self.private))
+        manager.feed(raw)
+        manager._finish(1, {"folder": self.private}, "")
+        manager.feed(raw)
+        bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 1}, gen=1)
+        bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 2}, gen=1)
+        bridge._dispatch({"t": "recovered", "checkpoint": 3,
+                          "status": "degraded", "reason": self.private}, gen=1)
+        rows = self.rows()
+        self.assertEqual([row["state"] for row in rows],
+                         ["starting", "restoring", "catchup", "ending", "live"])
+        self.assertEqual(rows[2]["pending_frames"], 1)
+        self.assertEqual(rows[-1]["reason"], "acknowledged")
+        self.assertTrue(manager._live)
+
+    def test_timeout_and_feed_queue_overflow_have_distinct_restart_reasons(self):
+        bridge, ws, manager = self.manager()
+        manager._loading = True
+        with patch.object(bridge, "stop") as stop, patch.object(bridge, "start") as start:
+            manager._recovery_timed_out()
+            manager._restart(1)
+            manager._restart(0)
+        self.assertEqual(stop.call_count, 2)
+        self.assertEqual(start.call_count, 2)
+        self.assertEqual([row["reason"] for row in self.rows() if row["state"] == "restart"],
+                         ["progress_timeout", "feed_overflow"])
+
+    def test_buffer_overflow_records_pending_size_before_reset(self):
+        bridge, ws, manager = self.manager()
+        raw = frame(log(0, "0038|" + self.private))
+        manager.feed(raw)
+        with patch("nyaatriggers.triggevent_recovery._MAX_PENDING_BYTES", sys.getsizeof(raw)), \
+                patch.object(bridge, "stop"), patch.object(bridge, "start"):
+            manager.feed(raw)
+        overflow = next(row for row in self.rows() if row["state"] == "buffer_overflow")
+        self.assertEqual((overflow["pending_frames"], overflow["pending_bytes"]),
+                         (1, sys.getsizeof(raw)))
+        self.assertEqual(self.rows()[-1]["reason"], "buffer_overflow")
+        self.assertEqual(manager._pending, [raw])
+
+    def test_disconnect_reconnect_records_reason_without_status_text(self):
+        bridge, ws, manager = self.manager()
+        with patch.object(bridge, "stop", wraps=bridge.stop), patch.object(bridge, "start") as start:
+            manager._connection(True, self.private)
+            manager._connection(False, self.private)
+            manager._connection(True, self.private)
+        self.assertEqual([row["state"] for row in self.rows()],
+                         ["starting", "connected", "disconnected", "stopped", "connected", "restart"])
+        self.assertEqual(self.rows()[-1]["reason"], "reconnect")
+        start.assert_called_once()
+
+    def test_queue_retry_is_bounded_and_unknown_fallback_text_is_omitted(self):
+        bridge, ws, manager = self.manager()
+        with patch.object(bridge, "recover", return_value=False), \
+                patch("nyaatriggers.triggevent_recovery.QTimer.singleShot"):
+            for _ in range(20):
+                manager._finish(1, None, self.private)
+        self.assertEqual([row["state"] for row in self.rows()], ["starting", "fallback", "queue_wait"])
+        self.assertEqual(self.rows()[1]["reason"], "unknown")
 
 
 if __name__ == "__main__":

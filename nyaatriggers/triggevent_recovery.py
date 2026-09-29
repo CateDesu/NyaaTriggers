@@ -6,11 +6,19 @@ import sys
 
 from PyQt6.QtCore import QObject, QTimer
 
+from nyaatriggers.diagnostics import record
 from nyaatriggers.triggevent_bridge import _log
 from nyaatriggers.ws_client import _extract_raw
 
 _MAX_PENDING_BYTES = 16 << 20
 _PROGRESS_TIMEOUT_MS = 60_000
+_FALLBACK_REASONS = {
+    "This engine build does not support pull recovery": "recovery_unsupported",
+    "No local log available for recovery": "no_local_log",
+    "This engine build cannot read local pull history": "history_unsupported",
+    "Current player or zone is invalid": "invalid_world_state",
+    "": "state_only",
+}
 
 
 class TriggeventRecovery(QObject):
@@ -28,6 +36,9 @@ class TriggeventRecovery(QObject):
         self._ending = False
         self._checkpoint = 0
         self._lost_connection = False
+        self._connected = False
+        self._restart_on_connect = False
+        self._last_diagnostic = None
         self._initial_state = ws.state_snapshot()
         self._progress_timer = QTimer(self)
         self._progress_timer.setSingleShot(True)
@@ -37,16 +48,36 @@ class TriggeventRecovery(QObject):
         bridge.status.connect(self._on_status)
         bridge.recovery_progress.connect(self._on_progress)
         bridge.feed_overflow.connect(self._restart)
-        ws.raw_message.connect(self.feed)
+        ws.engine_message.connect(self.feed)
         ws.status_changed.connect(self._connection)
+
+    def _diagnostic(self, state, reason, generation=None):
+        generation = self._generation if generation is None else generation
+        key = generation, state, reason
+        if key == self._last_diagnostic:
+            return
+        self._last_diagnostic = key
+        record("recovery_state", gen=generation, state=state, reason=reason,
+               pending_frames=len(self._pending), pending_bytes=self._bytes,
+               checkpoint=self._checkpoint)
 
     def _on_status(self, active, _message, generation):
         if generation != self.bridge.generation():
             return
+        if active and not self.bridge.is_active():
+            return
         if not active:
+            self._diagnostic("stopped", "disconnect" if self._lost_connection else
+                             "requested" if _message == "Off" else "engine_exit", generation)
             self._progress_timer.stop()
+            self._ready = self._loading = self._live = self._ending = False
+            if _message != "Off":
+                self._restart_on_connect = True
+            elif not self._lost_connection:
+                self._restart_on_connect = False
         if active and generation != self._generation:
             self._progress_timer.stop()
+            self._restart_on_connect = False
             self._generation = generation
             self._pending = []
             self._bytes = 0
@@ -54,58 +85,80 @@ class TriggeventRecovery(QObject):
             self._ending = False
             self._checkpoint = 0
             self._initial_state = self.ws.state_snapshot()
+            self._diagnostic("starting", "engine_start")
 
-    def _restart(self, generation):
+    def _restart(self, generation, reason="feed_overflow"):
         if generation != self._generation or generation != self.bridge.generation():
             return
         self._progress_timer.stop()
         if self.bridge.is_active():
+            self._diagnostic("restart", reason)
             self.bridge.stop()
             self.bridge.start()
 
     def _recovery_timed_out(self):
-        if self._loading and not self._live:
+        if self._loading and not self._live and not self._lost_connection:
             _log("recovery: engine acknowledgement timed out")
-            self._restart(self._generation)
+            self._restart(self._generation, "progress_timeout")
 
     def _connection(self, connected, _message):
+        was_connected = self._connected
+        self._connected = bool(connected)
+        self._diagnostic("connected" if connected else "disconnected", "connection")
         if not connected:
             self._lost_connection = True
-            if self.bridge.supports_recovery():
-                self.bridge._send_command({"nyaa_cmd": "pause_feed"})
-        elif self._lost_connection:
+            self._progress_timer.stop()
+            if self.bridge.is_active():
+                self._restart_on_connect = True
+                self.bridge.stop()
+        elif not was_connected and (self._lost_connection or self._loading or self._live
+                                    or self._restart_on_connect):
             self._lost_connection = False
+            restart = self._restart_on_connect
+            self._restart_on_connect = False
             if self.bridge.is_active():
                 # A new engine avoids mixing a missed pull with old pending waits.
                 self.bridge.stop()
+                restart = True
+            if restart:
+                self._diagnostic("restart", "reconnect")
                 self.bridge.start()
 
     def _on_ready(self, generation):
-        if generation != self._generation or generation != self.bridge.generation():
+        if (generation != self._generation or generation != self.bridge.generation()
+                or not self.bridge.is_active()):
             return
         self._ready = True
+        self._diagnostic("ready", "ready")
         self._try_start()
         QTimer.singleShot(1500, lambda: self._try_start(True) if generation == self._generation else None)
 
     def feed(self, raw):
         if self._live or self._ending:
+            generation = self._generation
             self.bridge.feed(raw)
-            return
+            if generation == self._generation:
+                return
         size = sys.getsizeof(raw)
         if self._bytes + size > _MAX_PENDING_BYTES:
             _log("recovery: feed buffer exceeded its limit")
+            self._diagnostic("buffer_overflow", "buffer_overflow")
+            if self.bridge.is_active():
+                self._diagnostic("restart", "buffer_overflow")
             self._pending = []
             self._bytes = 0
             if self.bridge.is_active():
                 self.bridge.stop()
                 self.bridge.start()
-            return
+            if size > _MAX_PENDING_BYTES:
+                return
         self._pending.append(raw)
         self._bytes += size
         self._try_start()
 
     def _try_start(self, allow_empty=False):
-        if not self._ready or self._loading or self._live:
+        if (not self._ready or self._loading or self._live or self._lost_connection
+                or not self.bridge.is_active()):
             return
         if not self.bridge.supports_recovery():
             self._finish(self._generation, None, "This engine build does not support pull recovery")
@@ -149,9 +202,12 @@ class TriggeventRecovery(QObject):
             return None
 
     def _finish(self, generation, history, reason):
-        if generation != self._generation or generation != self.bridge.generation() or self._live:
+        if (generation != self._generation or generation != self.bridge.generation()
+                or self._live or self._lost_connection or not self.bridge.is_active()):
             return
         if not self._progress_timer.isActive():
+            self._diagnostic("restoring" if history else "fallback",
+                             "history_restore" if history else _FALLBACK_REASONS.get(reason, "unknown"))
             self._progress_timer.start()
         # State seeds go first. Later changes retain their original feed order.
         initial = self.ws.state_snapshot() if history else self._initial_state or self.ws.state_snapshot()
@@ -171,6 +227,7 @@ class TriggeventRecovery(QObject):
                 queued = self.bridge.recover(frames, timestamp, checkpoint=checkpoint)
             if not queued:
                 _log("recovery: waiting for space in the engine feed queue")
+                self._diagnostic("queue_wait", "queue_full")
                 self._loading = True
                 QTimer.singleShot(100, lambda: self._finish(generation, history, reason))
                 return
@@ -186,18 +243,21 @@ class TriggeventRecovery(QObject):
         self._live = not self.bridge.supports_catchup()
         if self._live:
             self._progress_timer.stop()
+            self._diagnostic("live", "catchup_unsupported")
         _log("recovery: requested engine history restore" if history else f"recovery: current state only, {reason}")
         self.ws.request_combatants_once()
 
     def _on_progress(self, message, generation):
         if (generation != self._generation or generation != self.bridge.generation()
-                or not self._loading or self._live
+                or not self._loading or self._live or self._lost_connection
+                or not self.bridge.is_active()
                 or message.get("checkpoint") != self._checkpoint):
             return
         if message.get("t") == "recovered" and self._ending:
             self._progress_timer.stop()
             self._live = True
             self._ending = self._loading = False
+            self._diagnostic("live", "acknowledged")
             _log(f"recovery: {message.get('status', 'unknown')}, "
                  f"skipped {message.get('skipped', 0)}, {message.get('reason', '')}")
         elif message.get("t") == "recovery_checkpoint" and not self._ending:
@@ -206,13 +266,16 @@ class TriggeventRecovery(QObject):
 
     def _flush_pending(self, generation, acknowledged):
         if (generation != self._generation or generation != self.bridge.generation()
-                or acknowledged != self._checkpoint or self._ending or self._live):
+                or acknowledged != self._checkpoint or self._ending or self._live
+                or self._lost_connection or not self.bridge.is_active()):
             return
         finish = not self._pending
         checkpoint = self._checkpoint + 1
         if not self.bridge.catch_up(self._pending, checkpoint, finish=finish):
+            self._diagnostic("queue_wait", "queue_full")
             QTimer.singleShot(100, lambda: self._flush_pending(generation, acknowledged))
             return
+        self._diagnostic("ending" if finish else "catchup", "checkpoint")
         self._pending = []
         self._bytes = 0
         self._checkpoint = checkpoint

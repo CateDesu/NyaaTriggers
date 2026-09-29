@@ -406,7 +406,8 @@ class TelestoClient(QObject):
             slot = self.slot_of_actor(actor_id)
             if not slot:
                 return False
-            return self.mark_slot(marker, slot, force=force)
+            return self._enqueue(game_command_message(mark_command(marker, slot)),
+                                 delay=True, force=force, actor=_actor_int(actor_id))
 
     def slot_of_actor(self, actor_id) -> "int | None":
         """Return the actor's current party slot, or None."""
@@ -431,7 +432,7 @@ class TelestoClient(QObject):
             if not slot:
                 return False
             return self._enqueue(game_command_message(f"/mk clear <{int(slot)}>"),
-                                 delay=True, force=force, cleanup=True)
+                                 delay=True, force=force, cleanup=True, actor=_actor_int(actor_id))
 
     def clear_all(self, force: bool = False) -> None:
         with self._lock:
@@ -447,7 +448,8 @@ class TelestoClient(QObject):
         """Probe reachability even while marking is disabled."""
         self.request_party_members(force=True)
 
-    def _enqueue(self, msg: dict, delay: bool, force: bool = False, cleanup: bool = False) -> bool:
+    def _enqueue(self, msg: dict, delay: bool, force: bool = False, cleanup: bool = False,
+                 actor: int | None = None) -> bool:
         """Return false if disabled or the queue is full."""
         try:
             with self._lock:
@@ -455,7 +457,7 @@ class TelestoClient(QObject):
                     return False
                 self._queue.put_nowait((msg, delay, force, self._command_epoch,
                                        self._endpoint_epoch, self._encounter_epoch,
-                                       self._cleanup_epoch if cleanup else None))
+                                       self._cleanup_epoch if cleanup else None, actor))
         except queue.Full:
             log_drop("telesto-queue", "command queue full, dropping message")
             self.error.emit("Telesto command queue full; command dropped")
@@ -475,7 +477,7 @@ class TelestoClient(QObject):
         q = self._queue
         with q.mutex:
             keep = [item for item in q.queue
-                    if item is _STOP or self._can_send(*item[2:])]
+                    if item is _STOP or self._can_send(*item[2:7])]
             removed = len(q.queue) - len(keep)
             if not removed:
                 return
@@ -501,7 +503,7 @@ class TelestoClient(QObject):
                 if stopping.is_set():
                     break
                 continue                       # stale sentinel from a previous generation
-            msg, delay, force, epoch, endpoint, encounter, cleanup = item
+            msg, delay, force, epoch, endpoint, encounter, cleanup, actor = item
             if not self._can_send(force, epoch, endpoint, encounter, cleanup):
                 continue
             if delay:
@@ -511,6 +513,12 @@ class TelestoClient(QObject):
                 break
             if not self._can_send(force, epoch, endpoint, encounter, cleanup):
                 continue
+            if actor is not None:
+                slot = self.slot_of_actor(actor)
+                if slot is None:
+                    continue
+                command = msg["payload"]["command"].rsplit(" ", 1)[0]
+                msg = game_command_message(f"{command} <{slot}>")
             try:
                 self._request_context.command = (force, epoch, endpoint, encounter, cleanup)
                 self._request_context.endpoint = endpoint

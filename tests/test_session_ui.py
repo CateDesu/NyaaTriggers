@@ -19,6 +19,8 @@ from nyaatriggers import app_common as ac
 from nyaatriggers import main_window as mw
 from nyaatriggers import theme
 from nyaatriggers.death_recap import MAX_DEATHS
+from nyaatriggers.recap_log import read_log
+from nyaatriggers.ui.recap_browser import SavedRecapDialog
 from nyaatriggers.prog_session import CHECKPOINT_SECONDS, ProgSessions
 from tests.test_session_features import ability, PLAYER, Clock
 from nyaatriggers.trigger_engine import Trigger
@@ -39,6 +41,7 @@ class SessionUiTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch("nyaatriggers.tts._speech_suspended", False))
         self.temp = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         self.stack.enter_context(patch("nyaatriggers.drop_log._LOG_FILE", self.temp / "nyaatriggers.log"))
         for key, value in {"_DATA_DIR": self.temp, "_SETTINGS_FILE": self.temp / "settings.json",
@@ -53,6 +56,7 @@ class SessionUiTests(unittest.TestCase):
         for target in ((mw.PluginLink, "start"), (mw.QTimer, "singleShot"),
                        (mw, "kokoro_ready"), (mw, "_ensure_worker"), (ac.QMessageBox, "warning")):
             self.stack.enter_context(patch.object(*target))
+        self.stack.enter_context(patch("nyaatriggers.ui.recap_widgets.RecapIcons._pump"))
         self.window = mw.MainWindow()
         self.addCleanup(self.window.close)
         self.clock = Clock()
@@ -326,7 +330,7 @@ class SessionUiTests(unittest.TestCase):
             mark.assert_called_once()
 
     def test_specialized_automarkers_accept_unknown_duty_then_restore_the_filter(self):
-        from nyaatriggers.umad_chains import RELEVANT_IDS, GAZE_FOLLOWUP_IDS
+        from nyaatriggers.umad_chains import RELEVANT_IDS, GAZE_VFX_STATUS, REAL_GAZE_VFX
         self.connect()
         window = self.window
         window._settings["telesto_enabled"] = True
@@ -338,10 +342,10 @@ class SessionUiTests(unittest.TestCase):
         status = ["26", "ts", next(iter(RELEVANT_IDS)), "Chain", "30", "40000001", "Boss", PLAYER, "Player"]
         gaze = list(status)
         gaze[2] = next(iter(window._umad_gaze.ids))
-        cast = ["20", "ts", "40000001", "Boss", next(iter(GAZE_FOLLOWUP_IDS)), "Followup"]
+        cast = ["26", "ts", GAZE_VFX_STATUS, "VFX", "9999", "E0000000", "", "40000001", "Boss", REAL_GAZE_VFX]
         with patch.object(window._umad_chains, "on_gain", return_value=[]) as chain_gain, \
                 patch.object(window._umad_gaze, "on_gain", return_value=[]) as gaze_gain, \
-                patch.object(window._umad_gaze, "on_followup", return_value=[]) as followup:
+                patch.object(window._umad_gaze, "on_vfx", return_value=[]) as followup:
             for fields in (status, gaze, cast):
                 self.line(fields)
             for call in (chain_gain, gaze_gain, followup):
@@ -396,7 +400,7 @@ class SessionUiTests(unittest.TestCase):
         self.assertFalse(window._automark_pending)
 
     def test_queued_umad_markers_respect_late_duty_metadata(self):
-        from nyaatriggers.umad_chains import ACCRETION, CRUST, GAZE_FOLLOWUP_IDS
+        from nyaatriggers.umad_chains import ACCRETION, CRUST, GAZE_VFX_STATUS, REAL_GAZE_VFX
         self.connect()
         window = self.window
         window._settings["telesto_enabled"] = True
@@ -409,7 +413,7 @@ class SessionUiTests(unittest.TestCase):
                 window._ws.status_changed.emit(True, "Connected")
                 with patch.object(window, "_mark_player", return_value=False):
                     if kind == "gaze":
-                        self.line(["20", "ts", "40000001", "Boss", next(iter(GAZE_FOLLOWUP_IDS)), "Followup"])
+                        self.line(["26", "ts", GAZE_VFX_STATUS, "VFX", "9999", "E0000000", "", "40000001", "Boss", REAL_GAZE_VFX])
                     for index, actor in enumerate((PLAYER, "10FF0002")):
                         effects = ((ACCRETION, f"{0xBBC + index:X}", CRUST) if kind == "chain"
                                    else (next(iter(window._umad_gaze.ids)),))
@@ -1481,9 +1485,12 @@ class SessionUiTests(unittest.TestCase):
             self.assertEqual(window._active_profile_id, profile["id"])
             self.assertEqual(trigger.tts_text, "Tank setup")
             window._profile_delete.click()
+            self.assertTrue(path.exists())
+            window = self.restart_profile_window()
+            window._profile_delete.click()
         self.assertFalse(path.exists())
         self.assertEqual(window._active_profile_id, DEFAULT_PROFILE_ID)
-        self.assertEqual(trigger.tts_text, "Normal setup")
+        self.assertEqual(window._triggers[0].tts_text, "Normal setup")
 
     def test_profile_storage_failures_keep_current_choices_and_saved_records(self):
         trigger, profile = self.saved_profile()
@@ -1655,14 +1662,14 @@ class SessionUiTests(unittest.TestCase):
         self.app.processEvents()
         table = window._recap_table
         self.assertEqual([table.item(row, 0).text() for row in range(2)], ["-2.0s", "-7.0s"])
-        self.assertEqual(table.item(0, 3).text(), hit[5])
-        self.assertEqual(table.item(0, 3).toolTip(), hit[5])
-        table.horizontalHeader().resizeSection(3, 130)
+        self.assertEqual(table.item(0, 2).text(), hit[5])
+        self.assertEqual(table.item(0, 2).toolTip(), hit[5])
+        table.horizontalHeader().resizeSection(2, 130)
         narrow_height = table.rowHeight(0)
-        table.horizontalHeader().resizeSection(3, 360)
+        table.horizontalHeader().resizeSection(2, 360)
         self.assertLess(table.rowHeight(0), narrow_height)
         window._select_recap(0)
-        self.assertEqual(table.columnWidth(3), 360)
+        self.assertEqual(table.columnWidth(2), 360)
         self.assertEqual(table.verticalScrollBar().value(), 0)
         self.assertEqual(window._recap_records[0]["events"], original)
         detail = window._recap_detail
@@ -1743,6 +1750,75 @@ class SessionUiTests(unittest.TestCase):
         tab.recap_button.click()
         self.assertIn("before saved death recaps", window._recap_notice.text())
         self.assertEqual(window._recap_list.count(), 0)
+
+    def test_saved_browser_steps_through_pulls_and_returns_to_matching_notes(self):
+        self.connect()
+        window = self.window
+        tab = window._prog_tab
+        tab.start_button.click()
+        for name in ("First", "Second"):
+            window._on_in_combat(True, True)
+            self.line(ability())
+            self.clock.value += 3
+            self.line(["25", "ts", PLAYER, name])
+            window._on_in_combat(False, False)
+        dialog = SavedRecapDialog(window._prog_sessions.sessions, window)
+        self.addCleanup(dialog.close)
+        self.assertEqual(dialog.pulls.count(), 2)
+        dialog.pulls.setCurrentRow(1)
+        window._show_pull_recaps(*dialog.selection)
+        self.assertEqual(window._recap_records[0]["name"], "First")
+        self.assertFalse(window._recap_previous.isEnabled())
+        window._recap_next.click()
+        self.assertEqual(window._recap_records[0]["name"], "Second")
+        self.assertFalse(window._recap_next.isEnabled())
+        window._recap_previous.click()
+        window._recap_back.click()
+        self.assertIs(tab.pull, tab.session["pulls"][0])
+
+    def test_log_browsing_keeps_live_recording_separate_and_closes_temporary_data(self):
+        from tests.test_recap_log import line as log_line
+        path = self.temp / "Network.log"
+        path.write_text(log_line(ability(), 1) + log_line(["25", "", PLAYER, "Imported"], 3) +
+                        log_line(["33", "", "0", "4000000F"], 4) + log_line(ability(), 10) +
+                        log_line(["25", "", PLAYER, "Imported"], 13))
+        window = self.window
+        with patch("nyaatriggers.ui.death_recap_tab.QFileDialog.getOpenFileName", return_value=(str(path), "")):
+            window._open_recap_log()
+        imported = window._recap_import
+        self.assertIsNotNone(imported)
+        self.assertEqual(window._recap_list.count(), 2)
+        self.assertEqual(len(window._death_recap.deaths), 0)
+        self.assertEqual(window._recap_table.item(0, 0).text(), "-3.0s")
+        window._recap_log_pull.setCurrentIndex(window._recap_log_pull.findData(1))
+        self.assertEqual(window._recap_list.count(), 1)
+        self.assertEqual(window._recap_table.item(0, 0).text(), "-2.0s")
+        self.connect()
+        window._prog_tab.start_button.click()
+        window._on_in_combat(True, True)
+        self.line(ability())
+        self.line(["25", "ts", PLAYER, "Live"])
+        self.assertEqual(window._recap_visible[0]["name"], "Imported")
+        self.assertEqual(len(window._death_recap.deaths), 1)
+        self.assertEqual(window._prog_sessions.current["pulls"][0]["recap_count"], 1)
+        window._show_recent_recaps()
+        self.assertEqual(window._recap_records[0]["name"], "Live")
+        self.assertTrue(imported._file.closed)
+
+    def test_failed_log_import_keeps_selected_recap(self):
+        from tests.test_recap_log import line as log_line
+        path = self.temp / "Network.log"
+        path.write_text(log_line(["25", "", PLAYER, "Imported"], 3))
+        window = self.window
+        imported = read_log(path)
+        window._show_imported_recaps(imported)
+        with patch("nyaatriggers.ui.death_recap_tab.QFileDialog.getOpenFileName", return_value=(str(path) + ".missing", "")):
+            window._open_recap_log()
+        self.assertIs(window._recap_import, imported)
+        self.assertFalse(imported._file.closed)
+        self.assertEqual(window._recap_list.count(), 1)
+        window._stop_recap_import()
+        self.assertTrue(imported._file.closed)
 
     def test_active_saved_view_tracks_deaths_without_changing_selection(self):
         self.connect()
@@ -1828,7 +1904,8 @@ class SessionUiTests(unittest.TestCase):
         saved, errors = window._prog_sessions.recaps.load(tab.session["id"], tab.session["pulls"][-1]["id"])
         self.assertEqual(errors, [])
         self.assertEqual(saved[0]["events"], death["events"])
-        self.assertEqual(saved[0]["statuses"], [{"name": "Preparation buff", "source": "Player"}])
+        self.assertEqual(saved[0]["statuses"], [{"name": "Preparation buff", "source": "Player",
+                                                       "id": 0xABC, "source_id": int(PLAYER, 16), "stacks": 0}])
 
     def test_live_duration_and_break_time_are_checkpointed_without_edits(self):
         self.connect()
@@ -1994,7 +2071,8 @@ class SessionUiTests(unittest.TestCase):
                 saved, errors = window._prog_sessions.recaps.load(tab.session["id"], pull["id"])
                 self.assertEqual(errors, [])
                 self.assertEqual(len(saved), 1)
-                self.assertEqual(saved[0]["statuses"], [{"name": "Preparation buff", "source": "Player"}])
+                self.assertEqual(saved[0]["statuses"], [{"name": "Preparation buff", "source": "Player",
+                                                       "id": 0xABC, "source_id": int(PLAYER, 16), "stacks": 0}])
                 self.assertEqual([e["kind"] for e in saved[0]["events"]], ["gained", "damage"])
         self.assertEqual(len(tab.session["pulls"]), 2)
 
@@ -2048,7 +2126,8 @@ class SessionUiTests(unittest.TestCase):
         self.assertEqual(pull["recap_count"], 1)
         saved, errors = window._prog_sessions.recaps.load(window._prog_sessions.current["id"], pull["id"])
         self.assertEqual(errors, [])
-        self.assertEqual(saved[0]["statuses"], [{"name": "Transition buff", "source": "Player"}])
+        self.assertEqual(saved[0]["statuses"], [{"name": "Transition buff", "source": "Player",
+                                                       "id": 0xABC, "source_id": int(PLAYER, 16), "stacks": 0}])
         self.assertTrue(any(e["kind"] == "damage" for e in saved[0]["events"]))
 
     def test_death_in_phase_gap_is_not_counted_again_in_the_next_segment(self):
@@ -2181,7 +2260,7 @@ class SessionUiTests(unittest.TestCase):
             self.line(["25", "ts", PLAYER, f"Death {index + 1}"])
         window._recap_list.setCurrentRow(MAX_DEATHS - 1)
         oldest = window._recap_list.currentItem().data(Qt.ItemDataRole.UserRole)
-        self.assertEqual(window._recap_table.item(0, 4).text(), "1")
+        self.assertEqual(window._recap_table.item(0, 1).text(), "-1")
         self.clock.value += 1.1
         self.line(ability(pairs=[("03", "3E70000")]))
         self.line(["25", "ts", PLAYER, "Newest death"])
@@ -2191,17 +2270,17 @@ class SessionUiTests(unittest.TestCase):
         row = window._recap_list.currentRow()
         self.assertEqual(window._recap_records[row]["id"], selected)
         self.assertEqual(window._recap_records[row]["name"], "Newest death")
-        self.assertEqual(window._recap_table.item(0, 4).text(), "999")
+        self.assertEqual(window._recap_table.item(0, 1).text(), "-999")
         tab.open_recaps()
         self.assertEqual(window._recap_list.count(), MAX_DEATHS + 1)
         oldest_row = next(i for i, d in enumerate(window._recap_records) if d["id"] == oldest)
         window._recap_list.setCurrentRow(oldest_row)
-        self.assertEqual(window._recap_table.item(0, 4).text(), "1")
+        self.assertEqual(window._recap_table.item(0, 1).text(), "-1")
         self.clock.value += 1.1
         self.line(ability(pairs=[("03", "10000")]))
         self.line(["25", "ts", PLAYER, "Another death"])
         self.assertEqual(window._recap_list.currentItem().data(Qt.ItemDataRole.UserRole), oldest)
-        self.assertEqual(window._recap_table.item(0, 4).text(), "1")
+        self.assertEqual(window._recap_table.item(0, 1).text(), "-1")
         loaded = ProgSessions(self.temp / "prog_sessions")
         saved, errors = loaded.recaps.load(tab.session["id"], tab.pull["id"])
         self.assertEqual(errors, [])

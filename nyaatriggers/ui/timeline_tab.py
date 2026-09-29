@@ -96,6 +96,12 @@ class TimelineTabMixin:
             return
         if self._timeline.has_schedule():
             self._pending_timeline_events = []
+            if getattr(self, "_timeline_reset_on_combat_end", False):
+                for i in range(len(pending) - 1, -1, -1):
+                    fields = pending[i][1]
+                    if fields[0] == "260" and len(fields) > 3 and fields[3] == "0":
+                        pending = pending[i + 1:]
+                        break
             self._timeline.resume(pending)
 
     def _load_timeline_for_zone(self, zone: str, *, preserve_time: bool = False) -> None:

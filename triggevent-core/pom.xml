@@ -15,6 +15,7 @@
         <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <tv.version>1.0-SNAPSHOT</tv.version>
+        <nyaa.engine.commit>unknown</nyaa.engine.commit>
     </properties>
 
     <dependencies>
@@ -95,6 +96,9 @@
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>gg.xp.nyaa.TriggeventCore</mainClass>
+                                    <manifestEntries>
+                                        <Nyaa-Engine-Commit>${nyaa.engine.commit}</Nyaa-Engine-Commit>
+                                    </manifestEntries>
                                 </transformer>
                                 <!-- Merge service files used by Groovy, Pico and Reflections. -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>

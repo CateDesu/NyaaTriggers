@@ -353,7 +353,8 @@ def asset_for_platform(release: Release) -> str | None:
 
 
 def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | None = None,
-             timeout: int = 60, max_bytes: int | None = None) -> None:
+             timeout: int = 60, max_bytes: int | None = None,
+             validate_cb: Callable[[Path], None] | None = None) -> None:
     """progress_cb receives downloaded and total bytes, with zero for an unknown total.
     Remove partial files on failure."""
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
@@ -431,6 +432,8 @@ def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | Non
         if total and progress[0] < total:
             raise OSError(
                 f"Download incomplete: received {progress[0]} of {total} bytes")
+        if validate_cb is not None:
+            validate_cb(part)
         os.replace(part, dest)
     except BaseException:
         try:
@@ -570,12 +573,16 @@ def _install_requirements(repo_dir: Path) -> tuple[bool, str] | None:
             return False, str(exc)
         return (False, issue) if issue else (True, "")
     try:
-        r = subprocess.run(
-            [sys.executable, "-m", "pip", "install",
-             "--disable-pip-version-check", "-r", str(req)],
-            capture_output=True, text=True, timeout=600,
-            encoding="utf-8", errors="replace",
-        )
+        from install import run_setup_command, setup_lock
+
+        with setup_lock():
+            r = run_setup_command(
+                [sys.executable, "-m", "pip", "install",
+                 "--disable-pip-version-check", "-r", str(req)],
+                timeout=600, capture_output=True,
+            )
+    except subprocess.CalledProcessError as exc:
+        r = exc
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
     if r.returncode == 0:
@@ -1274,7 +1281,6 @@ def _finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
     if not _wait_for_pid_exit(old_pid):
         _log_update(dest_dir, f"old process {old_pid} did not exit in time; "
                               "swap skipped, install untouched")
-        _relaunch_installed(exe_dst, dest_dir)
         return
 
     internal_swapped = False

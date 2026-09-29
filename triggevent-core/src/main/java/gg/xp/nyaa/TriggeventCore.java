@@ -8,6 +8,7 @@ import gg.xp.reevent.events.EventMaster;
 import gg.xp.reevent.events.InitEvent;
 import gg.xp.reevent.scan.AutoHandlerConfig;
 import gg.xp.xivsupport.callouts.CalloutGroup;
+import gg.xp.xivsupport.callouts.CalloutTrackingKey;
 import gg.xp.xivsupport.callouts.ModifiedCalloutHandle;
 import gg.xp.xivsupport.callouts.ModifiedCalloutRepository;
 import gg.xp.xivsupport.callouts.RawModifiedCallout;
@@ -15,6 +16,13 @@ import gg.xp.xivsupport.events.ACTLogLineEvent;
 import gg.xp.xivsupport.events.actlines.events.AbilityCastStart;
 import gg.xp.xivsupport.events.actlines.events.AbilityUsedEvent;
 import gg.xp.xivsupport.events.actlines.events.BuffApplied;
+import gg.xp.xivsupport.events.actlines.events.WipeEvent;
+import gg.xp.xivsupport.events.actlines.events.ZoneChangeEvent;
+import gg.xp.xivsupport.events.actlines.events.actorcontrol.DutyCommenceEvent;
+import gg.xp.xivsupport.events.actlines.events.actorcontrol.FadeOutEvent;
+import gg.xp.xivsupport.events.actlines.events.actorcontrol.VictoryEvent;
+import gg.xp.xivsupport.events.misc.pulls.PullEndedEvent;
+import gg.xp.xivsupport.events.misc.pulls.PullStartedEvent;
 import gg.xp.xivsupport.events.ws.ActWsRawMsg;
 import gg.xp.xivsupport.events.state.RefreshCombatantsRequest;
 import gg.xp.xivsupport.events.state.RefreshSpecificCombatantsRequest;
@@ -51,9 +59,11 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -77,6 +87,11 @@ public final class TriggeventCore {
 
     // Sequence emitted callouts so the parent can detect delivery gaps.
     private static final AtomicLong CALLOUT_SEQ = new AtomicLong();
+    private static final int MAX_PENDING_SPEECH = 1024;
+    private static final Map<CalloutTrackingKey, PendingSpeech> PENDING_SPEECH = new LinkedHashMap<>();
+    private static long speechEpoch;
+    private record PendingSpeech(long epoch, String id,
+                                 ModifiedCalloutHandle handle, String template) {}
 
     // Keep the engine Telesto integration available for explicit control commands. It
     // remains absent when telesto-core is not on the classpath.
@@ -84,6 +99,7 @@ public final class TriggeventCore {
     private static volatile AutoMarkServiceSelector AM_SELECTOR;
     private static PullRecovery RECOVERY;
     private static EventMaster MASTER;
+    private static EngineDiagnostics diagnostics;
     private static boolean requestedAutomark;
     private static JsonNode automarkCommand;
     private static String recoveryStatus = "state_only";
@@ -108,7 +124,7 @@ public final class TriggeventCore {
             final EventMaster master = pico.getComponent(EventMaster.class);
 
             emitStatus(true, "Triggevent Engine ready");
-            diag("ready; reading WS messages on stdin; recovery=1; history=1; catchup=1; custom=1");
+            diag("ready; reading WS messages on stdin; recovery=1; history=1; catchup=1; custom=1; speech_cancel=1; speech_cancel_all=1; diagnostics=1");
 
             // InitEvent handlers populate the callout registry synchronously. Drain any
             // queued followup work before publishing inventory.
@@ -117,6 +133,7 @@ public final class TriggeventCore {
                 emitInventory(pico);
             } catch (Throwable t) {
                 diag("inventory error: " + t);
+                diagnosticError("inventory", t);
             }
 
             // Pass raw IINACT messages through the engine's normal event handlers.
@@ -146,6 +163,7 @@ public final class TriggeventCore {
                         }
                     }
                     diag("feed error: " + t);
+                    diagnosticError("feed", t);
                 }
             }
             // Drain queued events on EOF and allow brief delayed callouts to finish
@@ -167,9 +185,11 @@ public final class TriggeventCore {
                 diag(sb.toString());
             }
             emitStatus(false, "stdin closed");
+            diagnostics.pipeline();
         } catch (Throwable t) {
             // Log boot failures and return an error before finally exits the JVM.
             t.printStackTrace();
+            diagnosticError("boot", t);
             OUT.flush();
             System.exit(1);
         } finally {
@@ -212,7 +232,12 @@ public final class TriggeventCore {
                 pico.getComponent(PrimaryLogSource.class));
         dist.registerHandler(RECOVERY);
         MASTER = pico.getComponent(EventMaster.class);
+        diagnostics = new EngineDiagnostics(RECOVERY,
+                record -> println(MAPPER.writeValueAsString(record)));
+        diagnostics.install(dist);
+        dist.registerHandler(BaseEvent.class, TriggeventCore::onSpeechBoundary);
         dist.registerHandler(CalloutEvent.class, TriggeventCore::onCallout);
+        dist.registerHandler(TtsRequest.class, TriggeventCore::onTtsRequest);
         dist.registerHandler(TelestoStatusUpdatedEvent.class, TriggeventCore::onTelestoStatus);
         dist.registerHandler(RefreshCombatantsRequest.class, (c, e) -> requestCombatants(List.of()));
         dist.registerHandler(RefreshSpecificCombatantsRequest.class, (c, e) -> requestCombatants(e.getCombatants()));
@@ -262,6 +287,7 @@ public final class TriggeventCore {
             }
         } catch (Throwable t) {
             diag("telesto wiring skipped: " + t);
+            diagnosticError("automark", t);
         }
         return pico;
     }
@@ -270,21 +296,105 @@ public final class TriggeventCore {
      * Receive resolved callouts from built in triggers, EasyTriggers and Groovy.
      */
     private static void onCallout(EventContext ctx, CalloutEvent ev) {
-        if (!RECOVERY.outputAllowed()) {
+        try {
+            boolean delayed = ev.getTtsDelayMs() > 0 && ev.getCallText() != null
+                    && !ev.getCallText().isBlank();
+            synchronized (PENDING_SPEECH) {
+                if (ev.replaces() != null) {
+                    PENDING_SPEECH.remove(ev.replaces().trackingKey());
+                }
+                if (delayed) {
+                    String id = calloutId(ev);
+                    ModifiedCalloutHandle handle = CALLOUTS.get(id);
+                    PENDING_SPEECH.put(ev.trackingKey(), new PendingSpeech(speechEpoch, id,
+                            handle, handle == null ? null : handle.getEffectiveTts()));
+                    if (PENDING_SPEECH.size() > MAX_PENDING_SPEECH) {
+                        PENDING_SPEECH.remove(PENDING_SPEECH.keySet().iterator().next());
+                        diag("delayed speech queue full; oldest callout dropped");
+                    }
+                }
+                if (!RECOVERY.outputAllowed()) {
+                    return;
+                }
+                String text = ev.getVisualText();
+                if (delayed && (text == null || text.isBlank())) {
+                    text = ev.getCallText();
+                }
+                emitCallout(ev, delayed ? null : ev.getCallText(), text, false,
+                        ev.getEffectiveHappenedAt());
+            }
+        } catch (Throwable t) {
+            diag("emit error: " + t);
+            diagnosticError("callout", t);
+        }
+    }
+
+    private static void onTtsRequest(EventContext ctx, TtsRequest request) {
+        if (!(request.getParent() instanceof CalloutEvent callout)) {
             return;
         }
+        synchronized (PENDING_SPEECH) {
+            PendingSpeech pending = PENDING_SPEECH.remove(callout.trackingKey());
+            if (pending == null) {
+                return;
+            }
+            try {
+                if (pending.epoch() != speechEpoch || !RECOVERY.outputAllowed()) {
+                    return;
+                }
+                ModifiedCalloutHandle handle = pending.handle();
+                if (handle != null && (!handle.isTtsEffectivelyEnabled()
+                        || !Objects.equals(pending.template(), handle.getEffectiveTts()))) {
+                    return;
+                }
+                emitCallout(callout, request.getTtsString(), null, true, RECOVERY.clock.now());
+            } catch (Throwable t) {
+                diag("delayed speech error: " + t);
+                diagnosticError("delayed_speech", t);
+            }
+        }
+    }
+
+    private static void onSpeechBoundary(EventContext ctx, BaseEvent event) {
+        if (event instanceof ZoneChangeEvent || event instanceof WipeEvent
+                || event instanceof FadeOutEvent || event instanceof VictoryEvent
+                || event instanceof PullEndedEvent || event instanceof DutyCommenceEvent
+                || event instanceof PullStartedEvent) {
+            cancelPendingSpeech();
+        }
+    }
+
+    private static void cancelPendingSpeech() {
+        synchronized (PENDING_SPEECH) {
+            speechEpoch++;
+            PENDING_SPEECH.clear();
+        }
+    }
+
+    private static void emitCallout(CalloutEvent ev, String tts, String text,
+                                    boolean ttsOnly, Instant at) {
         try {
             final StringBuilder sb = new StringBuilder(128);
             sb.append("{\"t\":\"callout\"");
-            sb.append(",\"seq\":").append(CALLOUT_SEQ.incrementAndGet());
-            field(sb, "id", calloutId(ev));
-            field(sb, "tts", ev.getCallText());
-            field(sb, "text", ev.getVisualText());
-            sb.append(",\"at\":").append(ev.getEffectiveHappenedAt().toEpochMilli());
+            long seq = CALLOUT_SEQ.incrementAndGet();
+            sb.append(",\"seq\":").append(seq);
+            Field sourceField = calloutField(ev);
+            field(sb, "id", ev instanceof CustomTriggers.Callout custom ? custom.id : idForField(sourceField));
+            field(sb, "tts", tts);
+            field(sb, "text", text);
+            if (ttsOnly) {
+                sb.append(",\"tts_only\":true");
+            }
+            sb.append(",\"at\":").append(at.toEpochMilli());
             sb.append(",\"severity\":\"").append(severity(ev.getColorOverride())).append('"');
-            field(sb, "sound", ev.getSound());
-            sb.append(",\"expired\":").append(ev.isExpired());
+            if (!ttsOnly) {
+                field(sb, "sound", ev.getSound());
+            }
+            boolean expired = ev.isExpired();
+            sb.append(",\"expired\":").append(expired);
             sb.append('}');
+            diagnostics.callout(sourceField, seq, ttsOnly, text != null && !text.isBlank(),
+                    tts != null && !tts.isBlank(), expired);
             println(sb.toString());
             // Report PrintStream write failures once per failure streak.
             if (OUT.checkError()) {
@@ -292,6 +402,7 @@ public final class TriggeventCore {
             }
         } catch (Throwable t) {
             diag("emit error: " + t);
+            diagnosticError("callout", t);
         }
     }
 
@@ -320,9 +431,14 @@ public final class TriggeventCore {
         if (ev instanceof CustomTriggers.Callout custom) {
             return custom.id;
         }
+        return idForField(calloutField(ev));
+    }
+
+    private static Field calloutField(CalloutEvent ev) {
+        if (ev instanceof CustomTriggers.Callout) return null;
         final CalloutTraceInfo trace = ev.getTrace();
         if (trace instanceof ModifiableCalloutTraceInfo mti) {
-            return idForField(mti.getCalloutField());
+            return mti.getCalloutField();
         }
         return null;
     }
@@ -334,6 +450,23 @@ public final class TriggeventCore {
     private static void handleCommand(JsonNode n) {
         try {
             final String cmd = n.path("nyaa_cmd").asText("");
+            if ("cancel_speech".equals(cmd)) {
+                var ids = new HashSet<String>();
+                for (JsonNode id : n.path("ids")) {
+                    if (id.isTextual()) {
+                        ids.add(id.asText());
+                    }
+                }
+                synchronized (PENDING_SPEECH) {
+                    if (n.path("all").asBoolean(false)) {
+                        PENDING_SPEECH.clear();
+                    } else {
+                        PENDING_SPEECH.values().removeIf(pending -> ids.contains(pending.id()));
+                    }
+                    println("{\"t\":\"speech_canceled\",\"token\":" + n.path("token").asLong(0) + "}");
+                }
+                return;
+            }
             if ("custom_triggers".equals(cmd)) {
                 CustomTriggers.Configure config = new CustomTriggers.Configure(n.path("triggers"));
                 MASTER.pushEventAndWait(config);
@@ -344,6 +477,7 @@ public final class TriggeventCore {
             if ("pause_feed".equals(cmd)) {
                 applyAutomark(false);
                 RECOVERY.begin(RECOVERY.clock.now().toString());
+                cancelPendingSpeech();
                 return;
             }
             if ("recover_log".equals(cmd)) {
@@ -351,6 +485,7 @@ public final class TriggeventCore {
                 recoveryStatus = "failed";
                 recoveryReason = "History restoration did not finish";
                 RECOVERY.begin(n.path("time").asText());
+                cancelPendingSpeech();
                 JsonNode history = n.path("history");
                 List<String> snapshots = new ArrayList<>();
                 for (JsonNode snapshot : n.path("state")) {
@@ -370,6 +505,7 @@ public final class TriggeventCore {
             if ("recover_begin".equals(cmd)) {
                 applyAutomark(false);
                 RECOVERY.begin(n.path("time").asText());
+                cancelPendingSpeech();
                 recoveryStatus = "state_only";
                 recoveryReason = "";
                 return;
@@ -405,6 +541,7 @@ public final class TriggeventCore {
                 diag("command: unknown callout id " + id);
                 return;
             }
+            String previousTts = h.getEffectiveTts();
             if ("set_callout".equals(cmd)) {
                 if (n.hasNonNull("tts")) {
                     trySet(() -> h.getTtsSetting().set(n.get("tts").asText("")));
@@ -423,12 +560,18 @@ public final class TriggeventCore {
                 trySet(() -> h.getTextSetting().delete());
                 diag("reset_callout applied: " + id);
             }
+            if (!Objects.equals(previousTts, h.getEffectiveTts())) {
+                synchronized (PENDING_SPEECH) {
+                    PENDING_SPEECH.values().removeIf(pending -> id.equals(pending.id()));
+                }
+            }
         } catch (Throwable t) {
             if (n.path("nyaa_cmd").asText("").startsWith("recover_")) {
                 recoveryStatus = "failed";
                 recoveryReason = t.toString();
             }
             diag("command error: " + t);
+            diagnosticError("command", t);
         }
     }
 
@@ -526,6 +669,7 @@ public final class TriggeventCore {
         sb.append("{\"t\":\"inventory\",\"triggers\":[");
         boolean first = true;
         final List<CalloutGroup> groups = repo.getAllCallouts();
+        diagnostics.registerSequences(repo);
         for (CalloutGroup g : groups) {
             final String fight = g.getDuty() == null ? "None" : g.getDuty().name();
             final String groupName = g.getName();
@@ -548,6 +692,7 @@ public final class TriggeventCore {
                 field(sb, "fight", fight);
                 field(sb, "group", groupName);
                 field(sb, "text", text);
+                field(sb, "tts", Objects.requireNonNullElse(h.getOriginal().getOriginalTts(), ""));
                 sb.append('}');
             }
         }
@@ -612,5 +757,13 @@ public final class TriggeventCore {
 
     private static void diag(String m) {
         System.err.println("[triggevent-core] " + m);
+    }
+
+    private static void diagnosticError(String site, Throwable error) {
+        EngineDiagnostics current = diagnostics;
+        if (current == null) {
+            current = new EngineDiagnostics(null, record -> println(MAPPER.writeValueAsString(record)));
+        }
+        current.error(site, error);
     }
 }

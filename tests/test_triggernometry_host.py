@@ -113,6 +113,44 @@ class TriggernometryHostTests(unittest.TestCase):
                 raise RuntimeError(message)
             raise unittest.SkipTest(message)
 
+    def combat_probe(self, host, label):
+        start = len(host.calls)
+        host.send(t="log", line="NYAA_COMBAT " + label)
+        host.until(lambda frame: frame.get("tts") == label + " done")
+        calls = host.calls[start:]
+        state = calls[0].split()
+        return int(state[2]), int(state[3]), calls
+
+    def test_act_combat_conditions_and_elapsed_time(self):
+        with replay(PACKS / "combat-state.xml") as host:
+            self.assertEqual(self.combat_probe(host, "before"),
+                             (0, 0, ["before state 0 0", "before done"]))
+            host.send(t="combat", active=True)
+            self.assertEqual(self.combat_probe(host, "start")[0], 1)
+            time.sleep(1.2)
+            host.send(t="combat", active=True)
+            active, duration, calls = self.combat_probe(host, "repeat")
+            self.assertEqual(active, 1)
+            self.assertGreaterEqual(duration, 1)
+            self.assertIn("repeat combat", calls)
+            self.assertIn("repeat elapsed", calls)
+            host.send(t="combat", active=False)
+            self.assertEqual(self.combat_probe(host, "ended"),
+                             (0, 0, ["ended state 0 0", "ended done"]))
+            host.log("260", "1", "0")
+            self.assertEqual(self.combat_probe(host, "next")[:2], (1, 0))
+            host.log("260", "0", "1")
+            self.assertEqual(self.combat_probe(host, "gameonly")[0], 0)
+
+    def test_pack_can_change_act_combat_state(self):
+        with replay(PACKS / "combat-state.xml") as host:
+            host.send(t="log", line="NYAA_START")
+            self.assertEqual(host.call(), "started")
+            self.assertEqual(self.combat_probe(host, "scriptstart")[0], 1)
+            host.send(t="log", line="NYAA_STOP")
+            self.assertEqual(host.call(), "stopped")
+            self.assertEqual(self.combat_probe(host, "scriptstop")[:2], (0, 0))
+
     def test_top_party_synergy_reads_telesto_callbacks(self):
         from nyaatriggers.triggernometry_telesto import TriggernometryTelesto
         from tests.test_triggernometry_telesto import FakeTelesto, post

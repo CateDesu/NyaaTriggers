@@ -7,7 +7,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ET_DIR="${EVENT_TRIGGER_DIR:-$HERE/event-trigger}"
 ET_REPO="${EVENT_TRIGGER_REPO:-https://github.com/CateDesu/event-trigger.git}"
 # Keep the engine commit pin in sync with build.bat.
-ET_REF="${EVENT_TRIGGER_REF:-06015a947b5b8c7d67f4863b8033e1c14e185494}"
+ET_REF="${EVENT_TRIGGER_REF:-64b7e0641e080b9af66d924cb1b617f04f513a3c}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -53,7 +53,8 @@ echo ">> installing Triggevent Engine modules to local Maven repo"
 
 # Build a clean sidecar jar too.
 echo ">> building triggevent-core.jar"
-( cd "$HERE" && mvn -q -Dmaven.test.skip=true clean package )
+ET_COMMIT="$(git -C "$ET_DIR" rev-parse HEAD)"
+( cd "$HERE" && mvn -q -Dmaven.test.skip=true "-Dnyaa.engine.commit=$ET_COMMIT" clean package )
 
 echo ""
 echo "Built: $HERE/target/triggevent-core.jar"

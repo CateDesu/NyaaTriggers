@@ -18,10 +18,14 @@ Both Triggernometry and NyaaTriggers are MIT licensed. The subprocess isolates t
 
 ## Wire protocol
 
-stdin and stdout carry one JSON object per line. Input includes `log`, `zone`,
+stdin and stdout carry one JSON object per line. Input includes `log`, `zone`, `combat`,
 `combatants`, and Telesto `endpoint` messages. Output includes `callout`, `sound`,
 and `status`. Message fields and control commands are defined in `host/Program.cs`
 and the Python bridge. Engine diagnostics go to stderr and `triggernometry.log`.
+
+ACT combat state drives `${_incombat}` and `${_duration}`. Duration counts from
+the combat entry observed by the host. Enabling the engine during combat starts
+the clock then. Repeated combat notifications preserve the current clock.
 
 ---
 
@@ -66,7 +70,7 @@ Send log and combatant JSON on stdin; callouts appear on stdout. The bridge find
 ## Remaining work
 
 - Validate live IINACT behavior, including `_map_combatants` field casing in `../nyaatriggers/ws_client.py`.
-- Legacy auras and direct game-memory scripts remain unsupported. ACT combat-state and encounter-duration hooks return initial values.
+- Legacy auras and direct game-memory scripts remain unsupported.
 - The first Roslyn compilation under Mono can exceed 2.5 seconds. A representative warm-up may help.
 - Consider bundling Mono for Linux releases.
 

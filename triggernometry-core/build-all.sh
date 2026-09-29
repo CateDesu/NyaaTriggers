@@ -64,7 +64,4 @@ ENGINE_BIN="$SRC/Triggernometry/bin/Release"
     -r:System.Xml.dll -r:System.dll -r:System.Core.dll -r:System.Text.Json.dll -r:System.Memory.dll \
     "$HERE/host/Program.cs" "$HERE/host/CombatantBridge.cs" "$HERE/host/ActLogLine.cs" )
 
-rm -rf "$HERE/bin"; mkdir -p "$HERE/bin"
-cp -f "$ENGINE_BIN/triggernometry-core.exe" "$HERE/bin/"
-cp -f "$ENGINE_BIN"/*.dll "$HERE/bin/"
-echo "built sidecar -> $HERE/bin ($(ls "$HERE/bin"/*.dll | wc -l) DLLs + triggernometry-core.exe)"
+ENGINE_BIN="$ENGINE_BIN" bash "$HERE/package.sh"

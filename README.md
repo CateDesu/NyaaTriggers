@@ -114,25 +114,25 @@ Choose **Settings - Data - Import Triggernometry** to load an XML export, such a
 
 Use **Triggers - Add - Triggernometry trigger** to create a pack, or **Add - Edit Triggernometry pack** to edit one. The editor supports nested conditions, variables, delays, trigger chains, and C# scripts. Saves validate native XML and regex syntax, keep a backup, and wait until combat ends before reloading the engine. See the [editor guide](docs/GUIDE.md#triggernometry-engine-wip).
 
-Imports always add a copy, even with the same filename. To update or remove a pack, close the program, replace or move its XML in the [pack folder](#updating-and-saved-data), then restart.
+Importing an updated export of the same pack asks to replace its existing copy when the engine is available. The previous XML is saved beside it with a `.bak` suffix. Identical imports reuse the existing copy. Separate packs with the same filename get separate files, while overlapping trigger IDs are rejected. To remove a pack, close the program, move its XML out of the [pack folder](#updating-and-saved-data), then restart.
 
 The engine supports conditions, shared variables, delayed actions, trigger chains, and C# scripts. Without the engine, only simple ability matches with plain speech convert to Local rows.
 
-Packs can use Telesto memory notifications and drawings through the **Telesto URL** in **Automarkers**. Commands and macros also require **Enable automarkers**. Legacy Triggernometry auras, direct memory access from C# scripts, and ACT combat-state or encounter-duration hooks are unsupported. Replay checks cover selected TOP and Zelenia mechanics; live validation is pending. See [compatibility and setup](docs/GUIDE.md#triggernometry-engine-wip).
+Packs can use Telesto memory notifications and drawings through the **Telesto URL** in **Automarkers**. Commands and macros also require **Enable automarkers**. Combat-state and encounter-duration hooks use the IINACT feed. Legacy Triggernometry auras and direct memory access from C# scripts are unsupported. Replay checks cover selected TOP and Zelenia mechanics; live validation is pending. See [compatibility and setup](docs/GUIDE.md#triggernometry-engine-wip).
 
 ## DPS, death recaps, and prog
 
 | Tab | What it records |
 |---|---|
 | **DPS** | Live DPS, damage share, HPS, crit and direct hit rates, max hit, and deaths. Pets merge into their owners. **Recent pulls** reviews attempts from the current run. |
-| **Death Recap** | Observed damage, healing, and statuses in the 15 seconds before a death. The latest 80 deaths remain available until the program closes. |
+| **Death Recap** | A minute of damage, incoming healing, HP and shield bars, ability icons, and filterable buff icons at each event. The latest 80 deaths remain available until the program closes. |
 | **Prog** | Saved duty sessions with pull durations, endings, deaths, a chart, bookmarks, notes, and death recaps. |
 
 The meter runs whenever the combat feed is connected. **Record encounters**, off by default, saves full pull summaries to `dps_logs/`, retaining five completed logs plus the active log. **Reset display after** affects only the live display.
 
 In Prog, **Start session** begins collection once the duty and combat state are known. Starting during combat waits for the next full pull. **End session** or leaving the duty ends collection; wipes and breaks stay in the session. Interrupted attempts are listed separately. **Combat ended** does not mean a clear.
 
-Notes and death recaps save automatically, independently of DPS recording and log rotation. Select a pull and choose **View death recaps** to review it, including after restart. Recaps cannot reconstruct exact HP or events missed before connection. UMAD phases are confirmed by boss casts and ability events. Older pulls without phase data remain **Not recorded**. See the [Prog guide](docs/GUIDE.md#prog-tab) for recording and recovery details.
+Notes and death recaps save automatically, independently of DPS recording and log rotation. Select a pull and choose **View death recaps** to review it, including after restart. Recaps retain observed HP and rounded shield percentages. Events missed before connection cannot be recovered. UMAD phases are confirmed by boss casts and ability events. Older pulls without phase data remain **Not recorded**. See the [Prog guide](docs/GUIDE.md#prog-tab) for recording and recovery details.
 
 **Settings - FFLogs** can show your best recorded rDPS after a fight using your personal API client details, server, and region. **IINACT Logs** opens the raw logs for an FFLogs uploader. DPS summaries are separate files.
 
@@ -176,6 +176,7 @@ Most writable data lives beside `main.py` for source runs or beside the executab
 | `prog_sessions/` | Saved sessions, notes, and per-pull deaths under `recaps/` |
 | `pull_logs/` | Optional raw captures for engine replay |
 | `nyaatriggers.log` | Program diagnostics, including dropped-callout and crash entries |
+| `diagnostics.log` | Structured support records, with two retained rotations |
 | `nyaatriggers-update.log` | Windows update and rollback diagnostics when an update runs |
 | `voices/`, `sounds/`, `timelines/` | User voices, imported sounds, and local timelines |
 
@@ -200,7 +201,11 @@ Check the connection, selected fight's row checkboxes, Cactbot mode, and sidebar
 
 The engine indicator beside the connection turns red if an engine fails to start or stops unexpectedly. Hover it for the full message. An amber **chain failures** count means Triggevent reported failed callout sequences, even if the engine is still running. Its tooltip shows recent errors.
 
-**Settings - Data - Save log…** exports the captured combat feed. **Settings - Connection - Record pulls to pull_logs for engine replay** can capture future attempts for replay. Program and engine diagnostic logs are listed under [saved data](#updating-and-saved-data). Their `.1` files keep the previous rotation when present. Include the program version, fight, missing callout, approximate time, and relevant logs when opening an [issue](https://github.com/CateDesu/NyaaTriggers/issues) or asking in [Discord](https://discord.com/invite/TQJrbZcgKF).
+**Settings - Data - Save diagnostics…** saves a support file you can attach to an [issue](https://github.com/CateDesu/NyaaTriggers/issues) or share in [Discord](https://discord.com/invite/TQJrbZcgKF). Include the fight, missing callout, and approximate time. Nothing uploads automatically.
+
+Support records cover connections, engine state, mechanic event IDs and timing, callout delivery, speech queues, and safe error locations. They include runtime versions and selected on/off settings. Actors use temporary session numbers. Character and computer names, chat, spoken text, network addresses, paths, credentials, and custom trigger content are excluded. Records are collected automatically with three files capped at 8 MiB each. The export reads only validated support records; it does not include older program or engine logs.
+
+**Save combat log…** separately exports the raw combat feed. **Settings - Connection - Record pulls to pull_logs for engine replay** captures raw attempts for replay. These files and the older program and engine logs can contain personal information. Review them before sharing; they are not part of the diagnostic export.
 
 ---
 

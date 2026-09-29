@@ -12,7 +12,7 @@ import os
 import re
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, pyqtSlot
@@ -188,11 +188,18 @@ class PullCapture(QObject):
         except OSError as e:
             self._warn_write("create the capture folder", e)
             return
-        stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")
-        path = folder / f"{stamp}.jsonl"
         try:
-            fh = open(path, "w", encoding="utf-8", newline="\n", opener=_owner_only)
-        except OSError as e:
+            stamp = datetime.now()
+            for existing in folder.glob("*.jsonl"):
+                try:
+                    previous = datetime.strptime(existing.stem, "%Y-%m-%d_%H-%M-%S-%f")
+                except ValueError:
+                    continue
+                if previous >= stamp:
+                    stamp = previous + timedelta(microseconds=1)
+            path = folder / f"{stamp.strftime('%Y-%m-%d_%H-%M-%S-%f')}.jsonl"
+            fh = open(path, "x", encoding="utf-8", newline="\n", opener=_owner_only)
+        except (OSError, OverflowError) as e:
             self._warn_write("open the capture file", e)
             return
         self._fh = fh
@@ -228,7 +235,7 @@ class PullCapture(QObject):
             self._bytes += len(line.encode("utf-8")) + 1
         except OSError as e:
             self._warn_write("write the capture", e)
-            self._finalize("ended")
+            self._finalize("ended", write_failed=True)
             return
         if (self._bytes > _MAX_PULL_BYTES
                 or time.monotonic() - self._started > _MAX_PULL_SECONDS):
@@ -254,7 +261,7 @@ class PullCapture(QObject):
         except OSError:
             pass
 
-    def _finalize(self, outcome: str) -> None:
+    def _finalize(self, outcome: str, *, write_failed: bool = False) -> None:
         if not self._in_pull:
             return
         self._in_pull = False
@@ -267,6 +274,13 @@ class PullCapture(QObject):
         path = self._path
         if path is None:
             return
+        if write_failed:
+            try:
+                if path.stat().st_size == 0:
+                    path.unlink()
+                    return
+            except OSError:
+                pass
         meta = {
             "fight": self._fight,
             "zone": self._zone,
@@ -281,4 +295,5 @@ class PullCapture(QObject):
                 fh.write(json.dumps(meta, indent=2) + "\n")
         except OSError:
             pass
-        self._prune(path.parent, keep=path)
+        if not write_failed:
+            self._prune(path.parent, keep=path)

@@ -8,15 +8,27 @@ from PyQt6.QtCore import QObject, QTimer, Qt
 
 from nyaatriggers.drop_log import log_drop
 from nyaatriggers.trigger_engine import (
-    _ABILITY_IDX, _ID_IDX, _SOURCE_IDX, _TARGET_IDX, _id_set, _safe_search,
+    _ABILITY_IDX, _COUNT_IDX, _ID_IDX, _SOURCE_IDX, _TARGET_IDX, _id_set, _safe_search,
     _str_or, compile_user_regex,
 )
+
+
+def _ability_action_key(fields):
+    if not fields or fields[0] not in ("21", "22") or len(fields) <= 44:
+        return None
+    try:
+        sequence = int(fields[44], 16)
+    except ValueError:
+        return None
+    if not sequence:
+        return None
+    return fields[2].upper(), fields[4].upper(), sequence
 
 
 class SequentialRunner(QObject):
 
     def __init__(self, trigger, captured: dict,
-                 on_complete, on_expire, parent=None, cooldown_key=""):
+                 on_complete, on_expire, parent=None, cooldown_key="", start_fields=None):
         super().__init__(parent)
         self.trigger = trigger
         self._captured = dict(captured)
@@ -27,6 +39,8 @@ class SequentialRunner(QObject):
         self._delay_deadline = None
         self._step_deadline = None
         self._step = 0  # index into trigger.sequence, step 0 is the first subsequent step
+        first_action = _ability_action_key(start_fields)
+        self._seen_abilities = {first_action} if first_action is not None else set()
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -41,6 +55,9 @@ class SequentialRunner(QObject):
             return False
         if time.monotonic() >= self._step_deadline:
             self._expire()
+            return False
+        action_key = _ability_action_key(fields)
+        if action_key is not None and action_key in self._seen_abilities:
             return False
         step = self.trigger.sequence[self._step]
         # Normalize step log types using the same default and whitespace handling as
@@ -73,6 +90,8 @@ class SequentialRunner(QObject):
                 return False
         # A step with neither id nor regex advances on any line of its log_type.
 
+        if action_key is not None:
+            self._seen_abilities.add(action_key)
         self._timer.stop()
         src_idx = _SOURCE_IDX.get(log_type, 3)
         if len(fields) > src_idx:
@@ -80,6 +99,12 @@ class SequentialRunner(QObject):
         tgt_idx = _TARGET_IDX.get(log_type, 7)
         if len(fields) > tgt_idx:
             self._captured["target"] = fields[tgt_idx]
+        count_idx = _COUNT_IDX.get(log_type)
+        if count_idx is not None:
+            try:
+                self._captured["count"] = str(int(fields[count_idx], 16))
+            except (IndexError, ValueError):
+                self._captured["count"] = ""
 
         self._step += 1
         if self._step >= len(self.trigger.sequence):

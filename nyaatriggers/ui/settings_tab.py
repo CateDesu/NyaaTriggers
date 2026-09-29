@@ -21,6 +21,7 @@ _MAX_SETTINGS_BYTES = 4 << 20
 
 class SettingsTabMixin:
     def _load_settings(self) -> None:
+        self._settings_backup_pending = False
         if ac._SETTINGS_FILE.exists():
             bad = ""
             try:
@@ -43,6 +44,7 @@ class SettingsTabMixin:
                     shutil.copy2(ac._SETTINGS_FILE, backup)
                 except OSError:
                     backup = None
+                    self._settings_backup_pending = True
                 # Show the warning after applying the language loaded from these
                 # settings.
                 self._settings_load_warning = (bad, backup)
@@ -62,9 +64,15 @@ class SettingsTabMixin:
 
     def _save_settings(self) -> bool:
         try:
+            if getattr(self, "_settings_backup_pending", False):
+                if ac._SETTINGS_FILE.exists():
+                    shutil.copy2(ac._SETTINGS_FILE, _next_bad_name(ac._SETTINGS_FILE))
+                self._settings_backup_pending = False
             _atomic_write_json(ac._SETTINGS_FILE, self._settings, indent=2)
+            self._settings_save_failed = False
             return True
         except (OSError, TypeError, ValueError, RecursionError) as exc:
+            self._settings_save_failed = True
             self._warn_save_failed(_("settings"), exc)
             return False
 
@@ -78,7 +86,7 @@ class SettingsTabMixin:
         if self._save_warned:
             return
         self._save_warned = True
-        ac.QMessageBox.warning(
+        ac.persistence_warning(
             self, _("Save Failed"),
             _("Could not save {what}. Changes will be lost when the program closes.\n"
               "{err}\n\nCheck that the folder is writable.").format(what=what, err=str(exc)))
@@ -181,6 +189,34 @@ class SettingsTabMixin:
                 count=len(lines),
                 plural="" if len(lines) == 1 else "s", path=path))
 
+    def _save_diagnostics(self) -> None:
+        from nyaatriggers.diagnostics import export_diagnostics
+
+        dlg = ac.QFileDialog(self, _("Save Diagnostics"), "nyaatriggers-diagnostics.jsonl",
+                            _("Diagnostic logs (*.jsonl);;All files (*)"))
+        dlg.setAcceptMode(ac.QFileDialog.AcceptMode.AcceptSave)
+        dlg.setDefaultSuffix("jsonl")
+        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.selectedFiles():
+            return
+        try:
+            settings = dict(self._settings)
+            for key, attr in (("triggevent_mode", "_triggevent_mode"),
+                              ("triggernometry_mode", "_triggernometry_mode"),
+                              ("connected", "_connected")):
+                settings[key] = getattr(self, attr, None)
+            mute = getattr(self, "_mute_btn", None)
+            if mute is not None:
+                settings["muted"] = mute.isChecked()
+            count = export_diagnostics(Path(dlg.selectedFiles()[0]), settings)
+        except (OSError, ValueError) as exc:
+            ac.QMessageBox.critical(self, _("Save Diagnostics"),
+                                   _("Could not write file:\n{error}").format(error=exc))
+            return
+        ac.QMessageBox.information(
+            self, _("Save Diagnostics"),
+            _("Saved {count} diagnostic records. Attach this file to your bug report. "
+              "Combat logs, chat, character names, computer names, paths, and credentials are excluded.").format(count=count))
+
     def _write_ability_line(self, line: str, color: str,
                             log_type: str, ability_name: str, ability_id: str = "",
                             source: str = "", target: str = "") -> None:
@@ -228,6 +264,6 @@ class SettingsTabMixin:
 
     def _flush_pending_settings_save(self) -> None:
         """Flush pending settings before the process exits."""
-        if self._settings_save_timer.isActive():
+        if self._settings_save_timer.isActive() or getattr(self, "_settings_save_failed", False):
             self._settings_save_timer.stop()
             self._save_settings()

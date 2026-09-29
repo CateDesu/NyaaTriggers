@@ -215,6 +215,14 @@ def has_packs() -> bool:
     return bool(_find_packs())
 
 
+def _pack_stamp(path):
+    try:
+        info = Path(path).stat()
+    except OSError:
+        return None
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
 def has_mono() -> bool:
     """Windows needs no Mono runtime."""
     return os.name == "nt" or _find_mono() is not None
@@ -238,6 +246,7 @@ class TriggernometryBridge(QObject):
     sound     = pyqtSignal(str, int, int)   # sound file path, volume 0-100, generation
     status    = pyqtSignal(bool, str, int)  # active, message, generation
     inventory = pyqtSignal(str, int)   # editable speech and engine generation
+    feed_overflow = pyqtSignal(int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -251,9 +260,11 @@ class TriggernometryBridge(QObject):
         self._telesto_commands = False
         self._wq: queue.Queue = _ByteQueue(maxsize=20000)
         self._active = False
+        self._pack_stamps = {}
         # Increment on start and stop. An active flag alone cannot distinguish output
         # from a replaced reader.
         self._gen = 0
+        self._overflow_gen = -1
         self._replacements: list = []
         self._disabled: frozenset = frozenset()
         # Makes the stop and reader-exit check-and-clear of _proc and _active atomic.
@@ -265,6 +276,12 @@ class TriggernometryBridge(QObject):
 
     def is_active(self) -> bool:
         return self._active
+
+    def pack_is_current(self, path: Path) -> bool:
+        """Check that the pack has not changed since this engine started."""
+        stamp = _pack_stamp(path)
+        return (self._active and stamp is not None
+                and self._pack_stamps.get(Path(path).absolute()) == stamp)
 
     def generation(self) -> int:
         """Current generation used by UI slots to reject stale signals."""
@@ -325,12 +342,12 @@ class TriggernometryBridge(QObject):
         self._enqueue(cmd)
 
     @staticmethod
-    def _launch_cmd(exe: Path) -> "list[str]":
+    def _launch_cmd(exe: Path, packs: list[str]) -> "list[str]":
         """Use Xvfb and Mono on POSIX because the engine constructs WinForms controls.
         Windows runs the executable directly.
         """
         cfg = str(_rundata_dir())
-        argv = [str(exe), cfg, "--serve", "--"] + _find_packs()
+        argv = [str(exe), cfg, "--serve", "--"] + packs
         if os.name == "nt":
             return argv
         mono = _find_mono()
@@ -357,7 +374,9 @@ class TriggernometryBridge(QObject):
             _make_bundled_mono_executable()
 
         try:
-            cmd = self._launch_cmd(exe)
+            packs = _find_packs()
+            pack_stamps = {Path(path).absolute(): _pack_stamp(path) for path in packs}
+            cmd = self._launch_cmd(exe, packs)
         except OSError as e:
             _log(f"launch failed: {e!r}")
             self.status.emit(False, f"Failed to launch sidecar: {e}", self._gen)
@@ -407,6 +426,7 @@ class TriggernometryBridge(QObject):
             self._telesto = relay
             self._wq = wq
             self._active = True
+            self._pack_stamps = pack_stamps
             self._gen += 1
             gen = self._gen
         self._reader = threading.Thread(target=self._read_loop, args=(proc, wq, gen), daemon=True, name="tn-reader")
@@ -527,12 +547,11 @@ class TriggernometryBridge(QObject):
         try:
             self._wq.put_nowait(line)
         except queue.Full:
-            log_drop("engine-feed", "trig sidecar stdin queue full; dropped oldest feed message")
-            try:
-                self._wq.get_nowait()
-                self._wq.put_nowait(line)
-            except (queue.Empty, queue.Full):
-                pass
+            generation = self._gen
+            if self._active and self._overflow_gen != generation:
+                self._overflow_gen = generation
+                log_drop("engine-feed", "Triggernometry feed queue full; restarting engine")
+                self.feed_overflow.emit(generation)
 
     def feed_log(self, line: str) -> None:
         """Queue a raw log line from the GUI thread without blocking."""
@@ -547,6 +566,16 @@ class TriggernometryBridge(QObject):
         if not self._active or not isinstance(payload, dict):
             return
         self._enqueue({"t": "combatants", "me": payload.get("me", 0), "list": payload.get("list", [])})
+
+    def feed_combat(self, act: bool, game: bool) -> None:
+        self._enqueue({"t": "combat", "active": bool(act)})
+
+    def feed_player(self, player_id: int, _name: str = "") -> None:
+        try:
+            player_id = int(player_id or 0)
+        except (TypeError, ValueError, OverflowError):
+            player_id = 0
+        self._enqueue({"t": "player", "id": player_id if 0 <= player_id <= 0x7FFFFFFF else 0})
 
     def feed_zone(self, zone_id: int, zone_name: str) -> None:
         if not self._active:

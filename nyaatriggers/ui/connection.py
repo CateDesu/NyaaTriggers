@@ -197,7 +197,12 @@ class ConnectionMixin:
         if not self._connected:
             url = self._url_edit.text().strip()
             self._settings["ws_url"] = url
-            self._save_settings()
             self._ws.connect_to(url)
+            if self._cactbot_mode:
+                self._set_cactbot_enabled(True, save=False)
+                if not self._cactbot_mode:
+                    self._set_triggers_enabled(True)
+                    return
+            self._save_settings()
         else:
             self._ws.disconnect_from()

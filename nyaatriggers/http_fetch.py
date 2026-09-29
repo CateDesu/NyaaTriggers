@@ -150,13 +150,17 @@ def fetch_bytes(request, max_bytes: int, timeout: float = 15,
 
     def read():
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            headers_deadline = min(end, state["progress"] + stall)
+            with open_response(request, timeout, headers_deadline) as response:
                 state["response"] = response
                 body = bytearray()
                 read_chunk = getattr(response, "read1", response.read)
                 while not cancelled.is_set():
                     chunk = read_chunk(min(65536, max_bytes + 1 - len(body)))
                     if not chunk:
+                        remaining = getattr(response, "length", None)
+                        if isinstance(remaining, int) and remaining > 0:
+                            raise http.client.IncompleteRead(bytes(body), remaining)
                         result.append(bytes(body))
                         return
                     body.extend(chunk)

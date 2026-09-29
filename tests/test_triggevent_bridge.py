@@ -1,5 +1,6 @@
 """Triggevent process cleanup, sequence tracking and generation checks."""
 import io
+import json
 import os
 import queue
 import signal
@@ -177,6 +178,7 @@ try:
     # the live generation fires, stamped with its generation
     tv3._active = True
     tv3._gen = 1
+    tv3._handle_diagnostic("reading WS messages on stdin", 1)
     tv3._err_loop(_ErrProc(), 1)
     check("the live generation fires chain_failure with its generation",
           len(seen) == 1 and "DMU.ttSq" in seen[0][0] and seen[0][1] == 1)
@@ -291,6 +293,7 @@ class _CalloutHost:
     def __init__(self, bridge):
         self._triggevent = bridge
         self._triggevent_mode = True
+        self._connected = True
         self.shown = []
 
     def _localize_text(self, text):
@@ -311,6 +314,172 @@ check("the UI slot accepts the live generation's callout",
 host._on_triggevent_callout("internal", "info")
 check("a direct internal call without a token still lands",
       host.shown == [("live", "alert"), ("internal", "info")])
+
+delayed_bridge = tb.TriggeventBridge()
+delayed_bridge._active = True
+delayed_bridge._gen = 7
+delayed_popups, delayed_speech = [], []
+delayed_bridge.callout.connect(lambda *args: delayed_popups.append(args))
+delayed_bridge.tts.connect(lambda *args: delayed_speech.append(args))
+delayed_state = {"last": None}
+delayed_bridge._dispatch({"t": "callout", "seq": 1, "id": "delayed",
+                          "text": "Popup now"}, delayed_state, 7)
+delayed_bridge.set_replacements([{"find": "Later", "replace": "Edited"}])
+speech_frame = {"t": "callout", "seq": 2, "id": "delayed",
+                "tts": "Later speech", "tts_only": True}
+delayed_bridge._dispatch(speech_frame, delayed_state, 7)
+check("native delayed speech retains one immediate popup and applies current replacements",
+      delayed_popups == [("Popup now", "info", 7)]
+      and delayed_speech == [("Edited speech", 7)])
+delayed_bridge.set_disabled(["delayed"])
+delayed_bridge._dispatch(speech_frame, delayed_state, 7)
+delayed_bridge.set_disabled([])
+delayed_bridge._dispatch(speech_frame, delayed_state, 6)
+check("native delayed speech respects disabled IDs and stale reader generations",
+      delayed_speech == [("Edited speech", 7)])
+delayed_bridge._dispatch({"t": "callout", "tts": "Normal fallback"}, delayed_state, 7)
+check("ordinary speech still supplies missing visual text",
+      delayed_popups[-1] == ("Normal fallback", "info", 7))
+
+cancel_bridge = tb.TriggeventBridge()
+cancel_bridge._active = True
+cancel_bridge._gen = 9
+cancel_bridge._handle_diagnostic("reading WS messages on stdin; speech_cancel=1", 9)
+canceled_speech = []
+cancel_bridge.tts.connect(lambda *args: canceled_speech.append(args))
+late = {"t": "callout", "id": "delayed", "tts": "Old speech", "tts_only": True}
+cancel_bridge.set_disabled(["delayed"])
+cancel_bridge.set_disabled([])
+cancel_bridge._dispatch(late, gen=9)
+check("UI disable then reenable keeps old delayed speech canceled before native ack",
+      canceled_speech == [])
+cancel_commands = list(cancel_bridge._wq.queue)
+check("UI disabling queues native cancellation without changing author enable defaults",
+      len(cancel_commands) == 2 and all(json.loads(command).get("nyaa_cmd") == "cancel_speech"
+                                     for command in cancel_commands))
+if cancel_commands:
+    first_cancel = json.loads(cancel_commands[0])["token"]
+    cancel_bridge.set_disabled(["delayed"])
+    cancel_bridge.set_disabled([])
+    latest_cancel = json.loads(list(cancel_bridge._wq.queue)[-1])["token"]
+    cancel_bridge._dispatch({"t": "speech_canceled", "token": first_cancel}, gen=9)
+    cancel_bridge._dispatch(late, gen=9)
+    check("an earlier native ack cannot reopen a later disabled callout",
+          canceled_speech == [] and latest_cancel > first_cancel)
+    cancel_bridge._dispatch({"t": "speech_canceled", "token": latest_cancel}, gen=8)
+    cancel_bridge._dispatch(late, gen=9)
+    check("stale readers cannot acknowledge current speech cancellation", canceled_speech == [])
+    cancel_bridge._dispatch({"t": "callout", "id": "other", "tts": "Unaffected",
+                             "tts_only": True}, gen=9)
+    check("canceling one source preserves unrelated delayed speech",
+          canceled_speech == [("Unaffected", 9)])
+    cancel_bridge._dispatch({"t": "speech_canceled", "token": latest_cancel}, gen=9)
+    cancel_bridge._dispatch({**late, "tts": "Fresh speech"}, gen=9)
+    check("fresh delayed speech resumes after the matching native cancellation ack",
+          canceled_speech == [("Unaffected", 9), ("Fresh speech", 9)])
+    recoveries = []
+    cancel_bridge.feed_overflow.connect(recoveries.append)
+    with mock.patch.object(tb, "_MAX_SPEECH_CANCEL_IDS", 2):
+        cancel_bridge.set_disabled(["one", "two", "three"])
+    cancel_bridge.set_disabled([])
+    cancel_bridge._dispatch({**late, "tts": "Overflow stale"}, gen=9)
+    check("pending cancellation remains bounded and requests recovery before accepting stale speech",
+          recoveries == [9] and not cancel_bridge._speech_cancel_pending
+          and canceled_speech[-1] == ("Fresh speech", 9))
+
+legacy_bridge = tb.TriggeventBridge()
+legacy_bridge._active = True
+legacy_bridge._gen = 4
+legacy_bridge._handle_diagnostic("reading WS messages on stdin; custom=1", 4)
+legacy_speech = []
+legacy_bridge.tts.connect(lambda *args: legacy_speech.append(args))
+legacy_bridge.set_disabled(["delayed"])
+legacy_bridge.set_disabled([])
+legacy_bridge._dispatch(late, gen=4)
+check("older jars keep their delivery filter without waiting for unsupported cancellation acks",
+      not list(legacy_bridge._wq.queue) and legacy_speech == [("Old speech", 4)])
+
+off_bridge = tb.TriggeventBridge()
+off_bridge._active = True
+off_bridge._gen = 3
+off_bridge._handle_diagnostic("reading WS messages on stdin; speech_cancel=1", 3)
+off_speech = []
+off_bridge.tts.connect(lambda *args: off_speech.append(args))
+off_bridge.set_disabled(["delayed"])
+off_token = json.loads(list(off_bridge._wq.queue)[-1])["token"]
+off_bridge._dispatch({"t": "speech_canceled", "token": off_token}, gen=3)
+off_bridge._dispatch({"t": "callout", "id": "delayed", "text": "Created while disabled"}, gen=3)
+off_bridge.set_disabled([])
+off_bridge._dispatch(late, gen=3)
+check("reenabling cancels native speech created during the disabled interval", off_speech == [])
+enable_token = json.loads(list(off_bridge._wq.queue)[-1])["token"]
+off_bridge._dispatch({"t": "speech_canceled", "token": enable_token}, gen=3)
+off_bridge._dispatch({**late, "tts": "Newly enabled"}, gen=3)
+check("fresh speech created after native reenable cancellation is preserved",
+      off_speech == [("Newly enabled", 3)])
+off_bridge.set_disabled(["delayed"])
+previous_token = json.loads(list(off_bridge._wq.queue)[-1])["token"]
+off_bridge.stop()
+check("stopping clears bounded pending cancellation state", not off_bridge._speech_cancel_pending)
+off_bridge._active = True
+off_bridge._gen += 1
+next_gen = off_bridge._gen
+off_bridge._handle_diagnostic("reading WS messages on stdin; speech_cancel=1", next_gen)
+off_bridge.set_disabled([])
+next_token = json.loads(list(off_bridge._wq.queue)[-1])["token"]
+off_bridge._dispatch({"t": "speech_canceled", "token": previous_token}, gen=3)
+off_bridge._dispatch(late, gen=next_gen)
+check("reenabling after reader recovery cancels reconstructed old delayed speech",
+      off_speech == [("Newly enabled", 3)] and next_token > previous_token)
+off_bridge._dispatch({"t": "speech_canceled", "token": next_token}, gen=next_gen)
+off_bridge._dispatch({**late, "tts": "New reader speech"}, gen=next_gen)
+check("the recovered reader accepts fresh speech after its own cancellation ack",
+      off_speech[-1] == ("New reader speech", next_gen))
+
+all_bridge = tb.TriggeventBridge()
+all_bridge._active = True
+all_bridge._gen = 12
+all_bridge._handle_diagnostic("reading WS messages on stdin; speech_cancel=1; speech_cancel_all=1", 12)
+all_speech = []
+all_bridge.tts.connect(lambda text, gen: all_speech.append(text))
+all_bridge.cancel_speech(["one"])
+one_token = json.loads(list(all_bridge._wq.queue)[-1])["token"]
+all_bridge.cancel_all_speech()
+all_token = json.loads(list(all_bridge._wq.queue)[-1])["token"]
+all_bridge._dispatch({"t": "speech_canceled", "token": one_token}, gen=12)
+all_bridge._dispatch({"t": "callout", "tts": "Old unidentified", "tts_only": True}, gen=12)
+check("an ID acknowledgement cannot release the whole mode barrier", all_speech == [])
+all_bridge._dispatch({"t": "speech_canceled", "token": all_token}, gen=11)
+all_bridge._dispatch({"t": "callout", "id": "one", "tts": "Old known"}, gen=12)
+check("an old reader cannot release the whole mode barrier", all_speech == [])
+all_bridge._dispatch({"t": "speech_canceled", "token": all_token}, gen=12)
+all_bridge._dispatch({"t": "callout", "tts": "Fresh unidentified", "tts_only": True}, gen=12)
+check("the matching mode acknowledgement admits unidentified fresh speech",
+      all_speech == ["Fresh unidentified"])
+
+all_bridge.cancel_all_speech()
+all_token = json.loads(list(all_bridge._wq.queue)[-1])["token"]
+all_bridge.cancel_speech(["one"])
+one_token = json.loads(list(all_bridge._wq.queue)[-1])["token"]
+all_bridge._dispatch({"t": "speech_canceled", "token": all_token}, gen=12)
+all_bridge._dispatch({"t": "callout", "id": "one", "tts": "ID still pending"}, gen=12)
+all_bridge._dispatch({"t": "callout", "tts": "Unrelated fresh", "tts_only": True}, gen=12)
+check("the mode acknowledgement preserves a newer ID barrier",
+      all_speech == ["Fresh unidentified", "Unrelated fresh"])
+all_bridge._dispatch({"t": "speech_canceled", "token": one_token}, gen=12)
+all_bridge._dispatch({"t": "callout", "id": "one", "tts": "ID fresh"}, gen=12)
+check("a later ID acknowledgement admits its fresh speech", all_speech[-1] == "ID fresh")
+all_bridge.cancel_all_speech()
+all_bridge.stop()
+check("stopping clears the constant size whole mode barrier", all_bridge._speech_cancel_all_pending is None)
+legacy_bridge.cancel_all_speech()
+check("older jars never receive unsupported whole mode cancellation", not list(legacy_bridge._wq.queue))
+all_bridge._active = True
+all_bridge._gen += 1
+pending_commands = all_bridge._wq.qsize()
+all_bridge.cancel_all_speech()
+check("whole mode cancellation capability belongs to one reader generation",
+      all_bridge._wq.qsize() == pending_commands and all_bridge._speech_cancel_all_pending is None)
 
 print()
 if FAILS:

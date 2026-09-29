@@ -20,6 +20,7 @@ import gg.xp.xivsupport.events.triggers.seq.SequentialTrigger;
 import gg.xp.xivsupport.events.misc.EchoEvent;
 import gg.xp.xivsupport.events.triggers.marks.AutoMarkSlotRequest;
 import gg.xp.xivsupport.speech.CalloutEvent;
+import gg.xp.xivsupport.speech.TtsRequest;
 import gg.xp.xivsupport.models.XivStatusEffect;
 import org.picocontainer.MutablePicoContainer;
 import tools.jackson.databind.ObjectMapper;
@@ -29,6 +30,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -260,7 +262,14 @@ public final class RecoveryVerification {
         Path path = Path.of(args[0]);
         int cut = Integer.parseInt(args[1]);
         var lines = Files.readAllLines(path).stream().filter(line -> !line.isBlank()).toList();
+        var snapshots = new LinkedHashMap<String, String>();
         if (args.length > 2 && !Boolean.getBoolean("recovery.reference")) {
+            for (String line : lines.subList(0, cut)) {
+                String kind = line.split("\\|", 2)[0];
+                if (List.of("01", "02", "11").contains(kind)) {
+                    snapshots.put(kind, line);
+                }
+            }
             var history = new PullHistoryReader().read(Path.of(args[2]), lines.get(cut),
                     Long.decode(args[3]), Long.decode(args[4]));
             check(history.reason().isEmpty(), "History was not restored: " + history.reason());
@@ -291,14 +300,35 @@ public final class RecoveryVerification {
             catch (ReflectiveOperationException error) {
                 throw new RuntimeException(error);
             }
+            String tts = e.getCallText() == null ? "" : e.getCallText();
+            String text = e.getVisualText() == null ? "" : e.getVisualText();
+            boolean delayed = e.getTtsDelayMs() > 0 && !tts.isBlank();
             trace.add(Map.of(
                 "id", id == null ? "" : id,
-                "tts", e.getCallText() == null ? "" : e.getCallText(),
-                "text", e.getVisualText() == null ? "" : e.getVisualText(),
+                "tts", delayed ? "" : tts,
+                "text", delayed && text.isBlank() ? tts : text,
                 "at", e.getEffectiveHappenedAt().minus(shift).toEpochMilli()));
+        });
+        dist.registerHandler(TtsRequest.class, (c, e) -> {
+            if (!(e.getParent() instanceof CalloutEvent callout) || callout.getTtsDelayMs() <= 0) {
+                return;
+            }
+            try {
+                String id = (String) calloutId.invoke(null, callout);
+                trace.add(Map.of("id", id == null ? "" : id,
+                        "tts", e.getTtsString(), "text", "",
+                        "at", recovery.clock.now().minus(shift).toEpochMilli()));
+            }
+            catch (ReflectiveOperationException error) {
+                throw new RuntimeException(error);
+            }
         });
         Instant first = ZonedDateTime.parse(lines.get(0).split("\\|")[1]).toInstant().plus(shift);
         recovery.begin(first.toString());
+        for (String snapshot : snapshots.values()) {
+            String[] parts = snapshot.split("\\|", 3);
+            feed(recovery, Map.of("type", "LogLine", "rawLine", parts[0] + "|" + first + "|" + parts[2]));
+        }
         for (int index = 0; index < lines.size(); index++) {
             if (index == cut) {
                 calls.clear();

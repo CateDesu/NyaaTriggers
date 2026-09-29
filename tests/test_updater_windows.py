@@ -153,7 +153,7 @@ with tempfile.TemporaryDirectory() as base:
         updater._wait_for_pid_exit = lambda pid, timeout=90.0: True
     check("install left fully OLD",
           snap_internal(inst) == OLD_INTERNAL and (inst / EXE).read_text() == "OLD-EXE")
-    check("relaunched old exe anyway", LAUNCHED == [inst / EXE])
+    check("no duplicate process launched", LAUNCHED == [])
     check("no backups/scratch created",
           not [n for n in leftovers(inst) if ".new" in n or n.endswith(".nyaa-old")])
     log_lines = (inst / updater._UPDATE_LOG_NAME).read_text().strip().splitlines()

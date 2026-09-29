@@ -80,6 +80,7 @@ datas += [
     # Bundle the local UMAD timeline. The sample timeline remains a source example.
     ('timelines/UMAD.txt', 'timelines'),
     ('assets/icon_nyaa.png', 'assets'),
+    ('assets/recap_icons.zip', 'assets'),
 ]
 
 # Bundle committed cactbot timelines for offline use. Writable downloads use separate

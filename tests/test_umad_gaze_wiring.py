@@ -2,13 +2,14 @@
 import os
 import sys
 import types
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nyaatriggers import main_window as mw
 from nyaatriggers.umad_chains import (
     AWAY1, AWAY2, LOOK1, LOOK2, CURSED_SHRIEK, DEFAULT_GAZE_MARKERS,
-    CursedShriekPairs, StatusPairs,
+    CursedShriekPairs, StatusPairs, GAZE_VFX_STATUS, FAKE_GAZE_VFX, REAL_GAZE_VFX,
 )
 
 FAILS = []
@@ -23,7 +24,7 @@ def check(name, cond):
 A, B, C, D = "10000001", "10000002", "10000003", "10000004"
 IGN1, IGN2 = DEFAULT_GAZE_MARKERS[AWAY1], DEFAULT_GAZE_MARKERS[AWAY2]
 BND1, BND2 = DEFAULT_GAZE_MARKERS[LOOK1], DEFAULT_GAZE_MARKERS[LOOK2]
-INFERNO, TSUNAMI = "BB1E", "BB1F"
+FAKE, REAL = FAKE_GAZE_VFX, REAL_GAZE_VFX
 
 
 class FakeWindow:
@@ -37,11 +38,13 @@ class FakeWindow:
     _dispatch_mark_actions = mw.MainWindow._dispatch_mark_actions
     _umad_name_of = mw.MainWindow._umad_name_of
     _retry_umad_gaze_pending = mw.MainWindow._retry_umad_gaze_pending
+    _on_umad_gaze_flush = mw.MainWindow._on_umad_gaze_flush
     _match_automark_rules = mw.MainWindow._match_automark_rules
 
     def __init__(self, gaze_on=True, fight="UMAD", telesto=True, slots=None,
                  mark_ok=True, rules=None):
         self._settings = {"telesto_enabled": telesto}
+        self.now = 1000.0
         self._current_fight_tag = fight
         self._umad_gaze_enabled = gaze_on
         self._umad_chain_enabled = False
@@ -74,11 +77,18 @@ class FakeWindow:
 
     def feed(self, ltype, eff, tgt, dur="20.00", name="n"):
         fields = [ltype, "ts", eff, name, dur, "src", "srcn", tgt, "tgtn"]
-        self._umad_gaze_line(fields)
+        with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=self.now):
+            self._umad_gaze_line(fields)
 
     def cast(self, eff, src="4000722B"):
         fields = ["20", "ts", src, "Chaos", eff, "Inferno"]
         self._umad_gaze_cast(fields)
+
+    def vfx(self, value, target="4000722B", ltype="26"):
+        self.now += 15.0
+        fields = [ltype, str(self.now), GAZE_VFX_STATUS, "VFX", "9999", "E0000000", "", target, "Neo Exdeath", value]
+        with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=self.now):
+            self._umad_gaze_line(fields)
 
     def gaze(self, order):
         for actor, dur in order:
@@ -89,56 +99,51 @@ def markmap(w):
     return {a: m for a, m in w.marks}
 
 
-# happy path: the labeled pull shape, Inferno fake then Tsunami real
+# happy path: the labeled pull shape, fake VFX then real VFX
 w = FakeWindow(slots={A: 1, B: 2, C: 3, D: 4})
-w.cast(INFERNO)
+w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
-w.cast(TSUNAMI)
+w.vfx(REAL)
 w.gaze([(C, "69.00"), (D, "69.00")])
 mm = markmap(w)
 check("host marks all four gaze carriers", len(w.marks) == 4)
-check("inferno wave gets the bind signs (by slot)",
+check("fake wave gets the bind signs (by slot)",
       mm[A] == BND1 and mm[B] == BND2)
-check("tsunami wave gets the ignore signs (by slot)",
+check("real wave gets the ignore signs (by slot)",
       mm[C] == IGN1 and mm[D] == IGN2)
 w.feed("26", CURSED_SHRIEK, A, dur="60.00")
 check("duplicate gaze gain after both pairs sends no clears", w.clears == [])
 
-# the second cast id of each element routes too
-w = FakeWindow()
-w.cast("BB20")
-w.gaze([(A, "60.00"), (B, "60.00")])
-check("BB20 Inferno arms the fake kind",
-      markmap(w) == {A: BND1, B: BND2})
-w = FakeWindow()
-w.cast("BB21")
-w.gaze([(A, "60.00"), (B, "60.00")])
-check("BB21 Tsunami arms the real kind",
-      markmap(w) == {A: IGN1, B: IGN2})
+# The elemental casts must not arm either gaze direction.
+for cast in ("BB1E", "BB1F", "BB20", "BB21"):
+    w = FakeWindow()
+    w.cast(cast)
+    w.gaze([(A, "60.00"), (B, "60.00")])
+    check(f"{cast} alone cannot select gaze signs", w.marks == [])
 
-# no followup cast, no marks
+# no VFX, no marks
 w = FakeWindow()
 w.gaze([(A, "60.00"), (B, "60.00"), (C, "69.00"), (D, "69.00")])
-check("gains without a followup tell mark nothing", w.marks == [])
+check("gains without a VFX tell mark nothing", w.marks == [])
 
 # gating
 w = FakeWindow(gaze_on=False)
-w.cast(INFERNO)
+w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
 check("toggle off marks nothing", w.marks == [])
 
 w = FakeWindow(fight="FRU")
-w.cast(INFERNO)
+w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
 check("a different known fight marks nothing", w.marks == [])
 
 w = FakeWindow(telesto=False)
-w.cast(INFERNO)
+w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
 check("Telesto disabled marks nothing", w.marks == [])
 
 w = FakeWindow(fight="")
-w.cast(INFERNO)
+w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
 check("unknown fight (started mid-instance) still marks",
       markmap(w) == {A: BND1, B: BND2})
@@ -151,14 +156,14 @@ check("unrelated cast ids arm nothing, the set fails closed", w.marks == [])
 
 # a non-numeric duration field is not load-bearing anymore
 w = FakeWindow()
-w.cast(INFERNO)
+w.vfx(FAKE)
 w.gaze([(A, "bad"), (B, "60.00")])
-check("an unparseable duration still marks, the tell is the cast",
+check("an unparseable duration still marks, the tell is the VFX",
       markmap(w) == {A: BND1, B: BND2})
 
 # slot-unknown marks are queued and retried, not lost
 w = FakeWindow(mark_ok=False)
-w.cast(INFERNO)
+w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
 check("marks that can't send yet are held pending", w.marks == []
       and len(w._umad_gaze_pending) == 2)
@@ -168,16 +173,16 @@ check("the party-refresh retry sends the held gaze marks", len(w.marks) == 2)
 
 # a loss clears the sign through the transport
 w = FakeWindow()
-w.cast(INFERNO)
+w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
 w.feed("30", CURSED_SHRIEK, A)
 check("losing the gaze clears that player's sign", w.clears == [A])
 
 # wipe reset clears outstanding signs
 w = FakeWindow()
-w.cast(INFERNO)
+w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
-w.cast(TSUNAMI)
+w.vfx(REAL)
 w.gaze([(C, "69.00"), (D, "69.00")])
 w._umad_gaze_reset(clear_marks=True)
 check("wipe/abort clears all four outstanding signs", sorted(w.clears) == [A, B, C, D])
@@ -194,6 +199,40 @@ w = FakeWindow(gaze_on=False, rules=rule15a7)
 w._match_automark_rules(["26", "ts", "15A7", "Cursed Shriek", "20.00",
                          "src", "srcn", A, "tgtn"])
 check("gaze off: the plain 15A7 rule fires as before", w.marks == [(A, "circle")])
+
+for value, target, ltype in (("45F", "40000001", "26"),
+                             ("460", "40000001", "26"),
+                             (REAL, A, "26"), (REAL, "40000001", "30"),
+                             ("bad", "40000001", "26")):
+    w = FakeWindow()
+    w.vfx(value, target, ltype)
+    w.gaze([(A, "60"), (B, "60")])
+    check("unrelated VFX and status removals cannot arm gaze signs", not w.marks)
+
+w = FakeWindow()
+w.vfx(REAL)
+w.gaze([(A, "60"), (B, "60")])
+w.vfx(REAL)
+w.gaze([(C, "69"), (D, "69")])
+w.cast("C2DC")
+check("Kefka Says clears active signs and forgets the waiting pair",
+      w.clears == [A, B] and not w._umad_gaze.needs_flush())
+w.vfx(FAKE)
+w.gaze([(A, "60"), (B, "60")])
+check("the next phase accepts fresh fake gaze evidence",
+      w.marks[-2:] == [(A, BND1), (B, BND2)])
+
+w = FakeWindow(mark_ok=False)
+w.vfx(REAL)
+w.gaze([(A, "60"), (B, "60")])
+w.vfx(REAL)
+w.gaze([(C, "69"), (D, "69")])
+w._mark_ok = True
+w.now += 46
+with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=w.now):
+    w._on_umad_gaze_flush()
+check("expiry cancels unsent first pair marks before retrying the later pair",
+      w.marks == [(C, IGN1), (D, IGN2)] and not w._umad_gaze_pending)
 
 print()
 if FAILS:

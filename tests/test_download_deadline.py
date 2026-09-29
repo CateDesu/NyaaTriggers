@@ -605,7 +605,8 @@ def test_tts_kokoro_healthy():
 
 
 def test_install_voice_healthy():
-    cfg_body = b'{"sample_rate": 22050}'
+    cfg_body = (Path(__file__).resolve().parents[1] / "voices" /
+                f"{install.VOICE_STEM}.onnx.json").read_bytes()
     srv = _HealthyServer({f"/{install.VOICE_STEM}.onnx.json": cfg_body})
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)

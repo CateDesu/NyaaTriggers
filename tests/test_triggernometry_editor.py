@@ -68,6 +68,16 @@ class EditorTests(unittest.TestCase):
             loaded.save()
         self.assertEqual(self.path.read_bytes(), first)
 
+    def test_editing_a_maximum_length_pack_name_preserves_the_backup(self):
+        path = self.path.with_name("猫" * 83 + "ab.xml")
+        document = example(path)
+        document.save()
+        original = path.read_bytes()
+        document.root.find("ExportedFolder").set("Name", "Renamed")
+        document.save()
+        self.assertNotEqual(path.read_bytes(), original)
+        self.assertEqual(path.with_suffix(".bak").read_bytes(), original)
+
     def test_invalid_regex_and_engine_enum_never_replace_a_saved_pack(self):
         document = example(self.path)
         document.save()
@@ -80,6 +90,48 @@ class EditorTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 document.save()
             self.assertEqual(self.path.read_bytes(), original)
+
+    def test_readme_without_a_matcher_survives_an_unrelated_editor_save(self):
+        for source in (None, "Log", "FFXIVNetwork", "None"):
+            with self.subTest(source=source):
+                document = example(self.path)
+                readme = document.add_trigger()
+                readme.attrib.update(Name="Pack instructions", IsReadme="True", Description="Keep this text")
+                if source is None:
+                    readme.attrib.pop("Source")
+                else:
+                    readme.set("Source", source)
+                raw = xml_bytes(document.root)
+                validate_native(raw)
+                self.path.write_bytes(raw)
+                loaded = PackDocument.load(self.path)
+                dialog = TriggernometryDialog(loaded)
+                self.addCleanup(dialog.deleteLater)
+                dialog.name.setText("Edited callout")
+                with patch("nyaatriggers.triggernometry_dialog.QMessageBox.warning") as warning:
+                    dialog.accept()
+                warning.assert_not_called()
+                self.assertEqual(dialog.result(), QDialog.DialogCode.Accepted)
+                saved = trigger_entries(PackDocument.load(self.path).root)
+                self.assertEqual(saved[0][1].get("Name"), "Edited callout")
+                self.assertEqual(ET.tostring(saved[-1][1]), ET.tostring(readme))
+                self.assertEqual(self.path.with_suffix(".xml.bak").read_bytes(), raw)
+
+    def test_regular_log_triggers_still_require_a_matcher(self):
+        for readme in (None, "False"):
+            for source in (None, "Log", "FFXIVNetwork"):
+                with self.subTest(readme=readme, source=source):
+                    document = example(self.path)
+                    trigger = document.add_trigger()
+                    if source is None:
+                        trigger.attrib.pop("Source")
+                    else:
+                        trigger.set("Source", source)
+                    if readme is not None:
+                        trigger.set("IsReadme", readme)
+                    with self.assertRaisesRegex(ValueError, "Enter a regular expression"):
+                        document.save()
+                    self.assertFalse(self.path.exists())
 
     def test_dtd_deep_xml_and_duplicate_ids_are_rejected(self):
         with self.assertRaises(ValueError):

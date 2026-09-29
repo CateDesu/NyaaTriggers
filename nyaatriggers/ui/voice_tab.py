@@ -18,6 +18,8 @@ from nyaatriggers.tts import (
 )
 from nyaatriggers.locale_util import _
 from nyaatriggers import updater
+from nyaatriggers.paths import resolve_voice_venv
+from nyaatriggers.voice_config import voice_config_ok
 
 from nyaatriggers import app_common as ac
 from nyaatriggers.app_common import _JP_NEURAL_VOICES, _sweep_stale_update_parts, _voice_display
@@ -32,8 +34,13 @@ class VoiceTabMixin:
             if not voices_dir.exists():
                 continue
             for p in sorted(voices_dir.glob("*.onnx")):
-                if (not p.stem.startswith("kokoro") and p.stem not in found
+                if (not p.stem.startswith("kokoro")
                         and p.is_file() and p.with_suffix(".onnx.json").is_file()):
+                    previous = found.get(p.stem)
+                    if previous is not None and (
+                            voice_config_ok(previous.with_suffix(".onnx.json"))
+                            or not voice_config_ok(p.with_suffix(".onnx.json"))):
+                        continue
                     found[p.stem] = p
         return [(stem, found[stem]) for stem in sorted(found)]
 
@@ -315,17 +322,21 @@ class VoiceTabMixin:
         self._alert_sound_combo.blockSignals(False)
 
     def _on_triggevent_tts(self, text: str, gen: "int | None" = None) -> None:
+        from nyaatriggers.diagnostics import record
         # Respect callout mode and reject stale engine generations.
         if ac._stale_gen(getattr(self, "_triggevent", None), gen):
+            record("ui_callout", gen=gen, channel="speech", result="stale")
             return
-        if not self._triggevent_mode:
+        if not self._triggevent_mode or not self._connected:
+            record("ui_callout", gen=gen, channel="speech",
+                   result="disabled" if not self._triggevent_mode else "disconnected")
             return
         self._triggevent_speak(text)
 
     def _on_triggernometry_tts(self, text: str, gen: "int | None" = None) -> None:
         if ac._stale_gen(getattr(self, "_triggernometry", None), gen):
             return
-        if not self._triggernometry_mode:
+        if not self._triggernometry_mode or not self._connected:
             return
         self._triggernometry_speak(text)
 
@@ -334,7 +345,7 @@ class VoiceTabMixin:
         # Convert engine volume percentages to playback amplitude.
         if ac._stale_gen(getattr(self, "_triggernometry", None), gen):
             return
-        if not self._triggernometry_mode:
+        if not self._triggernometry_mode or not self._connected:
             return
         try:
             if file and os.path.isfile(file):
@@ -389,9 +400,18 @@ class VoiceTabMixin:
 
     def _on_venv_changed(self) -> None:
         path = self._venv_edit.text().strip()
+        try:
+            resolve_voice_venv(path)
+            set_venv_path(path)
+        except (OSError, RuntimeError, ValueError) as exc:
+            previous = self._settings.get("venv_path")
+            self._venv_edit.setText(previous if isinstance(previous, str)
+                                    else str(resolve_voice_venv("")))
+            ac.QMessageBox.warning(self, _("Piper venv"), _(
+                "Could not use that voice environment:\n{error}").format(error=exc))
+            return
         self._settings["venv_path"] = path
         self._save_settings()
-        set_venv_path(path)
 
     def _browse_venv(self) -> None:
         path = ac.QFileDialog.getExistingDirectory(self, _("Select Piper venv directory"),

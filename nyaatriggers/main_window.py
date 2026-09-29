@@ -25,7 +25,7 @@ from nyaatriggers.pull_capture import PullCapture
 from nyaatriggers.tts import (
     speak, play_sound, interrupt as tts_interrupt, set_venv_path, set_master_volume, set_engine,
     default_engine, set_jp_voice, set_jp_auto, set_jp_neural, kokoro_ready, _ensure_worker,
-    _load_piper,
+    _load_piper, suspend as tts_suspend, resume as tts_resume,
 )
 from nyaatriggers.locale_util import _, effective_locale, set_locale, active_locale
 from nyaatriggers.sequential import SequentialRunner
@@ -418,6 +418,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             threading.Thread(target=_load_piper, daemon=True).start()
         # Warm Kokoro imports off the GUI thread to avoid a pause on voice selection.
         threading.Thread(target=kokoro_ready, daemon=True).start()
+        tts_resume()
         _ensure_worker()
         try:
             vol = float(self._settings.get("master_volume", 1.0))
@@ -804,10 +805,13 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._restore_trig_btn = QPushButton(_("Restore from Repo"))
         self._restore_trig_btn.clicked.connect(self._restore_triggers_from_repo)
         trig_update_row.addWidget(self._restore_trig_btn)
-        save_log_btn = QPushButton(_("Save log…"))
+        save_log_btn = QPushButton(_("Save combat log…"))
         save_log_btn.setMaximumWidth(160)
         save_log_btn.clicked.connect(self._save_raw_log)
         trig_update_row.addWidget(save_log_btn)
+        diagnostics_btn = QPushButton(_("Save diagnostics…"))
+        diagnostics_btn.clicked.connect(self._save_diagnostics)
+        trig_update_row.addWidget(diagnostics_btn)
         trig_update_row.addStretch()
         settings_layout.addLayout(trig_update_row)
         trig_update_note = QLabel(_("Update Triggers and Restore from Repo pull the bundled trigger set from the GitHub repo and reload it. Your own triggers are never removed."))
@@ -1298,6 +1302,9 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
     def _stop_background_timers(self) -> None:
         """Also used by update restarts that bypass closeEvent."""
         step = self._teardown_step
+        step("recap import stop", lambda: self._stop_recap_import())
+        step("speech stop", tts_suspend)
+        step("timeline stop", lambda: self._timeline.reset())
         step("telesto party timer stop", lambda: self._telesto_party_timer.stop())
         step("mute timer stop", lambda: self._mute_timer.stop())
         step("plugin tick timer stop", lambda: self._plugin_tick_timer.stop())

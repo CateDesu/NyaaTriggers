@@ -6,8 +6,32 @@ from pathlib import Path
 from nyaatriggers.death_recap import MAX_EVENTS, MAX_STATUSES, WINDOW_SECONDS
 from nyaatriggers.record_store import read_record, record_id, write_record
 
-EVENT_KINDS = {"damage", "heal", "dot", "hot", "gained", "lost", "instant-death"}
+EVENT_KINDS = {"damage", "heal", "dot", "hot", "gained", "lost", "instant-death", "health"}
 MAX_PENDING_RECAPS = 256
+
+
+def optional_number(entry, key, maximum=0xFFFFFFFF, integer=True):
+    value = entry.get(key)
+    if value is None:
+        return
+    types = (int,) if integer else (int, float)
+    if type(value) not in types or not 0 <= value <= maximum:
+        raise ValueError(f"Invalid observation {key}")
+
+
+def validate_statuses(statuses):
+    if not isinstance(statuses, list) or len(statuses) > MAX_STATUSES:
+        raise ValueError("Invalid recap statuses")
+    for status in statuses:
+        if not isinstance(status, dict):
+            raise ValueError("Invalid recap status")
+        for key in ("name", "source"):
+            if not isinstance(status.get(key), str) or len(status[key]) > 200:
+                raise ValueError("Invalid status text")
+        for key in ("id", "source_id"):
+            optional_number(status, key)
+        optional_number(status, "stacks", 65535)
+        optional_number(status, "remaining", 1e12, integer=False)
 
 
 def validate_recap(data):
@@ -39,6 +63,20 @@ def validate_recap(data):
         amount = event["amount"]
         if amount is not None and (type(amount) is not int or not 0 <= amount <= 0xFFFFFFFF):
             raise ValueError("Invalid event amount")
+        for key in ("action_id", "status_id", "sequence", "hp", "max_hp", "hp_after"):
+            optional_number(event, key)
+        for key in ("shield", "shield_after"):
+            optional_number(event, key, 255)
+        optional_number(event, "status_stacks", 65535)
+        optional_number(event, "status_duration", 1e12, integer=False)
+        optional_number(event, "damage_type", 15)
+        for key in ("critical", "direct_hit", "blocked", "parried"):
+            if key in event and type(event[key]) is not bool:
+                raise ValueError("Invalid combat flag")
+        for key in ("statuses", "source_statuses"):
+            if key in event:
+                validate_statuses(event[key])
+    validate_statuses(data["statuses"])
 
 
 class RecapStore:
@@ -58,7 +96,7 @@ class RecapStore:
     def record(self, session_id, pull_id, death):
         data = deepcopy(death)
         data.update(version=1, session_id=session_id, pull_id=pull_id)
-        data["statuses"] = [{"name": status["name"], "source": status["source"]}
+        data["statuses"] = [{k: v for k, v in status.items() if k not in ("expires", "bank")}
                             for status in data["statuses"]]
         validate_recap(data)
         self.save(data)

@@ -96,7 +96,7 @@ check("unpack hallowed is zero damage",
 check("unpack miss kind",
       _unpack_effect("750001", dmg(10000))[0] == "miss")
 check("unpack heal kind, never DH",
-      _unpack_effect("754004", dmg(10000)) == ("heal", 10000, False, False))
+      _unpack_effect("754004", dmg(10000)) == ("heal", 10000, True, False))
 check("unpack crit + DH severity",
       _unpack_effect("756003", dmg(10000)) == ("damage", 10000, True, True))
 check("unpack status application is none",
@@ -321,11 +321,13 @@ m4.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
 m4.process(["01", "ts", "4B0", "Everkeep"], "")
 check("even a same-name 01 finalizes (instance re-entry = new pull)",
       len(ended4) == 1 and m4.current is None)
-# A stale player ID cannot begin an encounter after a zone change.
+# New combat cannot inherit the previous zone's identity or jobs.
+check("zone change clears identity and actor metadata",
+      m4._me_id is None and not m4._jobs and not m4._owners and not m4._names)
 m4.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
-                   [("750003", dmg(1000))]), "")
-check("a line from the stale me id opens nothing after zoning",
-      m4.current is None)
+                    [("750003", dmg(1000))]), "")
+check("player damage before fresh identity opens a new encounter",
+      m4.current is not None and m4.snapshot()["Combatant"][ME_NAME]["Job"] == "")
 # Real feeds send a fresh 02 after zoning, pinning the local player again.
 m4.process(["02", "ts", ME, ME_NAME], "")
 m4.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
@@ -334,10 +336,12 @@ m4.process(["01", "ts", "4B1", "The Voidcast Dais"], "")
 check("zone change finalizes", len(ended4) == 2 and m4.current is None)
 check("zone change title was the old zone",
       ended4[1]["Encounter"]["title"] == "Everkeep")
-# Cleared job data cannot identify a player until a fresh roster arrives.
+# Player actor IDs remain recognizable while fresh job metadata is pending.
 m4.process(ability("21", P2, P2_NAME, "Auto Crossbow", BOSS, "Zeromus",
                    [("750003", dmg(5000))]), "")
-check("zone change clears job knowledge", m4.current is None)
+check("zone change clears job knowledge without discarding player damage",
+      m4.snapshot()["Combatant"][P2_NAME]["Job"] == ""
+      and m4.snapshot()["Combatant"][P2_NAME]["damage"] == 5000)
 
 # Malformed lines never raise and never corrupt state.
 m5 = DpsMeter(clock=Clock())

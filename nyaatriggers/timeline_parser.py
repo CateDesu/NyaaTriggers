@@ -17,9 +17,9 @@ _EVENT_KW_RE = re.compile(r"\b([A-Za-z]\w*)\s*\{")
 _WINDOW_RE = re.compile(r'\bwindow\s+(?P<before>[\d.]+)(?:\s*,\s*(?P<after>[\d.]+))?')
 _JUMP_RE = re.compile(r'\b(?P<force>force)?jump\s+(?:"(?P<jlabel>[^"]*)"|(?P<jtime>-?[\d.]+))')
 # Accept quoted or bare values and preserve regex escapes.
-_KV_RE = re.compile(r"\b(\w+)\s*:\s*(?:\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'|([^\s,\[\]{},\"']+))")
+_KV_RE = re.compile(r"(\"\w+\"|'\w+'|\b\w+)\s*:\s*(?:\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'|([^\s,\[\]{},\"']+))")
 # Parse arrays explicitly so ID alternatives are not lost.
-_KV_ARRAY_START_RE = re.compile(r"\b(\w+)\s*:\s*\[")
+_KV_ARRAY_START_RE = re.compile(r"(\"\w+\"|'\w+'|\b\w+)\s*:\s*\[")
 _ARRAY_ITEM_RE = re.compile(r"\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'")
 # Remove legacy regex sync bodies before searching for event clauses.
 _LEGACY_SYNC_RE = re.compile(r'\bsync\s*/(?:[^/\\]|\\.)*/')
@@ -33,7 +33,8 @@ def _array_fields(fields_text: str) -> list[tuple[str, str | None, int, int]]:
     i, n = 0, len(fields_text)
     while i < n:
         c = fields_text[i]
-        if c in '"\'':
+        m = _KV_ARRAY_START_RE.match(fields_text, i)
+        if c in '"\'' and m is None:
             # Skip quoted text as one value.
             q = c
             i += 1
@@ -41,7 +42,6 @@ def _array_fields(fields_text: str) -> list[tuple[str, str | None, int, int]]:
                 i += 2 if fields_text[i] == "\\" else 1
             i += 1
             continue
-        m = _KV_ARRAY_START_RE.match(fields_text, i)
         if m:
             j, depth, quote = m.end(), 1, ''
             while j < n and depth:
@@ -61,7 +61,7 @@ def _array_fields(fields_text: str) -> list[tuple[str, str | None, int, int]]:
                 j += 1
             j = min(j, n)
             body = fields_text[m.end():j - 1] if depth == 0 else None
-            pairs.append((m.group(1), body, i, j))
+            pairs.append((m.group(1).strip("\"'"), body, i, j))
             i = j
             continue
         i += 1
@@ -216,7 +216,7 @@ def parse(text: str) -> list[TimelineEntry]:
             for key, body, start, end in arrays:
                 scalar_chars[start:end] = ' ' * (end - start)
             scalar_text = ''.join(scalar_chars)
-            event_fields = {key: dq or sq or bq
+            event_fields = {key.strip("\"'"): dq or sq or bq
                             for key, dq, sq, bq in _KV_RE.findall(scalar_text)}
             # Join array values as regex alternatives. An explicit scalar for the same
             # key takes precedence.

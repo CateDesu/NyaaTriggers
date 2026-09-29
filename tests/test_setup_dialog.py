@@ -89,11 +89,13 @@ def _no_lock():
 
 
 _saved = (main._voice_present, main._piper_installed, main._FFXIV_VENV,
-          main.subprocess.run, main.time.sleep, main.install.setup_lock)
+          main.install.run_setup_command, main.time.sleep, main.install.setup_lock,
+          main._startup_settings)
 main._voice_present = lambda: True
-main._piper_installed = lambda: False
+main._piper_installed = lambda _venv=None: False
 main._FFXIV_VENV = Path(tempfile.mkdtemp())
-main.subprocess.run = lambda *a, **k: _pip_calls.append(k) or _FakeProcResult(a)
+main._startup_settings = lambda: {}
+main.install.run_setup_command = lambda *a, **k: _pip_calls.append(k) or _FakeProcResult(a)
 main.time.sleep = lambda *_a, **_k: None
 main.install.setup_lock = _no_lock
 _worker0 = main._SetupWorker()
@@ -105,13 +107,13 @@ try:
     _worker0.run()
 finally:
     (main._voice_present, main._piper_installed, main._FFXIV_VENV,
-     main.subprocess.run, main.time.sleep, main.install.setup_lock) = _saved
+     main.install.run_setup_command, main.time.sleep, main.install.setup_lock,
+     main._startup_settings) = _saved
 
-check("first run setup ran the venv create and the pip install",
-      len(_pip_calls) == 2)
-check("setup subprocess calls decode utf-8 with replacement",
-      all(k.get("encoding") == "utf-8" and k.get("errors") == "replace"
-          for k in _pip_calls))
+check("first run setup created the venv then installed and validated Piper",
+      len(_pip_calls) == 3)
+check("setup subprocess calls capture diagnostics through the owned runner",
+      all(k.get("capture_output") for k in _pip_calls))
 check("first run setup reports success", _done0 == [(True, "")])
 check("setup progress is translated", _progress0[-1] == "セットアップ完了。")
 check("setup dependency message is translated",

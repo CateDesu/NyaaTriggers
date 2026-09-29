@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nyaatriggers import updater
+import install
 
 FAILS = []
 
@@ -44,13 +45,11 @@ def run_case(pull_rc=0, head_moves=True, pip_rc=0, pip_err="", with_req=True):
             return _R(pip_rc, "", pip_err)
         raise AssertionError(f"unexpected argv: {argv}")
 
-    orig = updater.subprocess.run
-    updater.subprocess.run = fake_run
-    try:
-        with patch.object(updater, "_externally_managed_python", return_value=False):
-            ok, msg = updater.apply_git(repo)
-    finally:
-        updater.subprocess.run = orig
+    with patch.object(updater.subprocess, "run", side_effect=fake_run), \
+            patch.object(install, "run_setup_command", side_effect=fake_run), \
+            patch.object(install, "_SETUP_LOCK", repo / "setup.lock"), \
+            patch.object(updater, "_externally_managed_python", return_value=False):
+        ok, msg = updater.apply_git(repo)
     pip_calls = [c for c in calls if c[0] == sys.executable and "pip" in c]
     return ok, msg, pip_calls, tmp
 
@@ -268,13 +267,11 @@ def conflict_then_ok(argv, **kw):
         return _R(0)
     raise AssertionError(f"unexpected argv: {argv}")
 
-orig = updater.subprocess.run
-updater.subprocess.run = conflict_then_ok
-try:
-    with patch.object(updater, "_externally_managed_python", return_value=False):
-        ok, msg = updater.apply_git(repo)
-finally:
-    updater.subprocess.run = orig
+with patch.object(updater.subprocess, "run", side_effect=conflict_then_ok), \
+        patch.object(install, "run_setup_command", side_effect=conflict_then_ok), \
+        patch.object(install, "_SETUP_LOCK", repo / "setup.lock"), \
+        patch.object(updater, "_externally_managed_python", return_value=False):
+    ok, msg = updater.apply_git(repo)
 check("stale cactbot conflicts self heal and the pull retries",
       ok and len([c for c in calls if "pull" in c]) == 2)
 check("the stale downloads are gone from the checkout",

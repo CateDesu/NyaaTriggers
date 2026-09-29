@@ -1,11 +1,11 @@
-"""UMAD gaze pairing from followup casts and status gains."""
+"""UMAD gaze pairing from status VFX and status gains."""
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nyaatriggers.umad_chains import (
     AWAY1, AWAY2, LOOK1, LOOK2, BURST_GAP_S, CURSED_SHRIEK, DEFAULT_GAZE_MARKERS,
-    FAKE_FOLLOWUP_IDS, GAZE_IDS, REAL_FOLLOWUP_IDS, STALE_S,
+    FAKE_GAZE_VFX, GAZE_IDS, REAL_GAZE_VFX, STALE_S,
     CursedShriekPairs,
 )
 
@@ -22,7 +22,7 @@ def check(name, cond):
 # polarity.
 A, B, C, D = "10000001", "10000002", "10000003", "10000004"
 SET1, SET2 = 60.0, 69.0
-INFERNO, TSUNAMI = "BB1E", "BB1F"
+FAKE, REAL = FAKE_GAZE_VFX, REAL_GAZE_VFX
 IGN1, IGN2 = DEFAULT_GAZE_MARKERS[AWAY1], DEFAULT_GAZE_MARKERS[AWAY2]   # ignore1/2
 BND1, BND2 = DEFAULT_GAZE_MARKERS[LOOK1], DEFAULT_GAZE_MARKERS[LOOK2]   # bind1/2
 
@@ -35,12 +35,11 @@ def gain(e, actor, dur, t):
     return e.on_gain(CURSED_SHRIEK, actor, dur, t)
 
 
-def wave(e, actors, dur, t, followup=None, t_fu=None):
-    """Feed one wave: optional followup cast then the pair's gains, same
-    timestamp. Returns all actions."""
+def wave(e, actors, dur, t, vfx=None, vfx_time=None):
+    """Feed the VFX and both player status gains."""
     acts = []
-    if followup is not None:
-        acts += e.on_followup(followup, t if t_fu is None else t_fu)
+    if vfx is not None:
+        acts += e.on_vfx(vfx, t if vfx_time is None else vfx_time)
     for a in actors:
         acts += gain(e, a, dur, t)
     return acts
@@ -51,90 +50,93 @@ def marks(acts):
     return {a[1]: a[2] for a in acts if a[0] == "mark"}
 
 
-# the labeled pull shape: Inferno fake first, Tsunami real second
+# the labeled pull shape: Fake VFX first, real VFX second
 e = eng()
-m = marks(wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
-          + wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0))
-check("inferno wave marks its pair with the look-at binds",
+m = marks(wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
+          + wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0))
+check("fake wave marks its pair with the look-at binds",
       m[A] == BND1 and m[B] == BND2)
-check("tsunami wave marks its pair with the look-away ignores",
+check("real wave marks its pair with the look-away ignores",
       m[C] == IGN1 and m[D] == IGN2)
 check("all four signs are outstanding together",
       set(e.outstanding()) == {A, B, C, D})
 
-# the swap: Tsunami first, Inferno second
+# the swap: Real first, fake second
 e = eng()
-m = marks(wave(e, [A, B], SET1, 10.0, followup=TSUNAMI, t_fu=6.0)
-          + wave(e, [C, D], SET2, 25.0, followup=INFERNO, t_fu=21.0))
-check("swapped pulls mark the other way, tsunami real first",
+m = marks(wave(e, [A, B], SET1, 10.0, vfx=REAL, vfx_time=6.0)
+          + wave(e, [C, D], SET2, 25.0, vfx=FAKE, vfx_time=21.0))
+check("swapped pulls mark the other way, real VFX first",
       m[A] == IGN1 and m[B] == IGN2 and m[C] == BND1 and m[D] == BND2)
 
-# BB20/BB21, the second cast id of each element, arm the same way
-check("BB20 is a fake followup and BB21 a real one",
-      "BB20" in FAKE_FOLLOWUP_IDS and "BB21" in REAL_FOLLOWUP_IDS)
+# Chaos casts do not determine gaze direction.
+for cast in ("BB1E", "BB1F", "BB20", "BB21"):
+    check(f"{cast} cannot arm gaze signs", eng().on_vfx(cast, 1.0) == [])
 
 # nothing fires before the pair completes
 e = eng()
-half = e.on_followup(INFERNO, 6.0) + gain(e, A, SET1, 10.0) + gain(e, A, SET1, 10.0)
+half = e.on_vfx(FAKE, 6.0) + gain(e, A, SET1, 10.0) + gain(e, A, SET1, 10.0)
 check("one gain and a duplicate mark nothing", half == [])
 last = gain(e, B, SET1, 10.0)
 check("the partner gain completes the assignment", marks(last) == {A: BND1, B: BND2})
 
-# fail-closed: no followup, no marks
+# fail-closed: no vfx, no marks
 e = eng()
-check("a pair whose wave's followup never arrived marks nothing",
+check("a pair whose wave's vfx never arrived marks nothing",
       wave(e, [A, B], SET1, 10.0) == [])
 check("the unarmed set is discarded, not held",
-      e._set == [] and e._sets_done == 1)
-m = marks(wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0))
+      e._set == [] and e._sets_done == 0)
+m = marks(wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0))
 check("the next armed wave still marks", m == {C: IGN1, D: IGN2})
 
 for sweep in (False, True):
     e = eng()
-    e.on_followup(INFERNO, 1.0)
+    e.on_vfx(FAKE, 1.0)
     if sweep:
         e.flush(STALE_S + 2)
     check("an old tell without any gains cannot mark a later pair",
           wave(e, [A, B], SET1, STALE_S * 2) == [])
 
 e = eng()
-e.on_followup(INFERNO, 1.0)
+e.on_vfx(FAKE, 1.0)
 for t in (30.0, 60.0, 90.0):
     e.flush(t)
 check("intervening flushes cannot keep an old tell usable",
       wave(e, [A, B], SET1, 120.0) == [])
 check("a fresh tell after expiry still marks the correct kind",
-      marks(wave(e, [C, D], SET2, 130.0, followup=TSUNAMI, t_fu=126.0))
+      marks(wave(e, [C, D], SET2, 130.0, vfx=REAL, vfx_time=126.0))
       == {C: IGN1, D: IGN2})
 
 # Party slot ordering takes precedence over actor IDs.
 slots = {A: 2, B: 1, C: 4, D: 3}
 e = eng(slot_of=lambda a: slots.get(a))
-m = marks(wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
-          + wave(e, [C, D], SET2, 25.0, followup=INFERNO, t_fu=21.0))
+m = marks(wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
+          + wave(e, [C, D], SET2, 25.0, vfx=FAKE, vfx_time=21.0))
 check("bind 1 goes to the lower party slot (B), not the lower id",
       m[B] == BND1 and m[A] == BND2)
-check("the second pair orders by slot too",
-      m[D] == BND1 and m[C] == BND2)
+check("the later pair cannot steal the first pair signs",
+      C not in m and D not in m)
+m = marks(e.on_loss(CURSED_SHRIEK, A, 70.0) + e.on_loss(CURSED_SHRIEK, B, 70.0))
+check("the second pair inherits the signs in party order",
+      m == {D: BND1, C: BND2})
 
 # a known slot sorts ahead of an unknown one
 e = eng(slot_of=lambda a: {A: 5}.get(a))
-m = marks(wave(e, [A, B], SET1, 10.0, followup=TSUNAMI, t_fu=6.0))
+m = marks(wave(e, [A, B], SET1, 10.0, vfx=REAL, vfx_time=6.0))
 check("a slot-known player sorts ahead of a slot-unknown partner",
       m[A] == IGN1 and m[B] == IGN2)
 
 # incomplete sets
 e = eng()
-acts = e.on_followup(INFERNO, 6.0) + gain(e, A, SET1, 10.0)
+acts = e.on_vfx(FAKE, 6.0) + gain(e, A, SET1, 10.0)
 check("a lone first gain marks nothing", acts == [])
 lost = e.on_loss(CURSED_SHRIEK, A, 11.0)
 check("the lone carrier losing it clears quietly", lost == [])
-m = marks(wave(e, [B, C], SET1, 30.0, followup=INFERNO, t_fu=26.0))
+m = marks(wave(e, [B, C], SET1, 30.0, vfx=FAKE, vfx_time=26.0))
 check("a fresh wave after the discard still marks", m == {B: BND1, C: BND2})
 
 # a partner that never comes is dropped after the burst gap
 e = eng()
-e.on_followup(INFERNO, 6.0)
+e.on_vfx(FAKE, 6.0)
 gain(e, A, SET1, 10.0)
 check("flush inside the burst window keeps the open set",
       e.flush(11.0) == [] and e._set == [A])
@@ -144,9 +146,9 @@ check("flush after the burst gap discards the orphaned set",
 
 # Discarding an incomplete wave preserves the next wave's armed tell.
 e = eng()
-e.on_followup(INFERNO, 6.0)
+e.on_vfx(FAKE, 6.0)
 gain(e, A, SET1, 10.0)               # orphaned
-e.on_followup(TSUNAMI, 21.0)         # wave 2's tell
+e.on_vfx(REAL, 21.0)         # wave 2's tell
 acts = gain(e, C, SET2, 25.0) + gain(e, D, SET2, 25.1)
 check("a wave 2 tell survives the wave 1 orphan discard",
       marks(acts) == {C: IGN1, D: IGN2})
@@ -154,9 +156,9 @@ check("a wave 2 tell survives the wave 1 orphan discard",
 # same via the late loss path, the orphan's 30 line empties the set after
 # the new tell already armed
 e = eng()
-e.on_followup(INFERNO, 6.0)
+e.on_vfx(FAKE, 6.0)
 gain(e, A, SET1, 10.0)
-e.on_followup(TSUNAMI, 21.0)
+e.on_vfx(REAL, 21.0)
 loss = e.on_loss(CURSED_SHRIEK, A, 22.0)
 acts = gain(e, C, SET2, 25.0) + gain(e, D, SET2, 25.1)
 check("a late orphan loss clears nothing and keeps the armed tell",
@@ -164,25 +166,25 @@ check("a late orphan loss clears nothing and keeps the armed tell",
 
 # counterpart, no fresh tell: the dead wave's polarity must not bleed
 e = eng()
-e.on_followup(INFERNO, 6.0)
-gain(e, A, SET1, 10.0)               # orphaned, no wave 2 followup ever
+e.on_vfx(FAKE, 6.0)
+gain(e, A, SET1, 10.0)               # orphaned, no wave 2 vfx ever
 acts = gain(e, C, SET2, 25.0) + gain(e, D, SET2, 25.1)
 check("an orphaned wave's own tell dies with it, no bleed",
       marks(acts) == {})
 
 # a stray pair between waves marks nothing, the real wave self-heals
 e = eng()
-wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
+wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 acts = gain(e, C, SET1, 11.0) + gain(e, D, SET1, 11.1)
 check("a stray pair with no armed tell marks nothing and clears nothing",
       acts == [] and set(e.outstanding()) == {A, B})
-m = marks(wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0))
+m = marks(wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0))
 check("the real wave after the strays re-arms and assigns",
       m == {C: IGN1, D: IGN2})
 
 # loss clears that player's sign, per set
 e = eng()
-wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
+wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 loss = e.on_loss(CURSED_SHRIEK, A, 20.0)
 check("losing the gaze clears that player's sign", loss == [("clear", A)])
 check("cleared player drops out of outstanding", set(e.outstanding()) == {B})
@@ -191,63 +193,64 @@ check("a second loss for the same player is a no-op",
 
 # refresh keeps the assignment
 e = eng()
-wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
+wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 refire = gain(e, A, SET1, 11.0)
 check("a re-gain after assignment does not re-fire or wipe marks",
       refire == [] and set(e.outstanding()) == {A, B})
 
 # A repeated status line just after the second pair is still the same phase.
 e = eng()
-wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
-wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0)
+wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
+wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0)
 check("second pair duplicate keeps all four gaze signs",
       gain(e, A, SET1, 25.1) == [] and set(e.outstanding()) == {A, B, C, D})
 check("the other pair's duplicate also leaves signs in place",
       gain(e, D, SET2, 25.2) == [] and set(e.outstanding()) == {A, B, C, D})
 
 late = eng()
-wave(late, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
-wave(late, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0)
+wave(late, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
+wave(late, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0)
 check("a later gain before status expiry still keeps the signs",
       gain(late, C, SET2, 31.0) == [] and set(late.outstanding()) == {A, B, C, D})
-check("a gain after status expiry can start a new phase",
+check("late gains clear expired signs without rearming the phase",
       gain(late, C, SET2, 95.0) == [("clear", a) for a in (A, B, C, D)]
       and late.outstanding() == [])
 
-e.on_followup(INFERNO, 26.0)
-acts = gain(e, A, SET1, 26.1) + gain(e, B, SET1, 26.2)
-check("a fresh tell still starts a new phase within the burst gap",
-      [a for a in acts if a[0] == "clear"] == [("clear", a) for a in (A, B, C, D)]
-      and marks(acts) == {A: BND1, B: BND2})
+e.on_vfx(FAKE, 36.0)
+acts = gain(e, A, SET1, 36.1) + gain(e, B, SET1, 36.2)
+check("the third Grand Cross cannot rearm existing gaze carriers",
+      acts == [] and set(e.outstanding()) == {A, B, C, D})
 
-# a fully resolved phase resets quietly, the next phase assigns
+# Kefka Says resets the state before the next phase.
 e = eng()
-wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
-wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0)
+wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
+wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0)
 for who in (A, B, C, D):
     e.on_loss(CURSED_SHRIEK, who, 45.0)
 check("field is clear after every gaze resolves", e.outstanding() == [])
-m = marks(wave(e, [A, B], SET1, 100.0, followup=TSUNAMI, t_fu=96.0)
-          + wave(e, [C, D], SET2, 115.0, followup=INFERNO, t_fu=111.0))
+e.reset()
+m = marks(wave(e, [A, B], SET1, 100.0, vfx=REAL, vfx_time=96.0)
+          + wave(e, [C, D], SET2, 115.0, vfx=FAKE, vfx_time=111.0))
 check("the next phase after full resolution assigns again",
       m == {A: IGN1, B: IGN2, C: BND1, D: BND2})
 
 # both sets dealt with the 30s missed: a new gain starts clean
 e = eng()
-wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
-wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0)
-# every loss line missed, next pull deals a fresh first wave
-acts = wave(e, [A, B], SET1, 100.0, followup=TSUNAMI, t_fu=96.0)
-check("a gain after a closed phase drops the stale signs first",
-      [a for a in acts if a[0] == "clear"] == [("clear", a) for a in (A, B, C, D)])
+wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
+wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0)
+# The next Kefka Says starts a fresh phase after clearing old signs.
+e.reset()
+acts = wave(e, [A, B], SET1, 100.0, vfx=REAL, vfx_time=96.0)
+check("a reset phase has no stale signs to clear",
+      [a for a in acts if a[0] == "clear"] == [])
 m = marks(acts)
 check("the fresh deal assigns off the new tell, kept across the reset",
       m == {A: IGN1, B: IGN2})
 
-# same glue but the new pull's followup never arrived, so nothing marks
+# same glue but the new pull's vfx never arrived, so nothing marks
 e = eng()
-wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
-wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0)
+wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
+wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0)
 acts = gain(e, A, SET1, 100.0) + gain(e, B, SET1, 100.1)
 check("a glued deal with no fresh tell clears the signs and marks nothing",
       marks(acts) == {}
@@ -255,42 +258,89 @@ check("a glued deal with no fresh tell clears the signs and marks nothing",
 
 # staleness: an event long after the last one is a new phase
 e = eng()
-wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
-late = wave(e, [C, D], SET2, 10.0 + STALE_S + 5, followup=TSUNAMI,
-            t_fu=10.0 + STALE_S + 1)
+wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
+late = wave(e, [C, D], SET2, 10.0 + STALE_S + 5, vfx=REAL,
+            vfx_time=10.0 + STALE_S + 1)
 check("a stale phase's signs come down before the new wave assigns",
       [a for a in late if a[0] == "clear"] == [("clear", A), ("clear", B)]
       and marks(late) == {C: IGN1, D: IGN2})
 
-# a stale followup drops the dead phase's signs before arming
+# a stale vfx drops the dead phase's signs before arming
 e = eng()
-wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
-acts = e.on_followup(TSUNAMI, 10.0 + STALE_S + 5)
-check("a stale followup clears the dead signs and arms the new phase",
+wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
+acts = e.on_vfx(REAL, 10.0 + STALE_S + 5)
+check("a stale vfx clears the dead signs and arms the new phase",
       acts == [("clear", A), ("clear", B)]
       and e._sets_done == 0 and e._polarity == "away1")
 
 # misc
 check("a non-gaze status id is ignored",
       eng().on_gain("644", A, 20.0, 10.0) == [])
-check("a non-followup cast id is ignored",
-      eng().on_followup("BA94", 10.0) == [])
+check("an unrelated VFX id is ignored",
+      eng().on_vfx("BA94", 10.0) == [])
 check("default gaze id set is just Cursed Shriek",
       GAZE_IDS == frozenset({CURSED_SHRIEK}))
 
 e = eng()
 e.set_markers({AWAY1: "circle", AWAY2: "square", LOOK1: "cross", LOOK2: "triangle"})
-m = marks(wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
-          + wave(e, [C, D], SET2, 25.0, followup=TSUNAMI, t_fu=21.0))
+m = marks(wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
+          + wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0))
 check("set_markers swaps the signs used",
       m[A] == "cross" and m[B] == "triangle"
       and m[C] == "circle" and m[D] == "square")
 
 e = eng()
-wave(e, [A, B], SET1, 10.0, followup=INFERNO, t_fu=6.0)
+wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 e.reset()
 check("reset clears everything",
       e.outstanding() == [] and e._sets_done == 0)
+
+# A duplicate VFX cannot arm a stray pair after the real pair was assigned.
+e = eng()
+e.on_vfx(REAL, 1.0, event_id="wave1")
+wave(e, [A, B], SET1, 10.0)
+e.on_vfx(REAL, 10.1, event_id="wave1")
+check("a repeated VFX does not rearm the consumed wave",
+      wave(e, [C, D], SET2, 10.2) == [])
+
+e = eng()
+e.on_vfx(REAL, 1.0, event_id="wave1")
+first = wave(e, [A, B], SET1, 1.0)
+e.on_vfx(FAKE, 1.0, event_id="wave2")
+second = wave(e, [C, D], SET2, 1.0)
+check("distinct VFX survive delivery in the same processing tick",
+      marks(first + second) == {A: IGN1, B: IGN2, C: BND1, D: BND2})
+
+e = eng()
+e.on_vfx(REAL, 1.0)
+check("a missing wave cannot lend its VFX to the next wave",
+      wave(e, [A, B], SET2, 25.0) == [])
+
+for kind, signs in ((REAL, (IGN1, IGN2)), (FAKE, (BND1, BND2))):
+    e = eng()
+    wave(e, [A, B], SET1, 10.0, vfx=kind, vfx_time=1.0)
+    queued = wave(e, [C, D], SET2, 25.0, vfx=kind, vfx_time=16.0)
+    check("a matching later pair waits for the current carriers", queued == [])
+    actions = e.flush(70.1)
+    check("expiry transfers signs when the first pair loss lines are missing",
+          actions == [("clear", A), ("clear", B),
+                      ("mark", C, signs[0]), ("mark", D, signs[1])])
+    check("late losses cannot remove the later pair signs",
+          e.on_loss(CURSED_SHRIEK, A, 70.2) == []
+          and e.on_loss(CURSED_SHRIEK, B, 70.2) == []
+          and set(e.outstanding()) == {C, D})
+    check("late gains cannot reset the pair now holding the signs",
+          gain(e, A, SET1, 70.3) == [] and set(e.outstanding()) == {C, D})
+    check("the final pair expires even without loss lines",
+          e.flush(94.1) == [("clear", C), ("clear", D)] and not e.needs_flush())
+
+e = eng()
+wave(e, [A, B], SET1, 10.0, vfx=REAL, vfx_time=1.0)
+wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=16.0)
+check("an unmarked carrier loss does not clear a sign",
+      e.on_loss(CURSED_SHRIEK, C, 30.0) == [])
+check("a lost waiting carrier never receives the released sign",
+      marks(e.flush(70.1)) == {D: IGN2})
 
 print()
 if FAILS:

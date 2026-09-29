@@ -86,6 +86,7 @@ class TimelineEngine(QObject):
         self._active = False
         self._t0: float = 0.0
         self._fired: set[int] = set()
+        self._jumped: set[int] = set()
         self._replay_now = None
 
         self._timer = QTimer(self)
@@ -99,6 +100,7 @@ class TimelineEngine(QObject):
             spoken = [self._entries[i] for i in self._fired]
             self._fired = {i for i, entry in enumerate(entries)
                            if entry.time <= now or entry in spoken}
+            self._jumped = {i for i, entry in enumerate(entries) if entry.time <= now}
         else:
             self.reset()
         self._entries = entries
@@ -132,6 +134,7 @@ class TimelineEngine(QObject):
     def start(self) -> None:
         self._t0 = self._now()
         self._fired.clear()
+        self._jumped.clear()
         self._active = True
         self._timer.start()
 
@@ -139,6 +142,7 @@ class TimelineEngine(QObject):
         self._active = False
         self._timer.stop()
         self._fired.clear()
+        self._jumped.clear()
 
     def resume(self, events: list[tuple[float, list[str]]]) -> None:
         """Replay timing without speaking missed cues."""
@@ -157,12 +161,12 @@ class TimelineEngine(QObject):
         seen = {}
         while self._active:
             jump = next((i for i, entry in enumerate(self._entries)
-                         if i not in self._fired and entry.force_jump
+                         if i not in self._jumped and entry.force_jump
                          and entry.jump is not None and self._t0 + entry.time <= now), None)
             if jump is None:
                 break
             self._replay_now = max(self._now(), self._t0 + self._entries[jump].time)
-            state = (jump, frozenset(self._fired))
+            state = (jump, frozenset(self._fired), frozenset(self._jumped))
             previous = seen.get(state)
             if previous is not None:
                 period = self._replay_now - previous
@@ -295,6 +299,9 @@ class TimelineEngine(QObject):
         """
         old_t = self.current_time()
         self._t0 = self._now() - target
+        self._jumped = {i for i, entry in enumerate(self._entries)
+                        if entry.time < target or (entry.time == target
+                            and (target < old_t or i in self._jumped))}
         if target < old_t:
             self._fired = {i for i in self._fired if self._entries[i].time <= target}
             # Cactbot skips callouts at the sync point as well as those before it.
@@ -312,6 +319,8 @@ class TimelineEngine(QObject):
         self._fired |= {i for i, e in enumerate(self._entries) if e.time < target}
         if keep_fired is not None:
             self._fired.add(keep_fired)
+            if self._entries[keep_fired].time <= target:
+                self._jumped.add(keep_fired)
 
 
     def _tick(self) -> None:
@@ -319,10 +328,17 @@ class TimelineEngine(QObject):
             return
         now = self._now()
         for i, entry in enumerate(self._entries):
-            if i in self._fired or self._t0 + entry.time > now:
+            if self._t0 + entry.time > now:
                 continue
+            jump_ready = entry.force_jump and entry.jump is not None and i not in self._jumped
+            if i in self._fired and not jump_ready:
+                continue
+            if jump_ready:
+                # A prior sync can suppress duplicate speech while the next loop stays armed.
+                self._fired.discard(i)
+                self._jumped.add(i)
             self._fire(i, entry)
-            if entry.force_jump and entry.jump is not None:
+            if jump_ready:
                 # The jump changes the clock, so resume iteration on the next tick.
                 # Backward jumps rearm this entry for another loop. Other jumps keep it
                 # fired to avoid repeating every tick.

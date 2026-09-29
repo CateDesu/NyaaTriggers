@@ -28,6 +28,13 @@ Keep `ws_client.py`'s `_SUBSCRIBE` list aligned with the events the engine needs
 stdout emits JSON callouts and status. Message fields and commands are defined in
 `src/main/java/gg/xp/nyaa/TriggeventCore.java` and the Python bridge.
 
+The `diagnostics=1` capability adds structured failure, live mechanic and pipeline
+records. They contain built-in code locations, game IDs, temporary actor numbers
+and callout sequence numbers. Error messages, names and callout text are omitted.
+Historical replay keeps aggregate counts and failures without copying its full
+event stream into the diagnostic log. NyaaTriggers validates these records again
+when saving the support file.
+
 Severity is inferred from color because Triggevent has no severity enum: red means
 alarm, another override means alert, and no override means info. Non-JSON stdout
 is treated as diagnostics.
@@ -45,7 +52,7 @@ cd triggevent-core
 ./build.sh
 ```
 
-The script clones the engine, installs its modules into the local Maven repository, and builds `target/triggevent-core.jar`. Windows uses `build.bat`.
+The script clones the engine, installs its modules into the local Maven repository, and builds `target/triggevent-core.jar`. Windows uses `build.bat`. Both scripts embed the engine revision in the jar so support logs retain it in packaged builds and after engine updates.
 
 For a standalone debug run on Linux:
 

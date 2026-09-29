@@ -56,7 +56,7 @@ class RecapTests(unittest.TestCase):
 
     def test_history_window_and_frozen_statuses(self):
         self.recap.process(ability())
-        self.clock.value += 20
+        self.clock.value += 61
         self.status()
         self.recap.process(ability(pairs=[("04", "1F40000")]))
         death = self.death()

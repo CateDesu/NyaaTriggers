@@ -33,6 +33,39 @@ class MeterRecoveryTests(unittest.TestCase):
         meter.process(["02", "ts", PLAYER, "Player"])
         return meter, clock
 
+    def test_heal_recipient_agrees_with_recap(self):
+        other = "10FF0002"
+        for make_line in (ability, area_ability):
+            for target in (BOSS, other):
+                for flags in ("04", "104", "2104"):
+                    with self.subTest(kind=make_line.__name__, target=target, flags=flags):
+                        meter, clock = self.meter()
+                        meter.note_job(int(other, 16), 24)
+                        recap = DeathRecap(clock)
+                        line = make_line(source=PLAYER, target=target,
+                                         pairs=[("03", "640000"), (flags, "320000")])
+                        meter.process(line)
+                        recap.process(line)
+                        recipient = PLAYER if int(flags, 16) & 0x100 else target
+                        for encounter in (meter.current, meter._view):
+                            for actor in (PLAYER, other):
+                                row = encounter.combatants.get(int(actor, 16))
+                                received = row.healstaken if row else 0
+                                self.assertEqual(received, 50 if actor == recipient else 0)
+                            self.assertEqual(encounter.combatants[int(PLAYER, 16)].healed, 50)
+                        if recipient != BOSS:
+                            events = recap.buffers[int(recipient, 16)]["events"]
+                            self.assertEqual(sum(e["amount"] for e in events if e["kind"] == "heal"), 50)
+
+    def test_pet_source_heal_does_not_heal_its_owner(self):
+        meter, _clock = self.meter()
+        pet = "40000002"
+        meter.process(["03", "ts", pet, "Pet", "0", "0", PLAYER])
+        meter.process(ability(source=pet, target=BOSS,
+                              pairs=[("03", "640000"), ("104", "320000")]))
+        row = meter.current.combatants[int(PLAYER, 16)]
+        self.assertEqual((row.healed, row.healstaken), (50, 0))
+
     def test_reflection_agrees_with_recap_in_both_directions(self):
         for make_line in (ability, area_ability):
             for source, target in ((PLAYER, BOSS), (BOSS, PLAYER)):

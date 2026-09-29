@@ -273,7 +273,8 @@ updater.apply_frozen_linux(archive, dest, "NyaaTriggers")
         for directory in (self.dest / "voices", bundle / "voices"):
             directory.mkdir()
             (directory / f"{stem}.onnx").write_bytes(b"model")
-        (bundle / "voices" / f"{stem}.onnx.json").write_text("{}")
+        config = (REPO / "voices" / f"{stem}.onnx.json").read_bytes()
+        (bundle / "voices" / f"{stem}.onnx.json").write_bytes(config)
         window = SimpleNamespace(_settings={"voice_model": stem}, _voice_combo=QComboBox())
         with patch.object(ac, "_USER_VOICES_DIR", self.dest / "voices"), \
                 patch.object(ac, "_BUNDLE_DIR", bundle), \
@@ -283,7 +284,7 @@ updater.apply_frozen_linux(archive, dest, "NyaaTriggers")
             for repaired in (False, True):
                 with self.subTest(repaired=repaired):
                     if repaired:
-                        (self.dest / "voices" / f"{stem}.onnx.json").write_text("{}")
+                        (self.dest / "voices" / f"{stem}.onnx.json").write_bytes(config)
                     window._voice_combo.clear()
                     for name, path in voice_tab.VoiceTabMixin._scan_voices(window):
                         window._voice_combo.addItem(name, str(path))

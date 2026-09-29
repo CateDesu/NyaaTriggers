@@ -21,6 +21,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO))
+from nyaatriggers.combatant_responses import CombatantResponses
+
 _DEFAULT_JAR = _REPO / "triggevent-core" / "target" / "triggevent-core.jar"
 
 # Allow extra time for engine startup and shutdown beyond the paced feed duration.
@@ -163,6 +166,7 @@ def main() -> int:
 
     def feed():
         first = None
+        responses = CombatantResponses()
         try:
             for line in lines:
                 if stopped.is_set():
@@ -175,7 +179,10 @@ def main() -> int:
                     wait = due - (time.monotonic() - start)
                     if wait > 0 and stopped.wait(wait):
                         return
-                proc.stdin.write(line + "\n")
+                accepted = responses.normalize_line(line)
+                if accepted is None:
+                    continue
+                proc.stdin.write(accepted + "\n")
                 proc.stdin.flush()
             stopped.wait(args.hold)
         except (OSError, ValueError) as exc:

@@ -24,7 +24,9 @@ from nyaatriggers.paths import bundle_root, source_root
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from nyaatriggers import proc_env
+from nyaatriggers.diagnostics import record, record_engine
 from nyaatriggers.drop_log import log_drop, open_private_log, rotate_one_generation
+from nyaatriggers.engine_build_info import engine_commit as _launch_build_commit
 from nyaatriggers.trigger_engine import _safe_sub, compile_user_regex
 
 # Search both bundled resource and executable directories because jars and JRE data may
@@ -37,6 +39,7 @@ _MAX_LINE = 1 << 20
 
 # Bound queued bytes as well as message count because feed frames can be large.
 _MAX_QUEUE_BYTES = 64 << 20
+_MAX_SPEECH_CANCEL_IDS = 4096
 
 
 def _read_lines_bounded(stream):
@@ -47,10 +50,13 @@ def _read_lines_bounded(stream):
             return
         # A complete line at the limit includes its newline and remains valid.
         if len(line) > _MAX_LINE and not line.endswith("\n"):
+            chars = len(line)
             while True:
                 more = stream.readline(_MAX_LINE + 1)
+                chars += len(more)
                 if not more or more.endswith("\n"):
                     break
+            record("engine_protocol", reason="oversize", chars=chars)
             continue
         yield line
 
@@ -207,17 +213,32 @@ _BUILD_SCRIPT = _CORE_DIR / ("build.bat" if os.name == "nt" else "build.sh")
 # Use the maintained fork. Upstream changes enter through merges to its main branch.
 _ET_REPO_URL  = "https://github.com/CateDesu/event-trigger.git"
 _ET_BRANCH    = "main"
-# Record source HEAD only after a successful jar build. Clone state alone cannot prove
-# the jar is current.
+# Record both source trees after a successful build.
 _JAR_STAMP    = _CORE_DIR / "target" / "triggevent-core.jar.built-from"
 
 
-def _jar_built_from() -> "str | None":
-    """Return the jar build commit, or None when the stamp is unavailable."""
+def _jar_built_from() -> "dict | None":
+    """Old stamps without wrapper inputs require a rebuild."""
     try:
-        return _JAR_STAMP.read_text(encoding="ascii").strip() or None
-    except (OSError, ValueError):
+        value = json.loads(_JAR_STAMP.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError, RecursionError):
         return None
+
+
+def _wrapper_build_inputs() -> dict:
+    """Track source edits and additions without including generated files."""
+    def unreadable(error):
+        raise error
+
+    paths = [_CORE_DIR / name for name in ("pom.xml", "build.sh", "build.bat")]
+    for directory, _dirs, files in os.walk(_CORE_DIR / "src" / "main", onerror=unreadable):
+        paths.extend(Path(directory) / name for name in files)
+    inputs = {}
+    for path in sorted(paths):
+        stat = path.stat()
+        inputs[path.relative_to(_CORE_DIR).as_posix()] = [stat.st_mtime_ns, stat.st_size]
+    return inputs
 
 
 def _kill_build_tree(proc) -> None:
@@ -267,6 +288,11 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
                               capture_output=True, text=True, timeout=120)
 
     try:
+        d = _git("status", "--porcelain")
+        if d.returncode != 0:
+            return (False, f"Triggevent could not check local changes: {d.stderr.strip()[:200]}")
+        if d.stdout.strip():
+            return (False, "Triggevent pull skipped: local event-trigger clone has uncommitted changes")
         # Point older installs at the maintained fork, adding origin if absent.
         u = _git("remote", "get-url", "origin")
         if u.returncode != 0:
@@ -280,6 +306,11 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
         f = _git("fetch", "origin", _ET_BRANCH)
         if f.returncode != 0:
             return (False, f"Triggevent fetch failed: {f.stderr.strip()[:200]}")
+        a = _git("merge-base", "--is-ancestor", "HEAD", f"origin/{_ET_BRANCH}")
+        if a.returncode == 1:
+            return (False, "Triggevent pull skipped: local event-trigger clone has unpublished commits")
+        if a.returncode != 0:
+            return (False, f"Triggevent could not check local history: {a.stderr.strip()[:200]}")
         r = _git("rev-list", "--count", f"HEAD..origin/{_ET_BRANCH}")
         if r.returncode != 0:
             return (False, f"Triggevent rev-list failed: {r.stderr.strip()[:200]}")
@@ -288,19 +319,18 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
             return (False, f"Triggevent rev-parse failed: {h.stderr.strip()[:200]}")
         head = h.stdout.strip()
         behind = r.stdout.strip()
+        build_state = {"engine": head, "inputs": _wrapper_build_inputs()}
         if not behind.isdigit() or int(behind) == 0:
-            # Use the successful build stamp because an updated checkout may still have
-            # an older jar after a failed build.
-            if _jar_built_from() == head:
+            if (_jar_built_from() == build_state
+                    and (_CORE_DIR / "target" / "triggevent-core.jar").is_file()):
                 return (False, "Triggevent Engine already up to date")
-        # Remove legacy patch edits before fast-forwarding. Committed divergence still
-        # fails the merge.
-        _git("checkout", "--", ".")
         if _git("merge", "--ff-only", f"origin/{_ET_BRANCH}").returncode != 0:
             return (False, "Triggevent pull skipped: local event-trigger clone has diverged or has uncommitted changes")
         # Require a clean checkout so the build stamp identifies the compiled source.
         d = _git("status", "--porcelain")
-        if d.returncode == 0 and d.stdout.strip():
+        if d.returncode != 0:
+            return (False, f"Triggevent could not check local changes: {d.stderr.strip()[:200]}")
+        if d.stdout.strip():
             return (False, "Triggevent pull skipped: local event-trigger clone has uncommitted changes")
         cmd = [str(_BUILD_SCRIPT)] if os.name == "nt" else ["bash", str(_BUILD_SCRIPT)]
         # Build the newly merged commit instead of restoring the old pin.
@@ -311,6 +341,7 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
                             text=True, env=env)
         if os.name == "posix":
             popen_kwargs["start_new_session"] = True
+        _JAR_STAMP.unlink(missing_ok=True)
         proc = subprocess.Popen(cmd, **popen_kwargs)
         try:
             _, b_err = proc.communicate(timeout=1800)
@@ -321,11 +352,13 @@ def update_engine(channel: str = "stable", manual: bool = False) -> "tuple[bool,
     except subprocess.TimeoutExpired as e:
         prog = e.cmd[0] if isinstance(e.cmd, (list, tuple)) and e.cmd else str(e.cmd)
         return (False, f"Triggevent update timed out running {prog}")
+    except OSError as e:
+        return (False, f"Triggevent could not prepare the build: {e}")
     if proc.returncode != 0:
         return (False, f"Triggevent rebuild failed:\n{b_err.strip()[-400:]}")
-    # Stamp only after the jar build succeeds.
+    # Keep the prebuild inputs so edits during compilation remain pending.
     try:
-        _JAR_STAMP.write_text(head + "\n", encoding="ascii")
+        _JAR_STAMP.write_text(json.dumps(build_state, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:
         pass
     if behind.isdigit() and int(behind) > 0:
@@ -465,6 +498,8 @@ class TriggeventBridge(QObject):
     recovery_progress = pyqtSignal(object, int)
     feed_overflow = pyqtSignal(int)
     custom_status = pyqtSignal(bool, str, int)
+    _callout_ready = pyqtSignal(object, int)
+    _speech_cancel_ready = pyqtSignal(object, int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -473,6 +508,17 @@ class TriggeventBridge(QObject):
         self._history_gen = -1
         self._catchup_gen = -1
         self._custom_gen = -1
+        self._speech_cancel_gen = -1
+        self._speech_cancel_all_gen = -1
+        self._structured_diagnostics_gen = -1
+        self._diagnostic_ready_gen = -1
+        self._legacy_failure_gen = -1
+        self._legacy_failures = []
+        self._legacy_failure_count = 0
+        self._speech_cancel_seq = 0
+        self._speech_cancel_pending: dict[str, int] = {}
+        self._speech_cancel_all_pending: int | None = None
+        self._speech_cancel_overflow = -1
         self._overflow_gen = -1
         self._reader: threading.Thread | None = None
         self._errpump: threading.Thread | None = None
@@ -492,6 +538,39 @@ class TriggeventBridge(QObject):
         self._seen_lock = threading.Lock()
         # Makes stop and reader-exit check-and-clear of the _proc/_active pair atomic.
         self._state_lock = threading.Lock()
+        self._diagnostic_lock = threading.Lock()
+        self._diagnostic_rates: dict = {}
+        self._feed_frames = 0
+        self._feed_chars = 0
+        self._feed_report_at = time.monotonic()
+        # Preserve reader order through GUI delivery.
+        self._callout_ready.connect(self._deliver_callout)
+        self._speech_cancel_ready.connect(self._acknowledge_speech_cancel)
+
+    def _diagnostic(self, event: str, gen=None, *, throttle_s=0.0, **fields) -> None:
+        if throttle_s:
+            key = (event, self._gen if gen is None else gen,
+                   fields.get("reason"), fields.get("channel"), fields.get("state"))
+            now = time.monotonic()
+            with self._diagnostic_lock:
+                previous, count = self._diagnostic_rates.get(key, (float("-inf"), 0))
+                count += 1
+                if now - previous < throttle_s:
+                    self._diagnostic_rates[key] = (previous, count)
+                    return
+                self._diagnostic_rates[key] = (now, 0)
+                if len(self._diagnostic_rates) > 128:
+                    self._diagnostic_rates.pop(next(iter(self._diagnostic_rates)))
+            fields["count"] = count
+        record(event, gen=self._gen if gen is None else gen, **fields)
+
+    def _queue_diagnostic(self, *, reason=None, accepted=True, frames=0, chars=0, gen=None, wq=None, channel="feed") -> None:
+        q = self._wq if wq is None else wq
+        fields = dict(accepted=accepted, frames=frames, chars=chars, channel=channel,
+                      queue_depth=q.qsize(), queue_bytes=getattr(q, "_nbytes", 0))
+        if reason is not None:
+            fields["reason"] = reason
+        self._diagnostic("engine_queue", gen, **fields)
 
     @staticmethod
     def is_available() -> bool:
@@ -516,7 +595,47 @@ class TriggeventBridge(QObject):
 
     def set_disabled(self, ids) -> None:
         """Replace disabled IDs for the next callout without restarting."""
-        self._disabled = frozenset(ids or ())
+        disabled = frozenset(ids or ())
+        with self._state_lock:
+            changed = disabled ^ self._disabled
+            self._disabled = disabled
+        self.cancel_speech(changed)
+
+    def cancel_speech(self, ids) -> None:
+        """Cancel pending output for changed callouts without changing their defaults."""
+        changed = frozenset(ids or ())
+        with self._state_lock:
+            if (not changed or not self._gen_live(self._speech_cancel_gen)
+                    or self._speech_cancel_overflow == self._gen):
+                return
+            overflow = len(self._speech_cancel_pending.keys() | changed) > _MAX_SPEECH_CANCEL_IDS
+            if overflow:
+                self._speech_cancel_pending.clear()
+                self._speech_cancel_overflow = self._gen
+            else:
+                self._speech_cancel_seq += 1
+                token = self._speech_cancel_seq
+                self._speech_cancel_pending.update((cid, token) for cid in changed)
+        if overflow:
+            self._diagnostic("engine_cancel", reason="cancel_overflow", count=len(changed),
+                             pending_ids=0, result="rejected")
+            self._queue_overflow("speech cancellation queue full; restarting pull recovery")
+        else:
+            self._diagnostic("engine_cancel", token=token, count=len(changed),
+                             pending_ids=len(self._speech_cancel_pending), result="queued")
+            self._send_command({"nyaa_cmd": "cancel_speech", "ids": sorted(changed),
+                                "token": token})
+
+    def cancel_all_speech(self) -> None:
+        """Retire speech across a mode change without resetting the engine."""
+        with self._state_lock:
+            if not self._gen_live(self._speech_cancel_all_gen):
+                return
+            self._speech_cancel_seq += 1
+            token = self._speech_cancel_seq
+            self._speech_cancel_all_pending = token
+        self._diagnostic("engine_cancel", token=token, count=0, speech_cancel_all=True, result="queued")
+        self._send_command({"nyaa_cmd": "cancel_speech", "all": True, "token": token})
 
     def supports_custom_triggers(self) -> bool:
         return self._active and self._custom_gen == self._gen
@@ -557,20 +676,29 @@ class TriggeventBridge(QObject):
     def _send_command(self, cmd: dict) -> None:
         """Queue a control command and recover if the engine cannot keep up."""
         if not self._active:
+            self._diagnostic("engine_command", reason="inactive", result="rejected", throttle_s=5)
             return
+        kind = cmd.get("nyaa_cmd")
+        kind = kind if kind in ("cancel_speech", "custom_triggers", "set_callout", "reset_callout", "set_automark") else "unknown"
         try:
             line = json.dumps(cmd)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            self._diagnostic("engine_command", state=kind, reason="invalid_shape", result="rejected",
+                             error_type=type(exc).__name__)
             return
         try:
             self._wq.put_nowait(line)
+            self._diagnostic("engine_command", state=kind, result="queued", chars=len(line),
+                             queue_depth=self._wq.qsize())
         except queue.Full:
+            self._diagnostic("engine_command", state=kind, reason="queue_full", result="rejected")
             self._queue_overflow()
 
-    def _queue_overflow(self) -> None:
+    def _queue_overflow(self, reason: str = "sidecar stdin queue full; restarting pull recovery") -> None:
         if self._active and self._overflow_gen != self._gen:
             self._overflow_gen = self._gen
-            log_drop("engine-feed", "sidecar stdin queue full; restarting pull recovery")
+            self._queue_diagnostic(reason="queue_full", accepted=False)
+            log_drop("engine-feed", reason)
             self.feed_overflow.emit(self._gen)
 
     def seen_phrases(self) -> list:
@@ -618,10 +746,13 @@ class TriggeventBridge(QObject):
         """Start if not already running. Check availability first."""
         if self._active:
             return
+        self._diagnostic("engine_start", active=False)
         _log(f"start() requested (os={os.name})")
         java = _find_java()
         jar = _find_jar()
         if java is None or jar is None:
+            self._diagnostic("engine_error", reason="unavailable", java_available=java is not None,
+                             jar_available=jar is not None)
             _log(f"cannot start: java={java!r} jar={jar!r}")
             self.status.emit(False, "Java runtime or triggevent-core.jar not found", self._gen)
             return
@@ -631,12 +762,15 @@ class TriggeventBridge(QObject):
             _make_bundled_jre_executable()
 
         # Keep later class loads independent of rebuilds and engine updates.
+        engine_commit = _launch_build_commit(jar)
         try:
             runtime_dir, runtime_jar = _snapshot_jar(jar)
         except OSError as exc:
+            self._diagnostic("engine_error", reason="snapshot_failed", error_type=type(exc).__name__)
             _log(f"cannot prepare engine: {exc!r}")
             self.status.emit(False, f"Could not prepare Triggevent engine: {exc}", self._gen)
             return
+        engine_commit = _launch_build_commit(runtime_jar) or engine_commit
 
         # Use Xvfb for Swing initialization when available. Cap the heap at 512 MiB
         # because 256 MiB caused GC pauses and sequential trigger timeouts during long
@@ -666,6 +800,7 @@ class TriggeventBridge(QObject):
         try:
             proc = subprocess.Popen(cmd, **popen_kwargs)
         except OSError as e:
+            self._diagnostic("engine_error", reason="spawn_failed", error_type=type(e).__name__)
             runtime_dir.cleanup()
             _log(f"launch failed: {e!r}")
             self.status.emit(False, f"Failed to launch sidecar: {e}", self._gen)
@@ -680,7 +815,15 @@ class TriggeventBridge(QObject):
             self._wq = wq
             self._active = True
             self._gen += 1
+            self._speech_cancel_pending.clear()
+            self._speech_cancel_all_pending = None
             gen = self._gen
+        self._feed_frames = 0
+        self._feed_chars = 0
+        self._feed_report_at = time.monotonic()
+        proc._nyaa_generation = gen
+        proc._nyaa_started_at = time.monotonic()
+        self._diagnostic("engine_started", gen, active=True, xvfb=bool(xvfb), engine_commit=engine_commit)
         # Bind each worker to its process, queue and generation. Keep the callout
         # sequence watermark with that generation because the jar restarts numbering at
         # one.
@@ -700,12 +843,17 @@ class TriggeventBridge(QObject):
         if not self._active and self._proc is None:
             return
         with self._state_lock:
+            previous_gen = self._gen
             self._active = False
             # Invalidate queued output from the stopped generation.
             self._gen += 1
+            self._speech_cancel_pending.clear()
+            self._speech_cancel_all_pending = None
             gen = self._gen
             proc, self._proc = self._proc, None
             wq = self._wq
+        self._diagnostic("engine_stop", gen, previous_gen=previous_gen, wait=wait, reason="requested")
+        self._queue_diagnostic(gen=previous_gen, wq=wq, frames=self._feed_frames, chars=self._feed_chars)
         # Clear observed phrases so the next generation can report them again.
         with self._seen_lock:
             self._seen.clear()
@@ -798,25 +946,37 @@ class TriggeventBridge(QObject):
         try:
             data = json.loads(raw_msg)
         except (ValueError, TypeError, RecursionError):
+            self._diagnostic("engine_protocol", channel="feed", reason="invalid_json", throttle_s=5)
             log_drop("engine-feed", "discarded invalid feed JSON")
             return
         if not isinstance(data, dict) or "nyaa_cmd" in data:
+            self._diagnostic("engine_protocol", channel="feed", reason="feed_protocol", throttle_s=5)
             log_drop("engine-feed", "discarded feed frame outside the event protocol")
             return
         # Keep each JSON message on one protocol line.
         line = raw_msg.replace("\r", " ").replace("\n", " ")
         try:
             self._wq.put_nowait(line)
+            self._feed_frames += 1
+            self._feed_chars += len(line)
+            now = time.monotonic()
+            if now - self._feed_report_at >= 5:
+                self._queue_diagnostic(frames=self._feed_frames, chars=self._feed_chars)
+                self._feed_frames = 0
+                self._feed_chars = 0
+                self._feed_report_at = now
         except queue.Full:
             self._queue_overflow()
 
     def recover(self, frames, timestamp: str, *, history=None, state=(), checkpoint=None) -> bool:
         """Queue a silent replay as one bounded item before accepting live events."""
         if not self._active or not self.supports_recovery():
+            self._diagnostic("engine_recovery", state="recover_begin", result="rejected", reason="unsupported")
             return False
         command = {"nyaa_cmd": "recover_begin", "time": timestamp}
         if history is not None:
             if not self.supports_local_history():
+                self._diagnostic("engine_recovery", state="recover_log", result="rejected", reason="unsupported")
                 return False
             snapshots = []
             for raw in state:
@@ -831,6 +991,7 @@ class TriggeventBridge(QObject):
 
     def catch_up(self, frames, checkpoint: int, *, finish=False) -> bool:
         if not self.supports_catchup():
+            self._diagnostic("engine_recovery", state="catchup", result="rejected", reason="unsupported")
             return False
         return self._recovery_batch(frames, checkpoint, finish=finish)
 
@@ -845,10 +1006,16 @@ class TriggeventBridge(QObject):
                 lines.append(raw.replace("\r", " ").replace("\n", " "))
         lines.append(json.dumps({"nyaa_cmd": "recover_end" if finish or checkpoint is None else "recover_checkpoint",
                                  "checkpoint": checkpoint}))
+        state = command.get("nyaa_cmd") if command else ("recover_end" if finish else "catchup")
+        state = state if state in ("recover_begin", "recover_log", "recover_end", "catchup") else "catchup"
+        fields = dict(state=state, frames=len(lines) - 1 - bool(command),
+                      checkpoint=checkpoint, history=bool(command and "history" in command))
         try:
             self._wq.put_nowait("\n".join(lines))
         except queue.Full:
+            self._diagnostic("engine_recovery", result="rejected", reason="queue_full", **fields)
             return False
+        self._diagnostic("engine_recovery", result="queued", queue_depth=self._wq.qsize(), **fields)
         return True
 
     def supports_recovery(self) -> bool:
@@ -861,8 +1028,12 @@ class TriggeventBridge(QObject):
         return self.supports_recovery() and self._catchup_gen == self._gen
 
     def _write_loop(self, proc: subprocess.Popen, wq: queue.Queue) -> None:
+        gen = getattr(proc, "_nyaa_generation", self._gen)
         if proc.stdin is None:
+            self._diagnostic("engine_error", gen, channel="writer", reason="unavailable")
             return
+        frames = chars = 0
+        reported_at = time.monotonic()
         while True:
             item = wq.get()
             if item is _STOP:
@@ -870,8 +1041,18 @@ class TriggeventBridge(QObject):
             try:
                 proc.stdin.write(item + "\n")
                 proc.stdin.flush()
-            except (BrokenPipeError, OSError, ValueError):
+                frames += item.count("\n") + 1
+                chars += len(item)
+                now = time.monotonic()
+                if now - reported_at >= 5:
+                    self._queue_diagnostic(gen=gen, wq=wq, channel="writer", frames=frames, chars=chars)
+                    frames = chars = 0
+                    reported_at = now
+            except (BrokenPipeError, OSError, ValueError) as exc:
+                self._diagnostic("engine_error", gen, channel="writer", reason="write_failed",
+                                 error_type=type(exc).__name__, queue_depth=wq.qsize())
                 break
+        self._queue_diagnostic(gen=gen, wq=wq, channel="writer", frames=frames, chars=chars)
         try:
             if proc.stdin is not None:
                 proc.stdin.close()
@@ -879,8 +1060,10 @@ class TriggeventBridge(QObject):
             pass
 
     def _read_loop(self, proc: subprocess.Popen, wq: queue.Queue, seq_state: dict, gen: int) -> None:
+        reason = "eof"
         try:
             if proc.stdout is None:
+                self._diagnostic("engine_error", gen, channel="stdout", reason="unavailable")
                 return
             for line in _read_lines_bounded(proc.stdout):
                 line = line.strip()
@@ -893,15 +1076,24 @@ class TriggeventBridge(QObject):
                 try:
                     msg = json.loads(line)
                 except (ValueError, RecursionError):
+                    self._diagnostic("engine_protocol", gen, channel="stdout", reason="invalid_json", throttle_s=5)
                     log_drop("engine-parse", f"unparsed sidecar line {line[:160]!r}", 0)
                     continue
                 try:
                     self._dispatch(msg, seq_state, gen)
                 except Exception as exc:
+                    self._diagnostic("engine_error", gen, channel="stdout", reason="dispatch_failed",
+                                     error_type=type(exc).__name__, throttle_s=5)
                     _log(f"dispatch error: {exc!r}")
         except Exception as exc:
+            reason = "exception"
+            self._diagnostic("engine_error", gen, channel="stdout", reason="read_failed", error_type=type(exc).__name__)
             _log(f"reader error: {exc!r}")
         finally:
+            with self._state_lock:
+                if self._gen_live(gen):
+                    self._diagnostic_ready_gen = gen
+            self._flush_legacy_failures(gen)
             # Retire only this generation, including when stdout fails.
             with self._state_lock:
                 was_current = proc is self._proc and self._active
@@ -909,7 +1101,11 @@ class TriggeventBridge(QObject):
                     self._active = False
                     self._proc = None
             try:
+                self._diagnostic("engine_exit", gen, reason=reason, expected=not was_current,
+                                 returncode=proc.poll(),
+                                 duration_ms=max(0, time.monotonic() - getattr(proc, "_nyaa_started_at", time.monotonic())) * 1000)
                 if was_current:
+                    self._queue_diagnostic(gen=gen, wq=wq, frames=self._feed_frames, chars=self._feed_chars)
                     _log(f"sidecar exited (returncode={proc.poll()})")
                     self.status.emit(False, "Sidecar exited", gen)
             finally:
@@ -927,18 +1123,38 @@ class TriggeventBridge(QObject):
     def _err_loop(self, proc: subprocess.Popen, gen: int) -> None:
         if proc.stderr is None:
             return
-        for line in _read_lines_bounded(proc.stderr):
-            line = line.rstrip()
-            if not line:
-                continue
-            _log(f"[sidecar stderr] {line}")
-            self._handle_diagnostic(line, gen)
+        try:
+            for line in _read_lines_bounded(proc.stderr):
+                line = line.rstrip()
+                if not line:
+                    continue
+                if " ERROR " in line or "Exception" in line:
+                    self._diagnostic("engine_error", gen, channel="stderr", reason="exception", throttle_s=5)
+                _log(f"[sidecar stderr] {line}")
+                self._handle_diagnostic(line, gen)
+        except Exception as exc:
+            self._diagnostic("engine_error", gen, channel="stderr", reason="read_failed", error_type=type(exc).__name__)
+            raise
 
     def _handle_diagnostic(self, line: str, gen: int) -> None:
         # Some Xvfb wrappers merge stderr into stdout.
         if "Error in sequential trigger" in line:
             log_drop("engine-chain", line, 0)
-            if self._gen_live(gen):
+            if self._structured_diagnostics_gen != gen:
+                self._diagnostic("engine_error", gen, channel="stderr", reason="exception")
+            emit = False
+            with self._state_lock:
+                if self._gen_live(gen) and self._structured_diagnostics_gen != gen:
+                    if self._diagnostic_ready_gen == gen:
+                        emit = True
+                    else:
+                        if self._legacy_failure_gen != gen:
+                            self._legacy_failure_gen = gen
+                            self._legacy_failures = []
+                            self._legacy_failure_count = 0
+                        self._legacy_failures = (self._legacy_failures + [line[:4096]])[-50:]
+                        self._legacy_failure_count += 1
+            if emit:
                 self.chain_failure.emit(line, gen)
         # Replay world state once the live sidecar is reading stdin.
         if "reading WS messages on stdin" in line:
@@ -953,7 +1169,83 @@ class TriggeventBridge(QObject):
                     self._catchup_gen = gen
                 if "custom=1" in line:
                     self._custom_gen = gen
+                if "speech_cancel=1" in line:
+                    self._speech_cancel_gen = gen
+                if "speech_cancel_all=1" in line:
+                    self._speech_cancel_all_gen = gen
+                if "diagnostics=1" in line:
+                    self._structured_diagnostics_gen = gen
+                self._diagnostic_ready_gen = gen
+            self._flush_legacy_failures(gen)
+            self._diagnostic("engine_ready", gen, recovery=self._recovery_gen == gen,
+                             history=self._history_gen == gen, catchup=self._catchup_gen == gen,
+                             custom=self._custom_gen == gen, speech_cancel=self._speech_cancel_gen == gen,
+                             speech_cancel_all=self._speech_cancel_all_gen == gen)
             self.ready.emit(gen)
+
+    def _flush_legacy_failures(self, gen: int) -> None:
+        with self._state_lock:
+            if self._legacy_failure_gen != gen:
+                return
+            count, lines = self._legacy_failure_count, self._legacy_failures
+            self._legacy_failure_count, self._legacy_failures = 0, []
+            if self._structured_diagnostics_gen == gen:
+                return
+        for index in range(count):
+            if not self._gen_live(gen):
+                return
+            offset = index - (count - len(lines))
+            line = lines[offset] if offset >= 0 else "Error in sequential trigger before readiness"
+            self.chain_failure.emit(line, gen)
+
+    def _delivery_live(self, cid, gen: int, tts_only: bool) -> bool:
+        return self._delivery_block(cid, gen, tts_only) is None
+
+    def _delivery_block(self, cid, gen: int, tts_only: bool):
+        with self._state_lock:
+            if not self._gen_live(gen):
+                return "stale"
+            if cid in self._disabled:
+                return "disabled"
+            if cid in self._speech_cancel_pending:
+                return "cancel_pending"
+            if self._speech_cancel_all_pending is not None:
+                return "cancel_all_pending"
+            if tts_only and self._speech_cancel_overflow == gen:
+                return "cancel_overflow_pending"
+        return None
+
+    def _deliver_callout(self, payload, gen: int) -> None:
+        cid, text, tts, severity, tts_only = payload[:5]
+        seq = payload[5] if len(payload) > 5 else None
+        queued_at = payload[6] if len(payload) > 6 else time.monotonic()
+        queue_delay_ms = max(0, time.monotonic() - queued_at) * 1000
+        for channel, content in (("text", text if not tts_only else ""), ("tts", tts)):
+            if not content:
+                continue
+            reason = self._delivery_block(cid, gen, tts_only)
+            if reason is None:
+                if channel == "text":
+                    self.callout.emit(text, severity, gen)
+                else:
+                    self.tts.emit(tts, gen)
+            self._diagnostic("engine_callout", gen, seq=seq, channel=channel,
+                             queue_delay_ms=queue_delay_ms, tts_only=tts_only,
+                             result="emitted" if reason is None else "filtered", reason=reason)
+
+    def _acknowledge_speech_cancel(self, token, gen: int) -> None:
+        with self._state_lock:
+            accepted = self._gen_live(gen) and type(token) is int
+            if accepted:
+                if token == self._speech_cancel_all_pending:
+                    self._speech_cancel_all_pending = None
+                self._speech_cancel_pending = {
+                    cid: pending for cid, pending in self._speech_cancel_pending.items()
+                    if pending != token}
+            pending_ids = len(self._speech_cancel_pending)
+            all_pending = self._speech_cancel_all_pending is not None
+        self._diagnostic("engine_cancel", gen, token=token, pending_ids=pending_ids,
+                         speech_cancel_all=all_pending, result="acknowledged" if accepted else "ignored")
 
     def _dispatch(self, msg: dict, seq_state: "dict | None" = None,
                   gen: "int | None" = None) -> None:
@@ -964,22 +1256,31 @@ class TriggeventBridge(QObject):
             if seq_state is None:
                 seq_state = {}
             seq = msg.get("seq")
+            self._diagnostic("engine_callout", gen, seq=seq, result="received",
+                             has_text=bool(msg.get("text")), has_tts=bool(msg.get("tts")),
+                             tts_only=msg.get("tts_only") is True)
             if isinstance(seq, int):
                 last = seq_state.get("last")
                 seq_state["last"] = seq
                 if last is not None and seq > last + 1:
+                    self._diagnostic("engine_protocol", gen, seq=seq, reason="sequence_gap", dropped=seq - last - 1)
                     log_drop("engine-seq",
                              f"callout seq gap {last} -> {seq}, "
                              f"{seq - last - 1} lost between engine and program", 0)
+                elif last is not None and seq <= last:
+                    self._diagnostic("engine_protocol", gen, seq=seq, reason="sequence_regression")
             # Reject old generation output before dispatch. UI slots also recheck queued
             # signals.
             if not self._gen_live(gen):
+                self._diagnostic("engine_callout", gen, seq=seq, result="filtered", reason="stale")
                 return
             cid = msg.get("id")
             if cid and cid in self._disabled:
+                self._diagnostic("engine_callout", gen, seq=seq, result="filtered", reason="disabled")
                 return
             text = (msg.get("text") or "").strip()
             tts = (msg.get("tts") or "").strip()
+            tts_only = msg.get("tts_only") is True
             sev = msg.get("severity", "info")
             if sev not in ("info", "alert", "alarm"):
                 sev = "info"
@@ -988,36 +1289,70 @@ class TriggeventBridge(QObject):
             for phrase in (tts, text):
                 self._record_seen(phrase)
             had_engine_text = bool(text)
+            had_engine_tts = bool(tts)
             text = self._apply_replacements(text)
             tts = self._apply_replacements(tts)
-            if not text and tts and not had_engine_text:
+            if not text and tts and not had_engine_text and not tts_only:
                 # Use TTS as display text only when no visual text was supplied.
                 # Preserve intentional suppression by replacement rules.
                 text = tts
-            if text:
-                self.callout.emit(text, sev, gen)
-            if tts:
-                self.tts.emit(tts, gen)
+            if not tts and not (text and not tts_only):
+                self._diagnostic("engine_callout", gen, seq=seq, result="filtered",
+                                 reason="replacement_empty" if had_engine_tts or (had_engine_text and not tts_only) else "empty")
+            elif had_engine_text and not text and not tts_only:
+                self._diagnostic("engine_callout", gen, seq=seq, channel="text", result="filtered", reason="replacement_empty")
+            elif had_engine_tts and not tts:
+                self._diagnostic("engine_callout", gen, seq=seq, channel="tts", result="filtered", reason="replacement_empty")
+            self._callout_ready.emit((cid, text, tts, sev, tts_only, seq, time.monotonic()), gen)
+        elif kind == "diagnostic":
+            clean = record_engine(msg, gen=gen)
+            if clean is None:
+                self._diagnostic("engine_protocol", gen, reason="unknown_type", throttle_s=5)
+            elif self._gen_live(gen):
+                with self._state_lock:
+                    self._structured_diagnostics_gen = gen
+                self._flush_legacy_failures(gen)
+                if clean.get("event") == "sequence_failed":
+                    trigger = clean.get("trigger_class", "SequentialTrigger").rsplit(".", 1)[-1]
+                    field = clean.get("trigger_field")
+                    if field:
+                        trigger += "." + field
+                    waiting = clean.get("wait_event", clean.get("wait_kind", "unknown"))
+                    error = clean.get("error_type", "Exception")
+                    self.chain_failure.emit(
+                        f"Error in sequential trigger '{trigger}' while waiting for '{waiting}': {error}", gen)
+        elif kind == "speech_canceled":
+            if self._gen_live(gen):
+                self._speech_cancel_ready.emit(msg.get("token"), gen)
         elif kind == "status":
             # Ignore status from stopped or replaced generations.
             if not self._gen_live(gen):
                 return
             active = bool(msg.get("active", self._active))
+            self._diagnostic("engine_protocol", gen, state="status", result="received", active=active)
             self.status.emit(active, str(msg.get("message", "")), gen)
         elif kind == "custom_triggers":
+            self._diagnostic("engine_protocol", gen, state="custom_triggers", result="received",
+                             accepted=msg.get("ok") is True)
             if self._gen_live(gen):
                 self.custom_status.emit(msg.get("ok") is True, str(msg.get("message", "")), gen)
         elif kind in ("recovery_checkpoint", "recovered"):
+            self._diagnostic("engine_recovery", gen, state=kind, result="received",
+                             checkpoint=msg.get("checkpoint"), dropped=msg.get("skipped"),
+                             history_status=msg.get("status"), accepted=self._gen_live(gen))
             if self._gen_live(gen):
                 self.recovery_progress.emit(msg, gen)
         elif kind == "combatants_request":
             ids = msg.get("ids")
             if self._gen_live(gen) and isinstance(ids, list) and len(ids) <= 1000:
                 if all(type(actor) is int and 0 < actor <= 0xFFFFFFFF for actor in ids):
+                    self._diagnostic("engine_protocol", gen, state="combatants_request", result="received",
+                                     count=len(ids))
                     self.combatants_request.emit(ids, gen)
         elif kind == "inventory":
             triggers = msg.get("triggers")
             if self._gen_live(gen) and isinstance(triggers, list):
+                self._diagnostic("engine_protocol", gen, state="inventory", result="received", count=len(triggers))
                 self.inventory.emit(json.dumps(triggers), gen)
         elif kind == "telesto":
             if not self._gen_live(gen):
@@ -1025,4 +1360,7 @@ class TriggeventBridge(QObject):
             st = str(msg.get("status", "unknown")).lower()
             if st not in ("good", "bad", "unknown"):
                 st = "unknown"
+            self._diagnostic("engine_protocol", gen, state="telesto", result="received", active=st == "good")
             self.telesto.emit(st, gen)
+        else:
+            self._diagnostic("engine_protocol", gen, reason="unknown_type", throttle_s=5)

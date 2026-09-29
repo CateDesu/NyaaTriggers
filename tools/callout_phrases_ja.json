@@ -768,9 +768,25 @@
     "display": "中央誘導→外側",
     "reading": "ちゅうおうゆうどう→そとがわ"
   },
+  "Bait middle, then Northeast": {
+    "display": "中央誘導→北東",
+    "reading": "ちゅうおうゆうどう→ほくとう"
+  },
+  "Bait middle, then Northwest": {
+    "display": "中央誘導→北西",
+    "reading": "ちゅうおうゆうどう→ほくせい"
+  },
+  "Bait middle, then Southeast": {
+    "display": "中央誘導→南東",
+    "reading": "ちゅうおうゆうどう→なんとう"
+  },
+  "Bait middle, then Southwest": {
+    "display": "中央誘導→南西",
+    "reading": "ちゅうおうゆうどう→なんせい"
+  },
   "Bait middle, then {safe}": {
-    "display": "中央誘導",
-    "reading": "ちゅうおうゆうどう"
+    "display": "中央誘導→{safe}",
+    "reading": "ちゅうおうゆうどう→{safe}"
   },
   "Bait then Avoid ({event.estimatedRemainingDuration})": {
     "display": "誘導→回避",
@@ -1169,8 +1185,8 @@
     "reading": "ちゅうおうのとう"
   },
   "Center {rightSafe ? 'Right' : 'Left'}": {
-    "display": "中央",
-    "reading": "ちゅうおう"
+    "display": "中央 {rightSafe ? 'Right' : 'Left'}",
+    "reading": "ちゅうおう {rightSafe ? 'Right' : 'Left'}"
   },
   "Chain": {
     "display": "鎖",
@@ -1241,8 +1257,8 @@
     "reading": "サークル、とおく"
   },
   "Circle, {supportsCone ? 'Supports' : 'DPS'} have cone": {
-    "display": "サークル、扇あり",
-    "reading": "サークル、おうぎあり"
+    "display": "サークル、{supportsCone ? 'Supports' : 'DPS'}に扇",
+    "reading": "サークル、{supportsCone ? 'Supports' : 'DPS'}におうぎ"
   },
   "Cleanse Debuff": {
     "display": "デバフ除去",
@@ -1389,8 +1405,8 @@
     "reading": "おうぎ"
   },
   "Cone, {supportsCone ? 'Supports' : 'DPS'} have cone": {
-    "display": "扇あり",
-    "reading": "おうぎあり"
+    "display": "扇、{supportsCone ? 'Supports' : 'DPS'}に扇",
+    "reading": "おうぎ、{supportsCone ? 'Supports' : 'DPS'}におうぎ"
   },
   "Confetti ({event.estimatedRemainingDuration})": {
     "display": "紙吹雪",
@@ -6729,8 +6745,8 @@
     "reading": "さんかい＋しゅっけつ"
   },
   "Spread {bigSafe}": {
-    "display": "散開",
-    "reading": "さんかい"
+    "display": "散開 {bigSafe}",
+    "reading": "さんかい {bigSafe}"
   },
   "Spread {darkInCard} In, {darkOutCard} Out": {
     "display": "散開 内/外",
@@ -6741,8 +6757,8 @@
     "reading": "さんかい"
   },
   "Spread {initialSafeSpots}": {
-    "display": "散開",
-    "reading": "さんかい"
+    "display": "散開 {initialSafeSpots}",
+    "reading": "さんかい {initialSafeSpots}"
   },
   "Spread {safeSide} ({event.estimatedRemainingDuration})": {
     "display": "散開",
@@ -6960,6 +6976,14 @@
     "display": "まもなく中央頭割り、安全",
     "reading": "まもなくちゅうおうあたまわり、あんぜん"
   },
+  "Stack on DPS": {
+    "display": "DPSに頭割り",
+    "reading": "DPSにあたまわり"
+  },
+  "Stack on Support": {
+    "display": "サポートに頭割り",
+    "reading": "サポートにあたまわり"
+  },
   "Stack on You": {
     "display": "自分に頭割り",
     "reading": "じぶんにあたまわり"
@@ -6969,8 +6993,8 @@
     "reading": "あたまわり"
   },
   "Stack on {event.target.job.support ? 'Support' : 'DPS'}": {
-    "display": "頭割り",
-    "reading": "あたまわり"
+    "display": "{event.target.job.support ? 'Support' : 'DPS'}に頭割り",
+    "reading": "{event.target.job.support ? 'Support' : 'DPS'}にあたまわり"
   },
   "Stack on {event.target}": {
     "display": "頭割り",
@@ -7129,8 +7153,8 @@
     "reading": "あたまわり、あんぜん"
   },
   "Stack, {supportsCone ? 'Supports' : 'DPS'} have cone": {
-    "display": "頭割り、扇あり",
-    "reading": "あたまわり、おうぎあり"
+    "display": "頭割り、{supportsCone ? 'Supports' : 'DPS'}に扇",
+    "reading": "あたまわり、{supportsCone ? 'Supports' : 'DPS'}におうぎ"
   },
   "Stack/Avoid Light ({event.estimatedRemainingDuration})": {
     "display": "頭割り／光回避",
@@ -7305,8 +7329,8 @@
     "reading": "かいし、かいてん"
   },
   "Starting {resultingStart} -> {resultingClockwise ? 'Clockwise' : 'CCW'}": {
-    "display": "開始、回転",
-    "reading": "かいし、かいてん"
+    "display": "開始 {resultingStart} → {resultingClockwise ? 'Clockwise' : 'CCW'}",
+    "reading": "かいし {resultingStart} → {resultingClockwise ? 'Clockwise' : 'CCW'}"
   },
   "Stay ({event.estimatedRemainingDuration})": {
     "display": "留まる",
@@ -8529,8 +8553,8 @@
     "reading": "のこりばんごう"
   },
   "{event.stacks} Stacks": {
-    "display": "頭割り",
-    "reading": "あたまわり"
+    "display": "{event.stacks}スタック",
+    "reading": "{event.stacks}スタック"
   },
   "{event.target} Cleansed": {
     "display": "解除済み",
@@ -8909,8 +8933,8 @@
     "reading": "あんぜん"
   },
   "{stacks} Stacks": {
-    "display": "頭割り",
-    "reading": "あたまわり"
+    "display": "{stacks}スタック",
+    "reading": "{stacks}スタック"
   },
   "{state.player.job.caster ? \"Spread Outside and LB\" : \"Spread Outside\"}": {
     "display": "外側に散開",
@@ -8953,8 +8977,8 @@
     "reading": "せいしかうんどう、あたまわり"
   },
   "{stillness ? 'Stillness' : 'Motion'} and Stack {fakeIce ? 'In Ice' : 'Out of Ice'} ({event.estimatedRemainingDuration})": {
-    "display": "静止か運動、頭割り",
-    "reading": "せいしかうんどう、あたまわり"
+    "display": "{stillness ? 'Stillness' : 'Motion'}、頭割り {fakeIce ? 'In Ice' : 'Out of Ice'}",
+    "reading": "{stillness ? 'Stillness' : 'Motion'}、あたまわり {fakeIce ? 'In Ice' : 'Out of Ice'}"
   },
   "{supportCount} Supports, {dpsCount} DPS": {
     "display": "サポートとDPS",

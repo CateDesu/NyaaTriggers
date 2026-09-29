@@ -89,6 +89,245 @@ class EditorStorageTests(unittest.TestCase):
                      "_REPO_TRIGGERS_FILE", "_REPO_RETIRED_FILE", "_REPO_TRIGGERS_VERSION"):
             self.stack.enter_context(patch.object(ac, name, self.root / name))
 
+    def import_local_triggers(self, destination):
+        source = self.root / "import.json"
+        source.write_bytes(b'{"triggers":[{"id":"imported"}]}')
+        host = SimpleNamespace(_load_triggers=Mock())
+        with patch.object(ac, "TRIGGERS_LOCAL_FILE", destination), \
+                patch.object(ac.QFileDialog, "getOpenFileName", return_value=(str(source), "")), \
+                patch.object(ac.QMessageBox, "question", return_value=ac.QMessageBox.StandardButton.Yes), \
+                patch.object(ac.QMessageBox, "critical") as failure, \
+                patch.object(ac.QMessageBox, "information") as success:
+            TriggersTabMixin._import_triggers(host)
+        return host, failure, success, source.read_bytes()
+
+    def test_import_aborts_when_the_backup_cannot_be_replaced(self):
+        destination = self.root / "triggers.local.json"
+        original = b'{"triggers":[{"id":"original"}]}'
+        destination.write_bytes(original)
+        backup = destination.with_name(destination.name + ".bak")
+        backup.mkdir()
+        blocked_copy = backup / destination.name
+        blocked_copy.mkdir()
+        host, failure, success, _ = self.import_local_triggers(destination)
+        self.assertEqual(destination.read_bytes(), original)
+        self.assertEqual(list(backup.iterdir()), [blocked_copy])
+        failure.assert_called_once()
+        success.assert_not_called()
+        host._load_triggers.assert_not_called()
+        self.assertFalse(list(self.root.glob("*.tmp")))
+
+    def test_import_preserves_an_older_backup_when_sync_fails(self):
+        destination = self.root / "triggers.local.json"
+        original = b'{"triggers":[{"id":"original"}]}'
+        destination.write_bytes(original)
+        backup = destination.with_name(destination.name + ".bak")
+        backup.write_bytes(b"older backup")
+        with patch.object(os, "fsync", side_effect=OSError("disk full")):
+            host, failure, success, _ = self.import_local_triggers(destination)
+        self.assertEqual(destination.read_bytes(), original)
+        self.assertEqual(backup.read_bytes(), b"older backup")
+        failure.assert_called_once()
+        success.assert_not_called()
+        host._load_triggers.assert_not_called()
+        self.assertFalse(list(self.root.glob("*.tmp")))
+
+    def test_failed_import_preserves_the_current_file_and_its_backup(self):
+        destination = self.root / "triggers.local.json"
+        original = b'{"triggers":[{"id":"original"}]}'
+        destination.write_bytes(original)
+        replace = os.replace
+
+        def fail_replacement(source, target):
+            if Path(target) == destination:
+                raise OSError("cannot replace local triggers")
+            return replace(source, target)
+
+        with patch.object(os, "replace", side_effect=fail_replacement):
+            host, failure, success, _ = self.import_local_triggers(destination)
+        self.assertEqual(destination.read_bytes(), original)
+        self.assertEqual(destination.with_name(destination.name + ".bak").read_bytes(), original)
+        failure.assert_called_once()
+        success.assert_not_called()
+        host._load_triggers.assert_not_called()
+        self.assertFalse(list(self.root.glob("*.tmp")))
+
+    def test_import_keeps_the_exact_previous_bytes_before_reloading(self):
+        destination = self.root / "triggers.local.json"
+        original = b'{"triggers": [], "folders": [{"id": "mine", "name": "Mine"}]}\n'
+        destination.write_bytes(original)
+        host, failure, success, imported = self.import_local_triggers(destination)
+        self.assertEqual(destination.read_bytes(), imported)
+        self.assertEqual(destination.with_name(destination.name + ".bak").read_bytes(), original)
+        failure.assert_not_called()
+        success.assert_called_once()
+        host._load_triggers.assert_called_once()
+
+    def test_import_without_a_previous_file_needs_no_backup(self):
+        destination = self.root / "triggers.local.json"
+        host, failure, success, imported = self.import_local_triggers(destination)
+        self.assertEqual(destination.read_bytes(), imported)
+        self.assertFalse(destination.with_name(destination.name + ".bak").exists())
+        failure.assert_not_called()
+        success.assert_called_once()
+        host._load_triggers.assert_called_once()
+
+    def edit_host(self):
+        self.isolate_trigger_paths()
+        original = Trigger(id="edited", name="Original", ability_id="AAAA", tts_text="Original speech")
+        ac.TRIGGERS_LOCAL_FILE.write_text(json.dumps({"triggers": [original.to_dict()]}))
+        host = TriggerHost()
+        host._match_zone = ""
+        host._pick_fight_folder = Mock()
+        host._load_triggers()
+        original = host._triggers[0]
+        host._selected_row_key = lambda: original.id
+        host._is_engine_key = lambda key: False
+        host._selected_trigger = lambda: (original, 0)
+        return host, original
+
+    def test_local_editor_cannot_overwrite_a_changed_trigger_after_reload(self):
+        for method in ("_edit_trigger", "_open_trigger_for_edit"):
+            with self.subTest(method=method):
+                host, original = self.edit_host()
+                updated = Trigger.from_dict(original.to_dict())
+                updated.name = "Dialog edit"
+                external = {**original.to_dict(), "ability_id": "BBBB", "tts_text": "External speech"}
+
+                def accept():
+                    ac.TRIGGERS_LOCAL_FILE.write_text(json.dumps({"triggers": [external]}))
+                    host._load_triggers()
+                    return QDialog.DialogCode.Accepted
+
+                dialog = Mock()
+                dialog.exec.side_effect = accept
+                dialog.get_trigger.return_value = updated
+                with patch.object(triggers_tab, "TriggerDialog", return_value=dialog), \
+                        patch.object(ac.QMessageBox, "warning") as warning:
+                    getattr(host, method)(*([original] if method == "_open_trigger_for_edit" else []))
+                self.assertEqual(host._triggers[0].to_dict(), external)
+                self.assertEqual(json.loads(ac.TRIGGERS_LOCAL_FILE.read_text())["triggers"], [external])
+                warning.assert_called_once()
+
+    def test_local_editor_keeps_unrelated_reload_changes_and_runtime_cooldowns(self):
+        for method in ("_edit_trigger", "_open_trigger_for_edit"):
+            with self.subTest(method=method):
+                host, original = self.edit_host()
+                updated = Trigger.from_dict(original.to_dict())
+                updated.name = "Dialog edit"
+                other = Trigger(id="added", ability_id="BBBB", tts_text="New trigger")
+
+                def accept():
+                    original._last_fired["boss"] = 123
+                    ac.TRIGGERS_LOCAL_FILE.write_text(json.dumps({
+                        "triggers": [original.to_dict(), other.to_dict()]}))
+                    host._load_triggers()
+                    return QDialog.DialogCode.Accepted
+
+                dialog = Mock()
+                dialog.exec.side_effect = accept
+                dialog.get_trigger.return_value = updated
+                with patch.object(triggers_tab, "TriggerDialog", return_value=dialog), \
+                        patch.object(ac.QMessageBox, "warning") as warning:
+                    getattr(host, method)(*([original] if method == "_open_trigger_for_edit" else []))
+                self.assertEqual([t.to_dict() for t in host._triggers], [updated.to_dict(), other.to_dict()])
+                self.assertEqual(json.loads(ac.TRIGGERS_LOCAL_FILE.read_text())["triggers"],
+                                 [updated.to_dict(), other.to_dict()])
+                warning.assert_not_called()
+
+    def test_save_cannot_replace_external_edits_before_the_next_reload(self):
+        host, original = self.edit_host()
+        external = {"triggers": [{**original.to_dict(), "name": "External edit"}],
+                    "folders": [{"id": "external", "name": "New folder"}]}
+        ac.TRIGGERS_LOCAL_FILE.write_text(json.dumps(external))
+        original.name = "Unsaved edit"
+        with patch.object(ac.QMessageBox, "warning") as warning:
+            self.assertFalse(host._save_triggers())
+        self.assertEqual(json.loads(ac.TRIGGERS_LOCAL_FILE.read_text()), external)
+        warning.assert_called_once()
+        host._maybe_reload_triggers()
+        host._triggers[0].name = "Retried edit"
+        self.assertTrue(host._save_triggers())
+        saved = json.loads(ac.TRIGGERS_LOCAL_FILE.read_text())
+        self.assertEqual(saved["triggers"][0]["name"], "Retried edit")
+        self.assertEqual(saved["folders"], external["folders"])
+
+    def test_poll_retains_live_callouts_until_local_file_has_valid_trigger_rows(self):
+        for invalid in ([], {"triggers": "unfinished"}, {"triggers": [None]}):
+            with self.subTest(invalid=invalid):
+                host, original = self.edit_host()
+                original._last_fired["boss"] = 123
+                original_info = ac.TRIGGERS_LOCAL_FILE.stat()
+                original_stamp = host._triggers_mtime
+                ac.TRIGGERS_LOCAL_FILE.write_text(json.dumps(invalid))
+                with patch.object(ac.QMessageBox, "warning") as warning:
+                    host._maybe_reload_triggers()
+                self.assertEqual(host._triggers, [original])
+                self.assertIs(host._triggers[0], original)
+                self.assertEqual(original._last_fired["boss"], 123)
+                warning.assert_not_called()
+                fixed = {"triggers": [{**original.to_dict(), "tts_text": "Repaired speech"}]}
+                ac.TRIGGERS_LOCAL_FILE.write_text(json.dumps(fixed))
+                os.utime(ac.TRIGGERS_LOCAL_FILE,
+                         ns=(original_info.st_atime_ns, original_info.st_mtime_ns))
+                self.assertEqual(host._trigger_files_stamp(), original_stamp)
+                host._maybe_reload_triggers()
+                self.assertEqual(host._triggers[0].tts_text, "Repaired speech")
+
+    def test_save_detects_external_creation_and_removal(self):
+        for created in (False, True):
+            with self.subTest(created=created):
+                host, original = self.edit_host()
+                if created:
+                    ac.TRIGGERS_LOCAL_FILE.unlink()
+                    host._load_triggers()
+                    ac.TRIGGERS_LOCAL_FILE.write_text(json.dumps({"triggers": [original.to_dict()]}))
+                else:
+                    ac.TRIGGERS_LOCAL_FILE.unlink()
+                with patch.object(ac.QMessageBox, "warning"):
+                    self.assertFalse(host._save_triggers())
+                self.assertEqual(ac.TRIGGERS_LOCAL_FILE.exists(), created)
+
+    def test_conflicting_same_size_same_time_edit_reloads_before_retry(self):
+        host, original = self.edit_host()
+        stamp = ac.TRIGGERS_LOCAL_FILE.stat()
+        external = ac.TRIGGERS_LOCAL_FILE.read_text().replace('"Original"', '"External"')
+        ac.TRIGGERS_LOCAL_FILE.write_text(external)
+        os.utime(ac.TRIGGERS_LOCAL_FILE, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        original.name = "Unsaved"
+        with patch.object(ac.QMessageBox, "warning"):
+            self.assertFalse(host._save_triggers())
+        host._maybe_reload_triggers()
+        self.assertEqual(host._triggers[0].name, "External")
+        host._triggers[0].name = "Retried"
+        self.assertTrue(host._save_triggers())
+
+    def test_conflict_warning_cannot_rebaseline_a_callers_rollback(self):
+        host, original = self.edit_host()
+        external = {"triggers": [{**original.to_dict(), "tts_text": "External speech"}]}
+        ac.TRIGGERS_LOCAL_FILE.write_text(json.dumps(external))
+        original.tts_text = "Profile speech"
+        with patch.object(ac.QMessageBox, "warning", side_effect=lambda *args: host._maybe_reload_triggers()) as warning:
+            self.assertFalse(host._save_triggers())
+            host._triggers[0].tts_text = "Original speech"
+            self.assertFalse(host._save_triggers())
+            warning.assert_called_once()
+        self.assertEqual(json.loads(ac.TRIGGERS_LOCAL_FILE.read_text()), external)
+        host._maybe_reload_triggers()
+        self.assertEqual(host._triggers[0].tts_text, "External speech")
+
+    def test_own_save_updates_the_baseline_without_aliasing_sequence_edits(self):
+        host, original = self.edit_host()
+        original.sequence = [{"ability_id": "BBBB", "tts_text": "First"}]
+        self.assertTrue(host._save_triggers())
+        host._load_triggers()
+        host._triggers[0].sequence[0]["tts_text"] = "Second"
+        self.assertTrue(host._save_triggers())
+        host._triggers[0].sequence[0]["tts_text"] = "Third"
+        self.assertTrue(host._save_triggers())
+        saved = json.loads(ac.TRIGGERS_LOCAL_FILE.read_text())
+        self.assertEqual(saved["triggers"][0]["sequence"][0]["tts_text"], "Third")
+
     def test_invalid_downloaded_rows_use_the_bundled_triggers(self):
         self.isolate_trigger_paths()
         ac.TRIGGERS_FILE.write_text('[{"id":"bundled","ability_id":"ABCD"}]')

@@ -1,5 +1,6 @@
 """Shared paths, constants and data helpers for the main window and UI modules."""
 
+from contextlib import contextmanager
 import json
 import os
 import re
@@ -100,6 +101,35 @@ def _as_strset(value) -> set:
 
 def _as_str(value) -> str:
     return value if isinstance(value, str) else ""
+
+
+def persistence_warning(window, title, text, *, conflict=False):
+    pending = getattr(window, "_deferred_persistence_warnings", None)
+    if pending is not None:
+        pending.append((title, text, conflict))
+        return
+    if conflict:
+        window._local_conflict_dialog = True
+    try:
+        QMessageBox.warning(window, title, text)
+    finally:
+        if conflict:
+            window._local_conflict_dialog = False
+
+
+@contextmanager
+def defer_persistence_warnings(window):
+    if getattr(window, "_deferred_persistence_warnings", None) is not None:
+        yield
+        return
+    window._deferred_persistence_warnings = []
+    try:
+        yield
+    finally:
+        pending = window._deferred_persistence_warnings
+        window._deferred_persistence_warnings = None
+        for title, text, conflict in pending:
+            persistence_warning(window, title, text, conflict=conflict)
 
 
 def _atomic_write_json(path: "Path", data, *, indent: "int | None" = None) -> None:
@@ -307,6 +337,7 @@ def _compile_phrase_patterns(phrases: dict) -> list:
         if len(re.sub(r"[\W_]+", "", literal)) < 6:
             continue
         out.append((_PhrasePattern(parts), ja))
+    out.sort(key=lambda item: sum(len(part) for part in item[0].parts), reverse=True)
     return out
 
 MAX_ABILITY_LINES = 200

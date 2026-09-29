@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from nyaatriggers.paths import data_root
+from nyaatriggers.diagnostics import record_drop
 
 _LOG_FILE = data_root() / "nyaatriggers.log"
 
@@ -95,6 +96,7 @@ def log_drop(site: str, detail: str, throttle_s: float = 1.0) -> None:
         if now - _last.get(site, -10.0) < throttle_s:
             return
         _last[site] = now
+        record_drop(site, detail)
         try:
             if _LOG_FILE.exists() and _LOG_FILE.stat().st_size > _MAX_BYTES:
                 rotate_one_generation(_LOG_FILE)

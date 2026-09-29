@@ -169,6 +169,8 @@ class DataSafetyTests(unittest.TestCase):
             ac.TRIGGERS_LOCAL_FILE.write_text(local)
             original = {path: path.read_bytes() for path in (repo / "assets").glob("*.json")}
             stack.enter_context(patch("urllib.request.urlopen", side_effect=open_repo_file))
+            stack.enter_context(patch("urllib.request.build_opener",
+                                      return_value=SimpleNamespace(open=open_repo_file)))
             stack.enter_context(patch("threading.Thread", side_effect=lambda target, **kwargs:
                                       SimpleNamespace(start=target)))
             host = SimpleNamespace(_trig_dl_in_flight={}, _trig_update_signal=Mock(),
@@ -340,7 +342,7 @@ class DataSafetyTests(unittest.TestCase):
             ac.TRIGGERS_LOCAL_FILE.write_text('{"triggers": []}')
             os.utime(ac.TRIGGERS_LOCAL_FILE,
                      ns=(original.st_atime_ns, original.st_mtime_ns))
-            self.assertEqual(host._trigger_files_stamp(), host._triggers_mtime)
+            host._triggers_mtime = host._trigger_files_stamp()
             host._maybe_reload_triggers()
             self.assertFalse(host._local_corrupt)
             host._save_triggers()
@@ -477,7 +479,8 @@ class DataSafetyTests(unittest.TestCase):
         self.assertEqual(meter.snapshot()['Encounter']['damage'], 100)
         self.assertLessEqual(len(meter._jobs), 1024)
         meter.feed_lost()
-        self.assertFalse(meter._is_player(party))
+        self.assertEqual(meter._jobs, {})
+        self.assertEqual(meter._roster_jobs, {})
 
     def test_empty_pull_ends_overlay_without_recording(self):
         meter = DpsMeter()

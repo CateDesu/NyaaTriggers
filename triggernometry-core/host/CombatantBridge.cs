@@ -75,8 +75,15 @@ public static class CombatantBridge
 
     public static void SetSnapshot(uint playerId, FakeCombatant[] combatants)
     {
-        PlayerId = playerId;
         _snapshot = combatants ?? new FakeCombatant[0];
+        SetPlayerId(playerId);
+    }
+
+    public static void SetPlayerId(uint playerId)
+    {
+        PlayerId = playerId;
+        Triggernometry.PluginBridges.BridgeFFXIV.PlayerId = playerId;
+        Triggernometry.PluginBridges.BridgeFFXIV.PlayerHexId = playerId.ToString("X8");
     }
 
     public static List<FakeCombatant> Snapshot() => new List<FakeCombatant>(_snapshot);

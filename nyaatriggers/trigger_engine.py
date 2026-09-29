@@ -398,8 +398,8 @@ class Trigger:
     def cooldown_key(self, source_id: str) -> str:
         return "*" if self.cooldown_scope == "trigger" else source_id.upper()
 
-    def matches(self, fields: list[str], me: str = "") -> dict | None:
-        """Match a log line using the current player name for self scope."""
+    def matches(self, fields: list[str], me: str = "", me_id: str = "") -> dict | None:
+        """Match a log line using the current player for personal scope."""
         if not self.enabled or not fields:
             return None
         # Select fields using the actual incoming type when the trigger has
@@ -433,11 +433,21 @@ class Trigger:
         if lt in _STATUS_TYPES:
             scope = self.status_scope or "self"
             if scope in ("self", "by_me"):
-                if not me:
-                    return None  # Self scope cannot match until the player is known.
                 idx_map = _TARGET_IDX if scope == "self" else _SOURCE_IDX
                 idx = idx_map.get(lt, 8)
-                if len(fields) <= idx or fields[idx].casefold() != me.casefold():
+                try:
+                    player_id = int(me_id, 16)
+                except (TypeError, ValueError):
+                    player_id = 0
+                if 0x10000000 <= player_id < 0x11000000:
+                    try:
+                        actor_id = int(fields[idx - 1], 16)
+                    except (IndexError, TypeError, ValueError):
+                        return None
+                    if actor_id != player_id:
+                        return None
+                elif (not me or len(fields) <= idx
+                      or fields[idx].casefold() != me.casefold()):
                     return None
 
         # Check duration before consuming the cooldown.

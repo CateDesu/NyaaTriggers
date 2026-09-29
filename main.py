@@ -8,9 +8,7 @@ import sys
 if sys.platform == "linux":
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-import glob
 import json
-import platform
 import subprocess
 import threading
 import time
@@ -19,7 +17,9 @@ from datetime import datetime
 from pathlib import Path
 
 from nyaatriggers import drop_log
-from nyaatriggers.paths import bundle_root, data_root, default_voice_dir
+from nyaatriggers.diagnostics import record, record_exception
+from nyaatriggers.paths import bundle_root, data_root, default_voice_dir, resolve_voice_venv, voice_site_packages
+from nyaatriggers.voice_config import MAX_VOICE_CONFIG_BYTES, validate_voice_config, voice_config_ok
 
 _LOG_FILE = data_root() / "nyaatriggers.log"
 
@@ -30,6 +30,7 @@ def _owner_only(path, flags):
 
 
 def _log_crash(exc_type, exc_value, exc_tb) -> None:
+    record_exception("python_exception", exc_value, site="uncaught")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         # Use the drop log lock and size limit for crash entries too.
@@ -108,9 +109,9 @@ from nyaatriggers.http_fetch import configure_ssl_trust
 configure_ssl_trust()
 
 try:
-    from PyQt6.QtCore import QThread, pyqtSignal
+    from PyQt6.QtCore import QStandardPaths, QThread, pyqtSignal
     from PyQt6.QtWidgets import (
-        QApplication, QDialog, QLabel, QProgressBar, QPushButton, QVBoxLayout,
+        QApplication, QDialog, QLabel, QMessageBox, QProgressBar, QPushButton, QVBoxLayout,
     )
 except ImportError:
     print("PyQt6 is required. Install it with:")
@@ -134,17 +135,19 @@ _VOICE_BASE  = (
 
 
 def _voice_present() -> bool:
-    # Piper needs both files. Retry setup if either download is missing.
-    return _VOICE_FILE.exists() and _VOICE_CONFIG.exists()
+    # Piper needs both files and a readable config.
+    return _VOICE_FILE.exists() and voice_config_ok(_VOICE_CONFIG)
 
 
-def _piper_installed() -> bool:
+def _piper_installed(venv: Path | None = None) -> bool:
     # Frozen builds bundle Piper. Running their executable as Python would reopen setup
     # recursively.
     if getattr(sys, "frozen", False):
         return True
-    sp_paths  = glob.glob(str(_FFXIV_VENV / "lib" / "python*" / "site-packages"))
-    sp_paths += glob.glob(str(_FFXIV_VENV / "Lib" / "site-packages"))
+    venv = _configured_voice_venv() if venv is None else venv
+    if install.voice_setup_pending(venv):
+        return False
+    sp_paths = voice_site_packages(venv)
     return any((Path(p) / "piper").is_dir() for p in sp_paths)
 
 
@@ -152,7 +155,7 @@ def _needs_setup() -> bool:
     return not _voice_present() or not _piper_installed()
 
 
-def _set_setup_locale() -> None:
+def _startup_settings() -> dict:
     settings = {}
     try:
         with (data_root() / "nyaatriggers_settings.json").open("rb") as fh:
@@ -161,7 +164,20 @@ def _set_setup_locale() -> None:
             settings = json.loads(data.decode("utf-8"))
     except (OSError, ValueError, RecursionError):
         pass
-    language = settings.get("ui_language", "auto") if isinstance(settings, dict) else "auto"
+    return settings if isinstance(settings, dict) else {}
+
+
+def _configured_voice_venv() -> Path:
+    path = _startup_settings().get("venv_path")
+    try:
+        return resolve_voice_venv(path, _FFXIV_VENV)
+    except RuntimeError as exc:
+        print(f"[NyaaTriggers] saved voice environment is unavailable: {exc}", file=sys.stderr)
+        return _FFXIV_VENV
+
+
+def _set_setup_locale() -> None:
+    language = _startup_settings().get("ui_language", "auto")
     set_locale(effective_locale(language))
 
 
@@ -185,8 +201,10 @@ def _download(url: str, dest: Path, timeout: int = 30,
             progress[0] += received - last
         last = received
 
+    limit = min(MAX_VOICE_CONFIG_BYTES, _MAX_DOWNLOAD_BYTES) if dest == _VOICE_CONFIG else _MAX_DOWNLOAD_BYTES
     updater.download(url, dest, progress_cb=advanced, timeout=timeout,
-                     max_bytes=_MAX_DOWNLOAD_BYTES)
+                     max_bytes=limit,
+                     validate_cb=validate_voice_config if dest == _VOICE_CONFIG else None)
 
 
 class _SetupWorker(QThread):
@@ -204,8 +222,9 @@ class _SetupWorker(QThread):
     def run(self) -> None:
         self._cur = 0
         try:
+            venv = _configured_voice_venv()
             needs_download = not _voice_present()
-            needs_piper   = not _piper_installed()
+            needs_piper   = not _piper_installed(venv)
 
             dl_event = threading.Event()
             dl_error: list[Exception | None] = [None]
@@ -225,7 +244,7 @@ class _SetupWorker(QThread):
                     if not _VOICE_FILE.exists():
                         _download(f"{_VOICE_BASE}/{_VOICE_STEM}.onnx",
                                   _VOICE_FILE, progress=dl_progress)
-                    if not _VOICE_CONFIG.exists():
+                    if not voice_config_ok(_VOICE_CONFIG):
                         _download(f"{_VOICE_BASE}/{_VOICE_STEM}.onnx.json",
                                   _VOICE_CONFIG, progress=dl_progress)
                 except Exception as exc:
@@ -260,27 +279,12 @@ class _SetupWorker(QThread):
             # Only source installs may run this executable as Python.
             if needs_piper and not frozen:
                 self.progress.emit(-1, _("Installing piper-tts. This may take a few minutes..."))
-                pip = _FFXIV_VENV / (
-                    "Scripts" if platform.system() == "Windows" else "bin"
-                ) / ("pip.exe" if platform.system() == "Windows" else "pip")
                 # Serialize environment setup across processes to prevent concurrent
                 # venv creation.
                 with install.setup_lock():
-                    # Check pip because interrupted environment creation may leave an
-                    # incomplete directory.
-                    if not pip.exists():
-                        # Decode subprocess output as UTF-8 so non-ASCII paths remain
-                        # readable under a C locale.
-                        subprocess.run(
-                            [sys.executable, "-m", "venv", str(_FFXIV_VENV)],
-                            check=True, capture_output=True, text=True, timeout=120,
-                            encoding="utf-8", errors="replace",
-                        )
-                    subprocess.run(
-                        [str(pip), "install", "--upgrade", "--no-input", "piper-tts==1.4.2"],
-                        check=True, capture_output=True, text=True, timeout=600,
-                        encoding="utf-8", errors="replace",
-                    )
+                    def run(args, timeout):
+                        install.run_setup_command(args, timeout, capture_output=True)
+                    install.prepare_voice_venv(venv, run)
 
             for v in range(65, 91):
                 self.progress.emit(v, _("Making sure no cats are stuck in the pipes..."))
@@ -388,6 +392,33 @@ def main() -> None:
 
     app = QApplication(sys.argv)
     app.setApplicationName("NyaaTriggers")
+    from nyaatriggers.instance_lock import InstanceLock
+    cache = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.GenericCacheLocation)
+    instance = None
+    try:
+        if not cache:
+            raise OSError("The user cache folder is unavailable")
+        instance = InstanceLock(data_root(), cache)
+        if not instance.acquire():
+            _set_setup_locale()
+            QMessageBox.information(None, _("NyaaTriggers is already running"), _(
+                "Another NyaaTriggers program is using this folder. "
+                "Use the existing window or close it before starting again. "
+                "To run another copy, use a separate program folder."))
+            return
+    except OSError as exc:
+        _set_setup_locale()
+        QMessageBox.warning(None, _("Could not start NyaaTriggers"), _(
+            "Could not protect the settings from another running copy:\n{error}\n\n"
+            "Check that your user cache folder is writable, then try again.").format(error=exc))
+        return
+    try:
+        _run_program(app)
+    finally:
+        instance.close()
+
+
+def _run_program(app) -> None:
     # Load the bundled font, falling back to the system font if unavailable.
     from PyQt6.QtGui import QFontDatabase
     _bundle = bundle_root()
@@ -404,7 +435,10 @@ def main() -> None:
 
     # Delay the TTS import until setup has installed its dependencies.
     from nyaatriggers.main_window import MainWindow
+    from nyaatriggers.app_common import _DISPLAY_VERSION
     window = MainWindow()
+    record("app_start", version=_DISPLAY_VERSION, frozen=bool(getattr(sys, "frozen", False)))
+    app.aboutToQuit.connect(lambda: record("app_stop"))
     # Signal a good boot only after setup and the main window both succeed.
     from nyaatriggers import updater
     updater.mark_boot_ok()

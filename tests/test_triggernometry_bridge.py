@@ -92,6 +92,7 @@ class _CalloutHost:
     def __init__(self, bridge):
         self._triggernometry = bridge
         self._triggernometry_mode = True
+        self._connected = True
         self.shown = []
 
     def _localize_text(self, text):
@@ -108,6 +109,7 @@ class _TtsHost:
     def __init__(self, bridge):
         self._triggernometry = bridge
         self._triggernometry_mode = True
+        self._connected = True
         self.spoken = []
 
     def _triggernometry_speak(self, text):
@@ -144,6 +146,22 @@ try:
           played == [(__file__, 0.5)])
 finally:
     vt.play_sound = _o_play
+
+host._connected = thost._connected = False
+host._on_triggernometry_callout("disconnected", "alarm", 7)
+thost._on_triggernometry_tts("disconnected", 7)
+with patch.object(vt, "play_sound") as sound:
+    thost._on_triggernometry_sound(__file__, 50, 7)
+    check("disconnected sounds are suppressed", not sound.called)
+check("disconnected speech is suppressed", thost.spoken == ["live"])
+check("disconnected alerts are suppressed", len(host.shown) == 2)
+
+br3._active = True
+br3.feed_combat(True, False)
+br3.feed_combat(False, True)
+check("combat hooks follow ACT state independently of game state",
+      [br3._wq.get_nowait(), br3._wq.get_nowait()] == [
+          '{"t": "combat", "active": true}', '{"t": "combat", "active": false}'])
 
 br4 = tb.TriggernometryBridge()
 br4._active = True

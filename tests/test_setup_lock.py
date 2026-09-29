@@ -1,4 +1,4 @@
-"""Exclusive environment setup, stale locks and bounded waiting."""
+"""Exclusive environment setup, abandoned locks and bounded waiting."""
 import os
 import sys
 import tempfile
@@ -37,7 +37,10 @@ def test_setup_lock_acquire_release():
                 check("held lock file exists", install._SETUP_LOCK.exists())
                 check("lock names its holder",
                       install._SETUP_LOCK.read_text() == str(os.getpid()))
-            check("release removes the lock", not install._SETUP_LOCK.exists())
+            check("release removes the marker", not install._SETUP_LOCK.exists())
+            check("release keeps the shared guard", install._SETUP_LOCK.with_suffix(".lock.guard").exists())
+            with install.setup_lock():
+                check("released lock can be acquired again", True)
         finally:
             install._SETUP_LOCK = saved
 
@@ -79,7 +82,7 @@ def test_setup_lock_serializes_waiter():
             install._SETUP_LOCK = saved
 
 
-# a killed holder's leftover lock is broken by age
+# An old abandoned marker can be reclaimed under the guard.
 def test_setup_lock_breaks_stale():
     with tempfile.TemporaryDirectory() as td:
         saved = _patched_lock(td)
@@ -90,9 +93,9 @@ def test_setup_lock_breaks_stale():
             start = time.monotonic()
             with install.setup_lock():
                 held = True
-            check("stale lock broken right away",
+            check("abandoned marker can be acquired right away",
                   held and time.monotonic() - start < 5)
-            check("stale file replaced then released",
+            check("reclaimed marker is removed after release",
                   not install._SETUP_LOCK.exists())
         finally:
             install._SETUP_LOCK = saved

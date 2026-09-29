@@ -173,6 +173,8 @@ jobs:
           python3 triggevent-core/test_recovery.py --compare
           python3 triggevent-core/test_recovery_protocol.py
           python3 triggevent-core/test_custom_triggers.py
+          python3 triggevent-core/test_delayed_speech.py
+          python3 triggevent-core/test_diagnostics.py
 
       - name: Upload sidecar jar
         uses: actions/upload-artifact@v4
@@ -216,7 +218,8 @@ jobs:
                   seed = [
                       {'source': 'triggevent', 'id': t.get('id', ''),
                        'fight': t.get('fight', ''), 'group': t.get('group', ''),
-                       'name': t.get('name') or t.get('id', ''), 'text': t.get('text', '')}
+                       'name': t.get('name') or t.get('id', ''), 'text': t.get('text', ''),
+                       **({'tts': t['tts']} if 'tts' in t else {})}
                       for t in msg['triggers'] if isinstance(t, dict) and t.get('id')
                   ]
                   break

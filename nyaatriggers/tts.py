@@ -3,7 +3,6 @@ with aplay on Linux and winsound on Windows.
 """
 
 import array
-import glob
 import hashlib
 import io
 import os
@@ -21,11 +20,12 @@ import wave
 from pathlib import Path
 from queue import Queue, Empty, Full
 
-from nyaatriggers.paths import bundle_root, default_voice_dir
+from nyaatriggers.paths import bundle_root, default_voice_dir, resolve_voice_venv, voice_site_packages
 
 from nyaatriggers import proc_env
 from nyaatriggers.locale_util import has_japanese
 from nyaatriggers.drop_log import log_drop
+from nyaatriggers.diagnostics import record, record_exception
 from nyaatriggers.http_fetch import open_response
 
 try:
@@ -37,8 +37,7 @@ _venv_sps: list[str] = []   # site-packages entries we inserted, swapped around 
 _stale_venv_sps: set[str] = set()   # entries a previous venv used, their leftover modules get purged
 if not getattr(sys, 'frozen', False):
     _FFXIV_VENV = Path.home() / ".venv" / "ffxiv"
-    _sp_paths  = glob.glob(str(_FFXIV_VENV / "lib" / "python*" / "site-packages"))
-    _sp_paths += glob.glob(str(_FFXIV_VENV / "Lib" / "site-packages"))
+    _sp_paths = voice_site_packages(_FFXIV_VENV)
     for _sp in _sp_paths:
         if _sp not in sys.path:
             sys.path.insert(0, _sp)
@@ -70,6 +69,7 @@ _notification_slots = threading.BoundedSemaphore(4)
 _worker_started = threading.Event()
 _worker_lock    = threading.Lock()
 _master_volume: float = 1.0
+_speech_suspended = False
 # Invalidate results still synthesizing when interrupt runs.
 _generation: int = 0
 
@@ -99,7 +99,10 @@ _kokoro_epoch: int = 0
 
 def set_master_volume(v: float) -> None:
     global _master_volume
+    previous = _master_volume
     _master_volume = max(0.0, min(2.0, v))
+    if previous > 0 and _master_volume == 0:
+        interrupt()
 
 
 def set_engine(name: str) -> None:
@@ -166,14 +169,18 @@ def install_kokoro_deps(timeout: int = 1200) -> tuple[bool, str]:
     if getattr(sys, "frozen", False):
         return True, "bundled"
     try:
+        from install import run_setup_command, setup_lock
+
         # Kokoro uses the voice environment, outside requirements.txt.
-        r = subprocess.run(
-            [_venv_python(), "-m", "pip", "install", "--no-input", "--upgrade", "kokoro-onnx==0.4.7"],
-            capture_output=True, text=True, timeout=timeout,
-            encoding="utf-8", errors="replace",
-            env=proc_env.child_env())
+        with setup_lock():
+            r = run_setup_command(
+                [_venv_python(), "-m", "pip", "install", "--no-input", "--upgrade", "kokoro-onnx==0.4.7"],
+                timeout=timeout, capture_output=True, env=proc_env.child_env())
         tail = (r.stderr or r.stdout or "").strip().splitlines()[-3:]
         return r.returncode == 0, "\n".join(tail)
+    except subprocess.CalledProcessError as exc:
+        tail = (exc.stderr or exc.stdout or str(exc)).strip().splitlines()[-3:]
+        return False, "\n".join(tail)
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
 
@@ -312,11 +319,14 @@ def kokoro_ready() -> bool:
         return False
     if _kokoro_import_failed:
         return False
+    epoch = _kokoro_epoch
     try:
         import kokoro_onnx  # noqa: F401
         return True
     except Exception as exc:  # noqa: BLE001
-        _kokoro_import_failed = True
+        with _kokoro_lock:
+            if _kokoro_epoch == epoch:
+                _kokoro_import_failed = True
         _log_once("kokoro-import", f"[tts] kokoro-onnx unavailable: {exc!r}")
         return False
 
@@ -348,7 +358,8 @@ def _load_kokoro():
             except Exception as exc:  # noqa: BLE001
                 # Retain model files when a dependency is missing.
                 with _kokoro_lock:
-                    _kokoro_failed = True
+                    if _kokoro_epoch == epoch:
+                        _kokoro_failed = True
                 _log_once("kokoro-load", f"[tts] kokoro-onnx import failed: {exc!r}")
                 return None
         try:
@@ -383,17 +394,24 @@ def _load_kokoro():
             return _kokoro
 
 
-def _kokoro_synth(text: str, speed: float = 1.0) -> "bytes | None":
+def _kokoro_synth(text: str, speed: float = 1.0, gen: "int | None" = None) -> "bytes | None":
     """Use kana for Japanese synthesis. Return None for system voice fallback."""
     global _kokoro, _kokoro_failed
+    record("tts_backend", gen=gen, backend="kokoro", result="attempt")
+    if gen is not None and gen != _generation:
+        record("tts_backend", gen=gen, backend="kokoro", result="stale")
+        return None
     k = _load_kokoro()
-    if k is None:
+    if k is None or (gen is not None and gen != _generation):
+        record("tts_backend", gen=gen, backend="kokoro",
+               result="unavailable" if k is None else "superseded")
         return None
     try:
         import numpy as np
         ok, out = _synth_call(lambda: k.create(text, voice=_jp_neural_voice,
                                                speed=min(2.0, max(0.5, speed)), lang="ja"))
         if not ok:
+            record("tts_backend", gen=gen, backend="kokoro", result="timed_out")
             # Retire only the session that timed out so later callouts do not repeat its
             # stalled synthesis.
             with _kokoro_lock:
@@ -449,16 +467,23 @@ class _StampedItem(tuple):
 def _enqueue(item) -> None:
     """Queue without blocking, evicting the oldest item when full."""
     with _enqueue_lock:
+        if _master_volume <= 0 or _speech_suspended:
+            record("tts_queue", gen=_generation, depth=_queue.qsize(), kind=item[0],
+                   result="muted" if _master_volume <= 0 else "suspended")
+            return
         # Stamp at enqueue so interruptions also invalidate items already dequeued for
         # synthesis.
         stamped = _StampedItem(item, _generation)
         try:
             _queue.put_nowait(stamped)
+            record("tts_queue", gen=_generation, depth=_queue.qsize(), kind=item[0], result="queued")
         except Full:
             try:
                 _queue.get_nowait()
+                record("tts_queue", gen=_generation, depth=_queue.qsize(), kind=item[0], result="evicted")
                 log_drop("tts-overflow", "TTS queue full; dropped the oldest queued callout")
                 _queue.put_nowait(stamped)
+                record("tts_queue", gen=_generation, depth=_queue.qsize(), kind=item[0], result="queued")
             except (Empty, Full):
                 pass
 
@@ -495,7 +520,7 @@ def play_notification(path: str, volume: float = 1.0) -> None:
         raise
 
 
-def interrupt() -> None:
+def interrupt(*, wait: bool = False) -> None:
     """Synchronous winsound playback cannot be interrupted."""
     global _generation
     # Hold the enqueue lock while clearing and incrementing the generation. Always
@@ -508,13 +533,44 @@ def interrupt() -> None:
                 break
         with _proc_lock:
             _generation += 1
-            if _current_proc is not None:
+            record("tts_queue", gen=_generation, depth=_queue.qsize(), result="interrupted")
+            proc = _current_proc
+            if proc is not None:
                 global _interrupted_proc
-                _interrupted_proc = _current_proc
+                _interrupted_proc = proc
                 try:
-                    _current_proc.terminate()
+                    proc.terminate()
                 except OSError:
                     pass
+    if wait and proc is not None:
+        try:
+            proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                log_drop("tts-shutdown", "speech process did not stop after kill")
+        except OSError:
+            pass
+
+
+def suspend() -> None:
+    """Stop queued and active speech before program teardown."""
+    global _speech_suspended
+    with _enqueue_lock:
+        _speech_suspended = True
+    interrupt(wait=True)
+
+
+def resume() -> None:
+    """Accept fresh speech after startup or a failed restart."""
+    global _speech_suspended
+    with _enqueue_lock:
+        _speech_suspended = False
 
 
 def set_model(path: Path) -> None:
@@ -531,8 +587,7 @@ def _purge_stale_venv_modules() -> None:
     venv = globals().get("_FFXIV_VENV")
     if not venv:
         return
-    sps = glob.glob(str(venv / "lib" / "python*" / "site-packages"))
-    sps += glob.glob(str(venv / "Lib" / "site-packages"))
+    sps = voice_site_packages(venv)
     for name, mod in list(sys.modules.items()):
         mod_file = getattr(mod, "__file__", "") or ""
         if not mod_file:
@@ -548,12 +603,16 @@ def _purge_stale_venv_modules() -> None:
 
 def set_venv_path(path: str) -> None:
     global _FFXIV_VENV, _piper_voice, _piper_failed, _piper_epoch
+    global _kokoro, _kokoro_failed, _kokoro_import_failed, _kokoro_epoch
     if getattr(sys, 'frozen', False):
         return
-    new_venv = Path(path.strip()).expanduser() if path.strip() else Path.home() / ".venv" / "ffxiv"
+    try:
+        new_venv = resolve_voice_venv(path)
+    except RuntimeError as exc:
+        _log_once("invalid-voice-environment", f"[tts] invalid voice environment, using default: {exc}")
+        new_venv = resolve_voice_venv("")
+    new_sps = voice_site_packages(new_venv)
     _FFXIV_VENV = new_venv
-    new_sps  = glob.glob(str(new_venv / "lib" / "python*" / "site-packages"))
-    new_sps += glob.glob(str(new_venv / "Lib" / "site-packages"))
     for old in _venv_sps:
         try:
             sys.path.remove(old)
@@ -570,6 +629,11 @@ def set_venv_path(path: str) -> None:
         _piper_voice = None
         _piper_failed = False
         _piper_epoch += 1
+    with _kokoro_lock:
+        _kokoro = None
+        _kokoro_failed = False
+        _kokoro_import_failed = False
+        _kokoro_epoch += 1
 
 
 
@@ -634,14 +698,20 @@ def _worker_loop() -> None:
     while True:
         item = _queue.get()
         gen = getattr(item, "gen", None)
+        started = time.monotonic()
         try:
+            record("tts_queue", gen=gen, depth=_queue.qsize(), kind=item[0], result="dequeued")
             if item[0] == "wav":
                 _, path, volume = item
                 _play_wav_file(path, volume, gen)
             else:
                 _, text, volume, speed, reading = item
                 _pipeline(text, volume, speed, reading, gen)
+            record("tts_queue", gen=gen, depth=_queue.qsize(), kind=item[0],
+                   result="finished", duration_ms=(time.monotonic() - started) * 1000)
         except Exception as exc:  # noqa: BLE001
+            record_exception("python_exception", exc, site="tts")
+            record("tts_queue", gen=gen, depth=_queue.qsize(), result="failed")
             traceback.print_exc()
             log_drop("tts-error", f"{type(exc).__name__} in the TTS worker: {exc}")
 
@@ -721,6 +791,8 @@ def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool
                     gen: "int | None" = None) -> bool:
     """Track the child for interruption and reject stale generations before spawning."""
     global _current_proc, _interrupted_proc
+    record("tts_backend", gen=gen, backend="system", result="attempt")
+    started = time.monotonic()
     kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
                     "env": proc_env.child_env()}
     if no_window and platform.system() == "Windows":
@@ -741,7 +813,13 @@ def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool
         if gen is not None and gen != _generation:
             # Treat interrupted text as handled so it cannot be replayed through Piper.
             return True
-        proc = subprocess.Popen(cmd, **kwargs)
+        try:
+            proc = subprocess.Popen(cmd, **kwargs)
+        except OSError as exc:
+            record("tts_backend", gen=gen, backend="system", result="unavailable")
+            _log_once(f"system-spawn:{cmd[0]}",
+                      f"[tts] system voice spawn failed for {cmd[0]!r}: {exc!r}")
+            return False
         _current_proc = proc
     timed_out = False
     kill_failed = False
@@ -785,16 +863,22 @@ def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool
             _current_proc = None
     # Intentional termination counts as handled. Real backend failures can use fallback.
     if was_interrupted:
+        record("tts_backend", gen=gen, backend="system", result="interrupted")
         return True
     if timed_out:
+        record("tts_backend", gen=gen, backend="system", result="timed_out")
         # Drop timed out callouts instead of replaying stale text.
         log_drop("tts-backend", f"system TTS wedged; killed after 30s, callout dropped: {text[:60]!r}")
         return True
     if kill_failed:
+        record("tts_backend", gen=gen, backend="system", result="failed")
         log_drop("tts-backend", f"system TTS survived the kill; callout dropped: {text[:60]!r}")
         return True
     if proc.returncode != 0:
         log_drop("tts-backend", f"system TTS failed with exit status {proc.returncode}")
+    record("tts_backend", gen=gen, backend="system",
+           result="finished" if proc.returncode == 0 else "failed", returncode=proc.returncode,
+           elapsed_ms=(time.monotonic() - started) * 1000)
     return proc.returncode == 0
 
 
@@ -949,6 +1033,8 @@ def _play_winsound(source, flags: int, gen: "int | None" = None) -> None:
     """Bound driver stalls and propagate completed playback errors."""
     import winsound
     box: dict = {}
+    started = time.monotonic()
+    record("tts_backend", gen=gen, backend="winsound", result="attempt")
 
     def _run() -> None:
         try:
@@ -956,6 +1042,7 @@ def _play_winsound(source, flags: int, gen: "int | None" = None) -> None:
             # interrupt stays responsive.
             with _proc_lock:
                 if gen is not None and gen != _generation:
+                    box["stale"] = True
                     return
             winsound.PlaySound(source, flags)
         except Exception as exc:   # noqa: BLE001
@@ -966,11 +1053,16 @@ def _play_winsound(source, flags: int, gen: "int | None" = None) -> None:
     # Allow long sounds to finish by deriving the deadline from WAV duration.
     t.join(max(60.0, _wav_seconds(source) * 1.5 + 5))
     if t.is_alive():
+        record("tts_backend", gen=gen, backend="winsound", result="timed_out")
         log_drop("tts-playback",
                  "winsound hung on the audio device; playback abandoned, callout had no audio")
         return
     if "err" in box:
+        record("tts_backend", gen=gen, backend="winsound", result="failed")
         raise box["err"]
+    record("tts_backend", gen=gen, backend="winsound",
+           result="stale" if box.get("stale") else "finished",
+           elapsed_ms=(time.monotonic() - started) * 1000)
 
 
 def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
@@ -982,8 +1074,10 @@ def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
         _play_winsound(wav_path, winsound.SND_FILENAME | winsound.SND_NODEFAULT, gen)
         return
     player = ["aplay", "-q", "--", wav_path]
+    record("tts_backend", gen=gen, backend="aplay", result="attempt")
     with _proc_lock:
         if gen is not None and gen != _generation:
+            record("tts_backend", gen=gen, backend="aplay", result="stale")
             log_drop("tts-interrupt",
                      "callout cut off by a newer interrupt before playback started")
             return
@@ -992,6 +1086,7 @@ def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
                                     stderr=subprocess.PIPE,
                                     env=proc_env.child_env())
         except FileNotFoundError:
+            record("tts_backend", gen=gen, backend="aplay", result="unavailable")
             _aplay_missing()
             return
         _current_proc = proc
@@ -1019,12 +1114,15 @@ def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
             _current_proc = None
     # Intentional interruption is not a playback failure.
     if was_interrupted:
+        record("tts_backend", gen=gen, backend="aplay", result="interrupted")
         return
     if timed_out:
+        record("tts_backend", gen=gen, backend="aplay", result="timed_out")
         log_drop("tts-playback",
                  f"aplay hung {play_timeout:.0f}s on the audio device; killed, callout had no audio")
         return
     if proc.returncode != 0:
+        record("tts_backend", gen=gen, backend="aplay", result="failed", returncode=proc.returncode)
         lines = (err or b"").decode(errors="replace").strip().splitlines()
         detail = lines[-1][:160] if lines else f"exit {proc.returncode}"
         log_drop("tts-playback",
@@ -1033,6 +1131,9 @@ def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
     # An unexpectedly early successful exit may indicate discarded audio rather than
     # completed playback.
     elapsed = time.monotonic() - started
+    record("tts_backend", gen=gen, backend="aplay",
+           result="early_exit" if duration and elapsed < duration * 0.5 else "finished",
+           elapsed_ms=elapsed * 1000, duration_ms=duration * 1000)
     if duration and elapsed < duration * 0.5:
         log_drop("tts-playback",
                  f"aplay exited 0 after {elapsed:.2f}s for a {duration:.2f}s wav; "
@@ -1202,7 +1303,7 @@ def _play_wav_bytes(wav: "bytes | None", volume: float = 1.0,
 def _kokoro_speak(text: str, volume: float = 1.0, speed: float = 1.0,
                   gen: "int | None" = None) -> bool:
     """Return False for system voice fallback."""
-    wav = _kokoro_synth(text, speed)
+    wav = _kokoro_synth(text, speed, gen)
     if gen is not None and gen != _generation:
         # Treat interrupted synthesis as handled so it cannot trigger fallback.
         return True
@@ -1214,9 +1315,13 @@ def _pipeline(text: str, volume: float = 1.0, speed: float = 1.0,
     global _piper_voice, _piper_failed
     # Skip muted synthesis because minimum backend volume may still be audible.
     if volume * _master_volume <= 0.0:
+        record("tts_backend", gen=gen, backend=_engine, result="muted")
         return
     if gen is None:
         gen = _generation
+    if gen != _generation:
+        record("tts_backend", gen=gen, backend=_engine, result="stale")
+        return
     # Setters replace the map without mutating published snapshots.
     if reading is None:
         readings = _READINGS
@@ -1232,10 +1337,16 @@ def _pipeline(text: str, volume: float = 1.0, speed: float = 1.0,
 
     wav_path = None
     try:
+        record("tts_backend", gen=gen, backend="piper", result="attempt")
         voice = _load_piper()
+        if gen != _generation:
+            record("tts_backend", gen=gen, backend="piper", result="superseded")
+            return
         if voice is None:
             with _piper_lock:
                 failed = _piper_failed
+            record("tts_backend", gen=gen, backend="piper",
+                   result="unavailable" if failed else "superseded")
             if failed:
                 log_drop("tts-piper", f"piper voice unavailable (sticky load failure); not spoken: {text[:60]!r}")
             else:
@@ -1260,6 +1371,7 @@ def _pipeline(text: str, volume: float = 1.0, speed: float = 1.0,
 
         ok, wav = _synth_call(_synth)
         if not ok:
+            record("tts_backend", gen=gen, backend="piper", result="timed_out")
             # Retire only the voice that timed out so future callouts do not repeat a
             # stalled session.
             with _piper_lock:

@@ -24,7 +24,7 @@ class KagerouStatsTests(unittest.TestCase):
         meter.process(ability("10000001", "40000010", "6003", "00640000"))
         meter.process(ability("10000001", "40000010", "0003", "00640000"))
         meter.process(ability("40000010", "10000001", "0003", "00320000"))
-        meter.process(ability("10000002", "10000001", "0104", "004B0000"))
+        meter.process(ability("10000002", "10000001", "0004", "004B0000"))
         snapshot = meter.snapshot()
         rows = meter.overlay_rows(snapshot, detailed=True)
         player, healer = rows
@@ -46,6 +46,18 @@ class KagerouStatsTests(unittest.TestCase):
         self.assertEqual(frame["enc"]["participants"], 2)
         self.assertEqual(frame["enc"]["id"], snapshot["Encounter"]["pull_id"])
         self.assertNotIn("overheal", frame["rows"][1][7])
+
+    def test_source_healing_reaches_only_the_caster_row(self):
+        meter = DpsMeter(clock=lambda: 0)
+        meter.note_job(0x10000001, 31)
+        meter.note_job(0x10000002, 24)
+        meter.process(ability("10000001", "40000010", "0003", "00640000"))
+        meter.process(ability("10000002", "10000001", "0104", "004B0000"))
+        frame = dps_frame({}, meter.overlay_rows(meter.snapshot(), detailed=True))
+        player, healer = frame["rows"]
+        self.assertEqual(player[7]["healingTaken"], 0)
+        self.assertEqual(healer[7]["healingTaken"], 75)
+        self.assertEqual(healer[7]["healed"], 75)
 
     def test_legacy_rows_and_missing_metrics_remain_usable(self):
         row = ["Player", "MCH", 100, 100, 0, True, 0]

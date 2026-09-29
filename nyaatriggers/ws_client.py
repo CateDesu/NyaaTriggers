@@ -5,10 +5,14 @@ engine sidecars. The meter uses log lines rather than CombatData summaries.
 import json
 import math
 import os
+import time
 
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
 from PyQt6.QtNetwork import QAbstractSocket
 from PyQt6.QtWebSockets import QWebSocket
+
+from nyaatriggers.combatant_responses import CombatantResponses, extract_raw as _extract_raw, request_tag
+from nyaatriggers.diagnostics import record
 
 # Subscribe to combat logs and world state for local processing and sidecar replay.
 _SUBSCRIBE = json.dumps({"call": "subscribe", "events": [
@@ -28,7 +32,8 @@ class WSClient(QObject):
     party_jobs = pyqtSignal(dict)       # actor_id_int -> job_int from PartyChanged, decimal job ids
     zone_changed = pyqtSignal(int, str)     # zoneId and zoneName from ChangeZone
     primary_player = pyqtSignal(int, str)   # charID and charName from ChangePrimaryPlayer
-    raw_message = pyqtSignal(str)       # every raw WS text msg, verbatim, teed to the sidecar
+    raw_message = pyqtSignal(str)       # every raw WS text message for recordings
+    engine_message = pyqtSignal(str)    # accepted replies with native response tags
     status_changed = pyqtSignal(bool, str)  # connected and message
     in_combat = pyqtSignal(bool, bool)
 
@@ -43,6 +48,13 @@ class WSClient(QObject):
         self._error_reported = False
         # Cache subscription state for sidecars that start after these events arrive.
         self._state_cache: dict = {}    # msgtype -> raw_msg
+        self._combatant_sequence = 0
+        self._combatant_responses = CombatantResponses()
+        self._diag_frames = 0
+        self._diag_bytes = 0
+        self._diag_log_lines = 0
+        self._diag_rejected = 0
+        self._diag_at = time.monotonic()
 
         self._ws = QWebSocket(parent=self)
         self._ws.setMaxAllowedIncomingMessageSize(_MAX_WS_MESSAGE)
@@ -88,7 +100,16 @@ class WSClient(QObject):
         self._reconnect_timer.stop()
         # Reset backoff for a user-requested reconnect.
         self._reconnect_delay = 5000
-        if self._ws.state() != QAbstractSocket.SocketState.UnconnectedState:
+        state = self._ws.state()
+        if state in (QAbstractSocket.SocketState.HostLookupState,
+                     QAbstractSocket.SocketState.ConnectingState):
+            # An unfinished handshake may never emit disconnected after close.
+            self._reopen_on_disconnect = False
+            self._stop_heartbeat()
+            self._ws.abort()
+            self._open()
+            return
+        if state != QAbstractSocket.SocketState.UnconnectedState:
             # Wait for asynchronous close before reopening so its disconnect callback
             # cannot abort a new connection.
             self._reopen_on_disconnect = True
@@ -102,7 +123,8 @@ class WSClient(QObject):
         self._reopen_on_disconnect = False
         self._reconnect_timer.stop()
         self._stop_heartbeat()
-        self._ws.close()
+        # Cancel local work even when the peer cannot acknowledge a close.
+        self._ws.abort()
 
     def _open(self) -> None:
         if not self._url:
@@ -116,10 +138,12 @@ class WSClient(QObject):
             # another.
             self._ws.abort()
         self._ws.open(QUrl(self._url))
+        record("ws_state", state="connecting")
         # Arm a deadline for this handshake. Successful connection cancels it.
         self._schedule_reconnect()
 
     def _on_connected(self) -> None:
+        record("ws_state", state="connected")
         self._reconnect_timer.stop()
         self._reconnect_delay = 5000
         self._error_reported = False
@@ -132,6 +156,7 @@ class WSClient(QObject):
             self._poll_timer.start()
 
     def _on_disconnected(self) -> None:
+        record("ws_state", state="disconnected")
         self._poll_timer.stop()
         self._refresh_timer.stop()
         self._refresh_ids.clear()
@@ -141,6 +166,7 @@ class WSClient(QObject):
         self._player_id = 0
         self._party_types = {}
         self._state_cache.clear()
+        self._combatant_responses.reset(self._combatant_sequence)
         if self._error_reported:
             self._error_reported = False
         else:
@@ -160,6 +186,7 @@ class WSClient(QObject):
             self._stop_heartbeat()
             return
         if self._pending_ping is not None:
+            record("ws_state", state="heartbeat_timeout")
             self._stop_heartbeat()
             self._error_reported = True
             self.status_changed.emit(False, "Connection timed out")
@@ -178,11 +205,13 @@ class WSClient(QObject):
         # IINACT adds two zero bytes before the echoed payload. Accept that
         # reply too while still requiring the token from the current probe.
         if bytes(payload) not in (pending, b"\x00\x00" + pending):
+            record("ws_state", state="pong_rejected")
             return
         if self._ws.state() != QAbstractSocket.SocketState.ConnectedState:
             return
         self._pending_ping = None
         self._heartbeat_timer.start(_PING_INTERVAL_MS)
+        record("ws_state", state="pong_accepted", elapsed_ms=_elapsed)
 
     def set_combatant_polling(self, enabled: bool) -> None:
         """Poll combatants while connected and requested by an engine."""
@@ -203,7 +232,12 @@ class WSClient(QObject):
 
     def _request_combatants(self) -> None:
         if self._ws.isValid():
-            self._ws.sendTextMessage(json.dumps({"call": "getCombatants", "rseq": "allCombatants"}))
+            self._ws.sendTextMessage(json.dumps({"call": "getCombatants",
+                "rseq": self._combatant_tag("allCombatants")}))
+
+    def _combatant_tag(self, kind):
+        self._combatant_sequence += 1
+        return request_tag(kind, self._combatant_sequence, self._combatant_responses.zone_token or "")
 
     def request_engine_combatants(self, ids) -> None:
         if not ids:
@@ -219,7 +253,7 @@ class WSClient(QObject):
                 self._request_combatants()
             elif self._refresh_ids:
                 self._ws.sendTextMessage(json.dumps({"call": "getCombatants",
-                    "rseq": "specificCombatants", "ids": sorted(self._refresh_ids)}))
+                    "rseq": self._combatant_tag("specificCombatants"), "ids": sorted(self._refresh_ids)}))
         self._refresh_ids.clear()
         self._refresh_all = False
 
@@ -233,6 +267,7 @@ class WSClient(QObject):
         """
         for msg in self.state_snapshot():
             self.raw_message.emit(msg)
+            self.engine_message.emit(msg)
         self._request_combatants()
 
     def state_snapshot(self) -> tuple[str, ...]:
@@ -245,14 +280,24 @@ class WSClient(QObject):
         if self._ws.isValid():
             return   # Wait for disconnected before treating a transient socket error as feed loss.
         self._error_reported = True
+        record("ws_state", state="error", error_code=getattr(_err, "value", 0))
         self.status_changed.emit(False, self._ws.errorString())
         self._schedule_reconnect()
 
     def _on_message(self, msg: str) -> None:
+        self._diag_frames += 1
+        self._diag_bytes += len(msg.encode("utf-8", errors="replace"))
+        now = time.monotonic()
+        if now - self._diag_at >= 10:
+            record("ws_feed", frames=self._diag_frames, bytes=self._diag_bytes,
+                   log_lines=self._diag_log_lines, rejected=self._diag_rejected)
+            self._diag_at = now
         self.raw_message.emit(msg)
         try:
             data = json.loads(msg)
         except (ValueError, RecursionError):
+            self._combatant_responses.observe_raw(msg.strip(), self._combatant_sequence)
+            self.engine_message.emit(msg)
             # Catch excessive JSON nesting separately because RecursionError is not a
             # ValueError.
             raw = msg.strip()
@@ -261,11 +306,18 @@ class WSClient(QObject):
             return
 
         if not isinstance(data, dict):
+            self.engine_message.emit(msg)
             raw = msg.strip()
             if raw:
                 self._emit_log_line(raw)
             return
 
+        accepted = self._combatant_responses.accept(data, self._combatant_sequence)
+        if accepted is None:
+            self._diag_rejected += 1
+            return
+        self.engine_message.emit(msg if accepted is data else json.dumps(accepted))
+        data = accepted
         mtype = str(data.get("type", "")).lower()
 
         if mtype in ("changezone", "changeprimaryplayer", "partychanged", "incombat"):
@@ -316,7 +368,8 @@ class WSClient(QObject):
 
         if mtype == "combatants" or isinstance(data.get("combatants"), list):
             combs = data.get("combatants")
-            if isinstance(combs, list):
+            # Partial replies cannot replace the full roster.
+            if isinstance(combs, list) and data.get("rseq") != "specificCombatants":
                 self.combatants.emit({"me": self._player_id, "list": _map_combatants(combs, self._party_types)})
             return
 
@@ -325,6 +378,7 @@ class WSClient(QObject):
             self._emit_log_line(raw)
 
     def _emit_log_line(self, raw: str) -> None:
+        self._diag_log_lines += 1
         fields = raw.split("|", 4)
         if fields[0] == "01" and len(fields) > 3 and len(fields[2]) <= 8:
             try:
@@ -350,27 +404,9 @@ class WSClient(QObject):
 
     def _schedule_reconnect(self) -> None:
         if self._auto_reconnect and not self._reconnect_timer.isActive():
+            record("ws_state", state="reconnect_scheduled", delay_ms=self._reconnect_delay)
             self._reconnect_timer.start(self._reconnect_delay)
             self._reconnect_delay = min(self._reconnect_delay * 2, 60000)
-
-
-def _extract_raw(data: dict) -> str:
-    """Extract a raw ACT log line, or an empty string for unrelated messages."""
-    t = data.get("type", "")
-
-    if str(t).lower() == "logline":
-        line = data.get("line")
-        raw = data.get("rawLine") or data.get("raw_line")
-        if raw:
-            # Coerce rawLine to the string required by its Qt signal.
-            return str(raw)
-        return "|".join(str(f) for f in line) if isinstance(line, list) else ""
-
-    # Some IINACT versions use a broadcast wrapper.
-    if str(t).lower() == "broadcast" and str(data.get("msgtype", "")).lower() == "logline":
-        return str(data.get("msg", "")).strip()
-
-    return ""
 
 
 def _signal_id(value) -> int:

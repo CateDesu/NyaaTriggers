@@ -1,6 +1,7 @@
 """Fight tree, trigger table and callout controls for MainWindow."""
 
 from pathlib import Path
+from copy import deepcopy
 import json
 import os
 import shutil
@@ -18,7 +19,7 @@ from PyQt6.QtWidgets import (
 from nyaatriggers.trigger_engine import Trigger, _as_bool
 from nyaatriggers.trigger_profiles import merge_local_choices
 from nyaatriggers.trigger_dialog import TriggerDialog
-from nyaatriggers.tts import set_readings
+from nyaatriggers.tts import set_readings, interrupt as tts_interrupt
 from nyaatriggers.locale_util import _, active_locale
 from nyaatriggers.triggevent_bridge import TriggeventBridge
 try:
@@ -30,7 +31,7 @@ from nyaatriggers import updater
 
 from nyaatriggers import app_common as ac
 from nyaatriggers.app_common import (
-    _CALLOUTS_JA_MAX_BYTES, _CALLOUT_CLAIM_S, _C_EN, _C_FIGHT, _C_NAME, _C_RE, _C_TTS, _C_TYPE, _C_ZONE, _FIGHT_TREE, _GENERAL_TAB, _GUEST_CALLOUT_DEFER_MS, _GUEST_SEVERITY_RANK, _ITEM_ID_ROLE, _ITEM_TYPE_ROLE, _SECTION_ROLE, _TREE_FIGHTS, _VERSION, _as_strset, _atomic_write_json, _compile_phrase_patterns, _fsync_file, _next_bad_name, _repo_download_version, _watched_trigger_files,
+    _CALLOUTS_JA_MAX_BYTES, _CALLOUT_CLAIM_S, _C_EN, _C_FIGHT, _C_NAME, _C_RE, _C_TTS, _C_TYPE, _C_ZONE, _FIGHT_TREE, _GENERAL_TAB, _GUEST_CALLOUT_DEFER_MS, _GUEST_SEVERITY_RANK, _ITEM_ID_ROLE, _ITEM_TYPE_ROLE, _SECTION_ROLE, _TREE_FIGHTS, _VERSION, _as_strset, _atomic_write_bytes, _atomic_write_json, _compile_phrase_patterns, _next_bad_name, _repo_download_version, _watched_trigger_files,
 )
 
 
@@ -75,6 +76,9 @@ class TriggersTabMixin:
         return out
 
     def _load_triggers(self) -> None:
+        if getattr(self, "_local_conflict_dialog", False):
+            return
+        self._local_conflict_warned = False
         # Block local saves while the file is unreadable. Each reload checks again.
         self._local_corrupt = False
         official: list[Trigger] = []
@@ -120,6 +124,7 @@ class TriggersTabMixin:
                 raw = _read_local_triggers()
             except (OSError, ValueError, KeyError, TypeError, RecursionError):
                 self._handle_local_corrupt()
+        self._local_trigger_baseline = deepcopy(raw)
         if isinstance(raw, dict):
             trigs = raw.get("triggers")
             if not isinstance(trigs, list):
@@ -218,7 +223,7 @@ class TriggersTabMixin:
             where = "\n\n" + _("A copy was kept at:\n{path}").format(path=backup)
         except OSError:
             pass
-        ac.QMessageBox.warning(
+        ac.persistence_warning(
             self, _("Triggers Unreadable"),
             _("Your local triggers file could not be read. Edits are paused "
               "until the file is fixed or removed.") + where)
@@ -231,11 +236,19 @@ class TriggersTabMixin:
         # Recheck before saving because an external editor may have corrupted the file
         # since the last poll.
         try:
-            _read_local_triggers()
+            current_local = _read_local_triggers()
         except FileNotFoundError:
-            pass
+            current_local = None
         except (OSError, ValueError, RecursionError):
             self._handle_local_corrupt()
+            return False
+        if current_local != getattr(self, "_local_trigger_baseline", current_local):
+            self._triggers_mtime = ()
+            if not getattr(self, "_local_conflict_warned", False):
+                self._local_conflict_warned = True
+                ac.persistence_warning(self, _("Triggers Changed"), _(
+                    "Your local triggers changed outside the program. "
+                    "Wait for them to reload, then retry your edit."), conflict=True)
             return False
         to_save = [t for t in self._triggers if t.id in self._local_ids]
         records: list[dict] = []
@@ -258,6 +271,7 @@ class TriggersTabMixin:
                 "folders":  self._folders,
             }
             _atomic_write_json(ac.TRIGGERS_LOCAL_FILE, data, indent=2)
+            self._local_trigger_baseline = deepcopy(data)
             # Acknowledge only this local write so other changed files still reload.
             previous = getattr(self, "_triggers_mtime", ())
             current = self._trigger_files_stamp()
@@ -864,6 +878,7 @@ class TriggersTabMixin:
         idx = next((i for i, x in enumerate(self._triggers) if x.id == existing.id), -1)
         if idx < 0:
             return
+        original = deepcopy(existing.to_dict())
         dlg = TriggerDialog(trigger=existing, parent=self, current_zone=self._match_zone,
                             fight_picker=self._pick_fight_folder)
         accepted = dlg.exec() == QDialog.DialogCode.Accepted
@@ -874,6 +889,10 @@ class TriggersTabMixin:
             # Modal dialogs can reload the trigger list. Resolve by ID.
             idx = next((i for i, x in enumerate(self._triggers) if x.id == existing.id), -1)
             if idx < 0:
+                return
+            if self._triggers[idx].to_dict() != original:
+                ac.QMessageBox.warning(self, _("Edit Trigger"), _(
+                    "This callout changed outside the editor. Reopen it before saving."))
                 return
             self._triggers[idx] = updated
             self._local_ids.add(updated.id)
@@ -888,6 +907,7 @@ class TriggersTabMixin:
         t, _idx = self._selected_trigger()
         if t is None:
             return
+        original = deepcopy(t.to_dict())
         dlg = TriggerDialog(trigger=t, parent=self, current_zone=self._match_zone,
                             fight_picker=self._pick_fight_folder)
         accepted = dlg.exec() == QDialog.DialogCode.Accepted
@@ -897,6 +917,10 @@ class TriggersTabMixin:
             # Modal dialogs can reload the trigger list. Resolve by ID.
             idx = next((i for i, x in enumerate(self._triggers) if x.id == t.id), -1)
             if idx < 0:
+                return
+            if self._triggers[idx].to_dict() != original:
+                ac.QMessageBox.warning(self, _("Edit Trigger"), _(
+                    "This callout changed outside the editor. Reopen it before saving."))
                 return
             self._triggers[idx] = updated
             self._local_ids.add(updated.id)
@@ -1063,8 +1087,9 @@ class TriggersTabMixin:
             self._clear_callout_dedup()
         self._push_timeline_to_plugin()
         for src in engine_srcs:
-            self._persist_engine_disabled(src)
             self._apply_engine_disabled(src)
+        for src in engine_srcs:
+            self._persist_engine_disabled(src)
         if changed:
             self._save_triggers()
         self._save_settings()
@@ -1296,8 +1321,8 @@ class TriggersTabMixin:
                 dset.discard(tid)
             else:
                 dset.add(tid)
-        self._persist_engine_disabled("triggevent")
         self._apply_engine_disabled("triggevent")
+        self._persist_engine_disabled("triggevent")
 
     def _all_tv_ids(self) -> list:
         return [e["id"] for e in getattr(self, "_engine_inventory", [])
@@ -1314,8 +1339,8 @@ class TriggersTabMixin:
                 dset.discard(i)
         else:
             dset.update(self._all_tv_ids())
-        self._persist_engine_disabled("triggevent")
         self._apply_engine_disabled("triggevent")
+        self._persist_engine_disabled("triggevent")
         self._set_sections_collapsed(not enable, "engine")
         self._refresh_table()
         self._update_fight_controls()
@@ -1328,8 +1353,6 @@ class TriggersTabMixin:
             if t.enabled != enable:
                 self._set_trigger_enabled(t, enable)
                 self._local_ids.add(t.id)
-        self._save_triggers()
-        self._save_settings()
         if enable:
             self._push_timeline_to_plugin()
         else:
@@ -1340,6 +1363,8 @@ class TriggersTabMixin:
                 self._timeline.reset()
                 self._clear_callout_dedup()
             self._push_timeline_to_plugin()
+        self._save_triggers()
+        self._save_settings()
         self._set_sections_collapsed(not enable, "general", "dot", "local")
         self._refresh_table()
         self._update_fight_controls()
@@ -1388,7 +1413,7 @@ class TriggersTabMixin:
             self._src_collapsed[key] = not self._src_collapsed.get(key, False)
             self._apply_tab_filter()
 
-    def _set_local_enabled(self, enabled: bool) -> None:
+    def _set_local_enabled(self, enabled: bool, *, save: bool = True) -> None:
         self._local_enabled = bool(enabled)
         # Cancel pending expiry warnings because their timers run independently of log
         # matching.
@@ -1405,20 +1430,24 @@ class TriggersTabMixin:
         else:
             self._push_timeline_to_plugin()
         self._settings["local_enabled"] = self._local_enabled
-        self._save_settings()
+        if save:
+            self._save_settings()
 
     def _set_triggers_enabled(self, enabled: bool) -> None:
         """Switch editable callouts without stopping Triggevent automarkers."""
+        if self._triggers_enabled != bool(enabled):
+            tts_interrupt()
         self._triggers_enabled = bool(enabled)
         if enabled:
             # Clear the saved cactbot flag so it cannot restart on the next launch.
-            self._set_cactbot_enabled(False)
-        self._set_local_enabled(enabled)
+            self._set_cactbot_enabled(False, save=False)
+        self._set_local_enabled(enabled, save=False)
         if TriggeventBridge.is_available():
             self._set_triggevent_enabled(enabled)
         # Run imported Triggernometry packs alongside Local under this switch.
         if TriggernometryBridge is not None and TriggernometryBridge.is_available():
             self._set_triggernometry_enabled(enabled)
+        self._save_settings()
 
     def _on_callouts_localized_changed(self, state: int) -> None:
         self._settings["callouts_localized"] = bool(state)
@@ -1475,18 +1504,11 @@ class TriggersTabMixin:
         if answer != ac.QMessageBox.StandardButton.Yes:
             return
         try:
-            tmp = ac.TRIGGERS_LOCAL_FILE.with_suffix(ac.TRIGGERS_LOCAL_FILE.suffix + ".tmp")
-            tmp.write_bytes(imported)
-            # Keep a backup because import replaces the complete local file.
             backup = None
             if ac.TRIGGERS_LOCAL_FILE.exists():
-                try:
-                    backup = ac.TRIGGERS_LOCAL_FILE.with_name(ac.TRIGGERS_LOCAL_FILE.name + ".bak")
-                    shutil.copy2(ac.TRIGGERS_LOCAL_FILE, backup)
-                except OSError:
-                    backup = None
-            _fsync_file(tmp)
-            os.replace(tmp, ac.TRIGGERS_LOCAL_FILE)
+                backup = ac.TRIGGERS_LOCAL_FILE.with_name(ac.TRIGGERS_LOCAL_FILE.name + ".bak")
+                _atomic_write_bytes(backup, ac.TRIGGERS_LOCAL_FILE.read_bytes())
+            _atomic_write_bytes(ac.TRIGGERS_LOCAL_FILE, imported)
         except OSError as exc:
             ac.QMessageBox.critical(self, _("Import Failed"),
                                  _("Could not write file:\n{error}").format(error=exc))
@@ -1524,8 +1546,12 @@ class TriggersTabMixin:
         for p in (ac.TRIGGERS_FILE, ac.TRIGGERS_LOCAL_FILE):
             try:
                 if p.exists():
-                    json.loads(p.read_text(encoding="utf-8"))
+                    if p == ac.TRIGGERS_LOCAL_FILE:
+                        _read_local_triggers()
+                    else:
+                        json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError, RecursionError):
+                self._triggers_mtime = ()
                 return
         self._load_triggers()
 

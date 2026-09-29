@@ -10,10 +10,12 @@ from PyQt6.QtCore import Qt
 
 from nyaatriggers import app_common as ac
 from nyaatriggers.locale_util import _
-from nyaatriggers.record_store import load_records, record_id, write_record
+from nyaatriggers.record_store import load_records, read_record, record_id, write_record
 from nyaatriggers.trigger_profiles import (
     DEFAULT_PROFILE_ID, SOURCES, apply_choices, capture_profile, preserve_default, validate_profile,
 )
+
+_PENDING_PROFILE = "pending_trigger_profile"
 
 
 class ProfilesMixin:
@@ -118,7 +120,9 @@ class ProfilesMixin:
     def _profile_selection_changed(self):
         ident = self._profile_picker.currentData()
         named = ident is not None and ident != DEFAULT_PROFILE_ID
-        self._profile_apply.setEnabled(named or self._active_profile_id != DEFAULT_PROFILE_ID)
+        self._profile_apply.setEnabled(
+            _PENDING_PROFILE not in self._settings
+            and (named or self._active_profile_id != DEFAULT_PROFILE_ID))
         self._profile_update.setEnabled(named)
         self._profile_delete.setEnabled(named)
         self._profile_picker.setToolTip(
@@ -134,13 +138,108 @@ class ProfilesMixin:
         return next((p for p in self._profiles if p["id"] == ident), None)
 
     def _restore_missing_profile(self):
+        recovering = _PENDING_PROFILE in self._settings
+        if recovering and not self._recover_profile_change():
+            return
         if (self._active_profile_id != DEFAULT_PROFILE_ID
                 and not any(p["id"] == self._active_profile_id for p in self._profiles)):
             default = self._default_profile
             if default is None and not self._default_unreadable:
                 # Both records are gone. Keep the current choices as Default.
                 default = capture_profile(self, _("Default"), DEFAULT_PROFILE_ID)
-            self._activate_profile(default)
+            restored = self._activate_profile(default)
+            if recovering and restored:
+                self._set_profile_status(_("Recovered the interrupted profile change and returned to Default because the saved profile is unavailable."))
+
+    def _profile_intent_path(self):
+        return self._profiles_dir / ".pending" / (DEFAULT_PROFILE_ID + ".json")
+
+    def _profile_local_changed(self, baseline):
+        from nyaatriggers.ui.triggers_tab import _read_local_triggers
+        try:
+            current = _read_local_triggers()
+        except FileNotFoundError:
+            current = None
+        except (OSError, ValueError, RecursionError):
+            return True
+        return current != baseline
+
+    def _write_profile_intent(self, profile, *, preserve_local=False):
+        record_id(profile.get("id"))
+        validate_profile(profile)
+        write_record(self._profile_intent_path().parent,
+                     {"version": 1, "id": DEFAULT_PROFILE_ID, "profile": deepcopy(profile),
+                      "local_baseline": deepcopy(getattr(self, "_local_trigger_baseline", None)),
+                      "preserve_local": preserve_local})
+
+    def _persist_profile_choice(self, profile, *, preserve_local=False):
+        self._settings["active_trigger_profile"] = profile["id"]
+        self._settings[_PENDING_PROFILE] = True
+        if not self._save_settings() or (not preserve_local and not self._save_triggers()):
+            return False
+        self._settings.pop(_PENDING_PROFILE)
+        if not self._save_settings():
+            self._settings[_PENDING_PROFILE] = True
+            return False
+        if not self._default_unreadable:
+            try:
+                self._profile_intent_path().unlink(missing_ok=True)
+            except OSError:
+                pass
+        return True
+
+    def _recover_profile_change(self):
+        with ac.defer_persistence_warnings(self):
+            return self._recover_profile_change_now()
+
+    def _recover_profile_change_now(self):
+        returned_to_default = False
+        try:
+            if self._settings[_PENDING_PROFILE] is not True:
+                raise ValueError("Invalid pending profile change")
+            record = read_record(self._profile_intent_path())
+            profile = record.get("profile")
+            if not isinstance(profile, dict):
+                raise ValueError("Missing pending profile snapshot")
+            record_id(profile.get("id"))
+            validate_profile(profile)
+            preserve_local = record.get("preserve_local", False)
+            if type(preserve_local) is not bool:
+                raise ValueError("Invalid local recovery mode")
+            if not preserve_local and ("local_baseline" not in record
+                    or self._profile_local_changed(record["local_baseline"])):
+                preserve_local = True
+                self._write_profile_intent(profile, preserve_local=True)
+            if (preserve_local and profile["id"] != DEFAULT_PROFILE_ID
+                    and not any(p["id"] == profile["id"] for p in self._profiles)):
+                default = self._default_profile
+                if default is None and not self._default_unreadable:
+                    default = capture_profile(self, _("Default"), DEFAULT_PROFILE_ID)
+                if default is None:
+                    self._set_profile_status(_("Default could not be loaded. Repair the saved Default profile before switching profiles."))
+                    self._profile_selection_changed()
+                    return False
+                profile = deepcopy(default)
+                self._write_profile_intent(profile, preserve_local=True)
+                returned_to_default = True
+        except (OSError, ValueError, TypeError, KeyError, RecursionError, OverflowError) as exc:
+            self._set_profile_status(_("Could not recover the interrupted profile change: {error}\nRepair the recovery record in trigger_profiles/.pending before switching profiles.").format(error=exc))
+            self._profile_selection_changed()
+            return False
+        previous_speech = {ident: self._triggevent_effective_tts(ident)
+                           for ident in profile["engines"].get("triggevent", {})}
+        if preserve_local:
+            profile = deepcopy(profile)
+            profile["local"] = {}
+        apply_choices(self, profile)
+        if not self._persist_profile_choice(profile, preserve_local=preserve_local):
+            self._set_profile_status(_("The interrupted profile change could not be saved. Check that the data folder is writable, then restart to finish recovery."))
+            self._profile_selection_changed()
+            return False
+        self._profile_applied(profile, previous_speech)
+        if returned_to_default:
+            self._set_profile_status(_("Recovered the interrupted profile change and returned to Default because the saved profile is unavailable."))
+        return True
 
     def _save_new_profile(self):
         name, accepted = QInputDialog.getText(self, _("Save new profile"), _("Profile name:"))
@@ -203,6 +302,13 @@ class ProfilesMixin:
         self._activate_profile(self._selected_profile())
 
     def _activate_profile(self, profile):
+        with ac.defer_persistence_warnings(self):
+            return self._activate_profile_now(profile)
+
+    def _activate_profile_now(self, profile):
+        if _PENDING_PROFILE in self._settings:
+            self._set_profile_status(_("An interrupted profile change still needs recovery. Repair the recovery record in trigger_profiles/.pending, then restart before switching profiles."))
+            return False
         if profile is None:
             self._set_profile_status(_("Default could not be loaded. Repair the saved Default profile before switching profiles."))
             return False
@@ -224,15 +330,30 @@ class ProfilesMixin:
                 self._set_profile_status(_("Could not save Default: {error}").format(error=exc))
                 return False
             self._default_profile = default
-        before = capture_profile(self, "Previous setup")
+        before = capture_profile(self, "Previous setup", self._active_profile_id)
+        rollback = preserve_default(self, before, profile)
         old_settings = deepcopy(self._settings)
         old_local_ids = self._local_ids.copy()
         old_disabled = deepcopy(self._engine_disabled)
         old_edits = {src: deepcopy(getattr(self, f"_{src}_callout_edits", {})) for src in SOURCES}
+        try:
+            self._write_profile_intent(profile)
+        except (OSError, ValueError) as exc:
+            self._set_profile_status(_("Could not save profile recovery data: {error}").format(error=exc))
+            return False
+        previous_speech = {ident: self._triggevent_effective_tts(ident)
+                           for ident in profile["engines"].get("triggevent", {})}
         apply_choices(self, profile)
-        self._settings["active_trigger_profile"] = profile["id"]
-        # Save the selection first so a restart keeps Default separate.
-        if not self._save_settings() or not self._save_triggers():
+        if not self._persist_profile_choice(profile):
+            preserve_local = self._profile_local_changed(getattr(self, "_local_trigger_baseline", None))
+            try:
+                if preserve_local:
+                    self._write_profile_intent(rollback, preserve_local=True)
+                else:
+                    self._write_profile_intent(rollback)
+                rollback_ready = True
+            except (OSError, ValueError):
+                rollback_ready = False
             apply_choices(self, before)
             for source in SOURCES:
                 self._engine_disabled[source].clear()
@@ -243,12 +364,25 @@ class ProfilesMixin:
                     edits.update(old_edits[source])
             self._settings = old_settings
             self._local_ids = old_local_ids
-            restored_triggers = self._save_triggers()
-            restored_settings = self._save_settings()
+            self._settings[_PENDING_PROFILE] = True
+            restored = rollback_ready and self._persist_profile_choice(rollback, preserve_local=preserve_local)
+            if (rollback_ready and not restored and not preserve_local
+                    and self._profile_local_changed(getattr(self, "_local_trigger_baseline", None))):
+                try:
+                    self._write_profile_intent(rollback, preserve_local=True)
+                except (OSError, ValueError):
+                    pass
+                else:
+                    restored = self._persist_profile_choice(rollback, preserve_local=True)
             self._set_profile_status(_("Profile was not applied because the current setup could not be saved."))
-            if not restored_triggers or not restored_settings:
+            if not restored:
                 self._set_profile_status(_("Profile save and rollback failed. The previous setup is restored in memory. Check the data directory before restarting."))
+            self._profile_selection_changed()
             return False
+        self._profile_applied(profile, previous_speech)
+        return True
+
+    def _profile_applied(self, profile, previous_speech):
         self._active_profile_id = profile["id"]
         self._refresh_profiles(self._active_profile_id)
         self._clear_status_timers()
@@ -267,8 +401,14 @@ class ProfilesMixin:
                     bridge.set_callout(ident, tts=defaults[ident], text=defaults[ident])
                 else:
                     bridge.reset_callout(ident)
+            if source == "triggevent":
+                changed = []
+                for ident, previous in previous_speech.items():
+                    current = self._triggevent_effective_tts(ident)
+                    if previous is None or current is None or previous != current:
+                        changed.append(ident)
+                bridge.cancel_speech(changed)
         self._refresh_table()
         self._apply_tab_filter()
         name = _("Default") if profile["id"] == DEFAULT_PROFILE_ID else profile["name"]
         self._set_profile_status(_("Applied profile: {name}").format(name=name))
-        return True

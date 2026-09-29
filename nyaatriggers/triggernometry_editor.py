@@ -18,6 +18,46 @@ def normalized_id(value):
         return ""
 
 
+def pack_backup_path(path):
+    path = Path(path)
+    backup = path.with_suffix(".xml.bak")
+    return path.with_suffix(".bak") if len(os.fsencode(backup.name)) > 255 else backup
+
+
+def matching_import(packs, source, raw):
+    def identity(content):
+        root = parse_xml(content)
+        folder = root.find("ExportedFolder")
+        if folder is None:
+            raise ValueError(_("The file is not a Triggernometry folder export"))
+        return normalized_id(folder.get("Id")), {
+            ident for trigger in folder.iter("Trigger")
+            if (ident := normalized_id(trigger.get("Id")))}
+
+    folder_id, trigger_ids = identity(raw)
+    matches, overlaps = [], []
+    for path in sorted(Path(packs).iterdir()):
+        if not path.is_file() or path.suffix.lower() != ".xml":
+            continue
+        try:
+            with path.open("rb") as stream:
+                previous = stream.read(MAX_XML_BYTES + 1)
+            other_folder, other_triggers = identity(previous)
+        except (OSError, ValueError, RecursionError):
+            continue
+        if path.resolve() == Path(source).resolve() or (folder_id and folder_id == other_folder):
+            matches.append((path, previous))
+        elif trigger_ids & other_triggers:
+            overlaps.append(path)
+    if overlaps or len(matches) > 1:
+        conflicts = [path for path, _raw in matches] + overlaps
+        raise ValueError(_(
+            "This export shares trigger IDs with existing packs:\n{paths}\n\n"
+            "Review those packs before importing this version.").format(
+                paths="\n".join(str(path) for path in conflicts)))
+    return matches[0] if matches else None
+
+
 def parse_xml(raw, tag="TriggernometryExport"):
     if isinstance(raw, str):
         raw = raw.encode("utf-8")
@@ -89,7 +129,9 @@ def validate_pack(root):
         ids.add(ident)
         if not trigger.get("Name", "").strip():
             raise ValueError(_("Every trigger needs a name"))
-        if trigger.get("Source", "Log") in ("Log", "FFXIVNetwork") and not trigger.get("RegularExpression", "").strip():
+        if (trigger.get("IsReadme", "false").strip().lower() != "true"
+                and trigger.get("Source", "Log") in ("Log", "FFXIVNetwork")
+                and not trigger.get("RegularExpression", "").strip()):
             raise ValueError(_("Enter a regular expression for {name}").format(name=trigger.get("Name")))
 
 
@@ -171,7 +213,7 @@ class PackDocument:
             raise ValueError(_("This pack changed outside the editor. Reopen it before saving."))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.original is not None:
-            _atomic_write_bytes(self.path.with_suffix(".xml.bak"), self.original)
+            _atomic_write_bytes(pack_backup_path(self.path), self.original)
         _atomic_write_bytes(self.path, raw)
         self.original = raw
         self._added_ids.clear()

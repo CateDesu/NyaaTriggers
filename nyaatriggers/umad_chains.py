@@ -1,5 +1,5 @@
 """State machines for UMAD status automarkers. BlackHoleChains advances cleanse queues as
-Crust is removed. CursedShriekPairs assigns gaze signs using the wave's followup cast.
+Crust is removed. CursedShriekPairs assigns gaze signs using Neo Exdeath's status VFX.
 StatusPairs tracks compound rules. The host supplies monotonic time and handles log
 routing and marker actions. See docs/UMAD-DEBUFFS.md for status evidence.
 """
@@ -218,7 +218,6 @@ class BlackHoleChains:
             actions = [("clear", a) for a in self.outstanding()]
             self.reset()
             return actions
-        self._last_event = now
         return self._start_ready_queues(require_complete=False)
 
     def outstanding(self) -> "list[str]":
@@ -312,15 +311,13 @@ class BlackHoleChains:
         return actions
 
 
-# Cursed Shriek gaze type follows the wave's Inferno or Tsunami cast. Gain order and
-# duration do not identify it. See docs/UMAD-DEBUFFS.md.
+# Neo Exdeath's status VFX identifies real and fake Grand Cross debuffs.
 CURSED_SHRIEK = "15A7"
 GAZE_IDS = frozenset({CURSED_SHRIEK})
-# Inferno indicates the fake gaze.
-FAKE_FOLLOWUP_IDS = frozenset({"BB1E", "BB20"})    # Inferno, fire
-# Tsunami indicates the real gaze.
-REAL_FOLLOWUP_IDS = frozenset({"BB1F", "BB21"})    # Tsunami, water
-GAZE_FOLLOWUP_IDS = FAKE_FOLLOWUP_IDS | REAL_FOLLOWUP_IDS
+GAZE_VFX_STATUS = "808"
+FAKE_GAZE_VFX = "461"
+REAL_GAZE_VFX = "462"
+GAZE_TELL_S = 12.0
 GAZE_PER_SET = 2
 # Only the first two Grand Cross waves have gaze pairs.
 GAZE_SETS = 2
@@ -344,10 +341,8 @@ def _id_int(actor_id) -> int:
 
 
 class CursedShriekPairs:
-    """Assign Cursed Shriek pairs using each wave's followup cast. Inferno means fake gaze
-    and Tsunami means real gaze. Wait for both carriers and a known polarity before
-    marking. Number pairs by party slot, falling back to actor ID. Return the same
-    actions as BlackHoleChains.
+    """Pair gaze carriers using Neo Exdeath's real or fake status VFX.
+    Earlier carriers keep shared signs until their gaze ends.
     """
 
     def __init__(self, gaze_ids=GAZE_IDS, markers: "dict[str, str] | None" = None,
@@ -372,22 +367,23 @@ class CursedShriekPairs:
 
     def reset(self) -> None:
         """Forget the current phase."""
-        self._polarity: "str | None" = None    # armed by on_followup, per set
+        self._polarity: "str | None" = None
         self._polarity_t = 0.0                 # when the armed tell landed
+        self._last_vfx_event = None
         self._set: "list[str]" = []            # the open set's carriers
         self._set_t = 0.0                      # first gain time of the open set
-        self._sets_done = 0                    # closed sets, assigned or not
-        self._assigned: "dict[str, str]" = {}  # actor -> slot key while marked
+        self._sets_done = 0
+        self._assigned: "dict[str, str]" = {}
+        self._marked: "dict[str, str]" = {}
         self._active_until: "dict[str, float]" = {}
         self._last_event = 0.0
 
-    def on_followup(self, effect_hex: str, now: float) -> "list[tuple]":
-        """Arm the next gaze type from an Inferno or Tsunami cast. Gains place the marks.
-        """
-        eff = _norm_id(effect_hex)
-        if eff in FAKE_FOLLOWUP_IDS:
+    def on_vfx(self, vfx_hex: str, now: float, event_id=None) -> "list[tuple]":
+        """Arm one pair from the status loop VFX carried by Neo Exdeath."""
+        vfx = _norm_id(vfx_hex)
+        if vfx == FAKE_GAZE_VFX:
             kind = LOOK1
-        elif eff in REAL_FOLLOWUP_IDS:
+        elif vfx == REAL_GAZE_VFX:
             kind = AWAY1
         else:
             return []
@@ -396,6 +392,12 @@ class CursedShriekPairs:
             # Clear stale signs and state before arming a new phase.
             actions += [("clear", a) for a in self.outstanding()]
             self.reset()
+        if self._sets_done >= GAZE_SETS:
+            return actions
+        event = (vfx, now if event_id is None else event_id)
+        if event == self._last_vfx_event:
+            return actions
+        self._last_vfx_event = event
         self._last_event = now
         self._polarity = kind
         self._polarity_t = now
@@ -406,37 +408,12 @@ class CursedShriekPairs:
         if _norm_id(effect_hex) not in self._ids:
             return []
         actor_id = str(actor_id).strip().upper()
-        actions: "list[tuple]" = []
-        if self._polarity is not None and now - self._polarity_t > STALE_S:
+        actions = self.flush(now)
+        if self._polarity is not None and now - self._polarity_t > GAZE_TELL_S:
             self._polarity = None
-        if self._live() and now - self._last_event > STALE_S:
-            actions += [("clear", a) for a in self.outstanding()]
-            self.reset()
-        elif self._sets_done >= GAZE_SETS:
-            if (actor_id in self._assigned and self._polarity is None
-                    and (0 <= now - self._set_t <= BURST_GAP_S
-                         or now <= self._active_until.get(actor_id, 0.0))):
-                self._last_event = now
-                return actions
-            # A later gain starts a new phase. Keep a fresh tell from that wave.
-            actions += [("clear", a) for a in self.outstanding()]
-            armed = self._polarity if now - self._last_event <= STALE_S else None
-            armed_t = self._polarity_t if armed is not None else 0.0
-            self.reset()
-            self._polarity = armed
-            self._polarity_t = armed_t
-        elif actor_id in self._assigned:
-            self._last_event = now
+        if self._sets_done >= GAZE_SETS or actor_id in self._assigned:
             return actions
         self._last_event = now
-        # Discard an incomplete set after its burst gap. Preserve a tell armed after
-        # that set opened because it belongs to the next wave.
-        if self._set and now - self._set_t > BURST_GAP_S:
-            for actor in self._set:
-                self._active_until.pop(actor, None)
-            self._set = []
-            if self._polarity_t <= self._set_t:
-                self._polarity = None
         if actor_id in self._set:
             return actions
         if not self._set:
@@ -453,18 +430,31 @@ class CursedShriekPairs:
             return actions
         # A complete pair without a known polarity remains unmarked.
         polarity, self._polarity = self._polarity, None
-        self._sets_done += 1
         if polarity is None:
             for actor in self._set:
                 self._active_until.pop(actor, None)
             self._set = []
             return actions
+        self._sets_done += 1
         keys = (LOOK1, LOOK2) if polarity == LOOK1 else (AWAY1, AWAY2)
         pair = self._ordered(self._set)
         self._set = []
         for actor, key in zip(pair, keys):
             self._assigned[actor] = key
-            actions.append(("mark", actor, self._markers[key]))
+        actions += self._mark_available(now)
+        return actions
+
+    def _mark_available(self, now: float) -> "list[tuple]":
+        actions = []
+        occupied = set(self._marked.values())
+        for actor, key in self._assigned.items():
+            marker = self._markers[key]
+            if (actor in self._marked or marker in occupied
+                    or now >= self._active_until.get(actor, math.inf)):
+                continue
+            self._marked[actor] = marker
+            occupied.add(marker)
+            actions.append(("mark", actor, marker))
         return actions
 
     def on_loss(self, effect_hex: str, actor_id: str, now: float) -> "list[tuple]":
@@ -488,28 +478,37 @@ class CursedShriekPairs:
         if actor_id in self._assigned:
             self._assigned.pop(actor_id)
             self._active_until.pop(actor_id, None)
-            return [("clear", actor_id)]
+            actions = [("clear", actor_id)] if self._marked.pop(actor_id, None) else []
+            return actions + self._mark_available(now)
         return []
 
     def flush(self, now: float) -> "list[tuple]":
-        """Discard incomplete sets and clear signs from stale phases after the debounce.
-        """
+        """Expire old carriers and pass their signs to waiting pairs."""
         if self._live() and now - self._last_event > STALE_S:
             actions = [("clear", a) for a in self.outstanding()]
             self.reset()
             return actions
-        self._last_event = now
         if self._set and now - self._set_t > BURST_GAP_S:
             for actor in self._set:
                 self._active_until.pop(actor, None)
             self._set = []
             if self._polarity_t <= self._set_t:
                 self._polarity = None
-        return []
+        actions = []
+        for actor, expires in list(self._active_until.items()):
+            if now >= expires:
+                self._active_until.pop(actor)
+                self._assigned.pop(actor, None)
+                if self._marked.pop(actor, None):
+                    actions.append(("clear", actor))
+        return actions + self._mark_available(now)
+
+    def needs_flush(self) -> bool:
+        return bool(self._assigned or self._set)
 
     def outstanding(self) -> "list[str]":
         """Return current gaze sign holders in a stable order for cleanup."""
-        return sorted(self._assigned, key=_id_int)
+        return sorted(self._marked, key=_id_int)
 
     def _live(self) -> bool:
         return bool(self._polarity is not None or self._set or self._assigned or self._sets_done)

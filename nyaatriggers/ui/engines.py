@@ -7,7 +7,7 @@ import os
 import sys
 from collections import deque
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QUrl
 from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QDialogButtonBox, QListWidget, QListWidgetItem, QMenu, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidgetItem, QLineEdit, QLabel, QPlainTextEdit,
@@ -24,7 +24,7 @@ try:
 except Exception:  # noqa: BLE001
     _tn_convert_xml = None
     _tn_zone_map = None
-from nyaatriggers.tts import speak
+from nyaatriggers.tts import interrupt as tts_interrupt, speak
 from nyaatriggers.locale_util import _
 from nyaatriggers.cactbot_reader import CactbotReader, DEFAULT_CACTBOT_URL
 from nyaatriggers.triggevent_bridge import (
@@ -170,19 +170,23 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         """
         if self._cactbot_reader is None:
             return
+        if self._cactbot_reader.is_active():
+            tts_interrupt()
         self._cactbot_teardown = True
         try:
             self._cactbot_reader.stop()
         finally:
             self._cactbot_teardown = False
 
-    def _set_cactbot_enabled(self, enabled: bool) -> None:
+    def _set_cactbot_enabled(self, enabled: bool, *, save: bool = True) -> None:
         """Start or stop cactbot and reload timelines when its mode changes."""
         prev_mode = self._cactbot_mode
         if enabled:
             try:
                 reader = self._ensure_cactbot_reader()
                 ws_url = self._url_edit.text().strip() or "ws://127.0.0.1:10501/ws"
+                if reader.is_active() and QUrl(reader.websocket_url()) != QUrl(ws_url):
+                    self._stop_cactbot_reader()
                 url = (self._cactbot_url_edit.text().strip()
                        if hasattr(self, "_cactbot_url_edit") else "")
                 reader.start(ws_url, url or DEFAULT_CACTBOT_URL,
@@ -192,7 +196,8 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
                 self._cactbot_mode = False
                 self._stop_cactbot_reader()
                 self._settings["cactbot_enabled"] = False
-                self._save_settings()
+                if save:
+                    self._save_settings()
                 self._set_cactbot_button(False)
                 if hasattr(self, "_cactbot_status_lbl"):
                     self._cactbot_status_lbl.setText(_("● Error: {error}").format(error=exc))
@@ -206,7 +211,8 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             self._stop_cactbot_reader()
 
         self._settings["cactbot_enabled"] = self._cactbot_mode
-        self._save_settings()
+        if save:
+            self._save_settings()
         self._set_cactbot_button(self._cactbot_mode)
         # The Cactbot switch also selects timelines.
         if self._cactbot_mode != prev_mode:
@@ -261,7 +267,10 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             print("[triggevent] unavailable (need Java 17 + triggevent-core.jar)",
                   file=sys.stderr)
             return
+        changed = self._triggevent_mode != bool(enabled)
         self._triggevent_mode = bool(enabled)
+        if changed and self._triggevent is not None:
+            self._triggevent.cancel_all_speech()
         self._reconcile_triggevent_engine()
         self._sync_custom_triggevent()
 
@@ -336,18 +345,27 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
 
     def _on_triggevent_callout(self, text: str, severity: str,
                                gen: "int | None" = None) -> None:
+        from nyaatriggers.diagnostics import record
         # Speech arrives separately. Reject stale generations and disabled callouts.
         if _stale_gen(getattr(self, "_triggevent", None), gen):
+            record("ui_callout", gen=gen, channel="display", result="stale")
             return
-        if not self._triggevent_mode:
+        if not self._triggevent_mode or not self._connected:
+            record("ui_callout", gen=gen, channel="display",
+                   result="disabled" if not self._triggevent_mode else "disconnected")
             return
+        record("ui_callout", gen=gen, channel="display", result="emitted")
         self._emit_alert(self._localize_text(text), severity)
 
     def _triggevent_speak(self, text: str) -> None:
+        from nyaatriggers.diagnostics import record
         if not text:
+            record("ui_callout", channel="speech", result="empty")
             return
         if not self._dedup_speak_gate(self._triggevent_last_spoken, text, 0.3, 2.0):
+            record("ui_callout", channel="speech", result="duplicate")
             return
+        record("ui_callout", channel="speech", result="queued")
         speak(self._localize_text(text), reading=self._reading_for(self._localize_text(text)))
 
     def _ensure_triggernometry_bridge(self):
@@ -357,14 +375,34 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             self._triggernometry.tts.connect(self._on_triggernometry_tts)
             self._triggernometry.sound.connect(self._on_triggernometry_sound)
             self._triggernometry.inventory.connect(self._on_triggernometry_inventory)
+            self._triggernometry.feed_overflow.connect(
+                self._on_triggernometry_overflow, Qt.ConnectionType.QueuedConnection)
             self._triggernometry.status.connect(
                 lambda active, msg, gen: self._on_engine_sidecar_status("triggernometry", active, msg, gen))
             self._ws.log_line.connect(self._triggernometry.feed_log)
+            self._ws.in_combat.connect(self._triggernometry.feed_combat)
+            self._ws.status_changed.connect(self._on_triggernometry_connection)
             self._ws.combatants.connect(self._triggernometry.feed_combatants)  # positions/HP for ${_me}
+            self._ws.primary_player.connect(self._triggernometry.feed_player)
             self._ws.zone_changed.connect(self._triggernometry.feed_zone)       # zone changes -> ${_ffxivzoneid}
             self._apply_engine_overrides("triggernometry")
             self._triggernometry.set_disabled(self._triggernometry_disabled)
         return self._triggernometry
+
+    def _on_triggernometry_overflow(self, generation: int) -> None:
+        bridge = self._triggernometry
+        if _stale_gen(bridge, generation):
+            return
+        bridge.stop()
+        if self._triggernometry_mode and self._connected:
+            self._set_triggernometry_enabled(True)
+
+    def _on_triggernometry_connection(self, connected: bool, _message: str) -> None:
+        if not connected:
+            if self._triggernometry is not None:
+                self._triggernometry.stop()
+        elif self._triggernometry_mode:
+            self._set_triggernometry_enabled(True)
 
     def _set_triggernometry_enabled(self, enabled: bool) -> None:
         """Start or stop the engine for imported Triggernometry packs."""
@@ -378,8 +416,18 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
                 br.configure_telesto(self._settings.get("telesto_uri"),
                                      self._settings.get("telesto_enabled", False))
                 br.start()
-                # Zone filters need cached metadata after startup.
-                if self._current_zone:
+                self._replay_triggernometry_callout_edits()
+                for raw in self._ws.state_snapshot():
+                    state = json.loads(raw)
+                    kind = str(state.get("type", "")).lower()
+                    if kind == "changeprimaryplayer":
+                        br.feed_player(state.get("charID") or state.get("charId") or 0)
+                    elif kind == "incombat":
+                        br.feed_combat(state.get("inACTCombat", False),
+                                       state.get("inGameCombat", False))
+                # Only seed metadata confirmed for this connection.
+                if (not getattr(self, "_awaiting_zone_metadata", False)
+                        and (self._current_zone or self._current_zone_id)):
                     br.feed_zone(self._current_zone_id, self._current_zone)
                 self._ws.set_combatant_polling(True)
                 self._triggernometry_mode = True
@@ -403,7 +451,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         # Ignore callouts after disabling the engine or starting a newer generation.
         if _stale_gen(getattr(self, "_triggernometry", None), gen):
             return
-        if not self._triggernometry_mode:
+        if not self._triggernometry_mode or not self._connected:
             return
         self._emit_alert(self._localize_text(text), severity)
 
@@ -495,15 +543,14 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
     def _set_triggernometry_callout_edit(self, tid: str, text: str) -> None:
         self._triggernometry_callout_edits[tid] = text
         self._settings["triggernometry_callout_edits"] = self._triggernometry_callout_edits
-        self._save_settings()
         if getattr(self, "_triggernometry", None) is not None:
             self._triggernometry.set_callout(tid, tts=text, text=text)
+        self._save_settings()
         self._refresh_table()
 
     def _reset_triggernometry_callout_edit(self, tid: str) -> None:
         self._triggernometry_callout_edits.pop(tid, None)
         self._settings["triggernometry_callout_edits"] = self._triggernometry_callout_edits
-        self._save_settings()
         bridge = getattr(self, "_triggernometry", None)
         if bridge is not None:
             shipped = self._shipped_callout_defaults.get("triggernometry", {}).get(tid)
@@ -511,6 +558,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
                 bridge.set_callout(tid, tts=shipped, text=shipped)
             else:
                 bridge.reset_callout(tid)
+        self._save_settings()
         self._refresh_table()
 
     def _on_triggevent_inventory(self, payload: str, generation=None) -> None:
@@ -530,11 +578,14 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             tid = _as_str(e.get("id"))
             if not tid:
                 continue
-            self._engine_inventory.append({
+            entry = {
                 "source": "triggevent", "id": tid,
                 "fight": _as_str(e.get("fight")), "group": _as_str(e.get("group")),
                 "name": _as_str(e.get("name")) or tid, "text": _as_str(e.get("text")),
-            })
+            }
+            if "tts" in e:
+                entry["tts"] = _as_str(e["tts"])
+            self._engine_inventory.append(entry)
         self._save_triggevent_inventory_cache()
         self._record_engine_seen("triggevent")
         self._refresh_table()
@@ -579,11 +630,14 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             tid = _as_str(e.get("id"))
             if not tid:
                 continue
-            self._engine_inventory.append({
+            entry = {
                 "source": "triggevent", "id": tid,
                 "fight": _as_str(e.get("fight")), "group": _as_str(e.get("group")),
                 "name": _as_str(e.get("name")) or tid, "text": _as_str(e.get("text")),
-            })
+            }
+            if "tts" in e:
+                entry["tts"] = _as_str(e["tts"])
+            self._engine_inventory.append(entry)
         self._record_engine_seen("triggevent")
 
     def _set_cactbot_button(self, on: bool) -> None:
@@ -597,7 +651,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             "font-weight:bold; color:%s;" % ("#a6e3a1" if on else "#f38ba8"))
 
     def _on_cactbot_toggled(self, checked: bool) -> None:
-        self._set_cactbot_enabled(checked)
+        self._set_cactbot_enabled(checked, save=False)
         # Mute local callouts only after cactbot actually starts. Restore them after
         # stop or failure.
         self._set_triggers_enabled(not self._cactbot_mode)
@@ -708,10 +762,10 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         else:
             self._cactbot_disabled.discard(tid)
         self._settings["cactbot_disabled_triggers"] = sorted(self._cactbot_disabled)
-        self._save_settings()
         # Cactbot rereads disabled IDs on each trigger.
         if self._cactbot_reader is not None:
             self._cactbot_reader.set_disabled_triggers(self._cactbot_disabled)
+        self._save_settings()
         self._refresh_table()
 
     def _engine_fight_tag(self, e: dict) -> str:
@@ -791,8 +845,8 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             dset.discard(tid)
         else:
             dset.add(tid)
-        self._persist_engine_disabled(src)
         self._apply_engine_disabled(src)
+        self._persist_engine_disabled(src)
         if src == "cactbot":
             self._sync_cactbot_list_checkstate(tid)
         self._update_fight_controls()
@@ -962,18 +1016,25 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             self._settings[f"{src}_seen_triggers"] = sorted(seen)
             self._save_settings()
 
+    def _triggevent_effective_tts(self, tid: str):
+        inventory = self._engine_entry_for_key("triggevent:" + tid) or {}
+        return self._callout_edits_for("triggevent").get(tid, inventory.get("tts"))
+
     def _set_triggevent_callout_edit(self, tid: str, text: str) -> None:
+        previous = self._triggevent_effective_tts(tid)
         self._triggevent_callout_edits[tid] = text
         self._settings["triggevent_callout_edits"] = self._triggevent_callout_edits
-        self._save_settings()
         if getattr(self, "_triggevent", None) is not None:
             self._triggevent.set_callout(tid, tts=text, text=text)
+            if previous is None or previous != text:
+                self._triggevent.cancel_speech([tid])
+        self._save_settings()
         self._refresh_table()
 
     def _reset_triggevent_callout_edit(self, tid: str) -> None:
+        previous = self._triggevent_effective_tts(tid)
         self._triggevent_callout_edits.pop(tid, None)
         self._settings["triggevent_callout_edits"] = self._triggevent_callout_edits
-        self._save_settings()
         bridge = getattr(self, "_triggevent", None)
         if bridge is not None:
             shipped = self._shipped_callout_defaults.get("triggevent", {}).get(tid)
@@ -981,6 +1042,10 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
                 bridge.set_callout(tid, tts=shipped, text=shipped)
             else:
                 bridge.reset_callout(tid)
+            current = self._triggevent_effective_tts(tid)
+            if previous is None or current is None or previous != current:
+                bridge.cancel_speech([tid])
+        self._save_settings()
         self._refresh_table()
 
     def _replay_triggevent_callout_edits(self) -> None:
@@ -1035,33 +1100,62 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             return
         staged = False
         stage_failed = False
+        pack_changed = False
+        engine_available = (TriggernometryBridge is not None
+                            and TriggernometryBridge.is_available())
         if TriggernometryBridge is not None and _tn_packs_dir is not None:
+            from nyaatriggers.triggernometry_editor import matching_import, pack_backup_path, validate_native
+            existing = None
             try:
-                packs = _tn_packs_dir()
-                src = Path(path)
-                suffix = src.suffix if src.suffix.lower() == ".xml" else ".xml"
-                n = 1
-                while True:
-                    ending = suffix if n == 1 else f"_{n}{suffix}"
-                    stem = src.stem
-                    # Leave room for the suffix and counter without splitting Unicode.
-                    while len(os.fsencode(stem + ending)) > 255:
-                        stem = stem[:-1]
-                    target = packs / (stem + ending)
-                    if not target.exists() or target.resolve() == src.resolve():
-                        break
-                    n += 1
-                ac._atomic_write_bytes(target, xml_bytes)
-                staged = True
+                try:
+                    packs = _tn_packs_dir()
+                    src = Path(path)
+                    existing = matching_import(packs, src, xml_bytes)
+                    if existing is not None and existing[1] != xml_bytes and engine_available:
+                        validate_native(xml_bytes)
+                        answer = ac.QMessageBox.question(self, _("Replace Triggernometry pack"), _(
+                            "An imported copy of this pack already exists:\n{path}\n\n"
+                            "Replace it with this version? The previous file will be kept as a backup.")
+                            .format(path=existing[0]))
+                        if answer != ac.QMessageBox.StandardButton.Yes:
+                            return
+                        if matching_import(packs, src, xml_bytes) != existing:
+                            raise ValueError(_("This pack changed during import. Try importing it again."))
+                except (ValueError, RecursionError) as exc:
+                    ac.QMessageBox.critical(self, _("Import Triggernometry"), str(exc))
+                    return
+                if existing is not None:
+                    target, previous = existing
+                    if previous != xml_bytes and engine_available:
+                        ac._atomic_write_bytes(pack_backup_path(target), previous)
+                        ac._atomic_write_bytes(target, xml_bytes)
+                        pack_changed = True
+                    staged = previous == xml_bytes or pack_changed
+                else:
+                    suffix = src.suffix if src.suffix.lower() == ".xml" else ".xml"
+                    n = 1
+                    while True:
+                        ending = suffix if n == 1 else f"_{n}{suffix}"
+                        stem = src.stem
+                        # Leave room for the suffix without splitting Unicode.
+                        while len(os.fsencode(stem + ending)) > 255:
+                            stem = stem[:-1]
+                        target = packs / (stem + ending)
+                        if not target.exists() or target.resolve() == src.resolve():
+                            break
+                        n += 1
+                    ac._atomic_write_bytes(target, xml_bytes)
+                    pack_changed = True
+                    staged = True
             except Exception as exc:  # noqa: BLE001
                 stage_failed = True
                 print(f"[triggernometry] could not stage pack for the engine: {exc!r}", file=sys.stderr)
                 ac.QMessageBox.warning(self, _("Import Triggernometry"),
                                       _("Could not write file:\n{error}").format(error=exc))
+                if existing is not None:
+                    return
 
         # Convert simple triggers only when the sidecar cannot run the pack.
-        engine_available = (TriggernometryBridge is not None
-                            and TriggernometryBridge.is_available())
         engine_path = staged and engine_available
         added: list[Trigger] = []
         if not engine_path:
@@ -1090,9 +1184,15 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
 
         engine_running = False
         if staged and self._triggers_enabled and engine_available:
-            self._set_triggernometry_enabled(False)
-            self._set_triggernometry_enabled(True)
-            engine_running = self._triggernometry_mode
+            bridge = getattr(self, "_triggernometry", None)
+            if (pack_changed or not self._triggernometry_mode
+                    or bridge is None or not bridge.is_active()
+                    or not bridge.pack_is_current(target)):
+                self._set_triggernometry_enabled(False)
+                self._set_triggernometry_enabled(True)
+                bridge = getattr(self, "_triggernometry", None)
+            engine_running = (self._triggernometry_mode
+                              and bridge is not None and bridge.is_active())
 
         if not added and not staged and not converted:
             if stage_failed:

@@ -81,7 +81,7 @@ def _unpack_effect(flags_hex: str, dmg_hex: str) -> "tuple[str, int, bool, bool]
     except (TypeError, ValueError):
         f = 0
     etype = f & 0xFF
-    severity = (f >> 8) & 0xFF
+    severity = (f >> (16 if etype == _HEAL_TYPE else 8)) & 0xFF
     crit = bool(severity & 0x20)
     dh = bool(severity & 0x40) and etype != _HEAL_TYPE
     if etype in _DAMAGE_TYPES:
@@ -243,7 +243,8 @@ class DpsMeter:
     def _is_player(self, aid: "int | None") -> bool:
         if aid is None:
             return False
-        return aid == self._me_id or self._jobs.get(aid, 0) != 0
+        return (0x10000000 <= aid < 0x11000000 or aid == self._me_id
+                or self._jobs.get(aid, 0) != 0)
 
     def _player_key(self, aid: "int | None") -> "int | None":
         """Resolve player pets to their owner, players to themselves and other actors to
@@ -498,12 +499,11 @@ class DpsMeter:
         tid = _actor_int(fields[6])
         # Pets are also identified by the owner fields trailing 21/22 lines.
         owner_name = ""
-        if len(fields) > 47:
+        if len(fields) > 48:
             owner = _actor_int(fields[47])
-            if owner is not None and sid is not None and owner != sid:
+            if owner is not None and owner <= 0xFFFFFFFF and sid is not None and owner != sid:
                 self._note(self._owners, sid, owner)
-                if len(fields) > 48:
-                    owner_name = fields[48].strip()
+                owner_name = fields[48].strip()
         src_key = self._player_key(sid)
         tgt_key = self._player_key(tid)
         if src_key is None and tgt_key is None:
@@ -525,7 +525,8 @@ class DpsMeter:
             if flags & 0xFF == 0x1D:
                 reflected = True
                 continue
-            effects.append((*_unpack_effect(fields[i], fields[i + 1]), reflected))
+            effects.append((*_unpack_effect(fields[i], fields[i + 1]), reflected,
+                            bool(flags & 0x100)))
         # Damage and misses can start encounters. Healing and buffs before a pull must
         # not start the clock.
         if self.current is None:
@@ -561,7 +562,7 @@ class DpsMeter:
             src.swings += 1
             src.touch(now)
         reflector = None
-        for kind, amount, crit, dh, reflected in effects:
+        for kind, amount, crit, dh, reflected, on_source in effects:
             if kind == "damage":
                 dealer = src
                 dealer_key = src_key
@@ -599,8 +600,10 @@ class DpsMeter:
                     src.healed += amount
                     if amount > 0:
                         src.heals += 1
-                if tgt_key is not None and tgt_key == tid:
-                    self._combatant(enc, tgt_key, fields[7]).healstaken += amount
+                recipient, recipient_id, name = ((src_key, sid, fields[3]) if on_source
+                                                 else (tgt_key, tid, fields[7]))
+                if recipient is not None and recipient == recipient_id:
+                    self._combatant(enc, recipient, name).healstaken += amount
 
     def _on_dot_hot(self, fields: "list[str]") -> None:
         if len(fields) < 19:

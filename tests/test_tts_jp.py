@@ -651,7 +651,7 @@ try:
     _bogus = Path(_tmpdir) / "bogus_venv"
     _bogus.mkdir()
     tts._FFXIV_VENV = _bogus
-    with contextlib.redirect_stderr(io.StringIO()):
+    with contextlib.redirect_stderr(io.StringIO()), patch("install.setup_lock"):
         _ok, _msg = tts.install_kokoro_deps(timeout=30)
     check("a bogus configured venv fails the deps install",
           _ok is False and "bogus_venv" in _msg)

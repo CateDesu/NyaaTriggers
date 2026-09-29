@@ -37,9 +37,14 @@ ORDERS = [(D1, "BBC"), (D2, "BBD"), (D3, "BBE"),
 class FakeTimer:
     def __init__(self):
         self.armed = 0
+        self.active = False
 
     def start(self):
         self.armed += 1
+        self.active = True
+
+    def isActive(self):
+        return self.active
 
 
 class FakeWindow:
@@ -53,7 +58,6 @@ class FakeWindow:
     _umad_name_of = mw.MainWindow._umad_name_of
     _note_actor_job = mw.MainWindow._note_actor_job
     _rearm_umad_chain_flush = mw.MainWindow._rearm_umad_chain_flush
-    _on_umad_chain_flush = mw.MainWindow._on_umad_chain_flush
     _retry_umad_chain_pending = mw.MainWindow._retry_umad_chain_pending
     _on_ws_party_jobs = mw.MainWindow._on_ws_party_jobs
     _on_ws_combatants_jobs = mw.MainWindow._on_ws_combatants_jobs
@@ -76,6 +80,10 @@ class FakeWindow:
     def _mark_player(self, actor, marker, name="", is_me=False):
         self.marks.append((actor, marker))
         return True
+
+    def _on_umad_chain_flush(self):
+        self._umad_chain_flush_timer.active = False
+        mw.MainWindow._on_umad_chain_flush(self)
 
     def _clear_player(self, actor, name=""):
         self.clears.append(actor)

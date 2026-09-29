@@ -178,7 +178,8 @@ class ReleaseRecoveryTests(unittest.TestCase):
             voice.mkdir()
             (voice / "en_US-arctic-medium.onnx").write_bytes(b"model")
             self.assertEqual(paths.default_voice_dir(), self.dest / "voices")
-            (voice / "en_US-arctic-medium.onnx.json").write_text("{}")
+            (voice / "en_US-arctic-medium.onnx.json").write_bytes(
+                (REPO / "voices" / "en_US-arctic-medium.onnx.json").read_bytes())
             self.assertEqual(paths.default_voice_dir(), voice)
             repaired = self.dest / "voices"
             shutil.copytree(voice, repaired)
