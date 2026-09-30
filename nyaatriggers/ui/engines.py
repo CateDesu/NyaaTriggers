@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from collections import deque
+from types import SimpleNamespace
 
 from PyQt6.QtCore import Qt, QTimer, QUrl
 from PyQt6.QtGui import QBrush, QColor
@@ -25,7 +26,8 @@ except Exception:  # noqa: BLE001
     _tn_convert_xml = None
     _tn_zone_map = None
 from nyaatriggers.tts import interrupt as tts_interrupt, speak
-from nyaatriggers.locale_util import _
+from nyaatriggers.locale_util import _, engine_status
+from nyaatriggers.game_locale import fight_label
 from nyaatriggers.cactbot_reader import CactbotReader, DEFAULT_CACTBOT_URL
 from nyaatriggers.triggevent_bridge import (
     TriggeventBridge, _log as _te_log, has_java as _te_has_java, has_jar as _te_has_jar,
@@ -677,7 +679,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         if hasattr(self, "_cactbot_status_lbl"):
             color = "#a6e3a1" if active else "#8f8f9a"
             self._cactbot_status_lbl.setStyleSheet(f"color:{color}; font-weight:bold;")
-            self._cactbot_status_lbl.setText(f"● {msg}")
+            self._cactbot_status_lbl.setText(f"● {engine_status(msg)}")
         if active or self._cactbot_teardown or not self._cactbot_mode:
             return
         reader = self._cactbot_reader
@@ -696,7 +698,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         self._upd_notes_btn.setVisible(False)
         self._upd_dismiss_btn.setVisible(True)
         self._upd_msg.setText(
-            _("Cactbot failed to start ({msg}) - your callouts are back on.").format(msg=msg))
+            _("Cactbot failed to start ({msg}) - your callouts are back on.").format(msg=engine_status(msg)))
         self._update_banner.setVisible(True)
 
     def _on_cactbot_triggers_enumerated(self, payload: str) -> None:
@@ -814,22 +816,26 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         cb.setData(_SECTION_ROLE, "triggernometry" if src == "triggernometry" else "engine")
         self._table.setItem(row, _C_EN, cb)
         self._table.setItem(row, _C_ZONE, _ro(""))
-        # Engine rows use phrase translations because they have no translation by ID.
-        self._table.setItem(row, _C_NAME, _ro(self._localize_text(e.get("name") or tid)))
-        self._table.setItem(row, _C_FIGHT, _ro(self._engine_fight_tag(e)))
+        name = self._localized_name(SimpleNamespace(id=tid, name=e.get("name") or tid))
+        self._table.setItem(row, _C_NAME, _ro(self._localize_text(name)))
+        fight = self._engine_fight_tag(e)
+        fight_item = _ro(fight_label(fight))
+        fight_item.setToolTip(fight_item.text())
+        fight_item.setData(Qt.ItemDataRole.UserRole, fight)
+        self._table.setItem(row, _C_FIGHT, fight_item)
         self._table.setItem(row, _C_TYPE, _ro({"cactbot": "Cactbot", "triggevent": "Triggevent",
                                                "triggernometry": "Triggernometry"}.get(src, src)))
-        self._table.setItem(row, _C_RE, _ro("(engine)"))
+        self._table.setItem(row, _C_RE, _ro(_("(engine)")))
         txt = e.get("text") or ""
         _ce = self._callout_edits_for(src)
         edit = _ce.get(tid) if _ce is not None else None
         if edit is not None:
-            txt = edit if edit.strip() else "(silenced)"
+            txt = edit if edit.strip() else _("(silenced)")
         else:
             over = self._engine_text_overrides.get(key)
             if over is not None:
                 rep = over.get("replace", "")
-                txt = rep if rep else "(silenced)"
+                txt = rep if rep else _("(silenced)")
         tts_item = _ro(self._localize_text(txt))
         self._table.setItem(row, _C_TTS, tts_item)
         brush = QBrush(QColor("#1f2a3a"))

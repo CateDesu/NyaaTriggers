@@ -6,6 +6,7 @@ import uuid
 
 from nyaatriggers.paths import bundle_root, data_root
 from nyaatriggers.locale_util import _
+from nyaatriggers.game_locale import fight_label, game_text
 
 
 CUSTOM_FILE = data_root() / "triggevent.custom.json"
@@ -42,7 +43,7 @@ def fight_choices():
                     and 0 < int(zone_id) <= 0xFFFFFFFF and matcher.search(name)):
                 choices[fight, int(zone_id)] = {
                     "fight": fight, "zone_id": int(zone_id), "zone_name": name,
-                    "label": f"{fight} · {name} · {zone_id}",
+                    "label": f"{fight_label(fight)} · {game_text(name)} · {zone_id}",
                 }
     return sorted(choices.values(), key=lambda row: (row["fight"].casefold(), row["zone_id"]))
 

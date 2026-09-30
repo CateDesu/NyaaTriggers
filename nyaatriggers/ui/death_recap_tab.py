@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QF
                              QPushButton, QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from nyaatriggers.locale_util import _
+from nyaatriggers.game_locale import localized_metadata
 from nyaatriggers import theme, app_common as ac
 from nyaatriggers.recap_filters import DEFAULT_HIDDEN_STATUSES, hidden_statuses
 from nyaatriggers.ui.recap_widgets import RecapDelegate, RecapIcons, status_key, status_name
@@ -500,6 +501,8 @@ class DeathRecapTabMixin:
             if kind in ("hot", "dot", "gained", "lost") and event.get("status_id"):
                 metadata = self._recap_icons.metadata("Status", event["status_id"])
                 name = status_name({"name": event["name"] if kind in ("gained", "lost") else ""}, metadata) or name
+            elif kind in ("damage", "heal") and event.get("action_id"):
+                name = localized_metadata("Action", event["action_id"], {"name": name})["name"]
             values = [f"{event['time']:.1f}s", amount, name, event["source"],
                       "" if event.get("hp") is not None and event.get("max_hp") else _("Not recorded"),
                       "" if "statuses" in event else _("Not recorded")]

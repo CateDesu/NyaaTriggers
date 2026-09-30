@@ -95,6 +95,11 @@ for f in sorted(glob.glob('fonts/*')):
 # Bundle UI translations for use before any network request.
 for f in sorted(glob.glob('lang/*.json')):
     datas.append((f, 'lang'))
+from PyQt6.QtCore import QLibraryInfo
+qt_translations = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+datas.append((os.path.join(qt_translations, 'qtbase_ja.qm'), 'lang'))
+datas.append(('lang/SOURCES.txt', 'lang'))
+datas.append(('assets/game_data_ja.json', 'assets'))
 
 # Seed engine rows before the first sidecar launch. The writable cache takes precedence.
 if os.path.isfile('triggevent_inventory.seed.json'):

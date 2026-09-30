@@ -21,6 +21,7 @@ _active_locale: str = DEFAULT_LOCALE
 
 # Cache missing or invalid catalogs too so lookups do not repeatedly read disk.
 _catalogs: dict[str, dict[str, str]] = {}
+_qt_translator = None
 
 
 
@@ -66,6 +67,28 @@ def set_locale(loc: str) -> None:
     """Set the active supported locale, falling back to English."""
     global _active_locale
     _active_locale = normalize_locale(loc)
+    _install_qt_translation()
+
+
+def _install_qt_translation() -> None:
+    global _qt_translator
+    try:
+        from PyQt6.QtCore import QCoreApplication, QLibraryInfo, QTranslator
+    except ImportError:
+        return
+    app = QCoreApplication.instance()
+    if app is None:
+        return
+    if _qt_translator is not None:
+        app.removeTranslator(_qt_translator)
+        _qt_translator = None
+    if _active_locale == "ja":
+        translator = QTranslator(app)
+        if (translator.load(str(_LANG_DIR / "qtbase_ja.qm"))
+                or translator.load("qtbase_ja", QLibraryInfo.path(
+                    QLibraryInfo.LibraryPath.TranslationsPath))):
+            app.installTranslator(translator)
+            _qt_translator = translator
 
 
 def active_locale() -> str:
@@ -117,6 +140,30 @@ def _(key: str) -> str:
 def N_(text: str) -> str:
     """Mark a literal for catalog extraction while leaving translation until render time.
     """
+    return text
+
+
+def engine_status(text: str) -> str:
+    messages = (
+        N_("Off"), N_("Loading cactbot..."), N_("Reading cactbot"),
+        N_("Connected to IINACT"), N_("Failed to load cactbot (check the URL / connection)"),
+        N_("Cactbot renderer crashed, local callouts are back"),
+        N_("Java runtime or triggevent-core.jar not found"),
+        N_("Mono runtime or triggernometry-core.exe not found"),
+        N_("Starting Triggevent Engine..."), N_("Starting Triggernometry engine..."),
+        N_("Triggevent Engine ready"), N_("Sidecar exited"), N_("stdin closed"),
+        N_("ready"), N_("stopped"),
+    )
+    if text in messages:
+        return _(text)
+    for prefix, template in (
+        ("Failed to launch sidecar: ", N_("Failed to launch engine: {error}")),
+        ("Could not prepare Triggevent engine: ", N_("Could not prepare Triggevent engine: {error}")),
+        ("Telesto callback listener failed: ", N_("Telesto callback listener failed: {error}")),
+        ("init failed: ", N_("Engine initialization failed: {error}")),
+    ):
+        if text.startswith(prefix):
+            return _(template).format(error=text[len(prefix):])
     return text
 
 

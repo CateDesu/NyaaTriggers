@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 from nyaatriggers.drop_log import log_drop
 from nyaatriggers.http_fetch import open_response
 from nyaatriggers.locale_util import _, N_
+from nyaatriggers.game_locale import fight_label
 
 FightTree = list[tuple[str, list[tuple[str, list[str]]]]]
 
@@ -344,7 +345,7 @@ class FightPickerDialog(QDialog):
                 exp_item.setData(0, Qt.ItemDataRole.UserRole, None)
                 diff_item.addChild(exp_item)
                 for e in sorted(by_exp[expansion], key=lambda x: x["name"]):
-                    label = e["name"] + ("  ✓" if e["has_triggers"] else "")
+                    label = fight_label(e["name"]) + ("  ✓" if e["has_triggers"] else "")
                     leaf = QTreeWidgetItem([label])
                     leaf.setData(0, Qt.ItemDataRole.UserRole, e["folder_name"])
                     exp_item.addChild(leaf)

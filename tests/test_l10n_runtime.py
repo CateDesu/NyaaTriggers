@@ -178,21 +178,21 @@ check("ja.json: every translation preserves its key's {tokens}", _tok_bad == [])
 if _tok_bad:
     print("   token-mismatched keys:", _tok_bad[:5])
 
-# Dynamic phrase patterns exclude simple tokens, overly broad keys and untranslated
-# tokens.
+# Dynamic phrases preserve values and reject ambiguous templates.
 _comp = main_window._compile_phrase_patterns
 def _matched(phrases, text):
     ja = phrases.get(text)
     if ja:
         return ja
     for pat, ja_val in _comp(phrases):
-        if pat.match(text):
-            return ja_val
+        translated = pat.render(text, ja_val, phrases)
+        if translated is not None:
+            return translated
     return None
 _P = {
     "Away from {event.source} ({event.estimatedRemainingDuration})": "離れる",   # complex token, JA token-free -> compiles
     "Behind": "後ろ",                                                            # static -> exact only
-    "Buster on {target}": "{target} バスター",                                    # Simple token stays in exact lookup.
+    "Buster on {target}": "{target} バスター",
     "{safe}": "安全",                                                            # Insufficient literal text.
     "{firstQuadrant} then {secondQuadrant}": "ギミック",                          # Insufficient literal text.
 }
@@ -200,8 +200,8 @@ _compiled = _comp(_P)
 _compiled_en = {en for _pat, en in _compiled}
 check("complex-token key (token-free JA) compiles",
       "離れる" in _compiled_en)
-check("simple-token key does NOT compile (would leak {target} on engine path)",
-      "{target} バスター" not in _compiled_en)
+check("engine tokens are captured instead of leaking placeholders",
+      _matched(_P, "Buster on Alice Example") == "Alice Example バスター")
 check("static key does NOT compile (stays in the exact dict)",
       "後ろ" not in _compiled_en)
 check("no-literal key does NOT compile (would hijack unrelated callouts)",
@@ -211,6 +211,22 @@ check("regex matches post-substitution engine text", _matched(_P, "Away from Tan
 check("regex does NOT hijack an unrelated string", _matched(_P, "Triangle, far from buddy (3.0s)") is None)
 # Exact path still works for the static key
 check("exact dict still serves static keys", _matched(_P, "Behind") == "後ろ")
+check("translated engine callouts preserve target names and directions",
+      loc_text({"callouts_localized": True},
+               {"Stack on {event.target} then {safe}": "{event.target}に頭割り、その後{safe}",
+                "North": "北"}, "Stack on Alice Example then North")
+      == "Alice Exampleに頭割り、その後北")
+check("adjacent placeholders cannot guess where names end",
+      _comp({"Spread {first}{second}": "{first}と{second}に散開"}) == [])
+check("unknown replacement tokens cannot leak into speech",
+      _comp({"Spread {first}": "{unknown}に散開"}) == [])
+check("nested engine expressions are captured without evaluation",
+      loc_text({"callouts_localized": True},
+               {"Start from {{ clockwise ? 'North' : 'South' }}": "開始は{{ clockwise ? 'North' : 'South' }}",
+                "North": "北"}, "Start from North") == "開始は北")
+check("conditional templates only accept their declared choices",
+      _matched({"Center {right ? 'Right' : 'Left'}": "中央 {right ? 'Right' : 'Left'}"},
+               "Center to South, North, Northwest") is None)
 
 # Engine names fall back to phrase translation.
 def loc_name_text(id_map, text_map, t):

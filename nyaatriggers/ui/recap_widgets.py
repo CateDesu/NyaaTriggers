@@ -12,7 +12,8 @@ from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkDiskCache, QNetworkRe
 from PyQt6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolTip
 
 from nyaatriggers import app_common as ac
-from nyaatriggers.locale_util import _
+from nyaatriggers.locale_util import _, active_locale, has_japanese
+from nyaatriggers.game_locale import localized_metadata
 
 
 class RecapIcons(QObject):
@@ -55,6 +56,9 @@ class RecapIcons(QObject):
                         raise ValueError("Invalid icon catalog row")
             if not isinstance(catalog.get("unavailable_icons", {}), dict):
                 raise ValueError("Invalid missing icons")
+            for sheet in ("Status", "Action"):
+                catalog[sheet] = {ident: localized_metadata(sheet, ident, row)
+                                  for ident, row in catalog[sheet].items()}
             self.catalog = catalog
             self.destroyed.connect(self.archive.close)
         except (OSError, ValueError, KeyError, TypeError, BadZipFile):
@@ -94,7 +98,8 @@ class RecapIcons(QObject):
         if (key not in self.active and key not in self.waiting
                 and time.monotonic() >= self.failed.get(key, 0) and len(self.waiting) < 512):
             fields = "Name,Icon,MaxStacks,Description,StatusCategory,IsPermanent" if sheet == "Status" else "Name,Icon"
-            self.waiting[key] = (f"https://v2.xivapi.com/api/sheet/{sheet}/{ident}?fields={fields}", None)
+            language = "&language=ja" if active_locale() == "ja" else ""
+            self.waiting[key] = (f"https://v2.xivapi.com/api/sheet/{sheet}/{ident}?fields={fields}{language}", None)
             self._pump()
         return self._downloaded_metadata.get((sheet, ident), {}), self.placeholder
 
@@ -201,6 +206,8 @@ def status_key(status):
 
 def status_name(status, metadata):
     name = status["name"]
+    if active_locale() == "ja" and has_japanese(metadata.get("name", "")):
+        return metadata["name"]
     if not name or name.startswith(("Status ", "Unknown_", "_rsv_")):
         catalog_name = metadata.get("name", "")
         if catalog_name and not catalog_name.startswith("_rsv_"):

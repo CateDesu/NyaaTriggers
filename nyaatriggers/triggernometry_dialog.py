@@ -22,6 +22,27 @@ COMPARISONS = ("StringEqualCase", "StringEqualNocase", "StringNotEqualCase", "St
                "NumericEqual", "NumericNotEqual", "NumericGreater", "NumericGreaterEqual",
                "NumericLess", "NumericLessEqual", "RegexMatch", "RegexNotMatch",
                "ListContains", "ListDoesNotContain")
+OPTION_LABELS = {
+    "And": N_("All conditions"), "Or": N_("Any condition"),
+    "Xor": N_("Exclusive OR"), "Not": N_("NOT"),
+    "String": N_("Text"), "Numeric": N_("Number"),
+    "StringEqualCase": N_("Text equals, case sensitive"),
+    "StringEqualNocase": N_("Text equals, ignore case"),
+    "StringNotEqualCase": N_("Text differs, case sensitive"),
+    "StringNotEqualNocase": N_("Text differs, ignore case"),
+    "NumericEqual": N_("Number equals"), "NumericNotEqual": N_("Number differs"),
+    "NumericGreater": N_("Greater than"), "NumericGreaterEqual": N_("Greater than or equal"),
+    "NumericLess": N_("Less than"), "NumericLessEqual": N_("Less than or equal"),
+    "RegexMatch": N_("Matches regular expression"),
+    "RegexNotMatch": N_("Does not match regular expression"),
+    "ListContains": N_("List contains"), "ListDoesNotContain": N_("List does not contain"),
+    "SetString": N_("Set text"), "SetNumeric": N_("Set number"),
+    "Increment": N_("Add to number"), "Unset": N_("Remove variable"),
+    "UnsetRegex": N_("Remove variables matching regular expression"),
+    "FireTrigger": N_("Run trigger"), "CancelTrigger": N_("Cancel trigger"),
+    "EnableTrigger": N_("Enable trigger"), "DisableTrigger": N_("Disable trigger"),
+    "CancelAllTrigger": N_("Cancel all triggers"),
+}
 
 
 def combo(values, value):
@@ -37,7 +58,7 @@ def combo(values, value):
 
 
 def options(values):
-    return [(value, value) for value in values]
+    return [(value, _(OPTION_LABELS.get(value, value))) for value in values]
 
 
 def footer(dialog, layout):
@@ -130,9 +151,13 @@ class ConditionsWidget(QWidget):
             if not isinstance(element.tag, str):
                 return
             if element.tag in ("Condition", "ConditionGroup"):
-                text = element.get("Grouping", "Or")
+                value = element.get("Grouping", "Or")
+                text = _(OPTION_LABELS.get(value, value))
             else:
-                text = " ".join(element.get(key, "") for key in ("ExpressionL", "ConditionType", "ExpressionR"))
+                comparison = element.get("ConditionType", "")
+                text = " ".join((element.get("ExpressionL", ""),
+                                 _(OPTION_LABELS.get(comparison, comparison)),
+                                 element.get("ExpressionR", "")))
             if element.get("Enabled", "true").lower() != "true":
                 text += " · " + _("Disabled")
             item = QTreeWidgetItem(parent, [text or element.tag])

@@ -89,11 +89,16 @@ class InputGrowthTests(unittest.TestCase):
                     host._delete_folder("0")
                 self.assertEqual([folder["id"] for folder in host._folders], ["1"])
 
-    def test_translation_token_split_keeps_previous_semantics(self):
+    def test_translation_token_parser_preserves_unmatched_and_nested_braces(self):
         rng = random.Random(4928)
         for _ in range(5000):
             text = "".join(rng.choices("a{}\n界", k=rng.randrange(80)))
-            self.assertEqual(ac._split_phrase_tokens(text), re.split(r"\{[^}]*\}", text), text)
+            parts, tokens = ac._phrase_template(text)
+            self.assertEqual(len(parts), len(tokens) + 1)
+            rebuilt = "".join(part + token for part, token in zip(parts, tokens + [""]))
+            self.assertEqual(rebuilt, text)
+        self.assertEqual(ac._phrase_template("Start {{ list.collect { it } }} now"),
+                         (["Start ", " now"], ["{{ list.collect { it } }}"]))
 
     def test_deep_folder_tree_can_be_deleted(self):
         host = self.folder_host()

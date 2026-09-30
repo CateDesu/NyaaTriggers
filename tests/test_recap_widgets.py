@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QListWidget
 
 from nyaatriggers import app_common as ac, theme
 from nyaatriggers.death_recap import DeathRecap
+from nyaatriggers.game_locale import localized_metadata
+from nyaatriggers.locale_util import set_locale
 from nyaatriggers.recap_filters import DEFAULT_HIDDEN_STATUSES, hidden_statuses
 from nyaatriggers.ui.death_recap_tab import DeathRecapTabMixin
 from nyaatriggers.ui.recap_widgets import RecapIcons
@@ -127,6 +129,20 @@ class WidgetTests(unittest.TestCase):
         self.assertFalse(self.host._settings["recap_show_healing"])
         self.assertEqual(before, json.dumps(self.host._recap_records))
         self.assertEqual(self.host.saves, 1)
+
+    def test_japanese_action_names_preserve_instant_death_label(self):
+        set_locale("ja")
+        self.addCleanup(set_locale, "en")
+        death = record()
+        event = death["events"][0]
+        death["events"] = [event | {"kind": "instant-death", "amount": None}, event]
+        original = json.dumps(death)
+        self.host._recap_records = [death]
+        self.host._refresh_recap_list()
+        self.assertEqual(self.host._recap_table.item(0, 2).text(),
+                         localized_metadata("Action", event["action_id"], {})["name"])
+        self.assertEqual(self.host._recap_table.item(1, 2).text(), "即死")
+        self.assertEqual(json.dumps(death), original)
 
     def test_buff_filter_hides_icons_and_can_restore_them(self):
         def edit():

@@ -523,7 +523,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         brand = _BrandLabel("NyaaTriggers", theme.ACCENT, glow=True, spacing=106.0)
         brand.setObjectName("brand")
         side.addWidget(brand)
-        brand_ver = _BrandLabel(f"Version {_DISPLAY_VERSION}", theme.SUBTEXT_SOFT)
+        brand_ver = _BrandLabel(_("Version {version}").format(version=_DISPLAY_VERSION), theme.SUBTEXT_SOFT)
         brand_ver.setObjectName("brandVer")
         side.addWidget(brand_ver)
         side.addSpacing(18)
@@ -612,7 +612,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         _s_outer.addWidget(_s_scroll)
 
         self._settings_header(settings_layout, _("Program"))
-        ver_lbl = QLabel(f"NyaaTriggers Version {_DISPLAY_VERSION}")
+        ver_lbl = QLabel(_("NyaaTriggers Version {version}").format(version=_DISPLAY_VERSION))
         ver_lbl.setStyleSheet("color: #8f8f9a;")
         settings_layout.addWidget(ver_lbl)
         upd_row = QHBoxLayout()
@@ -940,7 +940,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(_C_EN,    QHeaderView.ResizeMode.Fixed); self._table.setColumnWidth(_C_EN,    28)
         hdr.setSectionResizeMode(_C_ZONE,  QHeaderView.ResizeMode.Fixed); self._table.setColumnWidth(_C_ZONE,  44)
-        hdr.setSectionResizeMode(_C_FIGHT, QHeaderView.ResizeMode.Fixed); self._table.setColumnWidth(_C_FIGHT, 60)
+        hdr.setSectionResizeMode(_C_FIGHT, QHeaderView.ResizeMode.Interactive)
+        self._table.setColumnWidth(_C_FIGHT, 180 if active_locale() == "ja" else 60)
         hdr.setSectionResizeMode(_C_TYPE,  QHeaderView.ResizeMode.Fixed); self._table.setColumnWidth(_C_TYPE,  44)
         for col in (_C_NAME, _C_RE, _C_TTS):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)

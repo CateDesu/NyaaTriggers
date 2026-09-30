@@ -50,6 +50,7 @@ except Exception:  # pragma: no cover - websockets is a declared dependency,
 
 from nyaatriggers.drop_log import log_drop
 from nyaatriggers.dps_meter import MAX_OVERLAY_ROWS
+from nyaatriggers.game_locale import game_text
 
 
 DEFAULT_PORT = 27080
@@ -126,7 +127,7 @@ def timeline_frame(entries) -> dict:
             if not math.isfinite(ft):
                 raise ValueError("non-finite timeline time")
             label = str(label)
-            clean.append([ft, label, timeline_kind(label)])
+            clean.append([ft, game_text(label, "timelines"), timeline_kind(label)])
         except (TypeError, ValueError):
             log_drop("plugin-tx", f"timeline entry dropped: {entry!r}")
     return {"c": "timeline", "v": clean}

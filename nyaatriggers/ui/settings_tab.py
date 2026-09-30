@@ -183,11 +183,10 @@ class SettingsTabMixin:
         except OSError as exc:
             ac.QMessageBox.critical(self, _("Save Log"), _("Could not write file:\n{error}").format(error=exc))
             return
+        message = (_("Saved {count} line to:\n{path}") if len(lines) == 1
+                   else _("Saved {count} lines to:\n{path}"))
         ac.QMessageBox.information(
-            self, _("Save Log"),
-            _("Saved {count} line{plural} to:\n{path}").format(
-                count=len(lines),
-                plural="" if len(lines) == 1 else "s", path=path))
+            self, _("Save Log"), message.format(count=len(lines), path=path))
 
     def _save_diagnostics(self) -> None:
         from nyaatriggers.diagnostics import export_diagnostics
@@ -242,15 +241,23 @@ class SettingsTabMixin:
         if ja:
             return ja
         for pat, ja_val in self._callouts_phrases_ja_patterns:
-            if pat.match(text):
-                return ja_val
+            translated = pat.render(text, ja_val, self._callouts_phrases_ja)
+            if translated is not None:
+                return translated
         return text
 
     def _reading_for(self, text: str) -> str:
         """Return a kana reading for Japanese speech, preserving text without a known
         reading.
         """
-        return self._callouts_readings.get(text) or text
+        reading = self._callouts_readings.get(text)
+        if reading:
+            return reading
+        for pattern, template in getattr(self, "_callouts_reading_patterns", ()):
+            reading = pattern.render(text, template, self._callouts_readings)
+            if reading is not None:
+                return reading
+        return text
 
     def _localized_name(self, t: Trigger) -> str:
         """Translate a trigger name for display using its ID, then its current wording.

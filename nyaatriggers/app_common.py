@@ -291,52 +291,112 @@ def cactbot_timeline_for_zone(zone_id: int) -> "tuple[str, str]":
 class _PhrasePattern:
     """Match literal fragments in order without backtracking through token values."""
 
-    def __init__(self, parts):
+    def __init__(self, parts, tokens=(), restrict_choices=True):
         self.parts = tuple(parts)
+        self.tokens = tuple(tokens)
+        self.durations = tuple("duration" in token.lower() for token in tokens)
+        self.choices = []
+        for token in tokens:
+            branches = token.rsplit("?", 1)[-1] if "?" in token else ""
+            choice = re.fullmatch(r'''\s*(['"])([^'"]*)\1\s*:\s*(['"])([^'"]*)\3\s*\}+''', branches)
+            self.choices.append((choice[2], choice[4]) if choice and restrict_choices else None)
 
-    def match(self, text: str) -> bool:
+    def values(self, text: str):
         if not text.startswith(self.parts[0]):
-            return False
+            return None
+        values = []
         position = len(self.parts[0])
-        for part in self.parts[1:-1]:
-            found = text.find(part, position)
+        for index, part in enumerate(self.parts[1:-1], 1):
+            markers = [part]
+            if index < len(self.choices) and self.choices[index]:
+                markers = [part + choice + self.parts[index + 1]
+                           for choice in self.choices[index]]
+            found = min((offset for marker in markers
+                         if (offset := text.find(marker, position)) >= 0), default=-1)
             if found < 0:
-                return False
+                return None
+            values.append(text[position:found])
             position = found + len(part)
         suffix = self.parts[-1]
-        # Preserve the former pattern's allowance for a final newline.
-        return (text.endswith(suffix, position)
-                or text.endswith("\n") and text.endswith(suffix, position, len(text) - 1))
+        end = len(text)
+        if not text.endswith(suffix, position):
+            if not text.endswith("\n") or not text.endswith(suffix, position, end - 1):
+                return None
+            end -= 1
+        values.append(text[position:end - len(suffix) if suffix else end])
+        if any(choices is not None and value not in choices
+               for value, choices in zip(values, self.choices)):
+            return None
+        if any(duration and not re.fullmatch(r"-?\d+(?:\.\d+)?(?:\s*(?:s|sec|seconds))?", value)
+               for value, duration in zip(values, self.durations)):
+            return None
+        return values
+
+    def match(self, text: str) -> bool:
+        return self.values(text) is not None
+
+    def render(self, text, translated, phrases):
+        values = self.values(text)
+        if values is None:
+            return None
+        replacements = dict(zip(self.tokens, values))
+        parts, tokens = _phrase_template(translated)
+        out = [parts[0]]
+        for token, tail in zip(tokens, parts[1:]):
+            value = replacements.get(token, token)
+            translated_value = phrases.get(value)
+            if translated_value is None:
+                items = re.split(r"[,、/]\s*", value.strip("[]"))
+                if len(items) > 1 and all(item in phrases for item in items):
+                    translated_value = "、".join(phrases[item] for item in items)
+            out.extend((translated_value or value, tail))
+        return "".join(out)
 
 
 def _split_phrase_tokens(text: str) -> list[str]:
+    return _phrase_template(text)[0]
+
+
+def _phrase_template(text: str):
     parts = []
+    tokens = []
     start = 0
     while True:
         left = text.find("{", start)
-        right = text.find("}", left + 1) if left >= 0 else -1
-        if right < 0:
+        if left < 0:
             parts.append(text[start:])
-            return parts
+            return parts, tokens
+        depth, right = 1, left + 1
+        while right < len(text) and depth:
+            if text[right] == "{":
+                depth += 1
+            elif text[right] == "}":
+                depth -= 1
+            right += 1
+        if depth:
+            parts.append(text[start:])
+            return parts, tokens
         parts.append(text[start:left])
-        start = right + 1
+        tokens.append(text[left:right])
+        start = right
 
 
-def _compile_phrase_patterns(phrases: dict) -> list:
-    """Leave simple local tokens for _fire. Require token-free translations and six
-    literal alphanumeric characters to avoid unrelated matches."""
-    simple = re.compile(r"^\{\w+\}$")
+def _compile_phrase_patterns(phrases: dict, *, minimum_literal=6, restrict_choices=True) -> list:
+    """Match specific templates and substitute captured values without evaluation."""
     out = []
     for en, ja in phrases.items():
-        parts = _split_phrase_tokens(en)
+        parts, tokens = _phrase_template(en)
         if len(parts) == 1:
             continue
-        if simple.search(en) or len(_split_phrase_tokens(ja)) > 1:
+        ja_tokens = _phrase_template(ja)[1]
+        if not set(ja_tokens) <= set(tokens):
+            continue
+        if any(not part for part in parts[1:-1]):
             continue
         literal = "".join(parts)
-        if len(re.sub(r"[\W_]+", "", literal)) < 6:
+        if len(re.sub(r"[\W_]+", "", literal)) < minimum_literal:
             continue
-        out.append((_PhrasePattern(parts), ja))
+        out.append((_PhrasePattern(parts, tokens, restrict_choices), ja))
     out.sort(key=lambda item: sum(len(part) for part in item[0].parts), reverse=True)
     return out
 

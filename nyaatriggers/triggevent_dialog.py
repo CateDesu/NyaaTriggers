@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 )
 
 from nyaatriggers.locale_util import _, N_
+from nyaatriggers.game_locale import fight_label, game_text
 from nyaatriggers.triggevent_custom import MAX_STEPS, fight_choices, new_trigger, validate_trigger
 
 
@@ -242,7 +243,7 @@ class TriggeventDialog(QDialog):
 
     def _update_fight_hint(self, zone_name=""):
         if self._selected_fight:
-            self._fight_hint.setText(zone_name or self._selected_fight)
+            self._fight_hint.setText(game_text(zone_name) if zone_name else fight_label(self._selected_fight))
         elif self.fight.text().strip():
             self._fight_hint.setText(_("Choose a search result to assign a fight. Otherwise this callout goes into Unsorted."))
         else:

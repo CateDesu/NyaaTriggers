@@ -1,0 +1,20 @@
+Japanese translation data
+
+Game action names, status names, status descriptions and place names come from
+the Japanese game data mirrored by xivapi/ffxiv-datamining:
+https://github.com/xivapi/ffxiv-datamining/tree/master/csv
+FINAL FANTASY XIV game content is copyright Square Enix.
+
+Fight, timeline and callout translations include adapted Japanese translations
+from OverlayPlugin/cactbot, revision 1a101b98d3fe4fe456dad9eb9eecfd849aa4506c:
+https://github.com/OverlayPlugin/cactbot
+These portions retain the Apache License 2.0. A copy of that license is bundled
+at fonts/LICENSE.txt. NyaaTriggers also supplies additional Japanese translations.
+
+The standard Qt widget translations are supplied by the installed Qt version.
+The release build includes its qtbase_ja.qm file in lang:
+https://github.com/qt/qttranslations
+
+Game metadata can be rebuilt with tools/build_game_locale.py using matching
+English and Japanese CSV files and the cactbot checkout above. Curated fight
+and timeline labels are stored in tools/game_text_ja.json.

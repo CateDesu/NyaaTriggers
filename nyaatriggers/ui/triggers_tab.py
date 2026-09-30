@@ -21,6 +21,7 @@ from nyaatriggers.trigger_profiles import merge_local_choices
 from nyaatriggers.trigger_dialog import TriggerDialog
 from nyaatriggers.tts import set_readings, interrupt as tts_interrupt
 from nyaatriggers.locale_util import _, active_locale
+from nyaatriggers.game_locale import fight_label
 from nyaatriggers.triggevent_bridge import TriggeventBridge
 try:
     from nyaatriggers.triggernometry_bridge import TriggernometryBridge
@@ -336,7 +337,7 @@ class TriggersTabMixin:
                 ci.addChild(ei)
 
                 for fight in fights:
-                    fi = QTreeWidgetItem([fight])
+                    fi = QTreeWidgetItem([fight_label(fight)])
                     fi.setData(0, Qt.ItemDataRole.UserRole, fight)
                     fi.setSizeHint(0, QSize(0, 22))
                     ei.addChild(fi)
@@ -408,7 +409,7 @@ class TriggersTabMixin:
         th.setSizeHint(0, QSize(0, 28))
         self._tree.addTopLevelItem(th)
         for fight in sorted(tbd):
-            fi = QTreeWidgetItem([f"{fight}  ({tbd[fight]})"])
+            fi = QTreeWidgetItem([f"{fight_label(fight)}  ({tbd[fight]})"])
             fi.setData(0, Qt.ItemDataRole.UserRole, fight)
             fi.setSizeHint(0, QSize(0, 22))
             th.addChild(fi)
@@ -682,7 +683,7 @@ class TriggersTabMixin:
                 header_rows.append((row, tid.split(":", 1)[1]))
                 continue
             fi  = self._table.item(row, _C_FIGHT)
-            fv  = fi.text() if fi else ""
+            fv = (fi.data(Qt.ItemDataRole.UserRole) or fi.text()) if fi else ""
             section = en.data(_SECTION_ROLE) if en else None
             if section not in section_has:
                 section = "engine" if self._is_engine_key(tid) else "local"
@@ -691,7 +692,7 @@ class TriggersTabMixin:
                 typ     = self._table.item(row, _C_TYPE).text() if self._table.item(row, _C_TYPE) else ""
                 ability = self._table.item(row, _C_RE).text()   if self._table.item(row, _C_RE)   else ""
                 tts     = self._table.item(row, _C_TTS).text()  if self._table.item(row, _C_TTS)  else ""
-                hidden  = not any(query in c.lower() for c in (name, fv, typ, ability, tts))
+                hidden = not any(query in c.lower() for c in (name, fight_label(fv), typ, ability, tts))
                 if hidden:
                     t = trigger_map.get(tid)
                     if t is not None:
@@ -779,7 +780,10 @@ class TriggersTabMixin:
 
         ability_display = t.ability_id if t.ability_id else t.ability_regex
         self._table.setItem(row, _C_NAME,  _ro(self._localized_name(t)))
-        self._table.setItem(row, _C_FIGHT, _ro(t.fight))
+        fight_item = _ro(fight_label(t.fight))
+        fight_item.setToolTip(fight_item.text())
+        fight_item.setData(Qt.ItemDataRole.UserRole, t.fight)
+        self._table.setItem(row, _C_FIGHT, fight_item)
         self._table.setItem(row, _C_TYPE,  _ro(t.log_type))
         self._table.setItem(row, _C_RE,    _ro(ability_display))
         self._table.setItem(row, _C_TTS,   _ro(self._localized_callout(t)))
@@ -1235,6 +1239,8 @@ class TriggersTabMixin:
         self._callouts_names_text_ja = _clean(parsed.get("names_text"))  # english name -> ja
         # Try resolved token patterns only after exact lookup fails.
         self._callouts_phrases_ja_patterns = _compile_phrase_patterns(self._callouts_phrases_ja)
+        self._callouts_reading_patterns = _compile_phrase_patterns(
+            self._callouts_readings, minimum_literal=1, restrict_choices=False)
         set_readings(self._callouts_readings)
 
     def _refresh_callouts_ja_async(self) -> None:

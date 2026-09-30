@@ -14,7 +14,7 @@ from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QFrame, QProgressBar, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 
 from nyaatriggers.tts import kokoro_ready, download_kokoro_model, install_kokoro_deps, resume as tts_resume
-from nyaatriggers.locale_util import _
+from nyaatriggers.locale_util import _, engine_status
 from nyaatriggers.triggevent_bridge import update_engine as _te_update_engine
 from nyaatriggers.plugin_link import plugin_supports_dps
 from nyaatriggers import theme
@@ -145,7 +145,7 @@ class UpdaterUiMixin:
         bad = [(src, msg) for src, (st, msg) in self._engine_sidecar_state.items() if st == "bad"]
         if bad:
             src, msg = bad[0]
-            full = _("● {name} Engine: {msg}").format(name=names.get(src, src), msg=msg)
+            full = _("● {name} Engine: {msg}").format(name=names.get(src, src), msg=engine_status(msg))
             # Keep the full status in the tooltip when the header label is truncated.
             lbl.setText(lbl.fontMetrics().elidedText(
                 full, Qt.TextElideMode.ElideRight, 420))

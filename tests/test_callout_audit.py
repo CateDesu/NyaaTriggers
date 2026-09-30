@@ -43,6 +43,8 @@ class MechanicTranslationTests(unittest.TestCase):
             _callouts_phrases_ja=data["phrases"],
             _callouts_phrases_ja_patterns=_compile_phrase_patterns(data["phrases"]),
             _callouts_readings=data["readings"],
+            _callouts_reading_patterns=_compile_phrase_patterns(
+                data["readings"], minimum_literal=1, restrict_choices=False),
             _triggevent=None, _triggevent_mode=True, _connected=True,
             _triggevent_last_spoken={}, _dedup_speak_gate=lambda *args: True)
         self.host._localize_text = types.MethodType(SettingsTabMixin._localize_text, self.host)
@@ -69,28 +71,35 @@ class MechanicTranslationTests(unittest.TestCase):
 
     def test_unknown_safe_corner_stays_intact(self):
         text = "Bait middle, then custom marker A"
-        self.assertEqual(self.host._localize_text(text), text)
+        self.assertEqual(self.host._localize_text(text), "中央誘導→custom marker A")
 
     def test_umad_direction_calls_keep_their_resolved_instructions(self):
         from nyaatriggers.ui.engines import EnginesMixin
 
-        for text in (
-                "Spread In Thunder, Look Away",
-                "Spread Southeast",
-                "Center to South, North, Northwest",
-                "Starting Northwest -> Clockwise",
-                "Starting Southeast -> CCW",
-                "Stillness and Stack In Ice (with Daymyx Hylen, Mimzy Marleapa)",
-                "Motion and Stack Out of Ice (with Mia Hunt)"):
+        for text, display, reading in (
+                ("Spread In Thunder, Look Away", "散開、雷の中、視線を避ける",
+                 "さんかい、かみなりのなか、しせんをさける"),
+                ("Spread Southeast", "散開 南東", "さんかい なんとう"),
+                ("Center to South, North, Northwest", "中央から南、北、北西",
+                 "ちゅうおうからみなみ、きた、ほくせい"),
+                ("Starting Northwest -> Clockwise", "開始 北西 → 時計回り",
+                 "かいし ほくせい → とけいまわり"),
+                ("Starting Southeast -> CCW", "開始 南東 → 反時計回り",
+                 "かいし なんとう → はんとけいまわり"),
+                ("Stillness and Stack In Ice (with Daymyx Hylen, Mimzy Marleapa)",
+                 "静止、氷の中でDaymyx Hylen, Mimzy Marleapaと頭割り",
+                 "せいし、こおりのなかでDaymyx Hylen, Mimzy Marleapaとあたまわり"),
+                ("Motion and Stack Out of Ice (with Mia Hunt)",
+                 "動く、氷の外でMia Huntと頭割り", "うごく、こおりのそとでMia Huntとあたまわり")):
             with self.subTest(text=text):
                 with patch("nyaatriggers.ui.engines.speak") as speak:
                     EnginesMixin._triggevent_speak(self.host, text)
-                speak.assert_called_once_with(text, reading=text)
+                speak.assert_called_once_with(display, reading=reading)
 
     def test_actor_and_duration_only_translations_still_work(self):
         from nyaatriggers.app_common import _compile_phrase_patterns
 
-        self.assertEqual(self.host._localize_text("Stack with Mia Hunt"), "バディと頭割り")
+        self.assertEqual(self.host._localize_text("Stack with Mia Hunt"), "Mia Huntと頭割り")
         phrases = {"Away from {event.source} ({event.estimatedRemainingDuration})": "離れる"}
         self.host._callouts_phrases_ja = phrases
         self.host._callouts_phrases_ja_patterns = _compile_phrase_patterns(phrases)
@@ -98,20 +107,20 @@ class MechanicTranslationTests(unittest.TestCase):
 
     def test_specific_actor_callout_keeps_the_following_mechanic(self):
         for text, expected in (
-                ("Stack with Mia Hunt, Bait Between", "バディと頭割り、間に誘導"),
-                ("Stack with Sasha Kurone, Bait Away", "バディと頭割り、離れて誘導"),
-                ("Stack with Mia Hunt", "バディと頭割り")):
+                ("Stack with Mia Hunt, Bait Between", "Mia Huntと頭割り、間で誘導"),
+                ("Stack with Sasha Kurone, Bait Away", "Sasha Kuroneと頭割り、離れて誘導"),
+                ("Stack with Mia Hunt", "Mia Huntと頭割り")):
             with self.subTest(text=text):
                 self.assertEqual(self.host._localize_text(text), expected)
 
     def test_umad_roles_and_prelude_cannot_be_swallowed_by_a_wildcard(self):
         for text, expected in (
-                ("Circle, DPS have cone", "Circle, DPS have cone"),
-                ("Cone, Supports have cone", "Cone, Supports have cone"),
-                ("Stack, Supports have cone", "Stack, Supports have cone"),
+                ("Circle, DPS have cone", "サークル、DPSに扇"),
+                ("Cone, Supports have cone", "扇、タンク・ヒーラーに扇"),
+                ("Stack, Supports have cone", "頭割り、タンク・ヒーラーに扇"),
                 ("Stack on DPS", "DPSに頭割り"),
-                ("Stack on Support", "サポートに頭割り"),
-                ("Bait Blizzards then Stacks", "Bait Blizzards then Stacks")):
+                ("Stack on Support", "タンク・ヒーラーに頭割り"),
+                ("Bait Blizzards then Stacks", "氷を誘導してから頭割り")):
             with self.subTest(text=text):
                 self.assertEqual(self.host._localize_text(text), expected)
 
@@ -138,7 +147,7 @@ class MechanicTranslationTests(unittest.TestCase):
                     patch("nyaatriggers.ui.triggers_tab.set_readings"):
                 TriggersTabMixin._load_cached_callouts_ja(self.host)
         text = "Spread In Thunder, Look Away"
-        self.assertEqual(self.host._localize_text(text), text)
+        self.assertEqual(self.host._localize_text(text), "散開、雷の中、視線を避ける")
 
 
 class ChainRefreshTests(unittest.TestCase):
