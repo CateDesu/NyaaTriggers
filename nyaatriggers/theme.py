@@ -1,5 +1,7 @@
 """Shared colours, widget styles and decorative drawing helpers."""
 
+from functools import lru_cache
+
 # Surface colours
 BASE     = "#0a0a0c"   # window background
 PANEL    = "#101013"   # Sidebar and list backgrounds
@@ -452,133 +454,74 @@ QFrame#updateBanner {{
 """
 
 
-def make_tree(seed: int, w: int, h: int, inward: int = 1, crisp: bool = False,
-              stroke_scale: float = 1.0, lift: float = 0.0) -> "QPixmap":
-    """Render a deterministic cherry tree from a seed. inward selects the window edge.
-    crisp omits the background wash, stroke_scale controls branch widths, and lift moves
-    the crown upward as a fraction of height.
-    """
-    import math
-    import random
-    from PyQt6.QtCore import Qt, QPointF
-    from PyQt6.QtGui import QColor, QGuiApplication, QPainter, QPen, QPixmap
+@lru_cache(maxsize=2)
+def load_sakura(side: str) -> "QPixmap":
+    """Load one of the two illustrated trees."""
+    from PyQt6.QtGui import QPixmap
+    from nyaatriggers.paths import bundle_root
 
-    rnd = random.Random(seed)
-    # Render at the display pixel ratio without setting the pixmap ratio. Callers scale
-    # by pixel height, so a device ratio tag would shrink the tree twice.
-    screen = QGuiApplication.primaryScreen()
-    dpr = screen.devicePixelRatio() if screen else 1.0
-    pm = QPixmap(round(w * dpr), round(h * dpr))
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    p.scale(dpr, dpr)
+    image = QPixmap(str(bundle_root() / "assets" / "sakura_trees.png"))
+    if image.isNull():
+        return image
+    half = image.width() // 2
+    x = 0 if side == "left" else half
+    return image.copy(x, 0, half, image.height())
 
-    blossoms = [
-        QColor(255, 224, 231),
-        QColor(255, 205, 216),
-        QColor(255, 185, 200),
-        QColor(255, 238, 242),
-    ]
-    bark = QColor(96, 66, 78, 200)
 
-    def stroke(x1, y1, x2, y2, width):
-        pen = QPen(bark)
-        pen.setWidthF(width)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        p.setPen(pen)
-        p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+class SakuraBackground:
+    """Keep one rendered scenery layer for the current size and display scale."""
 
-    tips = []
-    x0 = 3.0 if inward > 0 else w - 3.0   # Center the trunk on the window edge.
+    def __init__(self, side: str):
+        self._side = side
+        self._tree = load_sakura(side)
+        self._cache_key = None
+        self._pixmap = None
 
-    # Draw the trunk in one stroke to avoid a visible joint.
-    top_y = h * (0.24 - lift)
-    stroke(x0, h, x0, top_y, w * 0.045 * stroke_scale)
-
-    def branch(x, y, angle, length, width, depth):
-        x2 = x + math.cos(angle) * length
-        y2 = y + math.sin(angle) * length
-        stroke(x, y, x2, y2, width)
-        if depth <= 0:
-            tips.append((x2, y2))
+    def paint(self, painter: "QPainter", w: int, h: int) -> None:
+        if w <= 0 or h <= 0:
             return
-        for _ in range(2):
-            branch(x2, y2,
-                   angle + rnd.uniform(-0.25, 0.25) + inward * 0.08,
-                   length * rnd.uniform(0.55, 0.70), width * 0.62, depth - 1)
+        ratio = painter.device().devicePixelRatioF()
+        key = (w, h, ratio)
+        if key != self._cache_key:
+            import math
+            from PyQt6.QtCore import Qt, QPointF, QRectF
+            from PyQt6.QtGui import QBrush, QColor, QLinearGradient, QPainter, QPixmap, QRadialGradient
 
-    n_br = rnd.randint(3, 4)
-    for i in range(n_br):
-        by = top_y + (h * 0.04) * (i / max(1, n_br - 1))
-        branch(x0, by, -math.pi / 2 + inward * rnd.uniform(0.75, 1.15),
-               rnd.uniform(h * 0.04, h * 0.07), w * 0.018 * stroke_scale, 2)
-    tips.append((x0 + inward * w * 0.02, top_y - h * 0.02))
-
-    cx = sum(t[0] for t in tips) / len(tips)
-    cy = sum(t[1] for t in tips) / len(tips)
-    lo, hi = (w * 0.04, w * 0.22) if inward > 0 else (w * 0.78, w * 0.96)
-    cx = max(lo, min(hi, cx))
-    cy = max(h * (0.10 - lift), min(h * (0.15 - lift), cy))
-    # Fit the blossom crown to the branch tips.
-    max_dx = max(abs(t[0] - cx) for t in tips)
-    max_dy = max(abs(t[1] - cy) for t in tips)
-    cover_rx = min(w * 0.45, max(w * 0.30, max_dx + w * 0.06))
-    cover_ry = min(h * 0.13, max(h * 0.06, max_dy + h * 0.03))
-
-    p.setPen(Qt.PenStyle.NoPen)
-
-    # Skip the background wash for crisp crowns.
-    for _ in range(0 if crisp else 3):
-        px = cx + rnd.uniform(-0.08, 0.08) * cover_rx
-        py = cy + rnd.uniform(-0.08, 0.08) * cover_ry
-        c = QColor(rnd.choice(blossoms))
-        c.setAlpha(rnd.randint(10, 16))
-        p.setBrush(c)
-        p.drawEllipse(QPointF(px, py), cover_rx * 0.9, cover_ry * 0.9)
-
-    if crisp:
-        r_lo, r_hi, a_lo, a_hi = w * 0.011, w * 0.024, 60, 115
-    else:
-        r_lo, r_hi, a_lo, a_hi = w * 0.016, w * 0.042, 35, 85
-    for _ in range(6):
-        px = cx + rnd.uniform(-0.28, 0.28) * cover_rx
-        py = cy + rnd.uniform(-0.28, 0.28) * cover_ry
-        rx = rnd.uniform(0.55, 0.85) * cover_rx
-        ry = rnd.uniform(0.55, 0.85) * cover_ry
-        for _ in range(rnd.randint(45, 60)):
-            a = rnd.uniform(0.0, 2.0 * math.pi)
-            rr = math.sqrt(rnd.random())
-            bx = px + rx * rr * math.cos(a)
-            by = py + ry * rr * math.sin(a)
-            r = rnd.uniform(r_lo, r_hi)
-            c = QColor(rnd.choice(blossoms))
-            c.setAlpha(rnd.randint(a_lo, a_hi))
-            p.setBrush(c)
-            p.drawEllipse(QPointF(bx, by), r, r)
-
-    for tx, ty in tips:
-        for _ in range(rnd.randint(4, 6)):
-            ox = rnd.uniform(-w * 0.035, w * 0.035)
-            oy = rnd.uniform(-h * 0.020, h * 0.020)
-            r = rnd.uniform(w * (0.010 if crisp else 0.014), w * (0.022 if crisp else 0.030))
-            c = QColor(rnd.choice(blossoms))
-            c.setAlpha(rnd.randint(70 if crisp else 45, 120 if crisp else 90))
-            p.setBrush(c)
-            p.drawEllipse(QPointF(tx + ox, ty + oy), r, r)
-
-    for _ in range(rnd.randint(25, 35)):
-        a = rnd.uniform(0.0, 2.0 * math.pi)
-        rr = math.sqrt(rnd.random())
-        bx = cx + cover_rx * 0.9 * rr * math.cos(a)
-        by = cy + cover_ry * 0.9 * rr * math.sin(a)
-        r = rnd.uniform(w * 0.006, w * 0.014)
-        c = QColor(blossoms[3])
-        c.setAlpha(rnd.randint(80, 130))
-        p.setBrush(c)
-        p.drawEllipse(QPointF(bx, by), r, r)
-    p.end()
-    return pm
+            pixmap = QPixmap(math.ceil(w * ratio), math.ceil(h * ratio))
+            pixmap.setDevicePixelRatio(ratio)
+            pixmap.fill(QColor(BASE) if self._side == "right" else Qt.GlobalColor.transparent)
+            p = QPainter(pixmap)
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            tree = self._tree
+            if not tree.isNull():
+                p.save()
+                if self._side == "left":
+                    scale = h / tree.height()
+                    p.setOpacity(0.42)
+                else:
+                    scale = h * 1.08 / tree.height()
+                    p.setOpacity(0.34)
+                    p.translate(w - tree.width() * scale, -h * 0.08)
+                p.scale(scale, scale)
+                p.drawPixmap(0, 0, tree)
+                p.restore()
+            if self._side == "left":
+                # Keep navigation and branding readable over the tree.
+                band = QLinearGradient(0, h * 0.05, 0, h * 0.64)
+                band.setColorAt(0.0, QColor(7, 7, 11, 0))
+                band.setColorAt(0.20, QColor(7, 7, 11, 120))
+                band.setColorAt(0.74, QColor(7, 7, 11, 120))
+                band.setColorAt(1.0, QColor(7, 7, 11, 0))
+                p.fillRect(QRectF(0, h * 0.05, w, h * 0.59), QBrush(band))
+                bg = QRadialGradient(QPointF(w * 0.42, h * 0.065), h * 0.16)
+                bg.setColorAt(0.0, QColor(7, 7, 11, 130))
+                bg.setColorAt(0.6, QColor(7, 7, 11, 80))
+                bg.setColorAt(1.0, QColor(7, 7, 11, 0))
+                p.fillRect(QRectF(0, 0, w, h * 0.22), QBrush(bg))
+            p.end()
+            self._pixmap = pixmap
+            self._cache_key = key
+        painter.drawPixmap(0, 0, self._pixmap)
 
 
 def make_petal(size: int, tint: "QColor") -> "QPixmap":

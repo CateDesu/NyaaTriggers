@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from types import SimpleNamespace
 import unittest
@@ -24,8 +25,13 @@ BRIDGES = ((tv, tv.TriggeventBridge), (tn, tn.TriggernometryBridge))
 
 
 class BrokenStream:
+    closed = False
+
     def readline(self, limit):
         raise OSError("stdout failed")
+
+    def close(self):
+        self.closed = True
 
 
 class SidecarRecoveryTests(unittest.TestCase):
@@ -56,6 +62,8 @@ class SidecarRecoveryTests(unittest.TestCase):
             else:
                 bridge._read_loop(proc, pending, gen)
             reaped.assert_called_once_with(proc)
+        if stream is not None:
+            self.assertTrue(stream.closed)
         self.assertIs(pending.get_nowait(), module._STOP)
         self.assertEqual(bridge.is_active(), stale)
         self.assertIs(bridge._proc, live_proc if stale else None)
@@ -98,6 +106,58 @@ class SidecarRecoveryTests(unittest.TestCase):
         for module, cls in BRIDGES:
             with self.subTest(bridge=cls.__name__):
                 self.reader_case(module, cls, None)
+
+    def test_stderr_failure_closes_the_reader(self):
+        for module, cls in BRIDGES:
+            with self.subTest(bridge=cls.__name__):
+                stream = BrokenStream()
+                bridge = cls()
+                proc = SimpleNamespace(stderr=stream)
+                with patch.object(module, "_log"), self.assertRaises(OSError):
+                    if module is tv:
+                        bridge._err_loop(proc, 0)
+                    else:
+                        bridge._err_loop(proc)
+                self.assertTrue(stream.closed)
+
+    def test_exited_process_releases_all_pipes_before_collection(self):
+        for module, cls in BRIDGES:
+            with self.subTest(bridge=cls.__name__):
+                proc = subprocess.Popen(
+                    [sys.executable, "-c", "import sys; print('{}'); print('done', file=sys.stderr)"],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, start_new_session=os.name == "posix")
+                bridge = cls()
+                bridge._active = True
+                bridge._gen = 1
+                bridge._proc = proc
+                pending = queue.Queue()
+                pending.put(module._STOP)
+                workers = [
+                    threading.Thread(target=bridge._write_loop, args=(proc, pending)),
+                    threading.Thread(target=bridge._read_loop,
+                                     args=(proc, pending, {}, 1) if module is tv else (proc, pending, 1)),
+                    threading.Thread(target=bridge._err_loop,
+                                     args=(proc, 1) if module is tv else (proc,)),
+                ]
+                try:
+                    with patch.object(module, "_log"):
+                        for worker in workers:
+                            worker.start()
+                        for worker in workers:
+                            worker.join(8)
+                        self.assertTrue(all(not worker.is_alive() for worker in workers))
+                        self.assertIsNotNone(proc.poll())
+                        self.assertFalse(bridge.is_active())
+                        self.assertTrue(proc.stdin.closed)
+                        self.assertTrue(proc.stdout.closed)
+                        self.assertTrue(proc.stderr.closed)
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.wait(timeout=3)
+                    for stream in (proc.stdin, proc.stdout, proc.stderr):
+                        stream.close()
 
     def test_repeated_cleanup_does_not_signal_a_retired_process_group(self):
         for module, cls in BRIDGES:

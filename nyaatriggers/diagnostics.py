@@ -104,6 +104,14 @@ _SCHEMAS.update({
                  "delay_ms": "int", "error_code": "signed", "elapsed_ms": "int"},
     "ws_feed": {**dict.fromkeys(("frames", "bytes", "log_lines", "rejected", "zone_id"), "int"),
                 "combat": "bool"},
+    "gaze_state": {"kind": _enum("vfx", "gain", "loss", "reset"),
+                   "vfx": "int", "duration_s": "number", "slot": "int",
+                   "sets": "int", "assigned": "int", "marked": "int",
+                   "polarity": _enum("away1", "look1"), "tell_age_s": "number"},
+    "gaze_action": {"kind": _enum("mark", "clear"), "slot": "int",
+                    "result": _enum("queued", "pending")},
+    "marker_transport": {"kind": _enum("mark", "clear"), "slot": "int",
+                         "result": _enum("accepted", "failed", "cancelled", "unknown_slot")},
     "ui_callout": {"gen": "int", "channel": _enum("display", "speech"),
                    "result": _enum("stale", "disabled", "disconnected", "emitted",
                                    "empty", "duplicate", "queued")},
@@ -144,6 +152,11 @@ _SCHEMAS["engine_error"].update({
     "frames": "java_frames",
 })
 _SCHEMAS["engine_event"].update(source_actor="actor", target_actor="actor")
+for _event in ("gaze_action", "marker_transport"):
+    _SCHEMAS[_event]["marker"] = _enum(
+        *(f"attack{i}" for i in range(1, 9)), "attack", "clear",
+        "bind1", "bind2", "bind3", "ignore1", "ignore2",
+        "circle", "cross", "triangle", "square")
 _SCHEMAS["engine_started"]["engine_commit"] = "commit"
 _SCHEMAS["engine_recovery"]["history_status"] = _enum(
     "complete", "degraded", "unavailable", "failed", "state_only")
@@ -188,7 +201,7 @@ trigger_engine trigger_profiles triggernometry_bridge triggernometry_dialog
 triggernometry_editor triggernometry_telesto triggevent_bridge triggevent_custom
 triggevent_dialog triggevent_recovery tts ui.__init__ ui.ambient_fx
 ui.automarkers_tab ui.connection ui.custom_triggevent ui.death_recap_tab ui.dps_tab
-ui.engines ui.instance_tab ui.profiles ui.prog_tab ui.recap_browser ui.recap_widgets
+ui.engines ui.instance_tab ui.profiles ui.prog_comparison ui.prog_tab ui.recap_browser ui.recap_widgets
 ui.session_tracking ui.settings_tab ui.timeline_tab ui.triggernometry_editor
 ui.triggers_tab ui.voice_tab umad_chains updater updater_ui voice_config ws_client
 """.split()

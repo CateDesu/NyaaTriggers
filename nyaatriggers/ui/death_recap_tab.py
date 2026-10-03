@@ -274,6 +274,10 @@ class DeathRecapTabMixin:
             session, pull, _number = self._recap_context
             tab = self._prog_tab
             tab.flush()
+            if tab.picker.findData(session["id"]) < 0:
+                tab.session_search.clear()
+                if session.get("archived") is True:
+                    tab.show_archived.setChecked(True)
             tab.picker.setCurrentIndex(tab.picker.findData(session["id"]))
             row = next((i for i, candidate in enumerate(reversed(session["pulls"]))
                         if candidate["id"] == pull["id"]), -1)
@@ -334,11 +338,14 @@ class DeathRecapTabMixin:
         label = QLabel(_("Check a status to hide it throughout the recap. Offensive buffs are hidden by default. Mitigation, healing effects, and debuffs stay visible. Saved combat data is kept."))
         label.setWordWrap(True)
         layout.addWidget(label)
+        apply_hint = QLabel(_("Click Apply or OK to save changes, including Show all statuses and Restore defaults."))
+        apply_hint.setWordWrap(True)
+        layout.addWidget(apply_hint)
         search = QLineEdit()
         search.setPlaceholderText(_("Search statuses"))
         layout.addWidget(search)
         listing = QListWidget()
-        listing.setIconSize(self._recap_table.iconSize())
+        listing.setIconSize(QSize(26, 26))
         layout.addWidget(listing)
         known = dict(self._recap_import.statuses) if self._recap_import is not None else {}
         for death in self._recap_records if self._recap_import is None else []:
@@ -369,41 +376,73 @@ class DeathRecapTabMixin:
                 item.setHidden(text.casefold() not in item.text().casefold())
 
         def refresh_icons():
+            listing.blockSignals(True)
             for row in range(listing.count()):
                 item = listing.item(row)
                 status = item.data(Qt.ItemDataRole.UserRole + 1)
                 metadata, pixmap = self._recap_icons.get("Status", status.get("id"))
                 item.setIcon(QIcon(pixmap))
                 item.setText(status_name(status, metadata))
+            listing.blockSignals(False)
             filter_rows(search.text())
 
         search.textChanged.connect(filter_rows)
         self._recap_icons.changed.connect(refresh_icons)
+        summary = QLabel()
+        layout.addWidget(summary)
+
+        def selected_statuses():
+            return {listing.item(row).data(Qt.ItemDataRole.UserRole)
+                    for row in range(listing.count())
+                    if listing.item(row).checkState() == Qt.CheckState.Checked}
+
+        def update_selection():
+            selected = selected_statuses()
+            summary.setText(_("Selected to hide: {count}").format(count=len(selected)))
+            buttons.button(QDialogButtonBox.StandardButton.Apply).setEnabled(selected != self._recap_hidden)
+
+        def reset_selection(hidden):
+            listing.blockSignals(True)
+            for row in range(listing.count()):
+                item = listing.item(row)
+                item.setCheckState(Qt.CheckState.Checked if item.data(Qt.ItemDataRole.UserRole) in hidden
+                                   else Qt.CheckState.Unchecked)
+            listing.blockSignals(False)
+            update_selection()
+
+        def apply_selection():
+            selected = selected_statuses()
+            saved = sorted(selected)
+            if selected != self._recap_hidden or self._settings.get("recap_hidden_statuses") != saved:
+                self._recap_hidden.clear()
+                self._recap_hidden.update(selected)
+                self._settings["recap_hidden_statuses"] = saved
+                self._save_settings_debounced()
+                self._select_recap(self._recap_list.currentRow())
+            update_selection()
+
         show_all = QPushButton(_("Show all statuses"))
-        show_all.clicked.connect(lambda: [listing.item(row).setCheckState(Qt.CheckState.Unchecked)
-                                          for row in range(listing.count())])
+        show_all.setAutoDefault(False)
+        show_all.clicked.connect(lambda: reset_selection(set()))
         defaults = QPushButton(_("Restore defaults"))
-        defaults.clicked.connect(lambda: [listing.item(row).setCheckState(
-            Qt.CheckState.Checked if listing.item(row).data(Qt.ItemDataRole.UserRole) in DEFAULT_HIDDEN_STATUSES
-            else Qt.CheckState.Unchecked) for row in range(listing.count())])
+        defaults.setAutoDefault(False)
+        defaults.clicked.connect(lambda: reset_selection(DEFAULT_HIDDEN_STATUSES))
         actions = QHBoxLayout()
         actions.addWidget(show_all)
         actions.addWidget(defaults)
         layout.addLayout(actions)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+                                  | QDialogButtonBox.StandardButton.Apply)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
+        buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(apply_selection)
         layout.addWidget(buttons)
+        listing.itemChanged.connect(update_selection)
+        update_selection()
         result = dialog.exec()
         self._recap_icons.changed.disconnect(refresh_icons)
         if result == QDialog.DialogCode.Accepted:
-            self._recap_hidden.clear()
-            self._recap_hidden.update(listing.item(row).data(Qt.ItemDataRole.UserRole)
-                                      for row in range(listing.count())
-                                      if listing.item(row).checkState() == Qt.CheckState.Checked)
-            self._settings["recap_hidden_statuses"] = sorted(self._recap_hidden)
-            self._save_settings_debounced()
-            self._select_recap(self._recap_list.currentRow())
+            apply_selection()
         dialog.deleteLater()
 
     def _update_recap_ages(self):

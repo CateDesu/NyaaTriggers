@@ -24,10 +24,15 @@ Session files and recaps survive DPS log rotation. Save pull starts so a crash c
 erase an unfinished attempt, and order writes so retries cannot overwrite newer notes.
 Unreadable files are preserved and reported in Prog.
 
+Archiving adds an optional `archived` flag to the version 1 session envelope.
+It changes visibility in the picker and comparison choices. The session,
+pulls, phase data, and recap files remain available. Only finished sessions
+can be archived, and a failed write restores the previous flag in memory.
+
 Recaps use `prog_sessions/recaps/<session ID>/<pull ID>/<recap ID>.json`. Stable pull
 IDs keep them discoverable if the later summary write fails. Failed recap writes
 remain queued across session changes, with the latest 256 retained during persistent
 failure. This cap does not limit saved recaps. Stored statuses have no live expiry.
 
 [Phase tracking and comparisons](PROG-PHASE-DESIGN.md) covers UMAD detection and
-planned comparisons. Elapsed time and cactbot timelines cannot establish phase progress.
+comparison rules. Elapsed time and cactbot timelines cannot establish phase progress.

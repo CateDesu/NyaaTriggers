@@ -5,16 +5,14 @@ resume from the same frame.
 import time
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtGui import QPainter
 
 from nyaatriggers import theme
 
 
 class AmbientFxMixin:
     def _init_ambient_fx(self) -> None:
-        # Scale the tree stroke to match the sidebar while placing it at the right edge.
-        self._sakura = theme.make_tree(41, 380, 900, inward=-1, crisp=True,
-                                       stroke_scale=216 / 380, lift=0.02)
+        self._scenery = theme.SakuraBackground("right")
         self._petals = theme.make_petals(11, 14)
         self._fx_active = False
         self._fx_start = time.monotonic()
@@ -77,17 +75,9 @@ class AmbientFxMixin:
 
     def paintEvent(self, _ev):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(theme.BASE))
         w = self.width()
         h = self.height()
-        tree = self._sakura
-        p.save()
-        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        s = h / tree.height()
-        p.translate(w - tree.width() * s, 0)
-        p.scale(s, s)
-        p.drawPixmap(0, 0, tree)
-        p.restore()
+        self._scenery.paint(p, w, h)
         if self._fx_active:
             t = time.monotonic() - self._fx_start
         else:

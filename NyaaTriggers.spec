@@ -80,6 +80,7 @@ datas += [
     # Bundle the local UMAD timeline. The sample timeline remains a source example.
     ('timelines/UMAD.txt', 'timelines'),
     ('assets/icon_nyaa.png', 'assets'),
+    ('assets/sakura_trees.png', 'assets'),
     ('assets/recap_icons.zip', 'assets'),
 ]
 

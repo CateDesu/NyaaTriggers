@@ -111,14 +111,19 @@ class DpsTabMixin:
 
     def _fill_dps_row(self, table, r: int, name: str, job: str,
                       cells: "list[str]", right_from: int = 2) -> None:
-        table.setItem(r, 0, QTableWidgetItem(name))
-        table.setItem(r, 1, QTableWidgetItem(job))
-        for off, val in enumerate(cells):
-            cell = QTableWidgetItem(val)
-            if off + 2 >= right_from:
-                cell.setTextAlignment(
-                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            table.setItem(r, off + 2, cell)
+        right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        for column, value in enumerate((name, job, *cells)):
+            cell = table.item(r, column)
+            new = cell is None
+            if new:
+                cell = QTableWidgetItem(value)
+            elif cell.text() != value:
+                cell.setText(value)
+            alignment = right if column >= 2 and column >= right_from else 0
+            if cell.textAlignment() != alignment:
+                cell.setTextAlignment(alignment)
+            if new:
+                table.setItem(r, column, cell)
 
     def _populate_dps_table(self, table, snap) -> None:
         """Display a live or recorded meter snapshot."""

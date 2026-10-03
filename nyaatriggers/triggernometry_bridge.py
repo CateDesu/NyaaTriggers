@@ -647,15 +647,28 @@ class TriggernometryBridge(QObject):
                         wq.put_nowait(_STOP)
                     except (queue.Empty, queue.Full):
                         pass
-                self._reap(proc)
+                try:
+                    self._reap(proc)
+                finally:
+                    if proc.stdout is not None:
+                        try:
+                            proc.stdout.close()
+                        except OSError:
+                            pass
 
     def _err_loop(self, proc: subprocess.Popen) -> None:
         if proc.stderr is None:
             return
-        for line in _read_lines_bounded(proc.stderr):
-            line = line.rstrip()
-            if line:
-                _log(f"[sidecar stderr] {line}")
+        try:
+            for line in _read_lines_bounded(proc.stderr):
+                line = line.rstrip()
+                if line:
+                    _log(f"[sidecar stderr] {line}")
+        finally:
+            try:
+                proc.stderr.close()
+            except OSError:
+                pass
 
     def _apply_replacements(self, s: str) -> str:
         rules = self._replacements

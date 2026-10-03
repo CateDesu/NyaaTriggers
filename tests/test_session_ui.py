@@ -9,6 +9,7 @@ from itertools import permutations, product
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -95,6 +96,104 @@ class SessionUiTests(unittest.TestCase):
 
     def test_window_icon_loads_from_bundled_assets(self):
         self.assertFalse(self.window.windowIcon().isNull())
+
+    def _prepare_callout_refresh(self, localized=True):
+        window = self.window
+        cache = self.temp / "callouts_ja.cache.json"
+        self.stack.enter_context(patch.object(ac, "_CALLOUTS_JA_CACHE", cache))
+        self.stack.enter_context(patch.object(ac, "_CALLOUTS_JA_BUNDLE", self.temp / "missing.json"))
+        data = {"app_version": "1.0.0", "callouts": {"refresh-local": "避ける"},
+                "phrases": {"Engine call": "集合"}, "readings": {"集合": "しゅうごう"},
+                "names": {"refresh-local": "更新ローカル"},
+                "names_text": {"Refresh engine": "更新エンジン"}}
+        cache.write_text(json.dumps(data), encoding="utf-8")
+        local = Trigger(id="refresh-local", name="Refresh local", tts_text="Local call", fight="UMAD")
+        engine = {"source": "triggevent", "id": "refresh-engine", "name": "Refresh engine",
+                  "text": "Engine call", "fight": "UMAD"}
+        window._settings["callouts_localized"] = localized
+        window._triggers = [local]
+        window._official_triggers = {local.id: deepcopy(local)}
+        window._official_ids = {local.id}
+        window._local_ids = {local.id}
+        window._custom_triggevent = []
+        window._engine_inventory = [engine]
+        window._engine_disabled = {"triggevent": {engine["id"]}}
+        window._load_cached_callouts_ja()
+        window._refresh_table()
+        window._apply_tab_filter()
+        return cache, data, local, engine
+
+    def _callout_name_items(self):
+        table = self.window._table
+        return {table.item(row, ac._C_EN).data(Qt.ItemDataRole.UserRole): table.item(row, ac._C_NAME)
+                for row in range(table.rowCount()) if table.item(row, ac._C_NAME) is not None
+                and not table.item(row, ac._C_EN).data(Qt.ItemDataRole.UserRole).startswith("__hdr__:")}
+
+    def _queue_callout_refresh(self, changed=True):
+        worker = threading.Thread(target=self.window._callouts_ja_signal.emit, args=(changed,))
+        worker.start()
+        worker.join()
+        self.app.processEvents()
+
+    def test_unchanged_callout_display_keeps_table_items_and_refreshes_readings(self):
+        cache, data, _, _ = self._prepare_callout_refresh()
+        window = self.window
+        items = self._callout_name_items()
+        with patch.object(window, "_refresh_table", wraps=window._refresh_table) as rebuild, \
+                patch.object(window, "_load_cached_callouts_ja", wraps=window._load_cached_callouts_ja) as load:
+            self._queue_callout_refresh(False)
+            load.assert_not_called()
+            self._queue_callout_refresh()
+            data["readings"]["集合"] = "しゅーごー"
+            cache.write_text(json.dumps(data), encoding="utf-8")
+            self._queue_callout_refresh()
+            self.assertEqual(window._reading_for("集合"), "しゅーごー")
+            self.assertEqual(load.call_count, 2)
+            rebuild.assert_not_called()
+        for key, item in items.items():
+            self.assertIs(self._callout_name_items()[key], item)
+
+    def test_callout_refresh_keeps_english_table_when_localization_is_disabled(self):
+        cache, data, _, _ = self._prepare_callout_refresh(localized=False)
+        window = self.window
+        items = self._callout_name_items()
+        data["names"]["refresh-local"] = "新しいローカル名"
+        data["phrases"]["Engine call"] = "散開"
+        data["readings"]["散開"] = "さんかい"
+        cache.write_text(json.dumps(data), encoding="utf-8")
+        with patch.object(window, "_refresh_table", wraps=window._refresh_table) as rebuild:
+            self._queue_callout_refresh()
+            rebuild.assert_not_called()
+        self.assertEqual(window._callouts_names_ja["refresh-local"], "新しいローカル名")
+        self.assertEqual(window._reading_for("散開"), "さんかい")
+        self.assertEqual(items["refresh-local"].text(), "Refresh local")
+        self.assertEqual(items["triggevent:refresh-engine"].text(), "Refresh engine")
+        for key, item in items.items():
+            self.assertIs(self._callout_name_items()[key], item)
+
+    def test_changed_callout_translations_refresh_rows_and_keep_saved_definitions(self):
+        cache, data, local, engine = self._prepare_callout_refresh()
+        window = self.window
+        saved = deepcopy((local.to_dict(), engine))
+        window._search_edit.setText("新しい")
+        data["callouts"][local.id] = "新しいコール"
+        data["names"][local.id] = "新しいローカル名"
+        data["phrases"]["Engine call"] = "散開"
+        data["names_text"]["Refresh engine"] = "新しいエンジン名"
+        cache.write_text(json.dumps(data), encoding="utf-8")
+        self._queue_callout_refresh()
+        expected = {local.id: ("新しいローカル名", "新しいコール", Qt.CheckState.Checked),
+                    "triggevent:refresh-engine": ("新しいエンジン名", "散開", Qt.CheckState.Unchecked)}
+        items = self._callout_name_items()
+        self.assertEqual(set(items), set(expected))
+        for key, (name, callout, state) in expected.items():
+            row = items[key].row()
+            self.assertEqual(items[key].text(), name)
+            self.assertEqual(window._table.item(row, ac._C_TTS).text(), callout)
+            self.assertEqual(window._table.item(row, ac._C_EN).checkState(), state)
+            self.assertEqual(window._table.item(row, ac._C_FIGHT).data(Qt.ItemDataRole.UserRole), "UMAD")
+            self.assertFalse(window._table.isRowHidden(row))
+        self.assertEqual((local.to_dict(), engine), saved)
 
     def test_fflogs_signal_ignores_an_older_request_and_keeps_zero_percentile(self):
         window = self.window
@@ -1246,6 +1345,57 @@ class SessionUiTests(unittest.TestCase):
             self.line(ability())
         snapshot.assert_not_called()
         self.assertEqual(self.window._prog_sessions.current["pulls"][0]["ending"], "active")
+
+    def test_meter_refresh_preserves_selection_and_updates_reordered_and_saved_rows(self):
+        window = self.window
+        meter = window._dps_meter
+        meter.note_job(int(PLAYER, 16), 19)
+        meter.note_job(int("10FF0002", 16), 24)
+
+        def hit(actor, name, amount):
+            fields = ability(source=actor, target="40001234",
+                             pairs=[("03", f"{amount << 16:X}")])
+            fields[3] = name
+            meter.process(fields)
+
+        hit(PLAYER, "Player", 1000)
+        hit("10FF0002", "Ally", 500)
+        saved = deepcopy(meter.snapshot())
+        window._update_live_dps()
+        table = window._dps_live_table
+
+        def row(index):
+            return [table.item(index, column).text() for column in range(9)]
+
+        first = ["Player", "PLD", "1,000", "66.7", "0", "0.0", "0.0", "Ability 1,000", "0"]
+        self.assertEqual(row(0), first)
+        table.setCurrentCell(0, 2)
+        selected = table.currentItem()
+        changes = []
+        table.model().dataChanged.connect(lambda *args: changes.append(args))
+        window._update_live_dps()
+        self.assertEqual(changes, [])
+        self.assertIs(table.currentItem(), selected)
+
+        hit("10FF0002", "Ally", 2000)
+        hit("10FF0003", "Third", 100)
+        window._update_live_dps()
+        self.assertEqual(table.rowCount(), 3)
+        self.assertEqual(row(0), ["Ally", "WHM", "2,500", "69.4", "0", "0.0", "0.0",
+                                  "Ability 2,000", "0"])
+        right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        self.assertEqual(table.item(0, 2).textAlignment(), right)
+        self.assertEqual(table.item(2, 2).textAlignment(), right)
+
+        window._dps_history = [{"snapshot": deepcopy(saved), "when": "12:00:00"}]
+        window._refresh_dps_history_list()
+        window._on_dps_history_click(window._dps_history_list.item(0))
+        self.assertEqual(table.rowCount(), 2)
+        self.assertEqual(row(0), first)
+        window._on_dps_back_to_live()
+        self.assertEqual(table.rowCount(), 3)
+        self.assertEqual(row(0)[0], "Ally")
+        self.assertEqual(window._dps_history[0]["snapshot"], saved)
 
     def test_navigation_recap_and_prog_end_to_end(self):
         window = self.window

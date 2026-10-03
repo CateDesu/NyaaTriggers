@@ -126,13 +126,19 @@ Packs can use Telesto memory notifications and drawings through the **Telesto UR
 |---|---|
 | **DPS** | Live DPS, damage share, HPS, crit and direct hit rates, max hit, and deaths. Pets merge into their owners. **Recent pulls** reviews attempts from the current run. |
 | **Death Recap** | A minute of damage, incoming healing, HP and shield bars, ability icons, and filterable buff icons at each event. The latest 80 deaths remain available until the program closes. |
-| **Prog** | Saved duty sessions with pull durations, endings, deaths, a chart, bookmarks, notes, and death recaps. |
+| **Prog** | Saved duty sessions with pull durations, endings, deaths, phase progress, session comparisons, a chart, bookmarks, notes, and death recaps. |
 
 The meter runs whenever the combat feed is connected. **Record encounters**, off by default, saves full pull summaries to `dps_logs/`, retaining five completed logs plus the active log. **Reset display after** affects only the live display.
 
 In Prog, **Start session** begins collection once the duty and combat state are known. Starting during combat waits for the next full pull. **End session** or leaving the duty ends collection; wipes and breaks stay in the session. Interrupted attempts are listed separately. **Combat ended** does not mean a clear.
 
 Notes and death recaps save automatically, independently of DPS recording and log rotation. Select a pull and choose **View death recaps** to review it, including after restart. Recaps retain observed HP and rounded shield percentages. Events missed before connection cannot be recovered. UMAD phases are confirmed by boss casts and ability events. Older pulls without phase data remain **Not recorded**. See the [Prog guide](docs/GUIDE.md#prog-tab) for recording and recovery details.
+
+Search saved sessions by name or duty, and use star arrow buttons to move between bookmarked pulls. **Copy pull summary** shares the selected pull's observed details and notes through the clipboard.
+
+Archive finished sessions to keep the usual list short. **Show archived** keeps their notes and recaps available and offers **Restore session**.
+
+**Compare with…** reviews two sessions in the same duty. Phase rates show confirmed reach with sample sizes and excluded pulls. Interrupted attempts keep their observations but stay out of the rates. Older sessions retain their ordinary pull summaries. Different tracking rules prevent phase and duration comparisons where their recording conventions differ.
 
 **Settings - FFLogs** can show your best recorded rDPS after a fight using your personal API client details, server, and region. **IINACT Logs** opens the raw logs for an FFLogs uploader. DPS summaries are separate files.
 

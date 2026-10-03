@@ -1,14 +1,28 @@
 """Per-event health, shields, buffs and durable recap details."""
 
 from copy import deepcopy
+from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
+from zipfile import ZIP_DEFLATED, ZipFile
 
+from nyaatriggers import status_metadata
 from nyaatriggers.death_recap import DeathRecap
 from nyaatriggers.recap_store import RecapStore, validate_recap
 from tests.test_session_features import ability, PLAYER, BOSS, Clock
+
+
+def corrupt_zip_member(path, member):
+    """Damage a deflated member while preserving the ZIP directory."""
+    with ZipFile(path) as archive:
+        offset = archive.getinfo(member).header_offset
+    raw = bytearray(path.read_bytes())
+    name_size, extra_size = struct.unpack_from("<HH", raw, offset + 26)
+    raw[offset + 30 + name_size + extra_size] = 7
+    path.write_bytes(raw)
 
 
 def health(kind="38", hp=8000, maximum=10000, shield=20, sequence=17, statuses=()):
@@ -42,6 +56,23 @@ class DetailTests(unittest.TestCase):
     def death(self):
         self.recap.process(["25", "ts", PLAYER, "Player"])
         return self.recap.deaths[0]
+
+    def test_damaged_status_catalog_keeps_combat_recording_available(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "assets").mkdir()
+            archive = root / "assets" / "recap_icons.zip"
+            with ZipFile(archive, "w", ZIP_DEFLATED) as output:
+                output.writestr("catalog.json", '{"Status":{"360":{"is_permanent":true}}}')
+            with patch.object(status_metadata, "bundle_root", return_value=root):
+                status_metadata._permanent_statuses.cache_clear()
+                self.addCleanup(status_metadata._permanent_statuses.cache_clear)
+                self.assertTrue(status_metadata.is_permanent(360))
+                corrupt_zip_member(archive, "catalog.json")
+                status_metadata._permanent_statuses.cache_clear()
+                self.recap.process(health(statuses=[(360, 30, PLAYER, 0)]))
+                self.assertEqual(self.death()["statuses"][0]["id"], 360)
+                self.assertFalse(status_metadata.is_permanent(360))
 
     def test_minute_window_and_each_hits_statuses_remain_frozen(self):
         self.recap.process(hit())

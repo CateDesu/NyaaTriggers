@@ -13,6 +13,7 @@ from PyQt6.QtCore import QCoreApplication
 
 from nyaatriggers import diagnostics, tts
 from nyaatriggers.ws_client import WSClient
+from nyaatriggers.telesto_client import TelestoClient, game_command_message
 
 
 APP = QCoreApplication.instance() or QCoreApplication([])
@@ -90,6 +91,45 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
                     patch.object(tts, "_speech_suspended", False):
                 tts._enqueue(("tts", PRIVATE, 1, 1, None))
             self.assertEqual(queue.get_nowait()[1], PRIVATE)
+
+    def test_gaze_trace_distinguishes_waiting_pairs_and_queued_handoffs(self):
+        from tests.test_gaze_replay import Host
+
+        host = Host()
+        actors = [f"1000000{i}" for i in range(1, 5)]
+        host._umad_gaze._slot_of = lambda actor: actors.index(actor) + 1
+        for now, pair, duration in ((19, actors[:2], "60"), (34, actors[2:], "69")):
+            with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=now - 9):
+                host._umad_gaze_line(["26", str(now), "808", PRIVATE, "9999",
+                                     "E0000000", "", "40000001", PRIVATE, "461"])
+            with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=now):
+                for actor in pair:
+                    host._umad_gaze_line(["26", "ts", "15A7", PRIVATE, duration,
+                                         "E0000000", "", actor, PRIVATE])
+        state = self.rows("gaze_state")[-1]
+        self.assertEqual((state["sets"], state["assigned"], state["marked"]), (2, 4, 2))
+        self.assertEqual(len(self.rows("gaze_action")), 2)
+        with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=79.1):
+            host._on_umad_gaze_flush()
+        actions = self.rows("gaze_action")[-4:]
+        self.assertEqual([(row["kind"], row["slot"], row["result"]) for row in actions],
+                         [("clear", 1, "queued"), ("clear", 2, "queued"),
+                          ("mark", 3, "queued"), ("mark", 4, "queued")])
+        self.assertEqual(host.signs, {"bind1": actors[2], "bind2": actors[3]})
+
+    def test_marker_transport_records_acceptance_and_failure_without_command_text(self):
+        client = TelestoClient(enabled=True)
+        with patch.object(client, "_read_response", return_value=(200, b"null")):
+            client._post(game_command_message("/mk bind1 <4>"))
+            client._post(game_command_message("/echo " + PRIVATE))
+            client._post(game_command_message("/mk bind2 <" + PRIVATE + ">"))
+        with patch.object(client, "_read_response", side_effect=TimeoutError(PRIVATE)), \
+                patch("nyaatriggers.telesto_client.log_drop"):
+            client._post(game_command_message("/mk bind2 <8>"))
+        self.assertEqual(self.rows("marker_transport"), [
+            {"kind": "mark", "marker": "bind1", "slot": 4, "result": "accepted"},
+            {"kind": "mark", "marker": "bind2", "slot": 8, "result": "failed"},
+        ])
 
 
 if __name__ == "__main__":

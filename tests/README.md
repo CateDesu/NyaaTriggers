@@ -18,6 +18,12 @@ Run selected suites with:
 python3 -m tests test_prog_phases test_session_ui
 ```
 
+The Prog comparison suites cover phase eligibility and the real session page.
+`test_prog_pull_ui` checks saved-session search, bookmark navigation, copied
+observations, editor history, and recovery after a session file cannot be replaced.
+Archiving checks cover restart, saved recap navigation, comparison visibility,
+and failed writes while retaining the latest notes.
+
 For an individual suite, including its own command line options:
 
 ```bash

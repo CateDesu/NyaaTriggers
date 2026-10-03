@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
 )
 
 from nyaatriggers.locale_util import _
+from nyaatriggers.diagnostics import record
 from nyaatriggers.telesto_client import (
     TelestoClient, MARKERS as TELESTO_MARKERS, MARKER_TOKENS as TELESTO_MARKER_TOKENS, _actor_int,
 )
@@ -553,8 +554,14 @@ class AutomarkersTabMixin:
         tgt_id = fields[7].strip().upper()
         if eff == GAZE_VFX_STATUS:
             if fields[0] == "26" and len(fields) > 9 and tgt_id.startswith("40"):
+                now = time.monotonic()
                 actions = self._umad_gaze.on_vfx(
-                    fields[9], time.monotonic(), event_id=(tgt_id, fields[1]))
+                    fields[9], now, event_id=(tgt_id, fields[1]))
+                if self._norm_hex(fields[9]) in ("461", "462"):
+                    record("gaze_state", kind="vfx", vfx=int(fields[9], 16),
+                           sets=self._umad_gaze._sets_done,
+                           assigned=len(self._umad_gaze._assigned),
+                           marked=len(self._umad_gaze._marked))
                 self._dispatch_umad_gaze_actions(actions)
             return
         if not tgt_id.startswith("10"):
@@ -572,10 +579,21 @@ class AutomarkersTabMixin:
             self._umad_gaze_flush_timer.start()
         else:
             actions = self._umad_gaze.on_loss(eff, tgt_id, now)
+        record("gaze_state", kind="gain" if fields[0] == "26" else "loss",
+               duration_s=dur if fields[0] == "26" else None,
+               slot=self._umad_gaze._slot_of(tgt_id),
+               sets=self._umad_gaze._sets_done,
+               assigned=len(self._umad_gaze._assigned),
+               marked=len(self._umad_gaze._marked),
+               polarity=self._umad_gaze._polarity,
+               tell_age_s=max(0.0, now - self._umad_gaze._polarity_t))
         self._dispatch_umad_gaze_actions(actions)
 
     def _umad_gaze_reset(self, clear_marks: bool = False, force: bool = False) -> None:
         """Force clears when disabling and skip them on zone changes."""
+        record("gaze_state", kind="reset", sets=self._umad_gaze._sets_done,
+               assigned=len(self._umad_gaze._assigned),
+               marked=len(self._umad_gaze._marked))
         if clear_marks:
             for actor in self._umad_gaze.outstanding():
                 self._clear_player(actor, self._umad_name_of(actor), force=force)
@@ -668,6 +686,10 @@ class AutomarkersTabMixin:
         self._umad_gaze_pending = self._dispatch_mark_actions(
             actions, self._umad_gaze_pending,
             getattr(self, "_umad_gaze_pending_since", None))
+        for action in actions:
+            record("gaze_action", kind=action[0], slot=self._umad_gaze._slot_of(action[1]),
+                   marker=action[2] if action[0] == "mark" else "clear",
+                   result="pending" if action in self._umad_gaze_pending else "queued")
 
     def _rearm_umad_chain_flush(self) -> None:
         """Retry the chain debounce when new job data can resolve an open queue."""

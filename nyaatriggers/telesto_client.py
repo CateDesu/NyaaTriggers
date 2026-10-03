@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 
 from nyaatriggers.drop_log import log_drop
+from nyaatriggers.diagnostics import record
 from nyaatriggers.locale_util import N_   # Translate marker labels when rendering the selector.
 
 try:
@@ -199,6 +200,20 @@ def game_command_message(command: str) -> dict:
 def party_members_message() -> dict:
     """Request party members and probe reachability without changing game state."""
     return make_message(PARTY_UPDATE_ID, "GetPartyMembers", None)
+
+
+def _record_marker_transport(msg, result):
+    payload = msg.get("payload")
+    if msg.get("type") != "ExecuteCommand" or not isinstance(payload, dict):
+        return
+    parts = str(payload.get("command", "")).split()
+    if (len(parts) != 3 or parts[0] != "/mk"
+            or parts[1] not in MARKER_TOKENS | {"clear", "attack"}
+            or parts[2] not in {"<me>", *(f"<{slot}>" for slot in range(1, 9))}):
+        return
+    record("marker_transport", kind="clear" if parts[1] == "clear" else "mark",
+           marker=parts[1], slot=0 if parts[2] == "<me>" else int(parts[2][1:-1]),
+           result=result)
 
 
 def _slot_token(slot) -> str:
@@ -505,6 +520,7 @@ class TelestoClient(QObject):
                 continue                       # stale sentinel from a previous generation
             msg, delay, force, epoch, endpoint, encounter, cleanup, actor = item
             if not self._can_send(force, epoch, endpoint, encounter, cleanup):
+                _record_marker_transport(msg, "cancelled")
                 continue
             if delay:
                 self._sleep_command_delay(stopping)
@@ -512,10 +528,12 @@ class TelestoClient(QObject):
             if stopping.is_set():
                 break
             if not self._can_send(force, epoch, endpoint, encounter, cleanup):
+                _record_marker_transport(msg, "cancelled")
                 continue
             if actor is not None:
                 slot = self.slot_of_actor(actor)
                 if slot is None:
+                    _record_marker_transport(msg, "unknown_slot")
                     continue
                 command = msg["payload"]["command"].rsplit(" ", 1)[0]
                 msg = game_command_message(f"{command} <{slot}>")
@@ -553,6 +571,7 @@ class TelestoClient(QObject):
                 if not self._response_current(endpoint):
                     return
                 self._report_reachable(True, f"Connected (HTTP {code})")
+                _record_marker_transport(msg, "accepted")
                 if msg.get("id") == PARTY_UPDATE_ID:
                     self._update_party_slots(body)
         except urllib.error.HTTPError as exc:
@@ -563,6 +582,7 @@ class TelestoClient(QObject):
                 if not self._response_current(endpoint):
                     return
                 self._report_reachable(True, f"Telesto error: HTTP {exc.code}", degraded=True)
+                _record_marker_transport(msg, "failed")
             log_drop("telesto-http", f"HTTP {exc.code} for {msg.get('type')}")
         except (urllib.error.URLError, OSError, ValueError,
                 http.client.HTTPException) as exc:
@@ -571,6 +591,7 @@ class TelestoClient(QObject):
                 if not self._response_current(endpoint):
                     return
                 self._report_reachable(False, f"Telesto unreachable: {exc}")
+                _record_marker_transport(msg, "failed")
             log_drop("telesto-http", f"unreachable: {exc}")
 
     def _response_current(self, endpoint: int) -> bool:

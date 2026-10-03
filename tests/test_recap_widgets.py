@@ -8,11 +8,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from uuid import uuid4
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from PyQt6.QtCore import QByteArray, QEvent, QObject, QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QHelpEvent
 from PyQt6.QtNetwork import QNetworkReply
-from PyQt6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QListWidget, QPushButton, QStyleOptionViewItem, QWidget, QVBoxLayout
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QLineEdit, QListWidget, QPushButton, QStyleOptionViewItem, QWidget, QVBoxLayout
 
 from nyaatriggers import app_common as ac, theme
 from nyaatriggers.death_recap import DeathRecap
@@ -22,6 +24,7 @@ from nyaatriggers.recap_filters import DEFAULT_HIDDEN_STATUSES, hidden_statuses
 from nyaatriggers.ui.death_recap_tab import DeathRecapTabMixin
 from nyaatriggers.ui.recap_widgets import RecapIcons
 from nyaatriggers.ui.recap_browser import LogImportDialog, SavedRecapDialog
+from tests.test_death_recap_details import corrupt_zip_member
 
 
 class RecapHost(DeathRecapTabMixin, QWidget):
@@ -112,6 +115,47 @@ class WidgetTests(unittest.TestCase):
         self.addCleanup(self.host.close)
         self.host._recap_records = [record(), record("Other", 0x10000002)]
         self.host._refresh_recap_list()
+
+    def test_damaged_compressed_catalog_keeps_the_recap_page_available(self):
+        assets = self.directory / "assets"
+        assets.mkdir()
+        archive = assets / "recap_icons.zip"
+        with ZipFile(archive, "w", ZIP_DEFLATED) as output:
+            output.writestr("catalog.json", '{"Status":{},"Action":{}}')
+        corrupt_zip_member(archive, "catalog.json")
+        with patch.object(ac, "_ASSETS_DIR", assets):
+            host = RecapHost()
+            self.addCleanup(host.close)
+            self.assertIsNone(host._recap_icons.archive)
+            self.assertEqual(host._recap_icons.catalog, {})
+            self.assertFalse(host._recap_icons.placeholder.isNull())
+
+    def test_damaged_compressed_icon_uses_the_download_fallback(self):
+        assets = self.directory / "assets"
+        assets.mkdir()
+        archive = assets / "recap_icons.zip"
+        metadata = {"name": "Test status", "icon": 123, "max_stacks": 1}
+        with ZipFile(archive, "w", ZIP_DEFLATED) as output:
+            output.writestr("catalog.json", json.dumps({"Status": {"202": metadata}, "Action": {}}))
+            output.writestr("123.png", b"Compressed damaged icon")
+        corrupt_zip_member(archive, "123.png")
+        with patch.object(ac, "_ASSETS_DIR", assets):
+            icons = RecapIcons(self.directory / "cache", self.host)
+            self.assertIsNotNone(icons.archive)
+            _metadata, pixmap = icons.get("Status", 202)
+            self.assertEqual(pixmap.cacheKey(), icons.placeholder.cacheKey())
+            self.assertIn(("Status", 202, 0), icons.waiting)
+
+    def test_deeply_nested_catalog_keeps_the_recap_page_available(self):
+        assets = self.directory / "assets"
+        assets.mkdir()
+        with ZipFile(assets / "recap_icons.zip", "w", ZIP_DEFLATED) as output:
+            output.writestr("catalog.json", "[" * 2000 + "0" + "]" * 2000)
+        with patch.object(ac, "_ASSETS_DIR", assets):
+            host = RecapHost()
+            self.addCleanup(host.close)
+            self.assertIsNone(host._recap_icons.archive)
+            self.assertEqual(host._recap_icons.catalog, {})
 
     def test_player_filter_keeps_list_and_event_selection_together(self):
         index = self.host._recap_player.findData(0x10000002)
@@ -304,6 +348,106 @@ class WidgetTests(unittest.TestCase):
         self.assertEqual(self.host._recap_hidden, DEFAULT_HIDDEN_STATUSES)
         self.assertEqual(hidden_statuses(self.host._settings), DEFAULT_HIDDEN_STATUSES)
 
+    def test_reset_buttons_apply_to_icons_events_and_summary_while_searching(self):
+        death = record()
+        offensive = {"id": 1878, "name": "Divination", "source": "Healer"}
+        death["statuses"].append(offensive)
+        for event in death["events"]:
+            event["statuses"] = death["statuses"]
+        death["events"][0]["source_statuses"] = [
+            {"id": 1193, "name": "Reprisal", "source": "Tank"}]
+        death["events"].extend({"kind": "gained", "name": name, "source": "Player", "time": -1,
+                                 "amount": None, "status_id": ident}
+                                for ident, name in ((1878, "Divination"), (202, "Vulnerability Up")))
+        before = json.dumps(death)
+        self.host._recap_records = [death]
+        self.host._recap_buffs.setChecked(True)
+        self.host._recap_debuffs.setChecked(True)
+        self.host.saves = 0
+        self.host._recap_hidden.clear()
+        self.host._recap_hidden.update({"202", "1193"})
+        self.host._settings["recap_hidden_statuses"] = ["1193", "202"]
+        self.host._refresh_recap_list()
+        observed = {}
+
+        def edit():
+            dialog = QApplication.activeModalWidget()
+            listing = dialog.findChild(QListWidget)
+            dialog.findChild(QLineEdit).setText("Vulnerability")
+            buttons = {button.text(): button for button in dialog.findChildren(QPushButton)}
+            apply = dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Apply)
+            QTest.mouseClick(buttons["Restore defaults"], Qt.MouseButton.LeftButton)
+            observed["selected_defaults"] = {
+                listing.item(row).data(Qt.ItemDataRole.UserRole) for row in range(listing.count())
+                if listing.item(row).checkState() == Qt.CheckState.Checked}
+            observed["before_apply"] = set(self.host._recap_hidden)
+            observed["apply_enabled"] = apply.isEnabled()
+            QTest.mouseClick(apply, Qt.MouseButton.LeftButton)
+            observed["dialog_open"] = dialog.isVisible()
+            observed["defaults"] = set(hidden_statuses(self.host._settings))
+            observed["icons"] = [s["id"] for s in self.host._recap_delegate.statuses(death["events"][0])]
+            observed["events"] = [self.host._recap_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+                                  for row in range(self.host._recap_table.rowCount())]
+            observed["summary"] = self.host._recap_statuses.text()
+            observed["apply_disabled"] = not apply.isEnabled()
+            QTest.mouseClick(buttons["Show all statuses"], Qt.MouseButton.LeftButton)
+            QTest.mouseClick(apply, Qt.MouseButton.LeftButton)
+            observed["all_statuses"] = set(hidden_statuses(self.host._settings))
+            observed["all_summary"] = self.host._recap_statuses.text()
+            QTest.mouseClick(dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Ok),
+                             Qt.MouseButton.LeftButton)
+
+        QTimer.singleShot(0, edit)
+        self.host._filter_recap_buffs()
+        self.assertEqual(observed["selected_defaults"], DEFAULT_HIDDEN_STATUSES)
+        self.assertEqual(observed["before_apply"], {"202", "1193"})
+        self.assertTrue(observed["apply_enabled"])
+        self.assertTrue(observed["dialog_open"])
+        self.assertEqual(observed["defaults"], DEFAULT_HIDDEN_STATUSES)
+        self.assertEqual(observed["icons"], [202, 1193])
+        self.assertEqual([event["status_id"] for event in observed["events"] if "status_id" in event], [202])
+        self.assertIn("Vulnerability Up", observed["summary"])
+        self.assertNotIn("Divination", observed["summary"])
+        self.assertTrue(observed["apply_disabled"])
+        self.assertEqual(observed["all_statuses"], set())
+        self.assertIn("Divination", observed["all_summary"])
+        self.assertEqual(json.dumps(death), before)
+        self.assertEqual(self.host.saves, 2)
+
+    def test_cancel_after_apply_keeps_only_applied_choices_when_reopened(self):
+        before = json.dumps(self.host._recap_records)
+
+        def apply_then_cancel():
+            dialog = QApplication.activeModalWidget()
+            listing = dialog.findChild(QListWidget)
+            item = next(listing.item(row) for row in range(listing.count())
+                        if listing.item(row).data(Qt.ItemDataRole.UserRole) == "202")
+            item.setCheckState(Qt.CheckState.Checked)
+            buttons = dialog.findChild(QDialogButtonBox)
+            QTest.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Apply), Qt.MouseButton.LeftButton)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            QTest.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Cancel), Qt.MouseButton.LeftButton)
+
+        QTimer.singleShot(0, apply_then_cancel)
+        self.host._filter_recap_buffs()
+        self.assertEqual(self.host._recap_hidden, DEFAULT_HIDDEN_STATUSES | {"202"})
+        observed = {}
+
+        def reopen():
+            dialog = QApplication.activeModalWidget()
+            listing = dialog.findChild(QListWidget)
+            item = next(listing.item(row) for row in range(listing.count())
+                        if listing.item(row).data(Qt.ItemDataRole.UserRole) == "202")
+            observed["checked"] = item.checkState() == Qt.CheckState.Checked
+            dialog.reject()
+
+        QTimer.singleShot(0, reopen)
+        self.host._filter_recap_buffs()
+        self.assertTrue(observed["checked"])
+        self.assertEqual(hidden_statuses(self.host._settings), DEFAULT_HIDDEN_STATUSES | {"202"})
+        self.assertEqual(json.dumps(self.host._recap_records), before)
+        self.assertEqual(self.host.saves, 1)
+
     def test_rendered_health_and_status_icons_survive_column_resize(self):
         self.host.resize(1600, 600)
         self.host.show()
@@ -450,6 +594,27 @@ class WidgetTests(unittest.TestCase):
             self.assertEqual(picture.toImage(), cache.placeholder.toImage())
             self.assertEqual(len(cache.manager.requests), count)
             self.assertIn(("Status", ident, 0), cache.failed)
+        self.assertEqual(cache.active, set())
+
+    def test_nested_metadata_response_uses_cooldown_and_can_retry(self):
+        cache = self.fake_network()
+        key = ("Status", 60000, 0)
+        cache.get(*key)
+        errors = []
+        raw = b'{"fields":' + b"[" * 2000 + b"0" + b"]" * 2000 + b"}"
+        with patch("sys.excepthook", side_effect=lambda kind, error, traceback: errors.append(error)):
+            cache.manager.requests[0][1].deliver(raw)
+        self.assertEqual(errors, [])
+        self.assertEqual(cache.active, set())
+        self.assertIn(key, cache.failed)
+        cache.get(*key)
+        self.assertEqual(len(cache.manager.requests), 1)
+        with patch("nyaatriggers.ui.recap_widgets.time.monotonic", return_value=cache.failed[key] + 60):
+            cache.get(*key)
+        self.assertEqual(len(cache.manager.requests), 2)
+        cache.manager.requests[1][1].deliver(json.dumps({"fields": {
+            "Name": "Recovered status", "Icon": {"id": 0}, "MaxStacks": 0}}).encode())
+        self.assertEqual(cache.get(*key)[0]["name"], "Recovered status")
         self.assertEqual(cache.active, set())
 
     def test_icon_requests_and_images_stay_bounded(self):

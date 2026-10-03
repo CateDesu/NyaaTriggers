@@ -1270,9 +1270,13 @@ class TriggersTabMixin:
     def _on_callouts_ja_refreshed(self, changed: bool) -> None:
         """Refresh callout translations separately from UI locale catalogs."""
         if changed:
+            fields = ("_callouts_ja", "_callouts_phrases_ja", "_callouts_names_ja", "_callouts_names_text_ja")
+            previous = tuple(getattr(self, field, {}) for field in fields)
             self._load_cached_callouts_ja()
-            self._refresh_table()
-            self._apply_tab_filter()
+            if (previous != tuple(getattr(self, field, {}) for field in fields)
+                    and self._settings.get("callouts_localized", active_locale() == "ja")):
+                self._refresh_table()
+                self._apply_tab_filter()
 
     def _selected_row_key(self):
         items = self._table.selectedItems()

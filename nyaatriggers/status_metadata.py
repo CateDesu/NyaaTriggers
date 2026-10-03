@@ -3,6 +3,7 @@
 from functools import lru_cache
 import json
 from zipfile import BadZipFile, ZipFile
+import zlib
 
 from nyaatriggers.paths import bundle_root
 
@@ -19,7 +20,7 @@ def _permanent_statuses():
         return frozenset(int(ident) for ident, row in rows.items()
                          if ident.isascii() and ident.isdecimal() and len(ident) <= 10
                          and isinstance(row, dict) and row.get("is_permanent") is True)
-    except (OSError, ValueError, KeyError, TypeError, RecursionError, BadZipFile):
+    except (OSError, ValueError, KeyError, TypeError, RecursionError, BadZipFile, zlib.error):
         return frozenset()
 
 

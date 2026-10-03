@@ -13,10 +13,10 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QLineEdit, QLabel, QPlainTextEdit, QSplitter, QTreeWidget,
     QAbstractItemView, QStyle, QStyleOptionButton, QStylePainter,
 )
-from PyQt6.QtCore import Qt, QSize, QTimer, QUrl, QPointF, QRectF, QEvent, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QSize, QTimer, QUrl, QRectF, QEvent, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import (
     QBrush, QColor, QDesktopServices, QFont, QIcon, QPainter,
-    QFontMetricsF, QLinearGradient, QRadialGradient, QPainterPath, QPen,
+    QFontMetricsF, QPainterPath, QPen,
 )
 
 from nyaatriggers.trigger_engine import Trigger
@@ -70,7 +70,7 @@ class _SidebarFrame(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._petals = theme.make_petals(23, 5)
-        self._tree = theme.make_tree(17, 216, 900, inward=1)
+        self._scenery = theme.SakuraBackground("left")
         self._t0 = time.monotonic()
         self._last_t = None
         self.awake = True
@@ -92,24 +92,7 @@ class _SidebarFrame(QFrame):
         super().paintEvent(ev)
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        s = self.height() / self._tree.height()
-        p.save()
-        p.scale(s, s)
-        p.drawPixmap(0, 0, self._tree)
-        p.restore()
-        # Dim the scenery behind navigation and branding to keep text readable.
-        h = self.height()
-        band = QLinearGradient(0, h * 0.05, 0, h * 0.64)
-        band.setColorAt(0.0, QColor(7, 7, 11, 0))
-        band.setColorAt(0.20, QColor(7, 7, 11, 120))
-        band.setColorAt(0.74, QColor(7, 7, 11, 120))
-        band.setColorAt(1.0, QColor(7, 7, 11, 0))
-        p.fillRect(QRectF(0, h * 0.05, self.width(), h * 0.59), QBrush(band))
-        bg = QRadialGradient(QPointF(self.width() * 0.42, h * 0.065), h * 0.16)
-        bg.setColorAt(0.0, QColor(7, 7, 11, 130))
-        bg.setColorAt(0.6, QColor(7, 7, 11, 80))
-        bg.setColorAt(1.0, QColor(7, 7, 11, 0))
-        p.fillRect(QRectF(0, 0, self.width(), h * 0.22), QBrush(bg))
+        self._scenery.paint(p, self.width(), self.height())
         if self.awake:
             t = time.monotonic() - self._t0
         else:

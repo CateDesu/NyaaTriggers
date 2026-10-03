@@ -1118,7 +1118,14 @@ class TriggeventBridge(QObject):
                         wq.put_nowait(_STOP)
                     except (queue.Empty, queue.Full):
                         pass
-                self._reap(proc)
+                try:
+                    self._reap(proc)
+                finally:
+                    if proc.stdout is not None:
+                        try:
+                            proc.stdout.close()
+                        except OSError:
+                            pass
 
     def _err_loop(self, proc: subprocess.Popen, gen: int) -> None:
         if proc.stderr is None:
@@ -1135,6 +1142,11 @@ class TriggeventBridge(QObject):
         except Exception as exc:
             self._diagnostic("engine_error", gen, channel="stderr", reason="read_failed", error_type=type(exc).__name__)
             raise
+        finally:
+            try:
+                proc.stderr.close()
+            except OSError:
+                pass
 
     def _handle_diagnostic(self, line: str, gen: int) -> None:
         # Some Xvfb wrappers merge stderr into stdout.

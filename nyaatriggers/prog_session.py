@@ -1,6 +1,7 @@
 """Prog sessions and their saved pull summaries."""
 
 from copy import deepcopy
+from collections import Counter
 from pathlib import Path
 import time
 from uuid import uuid4
@@ -56,6 +57,95 @@ def summary(session):
     return {"pulls": len(complete), "interrupted": sum(not p["complete"] and p["ending"] != "active" for p in pulls),
             "longest": max((p["duration"] for p in complete), default=0),
             "combat": sum(p["duration"] for p in pulls)}
+
+
+def phase_summary(session, definitions=DEFINITIONS):
+    """Count confirmed reach only for complete attempts with compatible rules."""
+    excluded = Counter()
+    eligible = []
+    keys = set()
+    readable = {}
+    supported = definition_for(session["zone_id"], definitions)
+    for pull in session["pulls"]:
+        block = pull.get("phase_tracking")
+        if isinstance(block, dict):
+            ident, revision = block.get("definition_id"), block.get("definition_revision")
+            if isinstance(ident, str) and type(revision) is int:
+                keys.add((ident, revision))
+        data, definition, error = read_tracking(pull, session["zone_id"], definitions)
+        if error:
+            excluded["unavailable"] += 1
+        elif data is None:
+            excluded["not-recorded" if "phase_tracking" not in pull or supported else "not-supported"] += 1
+        elif not definition.verified:
+            excluded["not-supported"] += 1
+        else:
+            readable[(definition.ident, definition.revision)] = definition
+            if pull["ending"] == "active":
+                excluded["active"] += 1
+            elif data["coverage"] != "complete" or not pull["complete"]:
+                excluded["uncertain" if data["coverage"] == "uncertain" else "interrupted"] += 1
+            else:
+                rank = max((definition.phases.index(o["phase"]) for o in data["observations"]), default=-1)
+                eligible.append(rank)
+    definition = next(iter(readable.values()), None)
+    if len(keys) > 1:
+        status = "tracking-differs"
+        excluded["tracking-differs"] += len(eligible)
+        eligible = []
+        definition = None
+    elif definition is not None:
+        status = "available"
+    elif not session["pulls"] and supported is not None:
+        status = "available"
+        definition = supported
+    elif excluded["unavailable"]:
+        status = "unavailable"
+    elif excluded["not-recorded"]:
+        status = "not-recorded"
+    else:
+        status = "not-supported"
+    furthest = max(eligible, default=-1)
+    return {"status": status, "definition": definition, "eligible": len(eligible),
+            "counts": tuple(sum(rank >= index for rank in eligible)
+                            for index in range(len(definition.phases))) if definition else (),
+            "furthest": definition.phases[furthest] if definition and furthest >= 0 else None,
+            "excluded": {reason: count for reason, count in excluded.items() if count}}
+
+
+def _duration_basis(session, definitions):
+    bases = set()
+    for pull in session["pulls"]:
+        if not pull["complete"]:
+            continue
+        data, definition, error = read_tracking(pull, session["zone_id"], definitions)
+        if error or (definition is not None and not definition.verified):
+            return None
+        bases.add(("phase", definition.ident, definition.revision) if data else ("meter",))
+    return next(iter(bases)) if len(bases) == 1 else None
+
+
+def compare_sessions(selected, compared, definitions=DEFINITIONS):
+    left = phase_summary(selected, definitions)
+    right = phase_summary(compared, definitions)
+    if selected["zone_id"] != compared["zone_id"]:
+        status = "different-duty"
+    elif left["status"] == right["status"] == "available":
+        a, b = left["definition"], right["definition"]
+        status = "available" if (a.ident, a.revision) == (b.ident, b.revision) else "tracking-differs"
+    else:
+        status = next(reason for reason in ("tracking-differs", "unavailable", "not-recorded", "not-supported")
+                      if reason in (left["status"], right["status"]))
+    phases = []
+    if status == "available":
+        for index, phase in enumerate(left["definition"].phases):
+            a, b = left["counts"][index], right["counts"][index]
+            change = 100 * (a / left["eligible"] - b / right["eligible"]) if left["eligible"] and right["eligible"] else None
+            phases.append({"phase": phase, "selected": a, "compared": b, "change": change})
+    basis = _duration_basis(selected, definitions)
+    return {"selected": left, "compared": right, "phase_status": status, "phases": phases,
+            "durations_comparable": status != "different-duty" and basis is not None
+            and basis == _duration_basis(compared, definitions)}
 
 
 class ProgSessions:
@@ -159,6 +249,22 @@ class ProgSessions:
     def checkpoint(self):
         if self.current is not None and self.clock() - self._checkpoint_at >= CHECKPOINT_SECONDS:
             self.save(self.current)
+
+    def set_archived(self, session, archived):
+        if type(archived) is not bool or not any(record is session for record in self.sessions):
+            raise ValueError("Invalid session archive choice")
+        if session is self.current or session["state"] == "active":
+            raise ValueError("End the session before archiving it")
+        previous = session.get("archived")
+        had_flag = "archived" in session
+        session["archived"] = archived
+        if self.save(session):
+            return True
+        if had_flag:
+            session["archived"] = previous
+        else:
+            session.pop("archived")
+        return False
 
     def flush_pending(self):
         for session in list(self.unsaved.values()):

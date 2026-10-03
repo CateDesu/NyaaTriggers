@@ -1,6 +1,6 @@
 # Prog phase tracking and session comparisons
 
-UMAD phase tracking and planned session comparisons. Session and recap behavior is documented in [Prog session overview](PROG-SESSION-DESIGN.md).
+UMAD phase tracking and session comparisons. Session and recap behavior is documented in [Prog session overview](PROG-SESSION-DESIGN.md).
 
 ## Implementation status
 
@@ -17,10 +17,10 @@ Definitions with intermissions instead require a reset or explicit initial-pull
 rule. Midcombat starts and reconnects wait for a fresh attempt. Deaths before
 collection remain in Recent deaths without retrospective pull attribution.
 
-Session phase summaries and comparisons remain planned. The sections below
-include their intended behavior alongside the implemented pull tracking.
+Session phase summaries and comparisons between two sessions are implemented.
+The sections below describe their rules alongside the implemented pull tracking.
 Mechanic milestones, automatic clear detection, manual phase corrections,
-exports, and comparisons across more than two sessions remain later work.
+file exports, and comparisons across more than two sessions remain later work.
 
 ## Prog tab layout
 
@@ -253,6 +253,7 @@ Keep confirmation times in pull details. Averaging early and fallback events wou
   and pure summary and comparison calculations.
 - `nyaatriggers/ui/session_tracking.py`: ordered feed integration and lifecycle routing.
 - `nyaatriggers/ui/prog_tab.py`: the new column, details, progress summary, and comparison.
+- `nyaatriggers/ui/prog_comparison.py`: comparison selection, rates, and clipboard output.
 - `nyaatriggers/dps_meter.py`: additive timing metadata if required by the shared origin.
 
 Phase tracking must work with callouts disabled and without DPS log recording.

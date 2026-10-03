@@ -9,7 +9,7 @@ import sys
 import tempfile
 import threading
 import time
-from types import MethodType, SimpleNamespace
+from types import MethodType, ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 import wave
@@ -201,6 +201,39 @@ class CalloutWordingTests(unittest.TestCase):
         trigger.id = "custom-id"
         trigger.tts_text = "ここで待機 {target}"
         self.assertEqual(fire()[0], "ここで待機 Target")
+
+
+class VoiceEnvironmentTests(unittest.TestCase):
+    def test_overlapping_purges_can_remove_the_same_stale_module(self):
+        barrier = threading.Barrier(2)
+
+        class StaleModule(ModuleType):
+            def __getattribute__(self, key):
+                value = super().__getattribute__(key)
+                if key == "__file__":
+                    barrier.wait(timeout=5)
+                return value
+
+        module = StaleModule("nyaa_voice_environment_probe")
+        module.__file__ = "/old-voice/site-packages/probe.py"
+        self.enterContext(patch.dict(sys.modules, {module.__name__: module}))
+        self.enterContext(patch.object(tts, "_stale_venv_sps", {"/old-voice/site-packages"}))
+        errors = []
+
+        def purge():
+            try:
+                tts._purge_stale_venv_modules()
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=purge) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(8)
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        self.assertNotIn(module.__name__, sys.modules)
 
 
 class VoiceCancellationTests(unittest.TestCase):

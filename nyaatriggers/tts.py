@@ -598,7 +598,7 @@ def _purge_stale_venv_modules() -> None:
                 or any(mod_file.startswith(sp + os.sep) for sp in _stale_venv_sps.copy()):
             # Read a snapshot because the GUI can add stale environment paths
             # concurrently.
-            del sys.modules[name]
+            sys.modules.pop(name, None)
 
 
 def set_venv_path(path: str) -> None:

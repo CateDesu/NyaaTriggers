@@ -5,6 +5,7 @@ import json
 import math
 import time
 from zipfile import BadZipFile, ZipFile
+import zlib
 
 from PyQt6.QtCore import QByteArray, QBuffer, QIODevice, QObject, QRect, QSize, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QImageReader, QPainter, QPixmap
@@ -61,7 +62,7 @@ class RecapIcons(QObject):
                                   for ident, row in catalog[sheet].items()}
             self.catalog = catalog
             self.destroyed.connect(self.archive.close)
-        except (OSError, ValueError, KeyError, TypeError, BadZipFile):
+        except (OSError, ValueError, KeyError, TypeError, RecursionError, BadZipFile, zlib.error):
             if self.archive:
                 self.archive.close()
             self.archive = None
@@ -93,7 +94,7 @@ class RecapIcons(QObject):
                 pixmap = self._picture(self.archive.read(f"{icon}.png"))
                 self._remember(key, metadata, pixmap)
                 return self.entries[key]
-            except (OSError, ValueError, KeyError, BadZipFile):
+            except (OSError, ValueError, KeyError, BadZipFile, zlib.error):
                 pass
         if (key not in self.active and key not in self.waiting
                 and time.monotonic() >= self.failed.get(key, 0) and len(self.waiting) < 512):
@@ -188,7 +189,7 @@ class RecapIcons(QObject):
                     else:
                         self._remember(key, metadata, self._picture(payload))
                         self.changed.emit()
-                except (ValueError, KeyError, TypeError, OverflowError):
+                except (ValueError, KeyError, TypeError, OverflowError, RecursionError):
                     self.failed[key] = time.monotonic() + 60
                     while len(self.failed) > 512:
                         self.failed.popitem(last=False)
@@ -230,16 +231,16 @@ class RecapDelegate(QStyledItemDelegate):
         return index.siblingAtColumn(0).data(Qt.ItemDataRole.UserRole) or {}
 
     def _status_rect(self, rect, position):
-        columns = max(1, (rect.width() - 8) // 20)
-        return QRect(rect.left() + 4 + position % columns * 20,
-                     rect.top() + 3 + position // columns * 24, 18, 22)
+        columns = max(1, (rect.width() - 8) // 24)
+        return QRect(rect.left() + 4 + position % columns * 24,
+                     rect.top() + 3 + position // columns * 28, 22, 26)
 
     def sizeHint(self, option, index):
         size = super().sizeHint(option, index)
         if index.column() == 5:
             count = len(self.statuses(self._event(index)))
-            columns = max(1, (option.rect.width() - 8) // 20)
-            size.setHeight(max(30, math.ceil(count / columns) * 24 + 6))
+            columns = max(1, (option.rect.width() - 8) // 24)
+            size.setHeight(max(34, math.ceil(count / columns) * 28 + 6))
         return size
 
     def paint(self, painter, option, index):
@@ -253,7 +254,7 @@ class RecapDelegate(QStyledItemDelegate):
                                                    event.get("status_stacks", 0))
                 self.initStyleOption(opt, index)
                 opt.icon = QIcon(pixmap)
-                opt.decorationSize = QSize(22, 22)
+                opt.decorationSize = QSize(22, 22) if event.get("action_id") else QSize(26, 26)
                 opt.features |= QStyleOptionViewItem.ViewItemFeature.HasDecoration
                 style = opt.widget.style()
                 style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
