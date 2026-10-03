@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Rebuild the committed Triggernometry sidecar from pinned sources. Requires Mono 6.12
-# or newer, a Mono build tool, git and curl. The resulting .NET Framework assemblies run
-# on Windows and through Mono on Linux. This is a local regeneration tool.
+# Rebuild committed sidecar assemblies with Mono 6.12 or newer, a Mono build tool, git and curl.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ENGINE_DIR="${ENGINE_DIR:-$HERE/.engine}"
@@ -16,7 +14,6 @@ if   command -v xbuild  >/dev/null; then BUILDTOOL=xbuild
 elif command -v msbuild >/dev/null; then BUILDTOOL=msbuild
 else echo "ERROR: need xbuild or msbuild (mono-complete)"; exit 1; fi
 
-# Reset the engine checkout to the pinned commit.
 if [ ! -d "$ENGINE_DIR/.git" ]; then
   git clone "$ENGINE_REPO" "$ENGINE_DIR"
 fi
@@ -27,15 +24,12 @@ git -C "$ENGINE_DIR" clean -fd Source/Triggernometry/Forms Source/Triggernometry
 
 SRC="$ENGINE_DIR/Source"
 
-# Apply the engine build fixes and stub references.
 git -C "$ENGINE_DIR" apply "$HERE/engine-fixups.patch"
 
-# Match the designer filename case on Linux.
 if [ -f "$SRC/Triggernometry/Forms/RepositoryListForm.designer.cs" ]; then
   mv -f "$SRC/Triggernometry/Forms/RepositoryListForm.designer.cs" "$SRC/Triggernometry/Forms/RepositoryListForm.Designer.cs"
 fi
 
-# Use this machine's netstandard facade path.
 NETSTD="$(find /usr/lib/mono -name netstandard.dll -path '*Facades*' 2>/dev/null | sort | tail -1)"
 if [ -n "$NETSTD" ]; then
   sed -i "s#<HintPath>/usr/lib/mono/4.5/Facades/netstandard.dll</HintPath>#<HintPath>${NETSTD//\//\\/}</HintPath>#" \
@@ -58,7 +52,6 @@ fi
 ENGINE_BIN="$SRC/Triggernometry/bin/Release"
 [ -f "$ENGINE_BIN/TriggernometryPlugin.dll" ] || { echo "ERROR: engine build produced no dll"; exit 1; }
 
-# Build the host beside its dependencies.
 ( cd "$ENGINE_BIN" && mcs -target:exe -out:triggernometry-core.exe \
     -r:TriggernometryPlugin.dll -r:System.Windows.Forms.dll -r:System.Drawing.dll \
     -r:System.Xml.dll -r:System.dll -r:System.Core.dll -r:System.Text.Json.dll -r:System.Memory.dll \

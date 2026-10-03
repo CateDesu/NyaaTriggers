@@ -1,4 +1,3 @@
-"""Cactbot fight names and cached catalog deduplication."""
 import json
 import os
 import sys
@@ -20,7 +19,6 @@ def check(name, cond):
         FAILS.append(name)
 
 
-# Ultimates section of main_window._FIGHT_TREE
 FIGHT_TREE = [
     ("Ultimates", [
         ("Dawntrail",      ["FRU", "UMAD"]),
@@ -30,7 +28,6 @@ FIGHT_TREE = [
     ]),
 ]
 
-# ultimate data files in the live cactbot tree
 LIVE_PATHS = [
     "ui/raidboss/data/04-sb/ultimate/unending_coil_ultimate.ts",
     "ui/raidboss/data/04-sb/ultimate/ultima_weapon_ultimate.ts",
@@ -41,17 +38,12 @@ LIVE_PATHS = [
     "ui/raidboss/data/07-dt/ultimate/futures_rewritten.ts",
 ]
 
-# parse_cactbot_paths subscripts _ULTIMATE_INFO[tag] directly, so a mapped
-# tag missing there raises
 check("every mapped stem resolves to a known tag",
       all(tag in fc._ULTIMATE_INFO for tag in fc._ULTIMATE_STEM_TO_TAG.values()))
 
-# an unmapped live stem is how the duplicate picker rows appeared
 stems = {p.rsplit("/", 1)[1][:-3] for p in LIVE_PATHS}
 check("every live ultimate stem is mapped", stems <= set(fc._ULTIMATE_STEM_TO_TAG))
 
-# derived rows must land on the offline names and tag folders so the merge
-# dedupes them
 offline = fc.build_offline(FIGHT_TREE, set())
 online = fc.parse_cactbot_paths(LIVE_PATHS)
 offline_keys = {(e["difficulty"], e["name"]) for e in offline}
@@ -69,7 +61,6 @@ with tempfile.TemporaryDirectory() as td:
     check("no duplicate ultimate rows after merge", len(ult) == len(set(ult)))
     check("all seven ultimates present", len(ult) == 7)
 
-    # Deduplicate cached fights by difficulty and name even when folder names differ.
     cache.write_text(json.dumps([
         {"difficulty": "Ultimate", "expansion": "Dawntrail",
          "name": "Futures Rewritten", "folder_name": "bogus", "has_triggers": False},
@@ -87,7 +78,6 @@ with tempfile.TemporaryDirectory() as td:
     check("cache row with a fresh name is kept", "Some New Ultimate" in names)
     check("duplicate cache rows are dropped", names.count("Some New Ultimate") == 1)
 
-# Extreme Trials section of main_window._FIGHT_TREE
 TRIAL_TREE = [
     ("Extreme Trials", [
         ("Dawntrail",      ["Zelenia EX", "Enuo EX", "Doomtrain EX",
@@ -97,7 +87,6 @@ TRIAL_TREE = [
     ]),
 ]
 
-# extreme trial data files in the live cactbot tree
 LIVE_TRIAL_PATHS = [
     "ui/raidboss/data/02-arr/trial/levi-ex.ts",
     "ui/raidboss/data/02-arr/trial/shiva-ex.ts",
@@ -144,16 +133,13 @@ LIVE_TRIAL_PATHS = [
 
 EX_TAGS = {tag for _cat, exps in TRIAL_TREE for _exp, tags in exps for tag in tags}
 
-# a mapped stem naming a tag the tree dropped would double the fight again
 check("every mapped trial stem resolves to a shipped tag",
       all(tag in EX_TAGS for tag in fc._TRIAL_STEM_TO_TAG.values()))
 
-# a stale stem key falls through to the titleize fallback and doubles the fight
 trial_stems = {p.rsplit("/", 1)[1][:-3] for p in LIVE_TRIAL_PATHS}
 check("every mapped trial stem is a live stem",
       set(fc._TRIAL_STEM_TO_TAG) <= trial_stems)
 
-# Derived extreme fight names and folders must match shipped tags.
 online_trials = fc.parse_cactbot_paths(LIVE_TRIAL_PATHS)
 check("every shipped extreme fight survives derivation",
       EX_TAGS <= {e["name"] for e in online_trials})

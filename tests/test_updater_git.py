@@ -1,4 +1,3 @@
-"""Git update dependency refresh and recovery from old timeline download conflicts."""
 import os
 import sys
 import tempfile
@@ -25,9 +24,6 @@ class _R:
 
 
 def run_case(pull_rc=0, head_moves=True, pip_rc=0, pip_err="", with_req=True):
-    """Run apply_git against a temp checkout with updater.subprocess.run
-    stubbed so pull and pip return the scripted results.
-    Returns ok, msg, pip calls and the temporary directory handle."""
     tmp = tempfile.TemporaryDirectory()
     repo = Path(tmp.name)
     if with_req:
@@ -54,7 +50,6 @@ def run_case(pull_rc=0, head_moves=True, pip_rc=0, pip_err="", with_req=True):
     return ok, msg, pip_calls, tmp
 
 
-# A pull that moves HEAD installs the requirements with the running interpreter.
 ok, msg, pip_calls, tmp = run_case()
 check("moved HEAD runs pip install -r requirements.txt",
       len(pip_calls) == 1
@@ -67,13 +62,11 @@ check("successful deps install is reported in the message",
 check("pull output survives in the message", "Fast-forward" in msg)
 tmp.cleanup()
 
-# Retrying an update repairs dependencies even when the code is current.
 ok, msg, pip_calls, tmp = run_case(head_moves=False)
 check("unchanged HEAD still installs requirements", ok and len(pip_calls) == 1)
 check("unchanged HEAD reports the dependency result", "dependencies are up to date" in msg)
 tmp.cleanup()
 
-# System-managed Python can use already installed packages without invoking pip.
 with tempfile.TemporaryDirectory() as td:
     repo = Path(td)
     (repo / "requirements.txt").write_text(
@@ -148,13 +141,11 @@ with tempfile.TemporaryDirectory() as td:
           not parser_ok and "packaging" in parser_message
           and "distribution's package manager" in parser_message)
 
-# A failed pull never touches pip either.
 ok, msg, pip_calls, tmp = run_case(pull_rc=128)
 check("failed pull reports failure", not ok and "git pull failed" in msg)
 check("failed pull skips pip", pip_calls == [])
 tmp.cleanup()
 
-# A dependency failure must reach the UI before it offers a restart.
 ok, msg, pip_calls, tmp = run_case(pip_rc=1, pip_err="ERROR: No matching distribution")
 check("pip failure leaves the update incomplete", not ok)
 check("pip failure shows pip's error", "No matching distribution" in msg)
@@ -208,13 +199,11 @@ with tempfile.TemporaryDirectory() as td:
     check("the same checkout retries dependencies after a failed install",
           not first_ok and second_ok and attempts == [repo, repo])
 
-# A checkout without requirements.txt (shouldn't happen, but stay silent).
 ok, msg, pip_calls, tmp = run_case(with_req=False)
 check("missing requirements.txt skips pip without a word",
       ok and pip_calls == [] and "dependencies" not in msg)
 tmp.cleanup()
 
-# Fetch rolling tags even for commits already present locally.
 seen = []
 tmp = tempfile.TemporaryDirectory()
 
@@ -235,7 +224,6 @@ check("pull pins English output so the conflict parse survives any locale",
       pull_kw[0].get("env", {}).get("LC_ALL") == "C")
 tmp.cleanup()
 
-# Preserve conflicting old timeline downloads and retry the pull once.
 CONFLICT_ERR = """\
 error: The following untracked working tree files would be overwritten by merge:
 	timelines/castrum_abania.cactbot.txt
@@ -281,8 +269,6 @@ check("healed pull still refreshes pip requirements",
       "dependencies are up to date" in msg)
 tmp.cleanup()
 
-# A conflict on any other path keeps the hands off failure: nothing deleted,
-# no retry, the generic message.
 MIXED_ERR = CONFLICT_ERR.replace("timelines/sirensong_sea.cactbot.txt",
                                  "triggers.local.json")
 tmp = tempfile.TemporaryDirectory()
@@ -313,7 +299,6 @@ check("mixed conflicts never retry the pull",
       len([c for c in calls if "pull" in c]) == 1)
 tmp.cleanup()
 
-# Accept git advice prefixed with hint:.
 HINT_ERR = CONFLICT_ERR.replace(
     "Please move or remove them before you merge.",
     "hint: Please move or remove them before you merge.")

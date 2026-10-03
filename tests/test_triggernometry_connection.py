@@ -1,5 +1,3 @@
-"""Replay combat and delayed speech across real feed connections."""
-
 from contextlib import ExitStack
 import json
 import os

@@ -1,4 +1,3 @@
-"""UMAD gaze pairing from status VFX and status gains."""
 import os
 import sys
 
@@ -18,13 +17,12 @@ def check(name, cond):
         FAILS.append(name)
 
 
-# A and B carry the first wave, C and D the second. Their durations do not identify
-# polarity.
+# First and second wave durations do not identify gaze polarity.
 A, B, C, D = "10000001", "10000002", "10000003", "10000004"
 SET1, SET2 = 60.0, 69.0
 FAKE, REAL = FAKE_GAZE_VFX, REAL_GAZE_VFX
-IGN1, IGN2 = DEFAULT_GAZE_MARKERS[AWAY1], DEFAULT_GAZE_MARKERS[AWAY2]   # ignore1/2
-BND1, BND2 = DEFAULT_GAZE_MARKERS[LOOK1], DEFAULT_GAZE_MARKERS[LOOK2]   # bind1/2
+IGN1, IGN2 = DEFAULT_GAZE_MARKERS[AWAY1], DEFAULT_GAZE_MARKERS[AWAY2]
+BND1, BND2 = DEFAULT_GAZE_MARKERS[LOOK1], DEFAULT_GAZE_MARKERS[LOOK2]
 
 
 def eng(**kw):
@@ -36,7 +34,6 @@ def gain(e, actor, dur, t):
 
 
 def wave(e, actors, dur, t, vfx=None, vfx_time=None):
-    """Feed the VFX and both player status gains."""
     acts = []
     if vfx is not None:
         acts += e.on_vfx(vfx, t if vfx_time is None else vfx_time)
@@ -46,11 +43,9 @@ def wave(e, actors, dur, t, vfx=None, vfx_time=None):
 
 
 def marks(acts):
-    """{actor: marker} from mark actions."""
     return {a[1]: a[2] for a in acts if a[0] == "mark"}
 
 
-# the labeled pull shape: Fake VFX first, real VFX second
 e = eng()
 m = marks(wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
           + wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0))
@@ -61,25 +56,21 @@ check("real wave marks its pair with the look-away ignores",
 check("all four signs are outstanding together",
       set(e.outstanding()) == {A, B, C, D})
 
-# the swap: Real first, fake second
 e = eng()
 m = marks(wave(e, [A, B], SET1, 10.0, vfx=REAL, vfx_time=6.0)
           + wave(e, [C, D], SET2, 25.0, vfx=FAKE, vfx_time=21.0))
 check("swapped pulls mark the other way, real VFX first",
       m[A] == IGN1 and m[B] == IGN2 and m[C] == BND1 and m[D] == BND2)
 
-# Chaos casts do not determine gaze direction.
 for cast in ("BB1E", "BB1F", "BB20", "BB21"):
     check(f"{cast} cannot arm gaze signs", eng().on_vfx(cast, 1.0) == [])
 
-# nothing fires before the pair completes
 e = eng()
 half = e.on_vfx(FAKE, 6.0) + gain(e, A, SET1, 10.0) + gain(e, A, SET1, 10.0)
 check("one gain and a duplicate mark nothing", half == [])
 last = gain(e, B, SET1, 10.0)
 check("the partner gain completes the assignment", marks(last) == {A: BND1, B: BND2})
 
-# fail-closed: no vfx, no marks
 e = eng()
 check("a pair whose wave's vfx never arrived marks nothing",
       wave(e, [A, B], SET1, 10.0) == [])
@@ -106,7 +97,6 @@ check("a fresh tell after expiry still marks the correct kind",
       marks(wave(e, [C, D], SET2, 130.0, vfx=REAL, vfx_time=126.0))
       == {C: IGN1, D: IGN2})
 
-# Party slot ordering takes precedence over actor IDs.
 slots = {A: 2, B: 1, C: 4, D: 3}
 e = eng(slot_of=lambda a: slots.get(a))
 m = marks(wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
@@ -119,13 +109,11 @@ m = marks(e.on_loss(CURSED_SHRIEK, A, 70.0) + e.on_loss(CURSED_SHRIEK, B, 70.0))
 check("the second pair inherits the signs in party order",
       m == {D: BND1, C: BND2})
 
-# a known slot sorts ahead of an unknown one
 e = eng(slot_of=lambda a: {A: 5}.get(a))
 m = marks(wave(e, [A, B], SET1, 10.0, vfx=REAL, vfx_time=6.0))
 check("a slot-known player sorts ahead of a slot-unknown partner",
       m[A] == IGN1 and m[B] == IGN2)
 
-# incomplete sets
 e = eng()
 acts = e.on_vfx(FAKE, 6.0) + gain(e, A, SET1, 10.0)
 check("a lone first gain marks nothing", acts == [])
@@ -134,7 +122,6 @@ check("the lone carrier losing it clears quietly", lost == [])
 m = marks(wave(e, [B, C], SET1, 30.0, vfx=FAKE, vfx_time=26.0))
 check("a fresh wave after the discard still marks", m == {B: BND1, C: BND2})
 
-# a partner that never comes is dropped after the burst gap
 e = eng()
 e.on_vfx(FAKE, 6.0)
 gain(e, A, SET1, 10.0)
@@ -144,17 +131,14 @@ e.flush(10.0 + BURST_GAP_S + 1)
 check("flush after the burst gap discards the orphaned set",
       e._set == [] and e._polarity is None)
 
-# Discarding an incomplete wave preserves the next wave's armed tell.
 e = eng()
 e.on_vfx(FAKE, 6.0)
-gain(e, A, SET1, 10.0)               # orphaned
-e.on_vfx(REAL, 21.0)         # wave 2's tell
+gain(e, A, SET1, 10.0)
+e.on_vfx(REAL, 21.0)
 acts = gain(e, C, SET2, 25.0) + gain(e, D, SET2, 25.1)
 check("a wave 2 tell survives the wave 1 orphan discard",
       marks(acts) == {C: IGN1, D: IGN2})
 
-# same via the late loss path, the orphan's 30 line empties the set after
-# the new tell already armed
 e = eng()
 e.on_vfx(FAKE, 6.0)
 gain(e, A, SET1, 10.0)
@@ -164,15 +148,13 @@ acts = gain(e, C, SET2, 25.0) + gain(e, D, SET2, 25.1)
 check("a late orphan loss clears nothing and keeps the armed tell",
       loss == [] and marks(acts) == {C: IGN1, D: IGN2})
 
-# counterpart, no fresh tell: the dead wave's polarity must not bleed
 e = eng()
 e.on_vfx(FAKE, 6.0)
-gain(e, A, SET1, 10.0)               # orphaned, no wave 2 vfx ever
+gain(e, A, SET1, 10.0)
 acts = gain(e, C, SET2, 25.0) + gain(e, D, SET2, 25.1)
 check("an orphaned wave's own tell dies with it, no bleed",
       marks(acts) == {})
 
-# a stray pair between waves marks nothing, the real wave self-heals
 e = eng()
 wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 acts = gain(e, C, SET1, 11.0) + gain(e, D, SET1, 11.1)
@@ -182,7 +164,6 @@ m = marks(wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0))
 check("the real wave after the strays re-arms and assigns",
       m == {C: IGN1, D: IGN2})
 
-# loss clears that player's sign, per set
 e = eng()
 wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 loss = e.on_loss(CURSED_SHRIEK, A, 20.0)
@@ -191,14 +172,12 @@ check("cleared player drops out of outstanding", set(e.outstanding()) == {B})
 check("a second loss for the same player is a no-op",
       e.on_loss(CURSED_SHRIEK, A, 20.1) == [])
 
-# refresh keeps the assignment
 e = eng()
 wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 refire = gain(e, A, SET1, 11.0)
 check("a re-gain after assignment does not re-fire or wipe marks",
       refire == [] and set(e.outstanding()) == {A, B})
 
-# A repeated status line just after the second pair is still the same phase.
 e = eng()
 wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0)
@@ -221,7 +200,6 @@ acts = gain(e, A, SET1, 36.1) + gain(e, B, SET1, 36.2)
 check("the third Grand Cross cannot rearm existing gaze carriers",
       acts == [] and set(e.outstanding()) == {A, B, C, D})
 
-# Kefka Says resets the state before the next phase.
 e = eng()
 wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0)
@@ -234,11 +212,9 @@ m = marks(wave(e, [A, B], SET1, 100.0, vfx=REAL, vfx_time=96.0)
 check("the next phase after full resolution assigns again",
       m == {A: IGN1, B: IGN2, C: BND1, D: BND2})
 
-# both sets dealt with the 30s missed: a new gain starts clean
 e = eng()
 wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0)
-# The next Kefka Says starts a fresh phase after clearing old signs.
 e.reset()
 acts = wave(e, [A, B], SET1, 100.0, vfx=REAL, vfx_time=96.0)
 check("a reset phase has no stale signs to clear",
@@ -247,7 +223,6 @@ m = marks(acts)
 check("the fresh deal assigns off the new tell, kept across the reset",
       m == {A: IGN1, B: IGN2})
 
-# same glue but the new pull's vfx never arrived, so nothing marks
 e = eng()
 wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0)
@@ -256,7 +231,6 @@ check("a glued deal with no fresh tell clears the signs and marks nothing",
       marks(acts) == {}
       and [a for a in acts if a[0] == "clear"] == [("clear", a) for a in (A, B, C, D)])
 
-# staleness: an event long after the last one is a new phase
 e = eng()
 wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 late = wave(e, [C, D], SET2, 10.0 + STALE_S + 5, vfx=REAL,
@@ -265,7 +239,6 @@ check("a stale phase's signs come down before the new wave assigns",
       [a for a in late if a[0] == "clear"] == [("clear", A), ("clear", B)]
       and marks(late) == {C: IGN1, D: IGN2})
 
-# a stale vfx drops the dead phase's signs before arming
 e = eng()
 wave(e, [A, B], SET1, 10.0, vfx=FAKE, vfx_time=6.0)
 acts = e.on_vfx(REAL, 10.0 + STALE_S + 5)
@@ -273,7 +246,6 @@ check("a stale vfx clears the dead signs and arms the new phase",
       acts == [("clear", A), ("clear", B)]
       and e._sets_done == 0 and e._polarity == "away1")
 
-# misc
 check("a non-gaze status id is ignored",
       eng().on_gain("644", A, 20.0, 10.0) == [])
 check("an unrelated VFX id is ignored",
@@ -295,7 +267,6 @@ e.reset()
 check("reset clears everything",
       e.outstanding() == [] and e._sets_done == 0)
 
-# A duplicate VFX cannot arm a stray pair after the real pair was assigned.
 e = eng()
 e.on_vfx(REAL, 1.0, event_id="wave1")
 wave(e, [A, B], SET1, 10.0)

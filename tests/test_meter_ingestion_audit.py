@@ -1,5 +1,3 @@
-"""Combat logs remain useful before delayed player metadata arrives."""
-
 import json
 import os
 import unittest

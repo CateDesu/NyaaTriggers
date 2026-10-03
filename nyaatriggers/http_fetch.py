@@ -1,5 +1,3 @@
-"""HTTP setup and response deadlines for program downloads."""
-
 from contextlib import contextmanager
 import http.client
 import os
@@ -21,10 +19,7 @@ _LINUX_CA_BUNDLES = (
 
 @contextmanager
 def open_response(request, timeout: float, deadline: float):
-    """Acquire a response before an absolute monotonic deadline.
-
-    The caller owns body reads and their deadlines after this handoff.
-    """
+    """Acquire a response before the monotonic deadline. The caller owns body read deadlines."""
     done = threading.Event()
     cancelled = threading.Event()
     lock = threading.Lock()
@@ -125,7 +120,6 @@ def open_response(request, timeout: float, deadline: float):
 
 
 def configure_ssl_trust() -> None:
-    """Use the host trust store when bundled OpenSSL points at a missing file."""
     if not sys.platform.startswith('linux') or not getattr(sys, 'frozen', False):
         return
     if 'SSL_CERT_FILE' in os.environ or 'SSL_CERT_DIR' in os.environ:
@@ -141,7 +135,6 @@ def configure_ssl_trust() -> None:
 
 def fetch_bytes(request, max_bytes: int, timeout: float = 15,
                 stall: float = 15, deadline: float = 60) -> bytes:
-    """Fetch one body with a size cap and a deadline outside the reader."""
     done = threading.Event()
     cancelled = threading.Event()
     state = {"response": None, "progress": time.monotonic()}

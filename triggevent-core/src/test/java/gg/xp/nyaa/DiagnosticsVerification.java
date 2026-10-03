@@ -107,7 +107,6 @@ public final class DiagnosticsVerification {
             master.pushEventAndWait(new TetherEvent(boss, player, 45));
             check(records().stream().filter(record -> kind(record, "engine_event")).count() == before + 1,
                     "Live diagnostics did not resume after recovery");
-            // A broken diagnostics sink cannot stop mechanic handling or callouts.
             EngineDiagnostics unavailable = new EngineDiagnostics(null, record -> { throw new IllegalStateException(SECRET); });
             unavailable.error("feed", new IllegalStateException(SECRET));
             unavailable.callout(null, 1, false, true, true, false);

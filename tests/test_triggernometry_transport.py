@@ -1,5 +1,3 @@
-"""Use slow local peers to challenge relay deadlines and shutdown."""
-
 import threading
 import unittest
 from unittest.mock import patch

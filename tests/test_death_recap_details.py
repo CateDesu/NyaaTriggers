@@ -1,5 +1,3 @@
-"""Per-event health, shields, buffs and durable recap details."""
-
 from copy import deepcopy
 from pathlib import Path
 import struct

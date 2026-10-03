@@ -1,5 +1,3 @@
-"""Native pack updates preserve one active copy and its previous contents."""
-
 from contextlib import ExitStack
 import json
 import os

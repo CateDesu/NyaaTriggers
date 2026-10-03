@@ -1,5 +1,3 @@
-"""Offline icons, recap filters and health rendering in Qt."""
-
 import json
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

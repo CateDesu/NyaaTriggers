@@ -1,5 +1,3 @@
-"""Exercise encounter boundaries while transport workers have pending work."""
-
 import json
 from types import SimpleNamespace
 import threading

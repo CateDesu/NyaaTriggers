@@ -1,5 +1,3 @@
-"""Exercise session comparisons through the real Prog page and saved records."""
-
 from copy import deepcopy
 from dataclasses import replace
 

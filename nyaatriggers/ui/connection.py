@@ -1,5 +1,3 @@
-"""Connection controls and IINACT log folder handling for MainWindow."""
-
 from pathlib import Path
 import json
 import os
@@ -26,14 +24,11 @@ class ConnectionMixin:
         self._pull_capture.set_recording(bool(state))
 
     def _push_plugin_tick(self) -> None:
-        """Push the clock only while it runs. Stop paths clear it so the plugin cannot
-        continue a dead pull.
-        """
+        """Stop paths clear the plugin clock so it cannot continue a dead pull."""
         if self._timeline.is_active():
             self._plugin_link.send_tick(self._timeline.current_time())
 
     def _on_plugin_link_status(self, connected: bool, msg: str) -> None:
-        """Update connection status and restore the schedule after reconnect."""
         if (connected, msg) != self._plugin_link.last_status():
             return
         self._update_plugin_link_status_label(connected, msg)
@@ -41,7 +36,6 @@ class ConnectionMixin:
             self._push_timeline_to_plugin(reconnect=True)
 
     def _on_plugin_port_changed(self) -> None:
-        """Save and apply changes to the overlay port."""
         edit = getattr(self, "_plugin_port_edit", None)
         if edit is None:
             return
@@ -64,9 +58,7 @@ class ConnectionMixin:
 
     @staticmethod
     def _find_iinact_log_dir() -> "Path | None":
-        """Resolve IINACT's log directory from its configuration, mapping Windows paths
-        into Wine on Linux. Fall back to the default Documents location.
-        """
+        """Resolve the IINACT log folder, mapping Windows paths into Wine on Linux."""
         if os.name == "nt":
             cfg = (Path(os.environ.get("APPDATA", "")) / "XIVLauncher"
                    / "pluginConfigs" / "IINACT.json")
@@ -91,11 +83,9 @@ class ConnectionMixin:
                     mapped = prefix / "dosdevices" / f"{drive}:" / rest
                     if mapped.is_dir():
                         return mapped
-                # Match the lowercase Wine user directory while preserving later path
-                # components.
+                # Lowercase only the Wine user directory, preserving later path components.
                 first, _, tail = rest.partition("/")
                 rest = first.lower() + ("/" + tail if tail else "")
-                # Reject a bare drive root as a log directory.
                 if drive == "c" and rest:
                     mapped = prefix / "drive_c" / rest
                     if mapped.is_dir():
@@ -112,7 +102,6 @@ class ConnectionMixin:
         return None
 
     def _open_iinact_logs(self) -> None:
-        """Open the resolved IINACT log folder."""
         path = self._find_iinact_log_dir()
         if path is None:
             ac.QMessageBox.information(
@@ -122,7 +111,6 @@ class ConnectionMixin:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _on_ws_party_jobs(self, jobs: dict) -> None:
-        """Use the party roster as a shared job feed for automarkers and the meter."""
         note_job = getattr(getattr(self, "_dps_meter", None), "note_job", None)
         for k, v in jobs.items():
             if not v:
@@ -137,9 +125,7 @@ class ConnectionMixin:
         self._rearm_umad_chain_flush()
 
     def _on_ws_primary_player(self, _char_id: int, name: str) -> None:
-        """Apply a known primary player from cached or live metadata without overwriting
-        the name with an empty value. Pass the ID to the meter too.
-        """
+        """Apply known player metadata without replacing the name with an empty value."""
         self._me_id = f"{_char_id:08X}" if 0x10000000 <= _char_id < 0x11000000 else ""
         name = name.strip()
         if name and name != self._me_name:
@@ -149,8 +135,7 @@ class ConnectionMixin:
             set_me(_char_id)
 
     def _on_ws_combatants_jobs(self, payload: dict) -> None:
-        """Use live player combatant snapshots to backfill jobs after a midfight restart.
-        """
+        """Backfill jobs from combatant snapshots after midfight restarts."""
         if not self._umad_chain_enabled:
             return
         for c in (payload or {}).get("list") or []:
@@ -165,32 +150,23 @@ class ConnectionMixin:
         self._rearm_umad_chain_flush()
 
     def _quit_for_windows_handoff(self) -> None:
-        # Stop sidecars synchronously before the Windows handoff so they release runtime
-        # files. The staged updater handles relaunch. Flush status first and isolate
-        # teardown steps so one failure cannot skip cleanup.
+        # Wait for sidecars to release runtime files before the Windows handoff.
         app = QApplication.instance()
         if app is not None:
             app.processEvents()
         step = self._teardown_step
-        # Stop timers before allowing the final repaint.
         self._stop_background_timers()
         step("clear status timers", lambda: self._clear_status_timers())
         step("clear seq runners", lambda: self._clear_seq_runners())
-        # Flush pending settings because this path bypasses closeEvent.
         step("settings save flush", lambda: self._flush_pending_settings_save())
-        # Finish the active encounter before the handoff.
         step("meter encounter finalize", lambda: self._finalize_live_encounter())
         step("ws disconnect", lambda: self._ws.disconnect_from())
-        # Finalize the pull capture as closeEvent would.
         step("pull capture finalize", lambda: self._pull_capture.close())
         step("cactbot reader stop", lambda: self._stop_cactbot_reader())
         step("triggevent stop", lambda: self._stop_sidecar("_triggevent", wait=True))
-        # Wait for Triggernometry shutdown too so it releases the bundled runtime before
-        # the swap.
         step("triggernometry stop", lambda: self._stop_sidecar("_triggernometry", wait=True))
         step("telesto stop", lambda: self._stop_sidecar("_telesto_client"))
         step("plugin link stop", lambda: self._stop_sidecar("_plugin_link"))
-        # Allow the final repaint before exiting.
         QTimer.singleShot(300, app.quit if app is not None else (lambda: None))
 
     def _toggle_connection(self) -> None:

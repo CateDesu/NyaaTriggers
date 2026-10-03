@@ -1,5 +1,4 @@
-// Provide WMPLib types for Mono builds without Windows Media Player. SoundMethod=ACT
-// routes playback through the host hook, so this player remains inactive.
+// ACT host hooks handle playback. This Mono Windows Media Player stub stays inactive.
 namespace WMPLib
 {
     public enum WMPPlayState

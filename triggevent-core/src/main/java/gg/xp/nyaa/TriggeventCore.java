@@ -66,26 +66,17 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * Run Triggevent triggers from IINACT messages on stdin and emit resolved callouts as
- * JSON lines. Uses the engine's built in triggers, Groovy scripts and EasyTriggers
- * without opening another ACT connection.
- */
 public final class TriggeventCore {
 
-    // Use UTF-8 explicitly because the bundled JDK 17 can otherwise use a Windows code
-    // page.
+    // Bundled JDK 17 may otherwise use a Windows code page.
     private static final PrintStream OUT = new PrintStream(System.out, true, StandardCharsets.UTF_8);
 
-    // Set NYAA_TV_DIAG=1 to print event counts on exit.
     private static final boolean DIAG_ON = System.getenv("NYAA_TV_DIAG") != null;
     private static final Map<String, AtomicLong> DIAG = new LinkedHashMap<>();
 
-    // Index modifiable callouts by stable ID for live edits and suppression.
     private static final Map<String, ModifiedCalloutHandle> CALLOUTS = new HashMap<>();
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    // Sequence emitted callouts so the parent can detect delivery gaps.
     private static final AtomicLong CALLOUT_SEQ = new AtomicLong();
     private static final int MAX_PENDING_SPEECH = 1024;
     private static final Map<CalloutTrackingKey, PendingSpeech> PENDING_SPEECH = new LinkedHashMap<>();
@@ -93,8 +84,6 @@ public final class TriggeventCore {
     private record PendingSpeech(long epoch, String id,
                                  ModifiedCalloutHandle handle, String template) {}
 
-    // Keep the engine Telesto integration available for explicit control commands. It
-    // remains absent when telesto-core is not on the classpath.
     private static volatile TelestoMain TELESTO;
     private static volatile AutoMarkServiceSelector AM_SELECTOR;
     private static PullRecovery RECOVERY;
@@ -115,9 +104,7 @@ public final class TriggeventCore {
     }
 
     public static void main(String[] args) throws Exception {
-        // Do not force AWT headless mode. Engine components construct Swing windows
-        // during startup. The bridge supplies Xvfb when available, otherwise the
-        // session display.
+        // Swing startup needs a display. The bridge supplies Xvfb when available.
 
         try {
             final MutablePicoContainer pico = bootEngine();
@@ -126,8 +113,6 @@ public final class TriggeventCore {
             emitStatus(true, "Triggevent Engine ready");
             diag("ready; reading WS messages on stdin; recovery=1; history=1; catchup=1; custom=1; speech_cancel=1; speech_cancel_all=1; diagnostics=1");
 
-            // InitEvent handlers populate the callout registry synchronously. Drain any
-            // queued followup work before publishing inventory.
             try {
                 pico.getComponent(BasicEventQueue.class).waitDrain();
                 emitInventory(pico);
@@ -136,7 +121,6 @@ public final class TriggeventCore {
                 diagnosticError("inventory", t);
             }
 
-            // Pass raw IINACT messages through the engine's normal event handlers.
             final BufferedReader in =
                     new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
             String line;
@@ -146,7 +130,6 @@ public final class TriggeventCore {
                     continue;
                 }
                 try {
-                    // Python rejects reserved command keys from the WebSocket feed.
                     final JsonNode frame = MAPPER.readTree(line);
                     if (frame != null && frame.isObject() && frame.has("nyaa_cmd")) {
                         handleCommand(frame);
@@ -166,8 +149,6 @@ public final class TriggeventCore {
                     diagnosticError("feed", t);
                 }
             }
-            // Drain queued events on EOF and allow brief delayed callouts to finish
-            // before exit.
             try {
                 final BasicEventQueue q = pico.getComponent(BasicEventQueue.class);
                 q.waitDrain();
@@ -187,24 +168,18 @@ public final class TriggeventCore {
             emitStatus(false, "stdin closed");
             diagnostics.pipeline();
         } catch (Throwable t) {
-            // Log boot failures and return an error before finally exits the JVM.
             t.printStackTrace();
             diagnosticError("boot", t);
             OUT.flush();
             System.exit(1);
         } finally {
-            // Exit explicitly because engine event threads would otherwise keep the JVM
-            // alive after stdin closes.
+            // Engine threads would keep the JVM alive after stdin closes.
             OUT.flush();
             System.exit(0);
         }
     }
 
-    /**
-     * Initialize without opening a live ACT connection. Reflectively use the private
-     * requiredComponents bootstrap, then load user settings without writing them,
-     * attach the callout sink and run startup events.
-     */
+    // Bootstrap without a live ACT connection or writes to user settings.
     private static MutablePicoContainer bootEngine() throws Exception {
         final Method requiredComponents = XivMain.class.getDeclaredMethod("requiredComponents");
         requiredComponents.setAccessible(true);
@@ -219,12 +194,10 @@ public final class TriggeventCore {
 
         pico.addComponent(UserDirPropsPersistenceProvider.inUserDataFolder("triggevent", true));
 
-        // Keep replay parsers enabled so log lines can reconstruct player, zone and
-        // party state.
+        // Replay parsers reconstruct player, zone and party state.
         pico.getComponent(AutoHandlerConfig.class).setNotLive(true);
 
-        // Mark the source as live for Telesto dispatch and party polling. This does not
-        // start an ACT WebSocket and is separate from enabling replay parsers.
+        // Live source enables Telesto and party polling without opening an ACT WebSocket.
         pico.getComponent(PrimaryLogSource.class).setLogSource(KnownLogSource.WEBSOCKET_LIVE);
 
         final EventDistributor dist = pico.getComponent(EventDistributor.class);
@@ -257,9 +230,6 @@ public final class TriggeventCore {
                 pico.getComponent(StatusEffectRepository.class)));
         pico.getComponent(EventMaster.class).start();
 
-        // Select the none marker service by default. The higher priority keyboard
-        // handler would otherwise send keys to the focused window. Telesto requires an
-        // explicit control command.
         try {
             TELESTO = pico.getComponent(TelestoMain.class);
             if (TELESTO != null) {
@@ -272,8 +242,7 @@ public final class TriggeventCore {
             if (envUri != null && !envUri.isBlank() && TELESTO != null) {
                 trySet(() -> TELESTO.getUriSetting().set(URI.create(envUri.trim())));
             }
-            // Disable Telesto polling until requested. NYAA_AUTOMARK=1 enables it for
-            // standalone debugging.
+            // Default to no marker service. Keyboard handlers could send keys to the focused window.
             requestedAutomark = "1".equals(System.getenv("NYAA_AUTOMARK"));
             applyAutomark(requestedAutomark);
             if (AM_SELECTOR != null) {
@@ -292,9 +261,6 @@ public final class TriggeventCore {
         return pico;
     }
 
-    /**
-     * Receive resolved callouts from built in triggers, EasyTriggers and Groovy.
-     */
     private static void onCallout(EventContext ctx, CalloutEvent ev) {
         try {
             boolean delayed = ev.getTtsDelayMs() > 0 && ev.getCallText() != null
@@ -406,10 +372,7 @@ public final class TriggeventCore {
         }
     }
 
-    /**
-     * Emit engine Telesto connection status after requests. Requires the live source
-     * setting that enables Telesto dispatch.
-     */
+    // Telesto status requests require the live source setting.
     private static void onTelestoStatus(EventContext ctx, TelestoStatusUpdatedEvent ev) {
         try {
             final String s = switch (ev.getNewStatus()) {
@@ -423,10 +386,7 @@ public final class TriggeventCore {
         }
     }
 
-    /**
-     * Return the stable declaring class and field ID for a modifiable callout, or null
-     * for free text that needs phrase overrides.
-     */
+    // Free text has no stable class and field ID and needs phrase overrides.
     private static String calloutId(CalloutEvent ev) {
         if (ev instanceof CustomTriggers.Callout custom) {
             return custom.id;
@@ -443,10 +403,7 @@ public final class TriggeventCore {
         return null;
     }
 
-    /**
-     * Apply callout edits or reset defaults from control messages. Guard each setting
-     * write so read only persistence cannot block the remaining in memory changes.
-     */
+    // Failed setting writes must not block remaining in-memory changes.
     private static void handleCommand(JsonNode n) {
         try {
             final String cmd = n.path("nyaa_cmd").asText("");
@@ -526,7 +483,6 @@ public final class TriggeventCore {
                 recoveryProgress("recovered", n);
                 return;
             }
-            // Dispatch automarker commands before requiring a callout ID.
             if ("set_automark".equals(cmd)) {
                 automarkCommand = n;
                 requestedAutomark = n.path("enable").asBoolean(false);
@@ -598,10 +554,6 @@ public final class TriggeventCore {
         }
     }
 
-    /**
-     * Apply the requested Telesto URL and enabled state from a control message. Use
-     * telesto-am when enabled and none otherwise.
-     */
     private static void handleAutomark(JsonNode n) {
         RECOVERY.cancelPendingOutput();
         if (n.hasNonNull("uri") && TELESTO != null) {
@@ -613,10 +565,7 @@ public final class TriggeventCore {
         diag("set_automark applied");
     }
 
-    /**
-     * Change marker service and party polling together. Refresh party order immediately
-     * on enable, though slots remain unresolved until the reply arrives.
-     */
+    // Refresh party order on enable. Slots remain unknown until the reply arrives.
     private static void applyAutomark(boolean enable) {
         if (!enable) {
             RECOVERY.cancelPendingOutput();
@@ -630,10 +579,7 @@ public final class TriggeventCore {
         }
     }
 
-    /**
-     * Select the registered marker service by ID so upstream priority changes cannot
-     * select another handler.
-     */
+    // Select by ID so upstream priorities cannot choose another marker handler.
     private static void selectAutomarkService(String id) {
         if (AM_SELECTOR == null) {
             return;
@@ -644,9 +590,6 @@ public final class TriggeventCore {
                 .ifPresent(ServiceHandle::setEnabled));
     }
 
-    /**
-     * Derive a stable inventory and callout ID from the declaring class and field.
-     */
     private static String idForField(Field f) {
         if (f == null) {
             return null;
@@ -655,10 +598,6 @@ public final class TriggeventCore {
         return cn == null ? null : cn + '.' + f.getName();
     }
 
-    /**
-     * Publish the modifiable callout inventory at startup. Include stable ID,
-     * description, duty, group and default text for each row.
-     */
     private static void emitInventory(MutablePicoContainer pico) {
         final ModifiedCalloutRepository repo = pico.getComponent(ModifiedCalloutRepository.class);
         if (repo == null) {
@@ -701,10 +640,6 @@ public final class TriggeventCore {
         diag("inventory emitted: " + groups.size() + " groups");
     }
 
-    /**
-     * Infer severity from the color override. Strong red is alarm, another override is
-     * alert, and no override is info.
-     */
     private static String severity(Color c) {
         if (c == null) {
             return "info";

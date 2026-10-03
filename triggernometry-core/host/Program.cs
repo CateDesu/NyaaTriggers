@@ -1,8 +1,4 @@
-// Host Triggernometry for NyaaTriggers and stream callouts as JSON. On Linux, run
-// through Mono and Xvfb. Serve mode reads log, zone and combatant messages on stdin and
-// writes callouts, sounds and status on stdout. Pass the configuration directory and
-// --serve followed by pack paths. Test mode takes the configuration directory, pack
-// path and an optional log line.
+// Args: configuration directory, then --serve and pack paths, or a pack and optional log line.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -25,7 +21,6 @@ static class Program
     static readonly Stopwatch encounterClock = new Stopwatch();
     static bool inCombat;
 
-    // Map stable callout IDs to live UseTTS actions for editing and suppression.
     static readonly Dictionary<string, Triggernometry.Action> _calloutActions = new Dictionary<string, Triggernometry.Action>();
     static readonly Dictionary<string, string> _calloutOriginal = new Dictionary<string, string>();
     static readonly Dictionary<string, string> _calloutOverride = new Dictionary<string, string>();
@@ -37,7 +32,6 @@ static class Program
     {
         AppDomain.CurrentDomain.UnhandledException += (s, e) => { crashed = true; crashMsg = Convert.ToString(e.ExceptionObject); Err("[FATAL] " + crashMsg); };
         Application.ThreadException += (s, e) => { crashed = true; crashMsg = Convert.ToString(e.Exception); Err("[FATAL/UI] " + crashMsg); };
-        // Use UTF-8 for game text regardless of the system locale.
         try { var u8 = new System.Text.UTF8Encoding(false); Console.InputEncoding = u8; Console.OutputEncoding = u8; }
         catch (Exception ex) { Err("[host] set UTF-8 console: " + ex.Message); }
         try { Application.EnableVisualStyles(); } catch (Exception ex) { Err("[host] EnableVisualStyles: " + ex.Message); }
@@ -59,7 +53,6 @@ static class Program
 
         BuildConfig(Path.Combine(cfgDir, pluginName + ".config.xml"), packPaths);
 
-        // Create window handles required by the hosted engine.
         Form mainform = new Form { ShowInTaskbar = false, FormBorderStyle = FormBorderStyle.None };
         mainform.Load += (s, e) => ((Form)s).Visible = false;
         var _h = mainform.Handle; mainform.CreateControl();
@@ -137,8 +130,7 @@ static class Program
             catch (Exception ex) { Err("[host] stdin loop ended: " + ex.Message); }
             finally
             {
-                // Exit explicitly on stdin EOF because foreground engine threads would
-                // keep the host alive. This also covers EOF before Application.Run.
+                // Exit on stdin EOF because foreground engine threads would keep the host alive.
                 FlushEngineErrors();
                 EmitStatus(false, "stopped");
                 try { Application.Exit(); } catch { }
@@ -170,7 +162,6 @@ static class Program
                         if (raw.Length == 0) return;
                         if (raw.StartsWith("01|"))
                         {
-                            // Use the array overload for .NET Framework compatibility.
                             var f = raw.Split(new[] { '|' });
                             if (f.Length > 3)
                             {
@@ -247,8 +238,7 @@ static class Program
             if (fields.Length > 3 && (fields[2] == "0" || fields[2] == "1"))
                 SetCombatState(fields[2] == "1");
         }
-        // Network triggers receive the original line. Log triggers receive
-        // the formatted line that ACT would deliver after parsing it.
+        // ACT log triggers need formatted lines. Network triggers need the original wire line.
         plug.BeforeLogLineRead(false, raw, zone);
         plug.OnLogLineRead(false, ActLogLine.Format(raw), zone);
     }
@@ -279,7 +269,6 @@ static class Program
     static byte JB(JsonElement c, string k) { return (byte)Math.Min(JU(c, k), 255u); }
     static string JS(JsonElement c, string k) { JsonElement v; return c.TryGetProperty(k, out v) ? (v.GetString() ?? "") : ""; }
 
-    // Publish live UseTTS actions with stable IDs for the trigger table.
     static void BuildAndEmitInventory()
     {
         var sb = new System.Text.StringBuilder();
@@ -300,7 +289,7 @@ static class Program
                     foreach (var a in t.Actions)
                     {
                         if (a == null || a.ActionType != "UseTTS") continue;
-                        string text = a.UseTTSTextExpression;   // property getter returns null when empty
+                        string text = a.UseTTSTextExpression;
                         if (string.IsNullOrEmpty(text)) continue;
                         string id = t.Id.ToString() + "#" + idx;
                         lock (_coLock) { _calloutActions[id] = a; if (!_calloutOriginal.ContainsKey(id)) _calloutOriginal[id] = text; }
@@ -457,8 +446,7 @@ static class Program
             foreach (var child in folder.Folders) RouteTelestoRequests(child, relay);
     }
 
-    // Supply a loaded assembly when script references are empty. The interpreter
-    // rejects an empty reference string.
+    // Empty script references need an assembly because the interpreter rejects an empty string.
     static int FixupExecuteScriptAssemblies(Folder f)
     {
         if (f == null) return 0;

@@ -1,5 +1,3 @@
-"""Queued callouts must respect the current feed and engine state."""
-
 import os
 import http.client
 import json

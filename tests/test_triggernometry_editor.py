@@ -1,5 +1,3 @@
-"""Native pack editing and execution through the bundled engine."""
-
 from copy import deepcopy
 import os
 import shutil

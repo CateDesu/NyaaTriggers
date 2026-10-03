@@ -1,5 +1,3 @@
-"""Callouts and saved choices across refreshes, toggles and duty changes."""
-
 from contextlib import ExitStack
 import json
 from pathlib import Path

@@ -1,5 +1,3 @@
-"""Build the host and validator using prepared engine assemblies."""
-
 import os
 from pathlib import Path
 import shutil
@@ -35,7 +33,6 @@ class PackagingTests(unittest.TestCase):
             (source / "Triggernometry" / "TriggernometryPlugin.csproj").write_text("<Project />")
             commands = root / "commands"
             commands.mkdir()
-            # Use the bundled engine so this check needs no downloads.
             for name in ("git", "xbuild", "curl"):
                 command = commands / name
                 command.write_text("#!/bin/sh\nexit 0\n")

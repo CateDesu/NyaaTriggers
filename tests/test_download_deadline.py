@@ -1,6 +1,3 @@
-"""Download watchdogs against local HTTP servers with healthy, stalled and trickling
-responses.
-"""
 import hashlib
 import http.server
 import json
@@ -36,9 +33,7 @@ def _wait_for(cond, timeout=10.0):
 
 
 class _TrickleServer:
-    """Local HTTP server that trickles bytes, parks after a partial body or drips whole
-    chunks. Track live connections to verify watchdog cleanup.
-    """
+    """Trickle or stall responses, tracking live connections to verify watchdog cleanup."""
 
     def __init__(self, mode="trickle", interval=0.05, chunk=65536,
                  partial=0, content_length=1 << 20, body=None):
@@ -47,7 +42,6 @@ class _TrickleServer:
         self.interval = interval
         self.chunk = chunk
         self.partial = partial
-        # Use the supplied drip body when the test needs to compare saved bytes.
         self.body = body
         if body is not None:
             content_length = len(body)
@@ -95,8 +89,6 @@ class _TrickleServer:
             if self.partial:
                 conn.sendall(b"A" * self.partial)
             if self.mode == "park":
-                # Wait for the client to close so the server can track connection
-                # cleanup.
                 while not self._stop.is_set():
                     try:
                         conn.settimeout(0.5)
@@ -139,8 +131,7 @@ class _HealthyHandler(http.server.BaseHTTPRequestHandler):
 
     def _answer(self):
         if self.command == "POST":
-            # Drain the request body so the response is not racing unread
-            # request bytes on the same connection.
+            # Drain requests so unread bytes cannot race the response.
             length = int(self.headers.get("Content-Length") or 0)
             if length:
                 self.rfile.read(length)
@@ -161,8 +152,6 @@ class _HealthyHandler(http.server.BaseHTTPRequestHandler):
 
 
 class _HealthyServer:
-    """Plain threaded HTTP server handing full bodies out of a routes dict."""
-
     def __init__(self, routes):
         handler = type("BoundHandler", (_HealthyHandler,), {"routes": dict(routes)})
         self._srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -175,7 +164,6 @@ class _HealthyServer:
         self._srv.server_close()
 
 
-# Watchdog cutoffs, one per site, each against trickle and park
 
 def test_fetch_latest_release_cut():
     for mode in ("trickle", "park"):
@@ -238,7 +226,6 @@ def test_fight_catalog_cut():
             cache = Path(td) / "fight_catalog.json"
             try:
                 fc.refresh_from_cactbot_async(cache)
-                # The latch must free even though the read never finishes.
                 assert _wait_for(lambda: not fc._REFRESH_RUNNING.is_set()), mode
                 assert not cache.exists(), mode
                 reason = "timed out after 60 s" if mode == "trickle" else "stalled, no new bytes"
@@ -330,11 +317,8 @@ def test_fflogs_cut():
             srv.close()
 
 
-# The deadline still fires while bytes flow, and only then
 
 def test_download_deadline_fires_mid_flow():
-    # Drip whole chunks so progress never stalls. The stall window must not
-    # fire. The total deadline must, on time.
     srv = _TrickleServer(mode="drip", interval=0.15, chunk=262144,
                          content_length=100 << 20)
     saved = (updater._READ_STALL_S, updater._DOWNLOAD_DEADLINE_S)
@@ -358,7 +342,6 @@ def test_download_deadline_fires_mid_flow():
 
 
 def test_download_quiet_inside_final_window_says_deadline():
-    # A deadline reached before the full quiet window must be reported as a deadline.
     srv = _TrickleServer(mode="park", partial=100)
     saved = (updater._READ_STALL_S, updater._DOWNLOAD_DEADLINE_S)
     updater._READ_STALL_S = 30
@@ -379,7 +362,6 @@ def test_download_quiet_inside_final_window_says_deadline():
 
 
 def test_install_voice_quiet_inside_final_window_says_deadline():
-    # Same label rule at the voice install site.
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         srv = _TrickleServer(mode="park", partial=100)
@@ -405,7 +387,6 @@ def test_install_voice_quiet_inside_final_window_says_deadline():
 
 
 def test_fflogs_quiet_inside_final_window_says_deadline():
-    # FFLogs reports the deadline when the quiet window has not elapsed.
     import io
     import contextlib
     srv = _TrickleServer(mode="park", partial=100)
@@ -426,7 +407,6 @@ def test_fflogs_quiet_inside_final_window_says_deadline():
 
 
 def test_fight_catalog_quiet_inside_final_window_says_deadline():
-    # Same label rule at the cactbot tree fetch site.
     with tempfile.TemporaryDirectory() as td:
         srv = _TrickleServer(mode="park", partial=100)
         drops = []
@@ -449,7 +429,6 @@ def test_fight_catalog_quiet_inside_final_window_says_deadline():
 
 
 def test_tts_kokoro_quiet_inside_final_window_says_deadline():
-    # Capture the Kokoro failure label from stderr.
     import io
     import contextlib
     with tempfile.TemporaryDirectory() as td:
@@ -507,7 +486,6 @@ def test_small_data_fetch_deadline_stall_and_size_cap():
 
 
 def test_download_slow_but_flowing_succeeds():
-    # Progress within the stall window allows a slow transfer to complete.
     body = b"z" * (5 * 65536)
     srv = _TrickleServer(mode="drip", interval=0.05, chunk=65536, body=body)
     saved = (updater._READ_STALL_S, updater._DOWNLOAD_DEADLINE_S)
@@ -523,7 +501,6 @@ def test_download_slow_but_flowing_succeeds():
         srv.close()
 
 
-# Healthy fast transfers still succeed through every site
 
 def test_fetch_latest_release_healthy():
     payload = json.dumps({
@@ -640,7 +617,6 @@ def test_fflogs_healthy():
 
 
 def test_fflogs_oversize():
-    # One byte past the cap still signals too large through the same error.
     body = b"o" * (fflogs._MAX_RESPONSE_BYTES + 1)
     srv = _HealthyServer({"/body": body})
     try:

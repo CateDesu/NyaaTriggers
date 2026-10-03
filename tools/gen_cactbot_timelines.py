@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Build assets/cactbot_timelines.json from cactbot raidboss declarations. Resolve zone
-constants and English zone patterns into numeric IDs so runtime lookup works across
-client languages. Run python tools/gen_cactbot_timelines.py.
-"""
+"""Build the cactbot timeline index with numeric zone IDs for all client languages."""
 import concurrent.futures
 import json
 import os
@@ -22,7 +19,6 @@ OUT = Path(__file__).resolve().parent.parent / "assets" / "cactbot_timelines.jso
 
 _UA = {"User-Agent": "NyaaTriggers"}
 
-# Bound tree listings and source responses.
 _MAX_FETCH = 64 << 20
 
 
@@ -32,14 +28,12 @@ def _fetch(url: str) -> bytes:
 
 
 def _zone_id_consts() -> dict:
-    """Read zone constants from cactbot zone_id.ts."""
     src = _fetch(RAW + "resources/zone_id.ts").decode("utf-8")
     return {m.group(1): int(m.group(2))
             for m in re.finditer(r"^\s*'([A-Za-z0-9_]+)': (\d+),?$", src, re.M)}
 
 
 def _zone_names_en() -> dict:
-    """Read English names by zone ID from zone_info.ts."""
     src = _fetch(RAW + "resources/zone_info.ts").decode("utf-8")
     names = {}
     for m in re.finditer(r"^  (\d+): \{(.*?)^  \},", src, re.S | re.M):
@@ -50,12 +44,10 @@ def _zone_names_en() -> dict:
 
 
 def _js_regex(lit: str, flags: str) -> "re.Pattern":
-    """Compile a cactbot JavaScript regex body."""
     return re.compile(lit.replace("\\/", "/"), re.I if "i" in flags else 0)
 
 
 def _zone_ids_for(src: str, consts: dict, names_en: dict, rel: str) -> list:
-    """Resolve declared zone IDs and zone patterns to numeric IDs."""
     m = re.search(r"zoneId:\s*ZoneId\.([A-Za-z0-9_]+)", src)
     if m:
         z = consts.get(m.group(1))
@@ -67,7 +59,6 @@ def _zone_ids_for(src: str, consts: dict, names_en: dict, rel: str) -> list:
     m = re.search(r"zoneId:\s*(\d+)", src)
     if m:
         return [int(m.group(1))]
-    # Match zoneRegex declarations against known English zone names.
     m = (re.search(r"zoneRegex:\s*\{[^}]*?en:\s*/((?:[^/\\]|\\.)*)/([a-z]*)", src, re.S)
          or re.search(r"zoneRegex:\s*/((?:[^/\\]|\\.)*)/([a-z]*)", src))
     if m:
@@ -106,7 +97,6 @@ def main() -> None:
         tl = re.search(r"timelineFile:\s*'([^']+)'", src)
         if not tl:
             continue
-        # Resolve timelineFile relative to the trigger source directory.
         txt = str(PurePosixPath(rel).parent / tl.group(1))
         if txt not in txt_set:
             print(f"  warn: {rel} names missing timeline {txt}")
@@ -129,13 +119,11 @@ def main() -> None:
     if skipped:
         print(f"  ({skipped} files skipped, see warnings)")
 
-    # Sort entries by numeric ID for readable diffs.
     body = ",\n".join(
         f'  "{z}": {{"tag": {json.dumps(e["tag"])}, '
         f'"txt_path": {json.dumps(e["txt_path"])}}}'
         for z, e in sorted(index.items()))
-    # Replace through a sibling temporary file to preserve previous output if
-    # interrupted.
+    # A sibling temporary file preserves the previous output if interrupted.
     tmp = OUT.with_name(OUT.name + ".tmp")
     tmp.write_text("{\n" + body + "\n}\n", encoding="utf-8")
     os.replace(tmp, OUT)

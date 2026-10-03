@@ -1,5 +1,3 @@
-"""Passive phase evidence and validation of saved observations."""
-
 from dataclasses import dataclass
 import math
 
@@ -163,8 +161,6 @@ def match_event(fields):
 
 
 class PhaseAttempt:
-    """One logical attempt with bounded transition and segment state."""
-
     def __init__(self, pull, definition, encounter, now):
         self.pull = pull
         self.definition = definition

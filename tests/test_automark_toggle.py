@@ -1,5 +1,3 @@
-"""Automarker changes take effect before a storage warning opens its event loop."""
-
 import unittest
 from unittest.mock import patch
 

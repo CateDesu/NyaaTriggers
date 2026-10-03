@@ -1,5 +1,3 @@
-"""A rolled back Windows release must not offer the same self update again."""
-
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

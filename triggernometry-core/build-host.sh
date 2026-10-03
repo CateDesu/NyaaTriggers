@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Build the host beside the engine dependencies. Requires the built engine at ENGINE_BIN
-# and Mono with mcs.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ENGINE_BIN="${ENGINE_BIN:-$HERE/.engine/Source/Triggernometry/bin/Release}"
@@ -20,5 +18,4 @@ mcs -target:exe -out:triggernometry-core.exe \
 
 echo "built: $ENGINE_BIN/triggernometry-core.exe ($(stat -c %s triggernometry-core.exe) bytes)"
 
-# Refresh the bundled sidecar after building the host.
 bash "$HERE/package.sh"

@@ -1,4 +1,3 @@
-"""Setup worker lifetime, output decoding and Linux dependencies."""
 import os
 import sys
 import threading
@@ -28,7 +27,6 @@ def check(name, cond):
 
 
 class _FakeWorker(QThread):
-    """Stands in for _SetupWorker: blocks until told, then emits done."""
     progress = pyqtSignal(int, str)
     done = pyqtSignal(bool, str)
 
@@ -51,7 +49,6 @@ def _make_worker():
     return _last_worker
 
 
-# Run setup synchronously with UTF-8 output from a non-ASCII path.
 _setup_app = QApplication.instance() or QApplication(sys.argv)
 _pip_calls = []
 
@@ -122,7 +119,6 @@ check("setup dependency message is translated",
 main._SetupWorker = _make_worker
 _app = QApplication.instance() or QApplication(sys.argv)
 
-# Failure path: reject and the window X are ignored while the worker runs.
 dlg = main._SetupDialog()
 check("setup title is translated", dlg.windowTitle() == "NyaaTriggers - 初回セットアップ")
 check("setup buttons are translated",
@@ -150,7 +146,6 @@ dlg.reject()
 check("reject closes after done",
       dlg.result() == QDialog.DialogCode.Rejected)
 
-# Success path: done(True) accepts the dialog on its own.
 main._SetupWorker = _make_worker
 dlg2 = main._SetupDialog()
 dlg2.show()
@@ -165,7 +160,6 @@ check("success accepts the dialog", dlg2.result() == QDialog.DialogCode.Accepted
 check("thread reaped before accept", not dlg2._worker.isRunning())
 locale_util.set_locale("en")
 
-# APT setup includes the separate Qt WebSockets package.
 _setup_sh = (Path(__file__).resolve().parents[1] / "setup.sh").read_text(encoding="utf-8")
 _apt_line = next((ln for ln in _setup_sh.splitlines() if "apt install" in ln), "")
 check("setup.sh apt branch installs the Qt WebSockets binding",

@@ -1,11 +1,5 @@
-"""Build ACT-style encounter totals from raw combat log lines without Qt or CombatData
-dependencies. Field layouts follow cactbot LogGuide. Pet damage and healing belong to
-their owners. DoT and HoT lines contain aggregate ticks without per-effect critical
-flags, so these totals can differ from FFLogs estimates. Roster events supplement spawn
-lines when connecting during an encounter. A separate display segment pauses on damage
-inactivity and resets when damage resumes. Encounter totals retain the full pull, and
-final rows remain visible until the next pull.
-"""
+"""Build ACT encounter totals from cactbot LogGuide fields. Pets contribute to owners.
+DoT and HoT ticks lack per-effect critical flags, so totals can differ from FFLogs."""
 
 from __future__ import annotations
 
@@ -19,10 +13,8 @@ METER_LOG_TYPES = frozenset(("01", "02", "03", "21", "22", "24", "25", "33"))
 # ActorControl command for a wipe or reset.
 _WIPE_COMMAND = "4000000F"
 
-# Limit overlay rows to a full alliance. The plugin may display fewer.
 MAX_OVERLAY_ROWS = 24
 
-# Unknown jobs and noncombat classes use an empty acronym.
 JOB_ACRONYMS = {
     1: "GLA", 2: "PGL", 3: "MRD", 4: "LNC", 5: "ARC", 6: "CNJ", 7: "THM",
     19: "PLD", 20: "MNK", 21: "WAR", 22: "DRG", 23: "BRD", 24: "WHM",
@@ -35,8 +27,6 @@ _DAMAGE_TYPES = frozenset((0x03, 0x05, 0x06, 0x33))
 _HEAL_TYPE = 0x04
 _MISS_TYPES = frozenset((0x01, 0x02))
 
-# Pause the display after this many seconds without damage. The next hit resets only the
-# display segment.
 DEFAULT_IDLE_TIMEOUT = 120.0
 # Recover stale encounters at the next combat start regardless of display settings.
 _STALE_ENCOUNTER_S = 120.0
@@ -44,10 +34,7 @@ DEATH_DUPLICATE_SECONDS = 1
 
 
 def _actor_int(actor_id) -> "int | None":
-    """Normalize numeric and hexadecimal actor IDs, with decimal fallback. Reject invalid
-    IDs and no-target sentinels. Keep this independent of telesto_client for standalone
-    use.
-    """
+    """Normalize actor IDs without Telesto dependencies. Reject invalid IDs and no-target sentinels."""
     if actor_id is None:
         return None
     if isinstance(actor_id, bool):          # bool is an int subclass
@@ -71,11 +58,8 @@ def _actor_int(actor_id) -> "int | None":
 
 
 def _unpack_effect(flags_hex: str, dmg_hex: str) -> "tuple[str, int, bool, bool]":
-    """Decode a flags and damage pair into kind, amount, critical and direct hit. Ignore
-    combo and positional bytes. Heal criticals are excluded from damage statistics and
-    heals never direct hit. The extended damage formula gives 82539 for 426B4001,
-    correcting the older LogGuide example.
-    """
+    """Decode kind, amount, critical and direct hit from wire flags.
+Extended damage 426B4001 gives 82539, correcting the older LogGuide caption."""
     try:
         f = int(flags_hex, 16)
     except (TypeError, ValueError):
@@ -118,8 +102,6 @@ def _mmss(seconds: float) -> str:
 
 
 class _Combatant:
-    """Player totals include contributions from owned pets."""
-
     __slots__ = ("aid", "name", "job", "damage", "healed", "swings", "hits",
                  "crits", "dhits", "cdhits", "maxhit_name", "maxhit_amount",
                  "deaths", "damagetaken", "healstaken", "heals", "first", "last")
@@ -151,10 +133,7 @@ class _Combatant:
 
 
 class _Encounter:
-    """Encounter duration ends at the last combat action. last_damage controls only display
-    idle handling. Monotonic start measures duration, while wall_start timestamps the
-    saved pull.
-    """
+    """Encounter totals end at the last action. last_damage controls display idle handling."""
 
     __slots__ = ("title", "zone", "start", "last", "last_damage", "combatants",
                  "wall_start", "pull_id")
@@ -172,19 +151,16 @@ class _Encounter:
 
 
 class DpsMeter:
-    """Start on either combat flag rising or the first hostile player event. End on combat
-    exit, wipes or zone lines. Skip empty encounters and retain the final snapshot until
-    the next pull.
-    """
+    """Track full pulls separately from display segments. Retain final rows until the next pull."""
 
     def __init__(self, clock=None) -> None:
         self._clock = clock or time.monotonic
         self._zone = ""
         self._awaiting_zone_metadata = True
         self._me_id: "int | None" = None
-        self._jobs: "dict[int, int]" = {}      # Actor ID to ClassJob ID
+        self._jobs: "dict[int, int]" = {}
         self._roster_jobs: dict[int, int] = {}
-        self._owners: "dict[int, int]" = {}    # Pet ID to owner ID
+        self._owners: "dict[int, int]" = {}
         self._names: "dict[int, str]" = {}
         self._in_act = False
         self._in_game = False
@@ -200,9 +176,7 @@ class DpsMeter:
         self.is_duplicate_death = None
 
     def set_idle_timeout(self, secs) -> None:
-        """Set the display idle timeout without splitting or shortening recorded
-        encounters.
-        """
+        """Change display idle handling without shortening recorded encounters."""
         try:
             v = float(secs)
         except (TypeError, ValueError):
@@ -210,9 +184,7 @@ class DpsMeter:
         self._idle_timeout = min(600.0, max(15.0, v))
 
     def _note(self, table: dict, aid: int, value) -> None:
-        """Bound actor caches so unrelated spawn lines cannot grow them indefinitely."""
-        # Refresh insertion order when an actor is seen again, then evict the oldest
-        # entries. Clearing the entire cache would lose current party jobs.
+        # Evict oldest actors rather than clearing current party jobs.
         table.pop(aid, None)
         table[aid] = value
         while len(table) > 1024:
@@ -221,21 +193,17 @@ class DpsMeter:
             del table[oldest]
 
     def note_job(self, aid: int, job: int) -> None:
-        """Update actor jobs from roster events as well as spawn lines."""
         if job:
             self._roster_jobs.pop(aid, None)
             self._roster_jobs[aid] = job
             while len(self._roster_jobs) > 24:
                 del self._roster_jobs[next(iter(self._roster_jobs))]
             self._note(self._jobs, aid, job)
-            # Update existing owner rows when roster details arrive after pet actions.
             for enc in (self.current, self._view):
                 if enc is not None and aid in enc.combatants:
                     self._combatant(enc, aid)
 
     def set_me(self, aid) -> None:
-        """Set local identity from subscription metadata. Invalid IDs leave it unchanged.
-        """
         v = _actor_int(aid)
         if v is not None:
             self._me_id = v
@@ -247,9 +215,7 @@ class DpsMeter:
                 or self._jobs.get(aid, 0) != 0)
 
     def _player_key(self, aid: "int | None") -> "int | None":
-        """Resolve player pets to their owner, players to themselves and other actors to
-        None.
-        """
+        """Resolve players and their pets to the player ID, or None for other actors."""
         if aid is None:
             return None
         owner = self._owners.get(aid)
@@ -264,7 +230,6 @@ class DpsMeter:
                            self._jobs.get(key, 0))
             enc.combatants[key] = c
         else:
-            # Fill an unnamed owner row created by an earlier pet action.
             if not c.name:
                 c.name = name or self._names.get(key, "")
             if not c.job and self._jobs.get(key, 0):
@@ -273,8 +238,7 @@ class DpsMeter:
 
     def _begin(self) -> None:
         if self.current is not None:
-            # Finalize idle encounters before a new pull. A late tick may have reopened
-            # one without a matching combat end.
+            # A late tick may reopen an encounter without a matching combat end.
             enc = self.current
             last = enc.last if enc.last is not None else enc.start
             if self._clock() - last <= _STALE_ENCOUNTER_S:
@@ -299,9 +263,7 @@ class DpsMeter:
                 log_drop("pull-observer", f"{exc!r}")
 
     def finalize(self, reason="combat-ended") -> None:
-        """Finalize and report a nonempty encounter. Also used when closing during a fight.
-        Safe when no encounter is open.
-        """
+        """Finalize a nonempty encounter, including on program exit. Safe when none is open."""
         enc = self.current
         if enc is None:
             return
@@ -327,9 +289,7 @@ class DpsMeter:
                 log_drop("dps-meter", f"on_encounter_end callback failed: {exc!r}")
 
     def _note_damage(self, now: float) -> None:
-        """Reset the display segment when damage resumes after the idle timeout. Preserve
-        full encounter totals.
-        """
+        """Reset only the display segment after damage inactivity."""
         view = self._view
         if view is None:
             return
@@ -346,9 +306,7 @@ class DpsMeter:
         return now - last > self._idle_timeout
 
     def feed_lost(self) -> None:
-        """Finalize on feed loss and reset combat flags so subscription replay can start a
-        fresh encounter.
-        """
+        """Finalize feed loss and reset combat flags for subscription replay."""
         self.finalize("feed-lost")
         self._in_act = False
         self._in_game = False
@@ -361,11 +319,7 @@ class DpsMeter:
         self._awaiting_zone_metadata = True
 
     def set_zone_metadata(self, name: str, *, zone_changed: bool | None = None) -> None:
-        """Apply zone metadata for connections that missed the raw zone line. Repeated
-        metadata must not end an encounter. A changed known zone finalizes before the
-        overlay is cleared, even when metadata arrives before the raw zone line.
-        An explicit False treats this as metadata for the current encounter.
-        """
+        """Finalize known zone changes before clearing the overlay. False marks current-zone metadata."""
         name = (name or "").strip()
         if zone_changed:
             # A known ID change is a boundary even when the name repeats or is absent.
@@ -381,8 +335,7 @@ class DpsMeter:
         if not first_metadata:
             self.finalize("duty-left")
         self._zone = name
-        # Preserve roster data that arrived before initial zone metadata. Clear it on
-        # later changes.
+        # Preserve roster data before initial metadata, then clear it on zone changes.
         if not first_metadata:
             self._jobs.clear()
             self._roster_jobs.clear()
@@ -397,9 +350,7 @@ class DpsMeter:
                 enc.zone = name
 
     def set_in_combat(self, in_act: bool, in_game: bool) -> None:
-        """Either combat flag can start or end a pull. Process falling edges before rising
-        edges in the same message so consecutive pulls stay separate.
-        """
+        """Process falling combat edges before rising ones to separate consecutive pulls."""
         act, game = bool(in_act), bool(in_game)
         if self.current is not None and (
                 (self._in_act and not act) or (self._in_game and not game)):
@@ -410,9 +361,7 @@ class DpsMeter:
         self._in_game = game
 
     def process(self, fields: "list[str]", raw: str = "", *, now=None) -> None:
-        """Process fields from one log line, skipping unrelated or malformed input. A
-        supplied timestamp aligns death checks with the recap.
-        """
+        """Process one log line. A supplied timestamp aligns death checks with the recap."""
         if not fields:
             return
         t = fields[0]
@@ -460,7 +409,6 @@ class DpsMeter:
             return
         aid = _actor_int(fields[2])
         if aid is None:
-            # Keep known identity until a valid replacement arrives.
             return
         self._me_id = aid
         name = fields[3].strip()
@@ -486,8 +434,6 @@ class DpsMeter:
         owner = _actor_int(fields[6])
         if owner is not None and owner != aid:
             self._note(self._owners, aid, owner)
-        # Update both encounter and display rows when late spawn lines supply actor
-        # details.
         for enc in (self.current, self._view):
             if enc is not None and aid in enc.combatants:
                 self._combatant(enc, aid)
@@ -553,12 +499,10 @@ class DpsMeter:
         ability = fields[5] if len(fields) > 5 else ""
         src = None
         if src_key is not None:
-            # Use the trailing owner name instead of the pet name.
             src = self._combatant(enc, src_key,
                                   fields[3] if src_key == sid else owner_name)
         if src is not None:
-            # Count every ability line as a swing, including status applications. ACT
-            # counts damaging lines only.
+            # Count all ability lines as swings. ACT counts only damaging lines.
             src.swings += 1
             src.touch(now)
         reflector = None
@@ -618,7 +562,6 @@ class DpsMeter:
             except (TypeError, ValueError):
                 amount = 0
         if not 0 <= amount <= 0xFFFFFFFF:
-            # Reject negative amounts and values wider than 32 bits.
             amount = 0
         app_id = _actor_int(fields[17])
         app_key = self._player_key(app_id)
@@ -645,8 +588,7 @@ class DpsMeter:
                        app_key: "int | None", tgt_key: "int | None",
                        app_id: "int | None", tid: "int | None") -> None:
         if which not in ("DoT", "HoT") or amount <= 0:
-            # Unsupported or empty ticks must not advance activity timestamps used by
-            # rate calculations.
+            # Empty or unsupported ticks must not extend activity timestamps.
             return
         enc.last = now
         if which == "DoT":
@@ -657,8 +599,6 @@ class DpsMeter:
                 c.touch(now)
             if tgt_key is not None and tgt_key != app_key \
                     and tgt_key == tid:
-                # Exclude self damage and pet targets from damage taken, as in the
-                # ability path.
                 t = self._combatant(enc, tgt_key, fields[3])
                 t.damagetaken += amount
         elif which == "HoT":
@@ -710,8 +650,7 @@ class DpsMeter:
         total_deaths = sum(c.deaths for c in players)
         best = max(players, key=lambda c: c.maxhit_amount, default=None)
 
-        # Add actor IDs to duplicate names so the result dictionary preserves both
-        # players.
+        # Actor IDs distinguish duplicate player names in the result dictionary.
         display = [c.name or f"{c.aid:X}" for c in players]
         dupes = {n for n in display if display.count(n) > 1}
         combatants = {}
@@ -783,9 +722,7 @@ class DpsMeter:
         return self._snapshot(self.current, self._clock(), active=True, full=True)
 
     def snapshot(self) -> dict:
-        """Return the live display, the final pull between encounters, or an inactive empty
-        state.
-        """
+        """Return the live display or the final pull between encounters."""
         if self.current is not None:
             enc = self._view if self._view is not None else self.current
             return self._snapshot(enc, self._clock(), active=True)
@@ -796,11 +733,8 @@ class DpsMeter:
         return self._snapshot(empty, self._clock(), active=False)
 
     def overlay_rows(self, snapshot=None, detailed=False) -> list:
-        """Return overlay rows in descending ENCDPS order with name, job, DPS, damage
-        share, HPS, local flag and deaths. A supplied snapshot can describe a finished pull.
-        Detailed rows append optional combat statistics. Without a snapshot, return no
-        rows outside an encounter.
-        """
+        """Return ENCDPS-sorted overlay rows. A snapshot may describe a finished pull.
+Detailed rows include combat statistics. Without a snapshot, inactive encounters return no rows."""
         if snapshot is None:
             if self.current is None:
                 return []

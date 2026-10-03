@@ -1,6 +1,3 @@
-"""Connect passive session pages to the shared combat feed."""
-
-
 class SessionTrackingMixin:
     def _prog_pull_started(self, snapshot):
         events = getattr(self, "_prog_events", None)

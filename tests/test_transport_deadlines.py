@@ -1,5 +1,3 @@
-"""Real local peers for HTTP deadlines and plugin reply checks."""
-
 import json
 import os
 from pathlib import Path

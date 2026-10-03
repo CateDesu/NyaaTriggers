@@ -1,5 +1,3 @@
-"""Metadata must retain its meaning across the feed and Qt boundaries."""
-
 from contextlib import ExitStack
 import json
 import os

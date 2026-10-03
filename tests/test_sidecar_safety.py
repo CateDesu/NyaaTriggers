@@ -1,5 +1,3 @@
-"""Sidecar feed boundaries, private logs, and queued string memory."""
-
 import json
 import os
 from pathlib import Path

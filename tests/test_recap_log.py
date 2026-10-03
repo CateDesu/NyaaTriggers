@@ -1,5 +1,3 @@
-"""Offline log replay, pull boundaries and temporary recap storage."""
-
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile

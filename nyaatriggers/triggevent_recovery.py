@@ -1,5 +1,3 @@
-"""Buffer the live feed while Triggevent restores its pull from local history."""
-
 from datetime import datetime, timezone
 import json
 import sys

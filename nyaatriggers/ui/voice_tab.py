@@ -1,5 +1,3 @@
-"""Voice selection, sound settings and mute controls for MainWindow."""
-
 from collections import Counter
 from pathlib import Path
 import math
@@ -27,8 +25,7 @@ from nyaatriggers.app_common import _JP_NEURAL_VOICES, _sweep_stale_update_parts
 
 class VoiceTabMixin:
     def _scan_voices(self) -> list[tuple[str, Path]]:
-        # Prefer complete user voice files over bundled files with the same stem. List
-        # Kokoro separately from Piper.
+        # Complete user voices take precedence over bundled voices with the same stem.
         found: dict[str, Path] = {}
         for voices_dir in (ac._USER_VOICES_DIR, ac._BUNDLE_DIR / "voices"):
             if not voices_dir.exists():
@@ -52,9 +49,7 @@ class VoiceTabMixin:
         self._save_settings_debounced()
 
     def _on_mute_toggled(self, muted: bool) -> None:
-        """Apply the mute button state, including timed and zone mutes."""
         if not muted:
-            # Unmuting also cancels any pending timed mute.
             self._mute_timer.stop()
             self._mute_until_zone = False
         if muted:
@@ -62,12 +57,10 @@ class VoiceTabMixin:
             self._mute_btn.setText("🔇")
             self._vol_label.setText(_("muted"))
         else:
-            # Coerce saved volume before passing it to TTS.
             try:
                 vol = float(self._settings.get("master_volume", 1.0))
             except (TypeError, ValueError, OverflowError):
                 vol = 1.0
-            # Reject nonfinite values before clamping volume.
             if not math.isfinite(vol):
                 vol = 1.0
             set_master_volume(vol)
@@ -119,9 +112,7 @@ class VoiceTabMixin:
 
     @staticmethod
     def _sound_amp_from_fraction(v: float) -> float:
-        """Map the slider to a decibel taper. Full volume is unity, halfway is one tenth
-        amplitude, and zero is silent.
-        """
+        """Use a decibel taper: unity at full volume, one tenth amplitude halfway, silence at zero."""
         if v <= 0.0:
             return 0.0
         if v >= 1.0:
@@ -187,7 +178,6 @@ class VoiceTabMixin:
                 ".wav file."))
 
     def _import_sfx(self) -> None:
-        """Copy a WAV into user sounds, select it and play a preview."""
         path, _unused = ac.QFileDialog.getOpenFileName(
             self, _("Import alert SFX"), str(Path.home()), _("WAV audio (*.wav)"))
         if not path:
@@ -222,8 +212,6 @@ class VoiceTabMixin:
             play_notification(snd, self._alert_sound_amp())
 
     def _emit_alert(self, text: str, severity: str = "info") -> None:
-        """Play the alert sound and send the callout and severity to the overlay plugin.
-        """
         self._maybe_play_alert_sound(severity)
         self._plugin_link.send_alert(text, severity)
 
@@ -323,7 +311,6 @@ class VoiceTabMixin:
 
     def _on_triggevent_tts(self, text: str, gen: "int | None" = None) -> None:
         from nyaatriggers.diagnostics import record
-        # Respect callout mode and reject stale engine generations.
         if ac._stale_gen(getattr(self, "_triggevent", None), gen):
             record("ui_callout", gen=gen, channel="speech", result="stale")
             return
@@ -342,7 +329,6 @@ class VoiceTabMixin:
 
     def _on_triggernometry_sound(self, file: str, volume: int,
                                  gen: "int | None" = None) -> None:
-        # Convert engine volume percentages to playback amplitude.
         if ac._stale_gen(getattr(self, "_triggernometry", None), gen):
             return
         if not self._triggernometry_mode or not self._connected:
@@ -363,7 +349,6 @@ class VoiceTabMixin:
         self._save_settings()
 
     def _on_voice_changed(self, index: int) -> None:
-        """Apply the selected Piper or Kokoro voice and start setup when needed."""
         data = self._voice_combo.itemData(index)
         if isinstance(data, str) and data.startswith("kokoro:"):
             voice = data[len("kokoro:"):]
@@ -423,13 +408,11 @@ class VoiceTabMixin:
     def _test_tts_settings(self) -> None:
         data = self._voice_combo.currentData()
         if isinstance(data, str) and data.startswith("kokoro:"):
-            # Test Japanese voices with a kana reading.
             speak("テストトリガー発動", reading="テストトリガーはつどう")
         else:
             speak("Test trigger fired")
 
     def _open_voices_folder(self) -> None:
-        """Open the user voice directory that survives program updates."""
         try:
             ac._USER_VOICES_DIR.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -439,7 +422,6 @@ class VoiceTabMixin:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(ac._USER_VOICES_DIR)))
 
     def _populate_voice_combo(self) -> None:
-        """List Piper model paths followed by Kokoro voice IDs."""
         voices = self._scan_voices()
         labels = Counter(_voice_display(stem) for stem, _path in voices)
         for stem, path in voices:
@@ -447,7 +429,6 @@ class VoiceTabMixin:
             if labels[label] > 1:
                 label = f"{label} · {stem}"
             self._voice_combo.addItem(label, userData=str(path))
-        # Offer Japanese voices on every platform. Download models on first selection.
         for vid, label in _JP_NEURAL_VOICES:
             self._voice_combo.addItem(label, userData="kokoro:" + vid)
 
@@ -494,7 +475,6 @@ class VoiceTabMixin:
                         and data and not data.startswith("kokoro:")), -1)
         self._voice_combo.setCurrentIndex(idx)
         self._voice_combo.blockSignals(False)
-        # Update TTS when the selected voice was removed.
         if idx >= 0 and self._voice_combo.currentData() != saved_data:
             self._on_voice_changed(self._voice_combo.currentIndex())
         elif isinstance(saved_data, str) and saved_data.startswith("kokoro:"):
@@ -548,8 +528,6 @@ class VoiceTabMixin:
                         self._upd_progress_signal.emit(-1, _("Verifying download..."))
                         ok, msg = updater.verify_release_asset(rel, updater.WINDOWS_ASSET, dest)
                         if ok:
-                            # Hand Windows updates to a staged build after loaded files
-                            # are released.
                             self._upd_progress_signal.emit(-1, _("Preparing update..."))
                             ok, msg = updater.apply_frozen_windows(dest, version=rel.version)
                 else:

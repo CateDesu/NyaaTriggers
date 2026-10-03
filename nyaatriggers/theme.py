@@ -1,8 +1,5 @@
-"""Shared colours, widget styles and decorative drawing helpers."""
-
 from functools import lru_cache
 
-# Surface colours
 BASE     = "#0a0a0c"   # window background
 PANEL    = "#101013"   # Sidebar and list backgrounds
 MANTLE   = "#18181d"   # Inputs and hovered controls
@@ -10,28 +7,23 @@ SURFACE2 = "#26262e"   # Raised surfaces and borders
 EDGE     = "#26262e"
 OVERLAY0 = "#3a3a44"   # Muted hover colour
 
-# Accents
 ACCENT    = "#ff8399"
 ACCENT2   = "#e66c82"
 ON_ACCENT = "#2b1017"   # dark text on accent fills
 
-# Text
 TEXT     = "#e8e8ec"
 SUBTEXT1 = "#8f8f9a"
 SUBTEXT0 = "#6a6a74"
 SUBTEXT_SOFT = "#b0b0be"   # Inactive navigation, kana and version labels
 
-# Status colours
 OK       = "#a6e3a1"
 ERR      = "#f38ba8"
 MAUVE    = "#cba6f7"
 
-# Brand gradient
 GRAD_FROM = ACCENT
 GRAD_TO   = MAUVE
 
 PILL = 14
-# Corner radius for larger surfaces.
 SOFT = 6
 
 
@@ -456,7 +448,6 @@ QFrame#updateBanner {{
 
 @lru_cache(maxsize=2)
 def load_sakura(side: str) -> "QPixmap":
-    """Load one of the two illustrated trees."""
     from PyQt6.QtGui import QPixmap
     from nyaatriggers.paths import bundle_root
 
@@ -469,7 +460,7 @@ def load_sakura(side: str) -> "QPixmap":
 
 
 class SakuraBackground:
-    """Keep one rendered scenery layer for the current size and display scale."""
+    """Cache the scenery at the current size and display scale."""
 
     def __init__(self, side: str):
         self._side = side
@@ -506,7 +497,7 @@ class SakuraBackground:
                 p.drawPixmap(0, 0, tree)
                 p.restore()
             if self._side == "left":
-                # Keep navigation and branding readable over the tree.
+                # Dim the tree behind navigation and branding.
                 band = QLinearGradient(0, h * 0.05, 0, h * 0.64)
                 band.setColorAt(0.0, QColor(7, 7, 11, 0))
                 band.setColorAt(0.20, QColor(7, 7, 11, 120))
@@ -553,7 +544,7 @@ def make_petal(size: int, tint: "QColor") -> "QPixmap":
 
 
 def make_petals(seed: int, count: int) -> list:
-    """Create petal textures and deterministic motion parameters for paint_petals."""
+    """Create petal textures with deterministic motion."""
     import random
     from PyQt6.QtGui import QColor
 
@@ -581,7 +572,7 @@ def make_petals(seed: int, count: int) -> list:
 
 
 def petal_rects(w: int, h: int, t: float, petals: list) -> list:
-    """Return petal bounds at time t so callers can repaint only the affected areas."""
+    """Return petal bounds for partial repainting."""
     import math
     from PyQt6.QtCore import QRect
 
@@ -613,9 +604,7 @@ def paint_petals(p: "QPainter", w: int, h: int, t: float, petals: list) -> None:
 
 
 def nav_icon(name: str, color: str, size: int = 18) -> "QIcon":
-    """Draw a tinted icon on a 24 by 24 grid. Generate each colour separately because QSS
-    cannot recolour icons.
-    """
+    """QSS cannot recolour icons, so generate each colour separately."""
     import math
     from PyQt6.QtCore import Qt, QRectF, QPointF
     from PyQt6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
@@ -633,18 +622,18 @@ def nav_icon(name: str, color: str, size: int = 18) -> "QIcon":
     p.setBrush(Qt.BrushStyle.NoBrush)
     p.scale(size / 24.0, size / 24.0)
 
-    if name == "triggers":           # bolt
+    if name == "triggers":
         pts = [(13, 2), (3, 14), (12, 14), (11, 22), (21, 10), (12, 10), (13, 2)]
         path = QPainterPath(QPointF(*pts[0]))
         for x, y in pts[1:]:
             path.lineTo(x, y)
         p.drawPath(path)
-    elif name == "current":          # activity pulse
+    elif name == "current":
         path = QPainterPath(QPointF(22, 12))
         for x, y in [(18, 12), (15, 21), (9, 3), (6, 12), (2, 12)]:
             path.lineTo(x, y)
         p.drawPath(path)
-    elif name == "dps":              # bar chart
+    elif name == "dps":
         for x, top in ((18, 10), (12, 4), (6, 14)):
             p.drawLine(QPointF(x, 20), QPointF(x, top))
     elif name == "recap":
@@ -658,7 +647,7 @@ def nav_icon(name: str, color: str, size: int = 18) -> "QIcon":
         for x, y in [(3, 14), (9, 14), (9, 9), (15, 9), (15, 4), (21, 4)]:
             path.lineTo(x, y)
         p.drawPath(path)
-    elif name == "automarkers":      # Map pin
+    elif name == "automarkers":
         path = QPainterPath(QPointF(21, 10))
         path.cubicTo(QPointF(21, 17), QPointF(12, 23), QPointF(12, 23))
         path.cubicTo(QPointF(12, 23), QPointF(3, 17), QPointF(3, 10))
@@ -666,7 +655,7 @@ def nav_icon(name: str, color: str, size: int = 18) -> "QIcon":
         path.closeSubpath()
         p.drawPath(path)
         p.drawEllipse(QPointF(12, 10), 3, 3)
-    elif name == "settings":         # gear
+    elif name == "settings":
         p.drawEllipse(QPointF(12, 12), 3.2, 3.2)
         p.drawEllipse(QPointF(12, 12), 8.2, 8.2)
         for k in range(8):
@@ -678,16 +667,13 @@ def nav_icon(name: str, color: str, size: int = 18) -> "QIcon":
 
 
 def apply_primary(button) -> None:
-    """Apply the primary button style and a glow. Keep the shadow radius small to limit
-    rendering artifacts.
-    """
+    """Style a primary button with a small glow to limit rendering artifacts."""
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QColor
     from PyQt6.QtWidgets import QGraphicsDropShadowEffect
 
     button.setObjectName("primary")
     button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-    # Refresh styles after changing objectName.
     button.style().unpolish(button)
     button.style().polish(button)
     glow = QGraphicsDropShadowEffect(button)

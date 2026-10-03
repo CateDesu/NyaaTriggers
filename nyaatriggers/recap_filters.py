@@ -1,5 +1,3 @@
-"""Offensive status defaults for death recaps."""
-
 # Keep mixed defensive buffs and unknown encounter statuses visible.
 OFFENSIVE_STATUSES = {
     'Acceleration': (1238,),

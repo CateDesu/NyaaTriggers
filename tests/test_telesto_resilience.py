@@ -1,4 +1,3 @@
-"""Telesto recovery, party resolution and marker cleanup with a local HTTP server."""
 import os
 import sys
 
@@ -46,7 +45,6 @@ class FakeWin:
         pass
 
 
-# self-heal: the 10s refresh re-asserts enabled + forces the probe
 w = FakeWin(enabled=True)
 w._refresh_telesto_party()
 check("refresh re-asserts set_enabled(True)",
@@ -57,17 +55,15 @@ check("enabled is re-asserted before the probe",
       w._telesto_client.calls.index(("set_enabled", True))
       < w._telesto_client.calls.index(("refresh", True)))
 
-# gated: nothing happens when automarkers is off
 w = FakeWin(enabled=False)
 w._refresh_telesto_party()
 check("refresh is a no-op when automarkers is off", w._telesto_client.calls == [])
 
-# the native client is the sole source of truth for the light
 w = FakeWin(enabled=True)
 w._telesto_client.status = (True, False)
 w._on_telesto_client_status(True, "Connected")
 check("native client turns the light green", w._telesto_status == "good")
-w._on_telesto_status("bad")            # the vestigial engine signal tries to clobber
+w._on_telesto_status("bad")
 check("engine 'bad' no longer clobbers the native green", w._telesto_status == "good")
 w._on_telesto_status("unknown")
 check("engine 'unknown' is ignored too", w._telesto_status == "good")
@@ -86,8 +82,6 @@ from nyaatriggers.telesto_client import TelestoClient, mark_command, DEFAULT_URI
 
 
 class FakeTelesto:
-    """Records /mk commands and answers GetPartyMembers with a fixed roster."""
-
     def __init__(self):
         self.commands = []
         self.party = [{"order": "1", "actor": "10FF0001"},
@@ -177,14 +171,12 @@ check("dead server reports unreachable",
 cli.stop()
 check("stop() joins the worker", cli._thread is None)
 
-# mark_command fallbacks
 check("known token passes through", mark_command("bind2", 3) == "/mk bind2 <3>")
 check("empty marker falls back to next-attack",
       mark_command("", "me") == "/mk attack <me>")
 check("unknown marker falls back like empty, drop-logged",
       mark_command("cler", "me") == "/mk attack <me>")
 
-# Invalid URI types fall back to the default during construction and configuration.
 c = TelestoClient(uri=12345, enabled=False)
 check("numeric uri at init falls back to the default", c.uri == DEFAULT_URI)
 c = TelestoClient(uri={"host": "x"}, enabled=False)
@@ -197,13 +189,10 @@ check("empty uri via configure falls back to the default", c.uri == DEFAULT_URI)
 c.configure(uri="http://127.0.0.1:8/")
 check("a real uri via configure sticks", c.uri == "http://127.0.0.1:8/")
 
-# parent automarkers off runs the forced reset-with-clear first
 import types
 
 
 class ApplyWin:
-    """Just enough of MainWindow for _apply_automark_state: settings, a
-    recording client, and recording stand-ins for the two engine resets."""
     _apply_automark_state = mw.MainWindow._apply_automark_state
 
     class _Client:
@@ -261,7 +250,6 @@ aw._apply_automark_state()
 check("enable runs no resets, configures on and probes the party",
       aw.events == [("configure", True), ("refresh", False)])
 
-# parent off force-clears rule-placed signs and drops the bookkeeping
 aw = ApplyWin(enabled=False)
 aw._automark_active = {"10FF0001": "644", "me": "63E"}
 aw._apply_automark_state()
@@ -273,7 +261,6 @@ check("the rule clears land before configure takes the client down",
       aw.events.index(("clear-actor", "10FF0001", True))
       < aw.events.index(("configure", False)))
 
-# the chain reset threads force into the per-player clears
 class ResetWin:
     _umad_chain_reset = mw.MainWindow._umad_chain_reset
     _umad_name_of = mw.MainWindow._umad_name_of
@@ -305,7 +292,6 @@ rw._umad_chain_reset(clear_marks=True)
 check("wipe-path reset stays unforced by default",
       rw.clears == [("10FF0001", False)])
 
-# a forced clear lands even with the client disabled, unforced fails closed
 srv2 = FakeTelesto()
 srv2.start()
 cli2 = TelestoClient(uri=f"http://127.0.0.1:{srv2.port}/", enabled=False,

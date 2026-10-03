@@ -1,6 +1,4 @@
-// Provide the System.Speech types required to compile and initialize Triggernometry
-// under Mono. TtsMethod=ACT routes speech through the host hook, so these methods need
-// no playback.
+// ACT host hooks handle playback. These Mono System.Speech stubs remain silent.
 namespace System.Speech.Synthesis
 {
     public class SpeechSynthesizer : System.IDisposable

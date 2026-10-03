@@ -1,5 +1,3 @@
-"""Exercise source updates with real Git repositories and offline pip installs."""
-
 import json
 import os
 from pathlib import Path

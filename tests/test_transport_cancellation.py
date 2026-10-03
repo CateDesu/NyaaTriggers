@@ -1,5 +1,3 @@
-"""Challenge cancellation while connections and outboxes are stalled."""
-
 import http.client
 from pathlib import Path
 import socketserver

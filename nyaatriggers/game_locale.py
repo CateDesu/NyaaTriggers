@@ -1,5 +1,3 @@
-"""Japanese game terminology for display without changing saved identifiers."""
-
 from functools import lru_cache
 import json
 

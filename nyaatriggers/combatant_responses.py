@@ -1,5 +1,3 @@
-"""Order owned combatant replies before passing them to native engines."""
-
 from collections import OrderedDict
 import base64
 import json
@@ -30,7 +28,6 @@ def _owned_tag(value):
 
 
 def extract_raw(data):
-    """Extract a raw ACT log line, or an empty string for unrelated messages."""
     kind = str(data.get("type", "")).lower()
     if kind == "logline":
         line = data.get("line")

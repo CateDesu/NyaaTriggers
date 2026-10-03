@@ -1,7 +1,4 @@
-"""Optional FFLogs v2 comparisons for the DPS meter using OAuth and GraphQL. Failures
-return None. The injectable HTTP transport returns a status and response bytes. Tokens
-expire from cache a minute early, and the zone list is shared across instances.
-"""
+"""Optional FFLogs v2 comparisons using OAuth and GraphQL. Failures return None."""
 
 from __future__ import annotations
 
@@ -20,18 +17,14 @@ from nyaatriggers.http_fetch import open_response
 TOKEN_URL = "https://www.fflogs.com/oauth/token"
 API_URL = "https://www.fflogs.com/api/v2/client"
 
-# Bound response size to limit memory use.
 _MAX_RESPONSE_BYTES = 8 << 20
-# Enforce stall and total deadlines outside the read because socket timeouts reset on
-# each received byte.
+# Socket timeouts reset on every byte, so enforce total and stall deadlines separately.
 _READ_STALL_S = 15
 _RESPONSE_DEADLINE_S = 60
 
 
 def _unblock_reader(resp) -> None:
-    """Try to shut down the socket without waiting for the reader to release its buffer
-    lock.
-    """
+    """Wake the reader without waiting for its buffer lock."""
     try:
         resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
     except Exception:  # noqa: BLE001
@@ -48,7 +41,7 @@ _RANKINGS_QUERY = (
 class FflogsClient:
     """Fetch a character's best parse for one zone."""
 
-    _zones_cache: "list[dict] | None" = None   # process-wide, per class
+    _zones_cache: "list[dict] | None" = None
     _zones_lock = threading.Lock()
 
     def __init__(self, client_id: str, client_secret: str, http_post=None) -> None:
@@ -67,8 +60,6 @@ class FflogsClient:
         deadline = time.monotonic() + _RESPONSE_DEADLINE_S
         headers_deadline = min(deadline, time.monotonic() + _READ_STALL_S)
         with open_response(req, timeout, headers_deadline) as resp:
-            # Read in a helper that reports progress so the caller can enforce both
-            # deadlines.
             done = threading.Event()
             progress = [0]
             reader_error = [None]
@@ -96,10 +87,7 @@ class FflogsClient:
             while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
                 now = time.monotonic()
                 if progress[0] == last_seen or now > deadline:
-                    # Shut down the socket to wake the reader without waiting for its
-                    # read lock.
                     _unblock_reader(resp)
-                    # Report a stall only after the full quiet window has elapsed.
                     if now - last_change >= _READ_STALL_S:
                         raise TimeoutError(
                             f"fflogs response stalled, no new bytes for {_READ_STALL_S} seconds")
@@ -164,8 +152,7 @@ class FflogsClient:
                     body, 15.0)
                 payload = json.loads(data.decode("utf-8"))
             except urllib.error.HTTPError as exc:
-                # Preserve HTTP error status for token refresh handling and close the
-                # response.
+                # Preserve HTTP status so token refresh can detect a 401.
                 exc.close()
                 status, payload = exc.code, None
             except Exception as exc:  # noqa: BLE001
@@ -209,8 +196,7 @@ class FflogsClient:
         for z in zones:
             if wanted in z["name"].casefold():
                 return z["id"], z["name"]
-        # Game zone names include floor numbers inside the FFLogs tier name. Match token
-        # supersets and prefer the most specific zone to preserve the difficulty.
+        # Match floor names within tier names, preferring the most specific difficulty.
         wanted_tokens = set(re.findall(r"[a-z0-9]+", wanted))
         best, best_len = None, 0
         for z in zones:
@@ -230,9 +216,7 @@ class FflogsClient:
 
     def fetch_best(self, char_name: str, server_slug: str, region: str,
                    zone_name: str) -> "dict | None":
-        """Return percent, amount and zone for the character's best performance, or None if
-        unavailable.
-        """
+        """Return percent, amount and zone for the character's best performance, or None."""
         with self._fetch_lock:
             return self._fetch_best(char_name, server_slug, region, zone_name)
 
@@ -269,7 +253,6 @@ class FflogsClient:
                 for entry in entries:
                     if not isinstance(entry, dict):
                         continue
-                    # Skip malformed entries without discarding other encounters.
                     encounter = entry.get("encounter")
                     if not isinstance(encounter, dict):
                         encounter = {}

@@ -1,11 +1,6 @@
-"""Build Japanese game metadata from matching English and Japanese game CSV files.
-
-Pass --data-dir with Action-en.csv, Action-ja.csv, Status-en.csv, Status-ja.csv,
-BNpcName-en.csv, BNpcName-ja.csv, PlaceName-en.csv and PlaceName-ja.csv from
-https://github.com/xivapi/ffxiv-datamining/tree/master/csv.
-Pass --cactbot-dir with a checkout of https://github.com/OverlayPlugin/cactbot.
-Curated fight and timeline labels live in tools/game_text_ja.json.
-"""
+"""Build Japanese metadata from paired game CSVs.
+Use --data-dir for Action, Status, BNpcName and PlaceName CSVs from xivapi/ffxiv-datamining.
+Use --cactbot-dir for zone patterns. Curated labels live in tools/game_text_ja.json."""
 
 import argparse
 import csv

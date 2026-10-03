@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Install the engine modules and package target/triggevent-core.jar. Requires JDK 17 and
-# Maven. The linked event-trigger engine and resulting jar are GPL-3.0.
+# Requires JDK 17 and Maven. The linked engine and resulting jar are GPL-3.0.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -26,32 +25,27 @@ if [ ! -d "$ET_DIR/.git" ]; then
   git -C "$ET_DIR" checkout "$ET_REF"
 else
   echo ">> reusing existing clone at $ET_DIR"
-  # Update older checkouts to use the engine fork.
   if [ "$(git -C "$ET_DIR" remote get-url origin 2>/dev/null || true)" != "$ET_REPO" ]; then
     echo ">> repointing origin at $ET_REPO"
     git -C "$ET_DIR" remote add origin "$ET_REPO" 2>/dev/null || git -C "$ET_DIR" remote set-url origin "$ET_REPO"
   fi
-  # Fetch when the pinned commit is missing locally.
   if ! git -C "$ET_DIR" cat-file -e "$ET_REF^{commit}" 2>/dev/null; then
     echo ">> fetching $ET_REPO"
     git -C "$ET_DIR" fetch origin
   fi
-  # Reset reused checkouts to the pinned source.
   if [ "$(git -C "$ET_DIR" rev-parse HEAD)" != "$ET_REF" ]; then
     echo ">> existing clone is not at the pinned ref; checking out $ET_REF"
     git -C "$ET_DIR" checkout "$ET_REF"
   fi
 fi
 
-# Build clean engine artifacts so incremental packaging cannot retain an old trigger
-# set. Skip engine tests and test compilation.
+# Clean builds prevent incremental packaging from retaining old triggers.
 echo ">> installing Triggevent Engine modules to local Maven repo"
 # List trigger submodules explicitly because triggers is only an aggregator.
 ( cd "$ET_DIR" && mvn -q -Dmaven.test.skip=true \
     -pl :actimport,:xivsupport,:trigger-support,:triggers-general,:triggers-ew,:triggers-sb,:triggers-dt,:titan-jails,:easytriggers,:timelines,:telesto-core -am \
     clean install )
 
-# Build a clean sidecar jar too.
 echo ">> building triggevent-core.jar"
 ET_COMMIT="$(git -C "$ET_DIR" rev-parse HEAD)"
 ( cd "$HERE" && mvn -q -Dmaven.test.skip=true "-Dnyaa.engine.commit=$ET_COMMIT" clean package )

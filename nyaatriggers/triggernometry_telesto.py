@@ -1,5 +1,3 @@
-"""Telesto drawings and callbacks owned by one Triggernometry engine run."""
-
 from __future__ import annotations
 
 import copy

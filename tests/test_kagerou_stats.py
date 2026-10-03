@@ -1,5 +1,3 @@
-"""Carry real combat statistics from the meter through the plugin frame."""
-
 import math
 from types import SimpleNamespace
 import unittest

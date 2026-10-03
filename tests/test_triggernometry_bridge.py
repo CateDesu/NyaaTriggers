@@ -1,4 +1,3 @@
-"""Triggernometry generation checks before dispatch and after queued delivery."""
 import io
 import os
 import queue
@@ -34,17 +33,15 @@ class _OldProc:
         return 0
 
 
-# start and stop bump the generation
 br = tb.TriggernometryBridge()
 g0 = br.generation()
-br._active = True          # a "running" bridge with no proc, stop must clean up
+br._active = True
 br.stop()
 check("stop retires the generation", br.generation() == g0 + 1)
 check("a stopped bridge has no live generation",
       not br._gen_live(g0) and not br._gen_live(br.generation()))
 
 
-# a previous generation's reader cannot fire into the live session
 _BUF = (
     '{"t":"callout","tts":"old gen","text":"old gen","severity":"alarm"}\n'
     '{"t":"sound","file":"/tmp/nyaa-tn-gentest.wav","volume":42}\n'
@@ -60,13 +57,12 @@ br2.status.connect(lambda active, msg, gen: fired.append(("status", msg, gen)))
 
 old_proc = _OldProc(_BUF)
 br2._active = True
-br2._proc = _OldProc("")       # the replacement generation's proc
-br2._gen = 3                   # stop bumped 1 -> 2, start bumped 2 -> 3
+br2._proc = _OldProc("")
+br2._gen = 3
 with patch.object(br2, "_reap"):
     br2._read_loop(old_proc, queue.Queue(), 1)
 check("a buffered callout from the old generation is not emitted", fired == [])
 
-# the live generation's reader fires every frame, stamped with its generation
 live_proc = _OldProc(_BUF)
 br2._proc = live_proc
 with patch.object(br2, "_reap"):
@@ -81,7 +77,6 @@ check("the live generation's exit status is emitted with its generation",
       ("status", "Sidecar exited", 3) in fired)
 
 
-# the UI slots re-check the generation token riding the payload
 from nyaatriggers.ui.engines import EnginesMixin
 import nyaatriggers.ui.voice_tab as vt
 

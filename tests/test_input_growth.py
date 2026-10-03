@@ -1,5 +1,3 @@
-"""Large valid inputs and interrupted edits should remain usable."""
-
 import os
 import random
 import re

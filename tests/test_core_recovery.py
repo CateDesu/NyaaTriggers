@@ -1,5 +1,3 @@
-"""Regression checks for compilation, timeline refresh and recorded state."""
-
 import json
 import os
 from pathlib import Path

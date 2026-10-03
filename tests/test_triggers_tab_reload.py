@@ -1,4 +1,3 @@
-"""Trigger reloads preserve unchanged object identity, pending timers and cooldowns."""
 import json
 import os
 import sys
@@ -34,8 +33,6 @@ _app = QApplication.instance() or QApplication(sys.argv)
 
 
 class Win(QObject, TriggersTabMixin, InstanceTabMixin, TimelineTabMixin):
-    """Bare host for the trigger mixins, only the state their paths touch."""
-
     def __init__(self):
         super().__init__()
         self.fired = []
@@ -84,7 +81,6 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
     w._load_triggers()
     warning, seq, unrelated = w._triggers
 
-    # the program's own save is not an external change
     warn_runner = arm_status(w, warning, "ABC")
     seq_runner = SequentialRunner(seq, {}, w._on_seq_complete,
                                   w._on_seq_expire, w)
@@ -107,7 +103,6 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
     check("armed sequence survives an unrelated save",
           seq_runner.try_advance(SEQ_STEP_LINE) and w.fired == ["warning", "seq"])
 
-    # an external edit reloads only what it touched
     warn_runner2 = arm_status(w, warning, "ABD")
     stale_runner = arm_status(w, unrelated, "ABE")
 
@@ -131,7 +126,6 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
     check("work bound to the changed trigger is invalidated",
           w.fired == ["warning", "seq", "warning"])
 
-    # editing the armed trigger itself invalidates its pending work
     warn_runner3 = arm_status(w, warning, "ABF")
     data = json.loads(ac.TRIGGERS_LOCAL_FILE.read_text(encoding="utf-8"))
     next(r for r in data["triggers"] if r["id"] == "warning")["name"] = "edited"

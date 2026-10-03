@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Offline fight catalog and picker, extended by cached cactbot data. Each entry has
-difficulty, expansion, name, folder_name and has_triggers fields. The folder name
-matches trigger.fight.
-"""
+"""Offline fight catalog extended by cached cactbot data. folder_name matches trigger.fight."""
 
 from __future__ import annotations
 
@@ -46,7 +43,6 @@ _ULTIMATE_INFO = {
     "UMAD": ("Dawntrail",       "Dancing Mad"),
 }
 
-# Use the local fight tags so cactbot entries merge with the offline catalog.
 _ULTIMATE_STEM_TO_TAG = {
     "unending_coil_ultimate":       "UCoB",
     "ultima_weapon_ultimate":       "UwU",
@@ -57,7 +53,6 @@ _ULTIMATE_STEM_TO_TAG = {
     "dancing_mad":                  "UMAD",
 }
 
-# Use the local fight tags to avoid duplicate picker entries.
 _TRIAL_STEM_TO_TAG = {
     "queen-eternal-ex": "Queen EX",
     "ultima-ex":        "Ultima's Bane EX",
@@ -77,9 +72,7 @@ def _entry(difficulty: str, expansion: str, name: str,
 
 
 def build_offline(fight_tree: FightTree, known_tags: set[str]) -> list[dict]:
-    """Build the offline catalog from a category, expansion and tag tree. known_tags
-    identifies fights that have triggers.
-    """
+    """Build the offline catalog. known_tags identifies fights with triggers."""
     out: list[dict] = []
     for category, exps in fight_tree:
         if category == "Ultimates":
@@ -96,7 +89,6 @@ def build_offline(fight_tree: FightTree, known_tags: set[str]) -> list[dict]:
 
 
 def parse_cactbot_paths(paths: list[str]) -> list[dict]:
-    """Derive fight entries from paths in the cactbot raidboss data tree."""
     out: list[dict] = []
     seen: set[tuple] = set()
     for p in paths:
@@ -114,8 +106,7 @@ def parse_cactbot_paths(paths: list[str]) -> list[dict]:
                 difficulty, name = "Ultimate", _titleize(stem)
                 folder = name
         elif kind == "raid" and re.search(r"\d+s$", stem):
-            # Cactbot uses R1S through R12S where the local fight tags use M1S through
-            # M12S.
+            # Cactbot R1S through R12S map to local M1S through M12S tags.
             name = re.sub(r"(?i)^r(\d+)s$", r"M\1S", stem.upper())
             difficulty = "Savage"
             folder = name
@@ -149,9 +140,6 @@ def _titleize(stem: str) -> str:
 
 
 def load_catalog(fight_tree: FightTree, known_tags: set[str], cache_path: Path) -> list[dict]:
-    """Merge cached cactbot fights with the offline base, falling back to the base on
-    failure.
-    """
     catalog = build_offline(fight_tree, known_tags)
     try:
         if cache_path.exists():
@@ -177,21 +165,16 @@ def load_catalog(fight_tree: FightTree, known_tags: set[str], cache_path: Path) 
     return catalog
 
 
-# Allow one refresh at a time and reuse the cache while it is fresh.
 _REFRESH_RUNNING = threading.Event()
 _CACHE_FRESH_S = 3600
-# Limit the size of the GitHub tree response.
 _TREE_MAX_BYTES = 16_000_000
-# Enforce stall and total deadlines outside the read. Socket timeouts reset on each
-# byte, so a trickling response could otherwise block refresh indefinitely.
+# Socket timeouts reset on each byte, so enforce total and stall deadlines separately.
 _TREE_STALL_S = 15
 _TREE_DEADLINE_S = 60
 
 
 def _unblock_reader(resp) -> None:
-    """Try to shut down the socket without waiting for the reader to release its buffer
-    lock.
-    """
+    """Wake the reader without waiting for its buffer lock."""
     try:
         resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
     except Exception:  # noqa: BLE001
@@ -215,7 +198,6 @@ def refresh_from_cactbot_async(cache_path: Path) -> None:
                 _CACTBOT_TREE_API, headers={"User-Agent": "NyaaTriggers"})
             deadline = time.monotonic() + _TREE_DEADLINE_S
             with open_response(req, 20, min(deadline, time.monotonic() + _TREE_STALL_S)) as resp:
-                # Read in a helper so the watchdog can enforce both deadlines.
                 done = threading.Event()
                 progress = [0]
                 reader_error = [None]
@@ -243,10 +225,7 @@ def refresh_from_cactbot_async(cache_path: Path) -> None:
                 while not done.wait(timeout=min(_TREE_STALL_S, max(0.0, deadline - time.monotonic()))):
                     now = time.monotonic()
                     if progress[0] == last_seen or now > deadline:
-                        # Shut down the socket to wake the reader. Closing the response
-                        # would wait for its read lock.
                         _unblock_reader(resp)
-                        # Report a stall only after the full quiet window has elapsed.
                         if now - last_change >= _TREE_STALL_S:
                             raise TimeoutError(
                                 f"cactbot tree fetch stalled, no new bytes for {_TREE_STALL_S} seconds")
@@ -274,7 +253,6 @@ def refresh_from_cactbot_async(cache_path: Path) -> None:
                 tmp = cache_path.with_suffix(".tmp")
                 with open(tmp, "w", encoding="utf-8") as f:
                     f.write(json.dumps(entries, indent=2))
-                    # Flush the data before replacing the cache file.
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp, cache_path)
@@ -285,15 +263,12 @@ def refresh_from_cactbot_async(cache_path: Path) -> None:
     try:
         threading.Thread(target=_worker, daemon=True).start()
     except Exception as e:  # noqa: BLE001
-        # Allow another refresh if the thread fails to start.
         _REFRESH_RUNNING.clear()
         log_drop("fight-catalog", f"cactbot tree refresh could not start: {e!r}")
 
 
 class FightPickerDialog(QDialog):
-    """Searchable fight picker. selected_folder is the chosen folder, an empty string for
-    uncategorised, or None on cancellation.
-    """
+    """selected_folder is a folder tag, empty for uncategorised, or None on cancellation."""
 
     _UNCATEGORISED = "\x00uncategorised"
 

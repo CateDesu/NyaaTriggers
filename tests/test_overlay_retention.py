@@ -1,5 +1,3 @@
-"""Replay encounter endings and wipes through the real meter and overlay sender."""
-
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch

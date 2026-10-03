@@ -1,5 +1,3 @@
-"""Recorded deaths, session boundaries, local storage, and profile choices."""
-
 from copy import deepcopy
 import json
 from pathlib import Path

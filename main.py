@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Program startup and first run setup."""
 import os
 import sys
 
-# Default to XWayland on Linux because the cactbot WebEngine runs on that path. Set
-# before importing Qt and allow an explicit user override.
+# Default to XWayland for cactbot WebEngine before importing Qt.
 if sys.platform == "linux":
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
@@ -25,7 +23,6 @@ _LOG_FILE = data_root() / "nyaatriggers.log"
 
 
 def _owner_only(path, flags):
-    # Create logs with owner access only, independently of the process umask.
     return os.open(path, flags, 0o600)
 
 
@@ -33,7 +30,6 @@ def _log_crash(exc_type, exc_value, exc_tb) -> None:
     record_exception("python_exception", exc_value, site="uncaught")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
-        # Use the drop log lock and size limit for crash entries too.
         drop_log.log_crash(
             f"\n{'='*60}\n"
             f"CRASH  {timestamp}\n"
@@ -55,13 +51,10 @@ threading.excepthook = _thread_crash
 
 
 def _maybe_finish_windows_update() -> bool:
-    """Apply a staged Windows update and relaunch the installed executable. Return true to
-    exit without starting Qt. This path must use only the standard library.
-    """
+    """Apply a staged Windows update before Qt imports. Return true to exit."""
     if "--apply-update" not in sys.argv:
         return False
-    # Contain failures across imports, argument parsing and the swap so update mode
-    # cannot open the GUI.
+    # Update failures must exit without opening the GUI.
     dest = None
     try:
         from nyaatriggers import updater
@@ -80,23 +73,20 @@ def _maybe_finish_windows_update() -> bool:
         if dest and staging:
             updater.finish_windows_update(Path(dest), Path(staging), pid, exe_name)
     except Exception:  # noqa: BLE001
-        # Write errors to the install directory because the staging directory will be
-        # removed.
+        # Keep errors outside the staging directory, which will be removed.
         try:
             log = (Path(dest) / _LOG_FILE.name) if dest else _LOG_FILE
             with open(log, "a", encoding="utf-8", opener=_owner_only) as f:
                 f.write(f"\nAPPLY-UPDATE FAILED  "
                         f"{datetime.now():%Y-%m-%d %H:%M:%S}\n")
                 f.write(traceback.format_exc())
-            # Apply owner permissions to existing logs as well as new ones.
             os.chmod(log, 0o600)
         except OSError:
             pass
     return True
 
 
-# Apply updates before importing Qt so a broken staged Qt build can still be rolled
-# back.
+# Run before Qt imports so a broken staged Qt build can still roll back.
 if "--apply-update" in sys.argv:
     _maybe_finish_windows_update()
     sys.exit(0)
@@ -135,13 +125,11 @@ _VOICE_BASE  = (
 
 
 def _voice_present() -> bool:
-    # Piper needs both files and a readable config.
     return _VOICE_FILE.exists() and voice_config_ok(_VOICE_CONFIG)
 
 
 def _piper_installed(venv: Path | None = None) -> bool:
-    # Frozen builds bundle Piper. Running their executable as Python would reopen setup
-    # recursively.
+    # Running a frozen executable as Python would reopen setup recursively.
     if getattr(sys, "frozen", False):
         return True
     venv = _configured_voice_venv() if venv is None else venv
@@ -181,16 +169,13 @@ def _set_setup_locale() -> None:
     set_locale(effective_locale(language))
 
 
-# Bound downloads independently of Content-Length. Keep this limit consistent with
-# install.py.
+# Keep the download limit consistent with install.py.
 _MAX_DOWNLOAD_BYTES = 1 << 30
 
 
 def _download(url: str, dest: Path, timeout: int = 30,
               progress: "list[int] | None" = None) -> None:
-    """Download to a unique temporary file, verify Content-Length and rename on success.
-    Enforce read timeouts and update progress with received bytes.
-    """
+    """Download atomically with deadlines and byte progress."""
     from nyaatriggers import updater
 
     last = 0
@@ -233,8 +218,7 @@ class _SetupWorker(QThread):
             def _do_download() -> None:
                 try:
                     _VOICES_DIR.mkdir(exist_ok=True)
-                    # Remove old partial downloads from interrupted setup attempts. Keep
-                    # recent files that another instance may still be writing.
+                    # Preserve recent partial files that another instance may be writing.
                     for stale in _VOICES_DIR.glob(f"{_VOICE_STEM}.onnx*.part"):
                         try:
                             if stale.stat().st_mtime < time.time() - 3600:
@@ -276,11 +260,9 @@ class _SetupWorker(QThread):
             if dl_error[0]:
                 raise dl_error[0]
 
-            # Only source installs may run this executable as Python.
             if needs_piper and not frozen:
                 self.progress.emit(-1, _("Installing piper-tts. This may take a few minutes..."))
-                # Serialize environment setup across processes to prevent concurrent
-                # venv creation.
+                # Prevent concurrent venv creation across processes.
                 with install.setup_lock():
                     def run(args, timeout):
                         install.run_setup_command(args, timeout, capture_output=True)
@@ -294,8 +276,7 @@ class _SetupWorker(QThread):
             self._fill_to(100, _("Setup complete."))
             self.done.emit(True, "")
         except subprocess.CalledProcessError as e:
-            # Include command output because the exception alone contains only its exit
-            # status.
+            # The exception alone contains only the exit status.
             detail = ((e.stderr or "") + (e.stdout or "")).strip()
             self.done.emit(False, str(e) + (f"\n{detail[:500]}" if detail else ""))
         except Exception as e:
@@ -389,7 +370,6 @@ class _SetupDialog(QDialog):
 
 
 def main() -> None:
-
     app = QApplication(sys.argv)
     app.setApplicationName("NyaaTriggers")
     from nyaatriggers.instance_lock import InstanceLock
@@ -419,7 +399,6 @@ def main() -> None:
 
 
 def _run_program(app) -> None:
-    # Load the bundled font, falling back to the system font if unavailable.
     from PyQt6.QtGui import QFontDatabase
     _bundle = bundle_root()
     _font = _bundle / "fonts" / "KosugiMaru-Regular.ttf"
@@ -439,11 +418,9 @@ def _run_program(app) -> None:
     window = MainWindow()
     record("app_start", version=_DISPLAY_VERSION, frozen=bool(getattr(sys, "frozen", False)))
     app.aboutToQuit.connect(lambda: record("app_stop"))
-    # Signal a good boot only after setup and the main window both succeed.
     from nyaatriggers import updater
     updater.mark_boot_ok()
-    # Keep Windows rollback backups until main window construction and boot verification
-    # succeed.
+    # Keep rollback backups until window construction and boot verification succeed.
     try:
         updater.cleanup_old_backups()
     except Exception as exc:  # noqa: BLE001

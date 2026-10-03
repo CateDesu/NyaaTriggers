@@ -1,7 +1,3 @@
-"""MainWindow callbacks for update checks, downloads and installation. Update policy lives
-in updater.py.
-"""
-
 import json
 import sys
 import threading
@@ -29,18 +25,16 @@ from nyaatriggers.app_common import (
 class UpdaterUiMixin:
     def _init_update_flow(self) -> None:
         self._pending_release = None
-        self._trig_dl_in_flight: dict = {}   # Download button to original label.
+        self._trig_dl_in_flight: dict = {}
         self._manual_check_in_flight = False
         self._install_in_flight = False
         self._update_action = "install"   # "install" | "openpage" | "restart"
-        self._update_applied_version = None   # set once an update is applied this session
+        self._update_applied_version = None
         # The banner also shows cactbot failures. Only update offers can be snoozed.
-        self._update_banner_mode = "update"   # "update" | "cactbot"
+        self._update_banner_mode = "update"
 
     def _update_live_dps(self) -> None:
-        """Show the selected past pull until new damage returns the meter to the live feed.
-        Between encounters, preserve the last pull.
-        """
+        """Keep reviewed and final pulls visible until new damage returns the meter to live."""
         title_lbl = getattr(self, "_dps_live_title", None)
         table = getattr(self, "_dps_live_table", None)
         if title_lbl is None or table is None:
@@ -83,7 +77,6 @@ class UpdaterUiMixin:
         self._populate_dps_table(table, snap)
 
     def _update_fflogs_visibility(self) -> None:
-        """Show the FFLogs line only once credentials and server are set."""
         lbl = getattr(self, "_fflogs_lbl", None)
         if lbl is None:
             return
@@ -108,16 +101,14 @@ class UpdaterUiMixin:
             msg = _("Waiting for the game plugin")
         if (connected and link is not None
                 and not plugin_supports_dps(link.plugin_version())):
-            # Older protocol 1 plugins can connect without meter support. Show that
-            # limitation in the status.
+            # Older protocol 1 plugins may lack meter support.
             msg += " " + _("too old for the DPS meter, update the plugin")
         lbl.setText(f"● {msg}")
         lbl.setStyleSheet(
             f"color:{'#a6e3a1' if connected else '#8f8f9a'}; font-weight:bold;")
 
     def _update_automark_status_label(self) -> None:
-        # Show Telesto connectivity even with rules disabled because marker tests still
-        # use it.
+        # Marker tests use Telesto even with rules disabled.
         lbl = getattr(self, "_automark_status_lbl", None)
         if lbl is None:
             return
@@ -136,8 +127,6 @@ class UpdaterUiMixin:
             lbl.setStyleSheet("color:#8f8f9a; font-weight:bold;")
 
     def _update_engine_status_label(self) -> None:
-        # Show failed sidecars in red and running ones in green. Hide the indicator when
-        # unused or intentionally stopped.
         lbl = getattr(self, "_engine_status_lbl", None)
         if lbl is None:
             return
@@ -146,7 +135,6 @@ class UpdaterUiMixin:
         if bad:
             src, msg = bad[0]
             full = _("● {name} Engine: {msg}").format(name=names.get(src, src), msg=engine_status(msg))
-            # Keep the full status in the tooltip when the header label is truncated.
             lbl.setText(lbl.fontMetrics().elidedText(
                 full, Qt.TextElideMode.ElideRight, 420))
             lbl.setToolTip(full)
@@ -163,7 +151,6 @@ class UpdaterUiMixin:
         lbl.setVisible(False)
 
     def _update_fight_controls(self) -> None:
-        """Refresh fight checkboxes from the actual enabled state of their triggers."""
         bar = getattr(self, "_fight_bar", None)
         if bar is None:
             return
@@ -195,8 +182,7 @@ class UpdaterUiMixin:
             c.blockSignals(False)
 
     def _on_kokoro_download(self) -> None:
-        # Allow one voice setup at a time because concurrent installs share the
-        # environment and model files.
+        # Concurrent voice installs share environment and model files.
         if getattr(self, "_kokoro_setup_running", False):
             return
         self._kokoro_setup_running = True
@@ -206,14 +192,13 @@ class UpdaterUiMixin:
         def _setup() -> None:
             status = "no-deps:"
             try:
-                # Install dependencies before downloading model files.
                 _deps_ok, log = install_kokoro_deps()
                 model_ok = download_kokoro_model()
                 if kokoro_ready():
                     status = "ready"
                 elif not model_ok:
                     status = "no-model"
-                else:                   # model present but deps/phonemizer failed
+                else:
                     status = "no-deps:" + (log or "")[:300]
             except Exception as exc:    # noqa: BLE001
                 status = "no-deps:" + repr(exc)[:300]
@@ -261,7 +246,6 @@ class UpdaterUiMixin:
         root.addWidget(bar)
 
     def _check_for_updates(self) -> None:
-        """Check for updates manually and report when no banner is needed."""
         if self._manual_check_in_flight:
             return
         self._manual_check_in_flight = True
@@ -275,8 +259,6 @@ class UpdaterUiMixin:
                 try:
                     rel = updater.fetch_latest_release(timeout=8, channel="stable")
                 except updater.RateLimited:
-                    # Use the last cached release when API limits prevent a fresh
-                    # lookup.
                     rel = updater.read_cached_release()
                     if rel is None:
                         self._upd_available_signal.emit(None)
@@ -285,12 +267,10 @@ class UpdaterUiMixin:
                             _("Update check failed - GitHub rate limit reached, try again later")
                             if manual else "")
                         return
-                # Snooze rolling tags for source installs whose base version stays
-                # unchanged. Manual checks bypass the snooze.
+                # Source base versions stay unchanged. Snooze full tags except on manual checks.
                 snoozed = (not manual and not updater.is_frozen()
                            and rel.tag and rel.tag == self._settings.get("update_snoozed"))
-                # Check whether git already contains the release commit because the base
-                # version alone cannot tell.
+                # The base version alone cannot show whether git contains the release.
                 covers = (updater.install_kind() == "git"
                           and updater.git_covers_upstream())
                 if (rel.version and not snoozed and not covers
@@ -308,7 +288,6 @@ class UpdaterUiMixin:
                     manual,
                     _("Update check failed - no network or GitHub unreachable")
                     if manual else "")
-        # Handle thread startup failures as well as worker failures.
         try:
             threading.Thread(target=_work, daemon=True).start()
         except Exception:  # noqa: BLE001
@@ -317,9 +296,7 @@ class UpdaterUiMixin:
                 _("Update check failed - could not start") if manual else "")
 
     def _on_update_checkmsg(self, manual: bool, msg: str) -> None:
-        """Show manual check feedback. Keep the button disabled if another manual check is
-        still running.
-        """
+        """Keep the button disabled while any manual check remains active."""
         if manual:
             self._manual_check_in_flight = False
             self._chk_updates_btn.setEnabled(True)
@@ -341,8 +318,7 @@ class UpdaterUiMixin:
                 pass
 
     def _show_update_banner(self, rel) -> None:
-        # Do not let a check result replace installation progress. The install updates
-        # the banner when it finishes.
+        # Check results must not replace installation progress.
         if self._install_in_flight:
             return
         self._pending_release = rel
@@ -379,15 +355,12 @@ class UpdaterUiMixin:
 
     def _on_update_dismiss_clicked(self) -> None:
         self._update_banner.setVisible(False)
-        # A cactbot warning can share a banner with a pending release. Dismissing it
-        # must not snooze the update.
+        # Dismissing a shared cactbot warning must not snooze the update.
         if self._update_banner_mode == "update":
             self._snooze_offered_update()
 
     def _snooze_offered_update(self) -> None:
-        """Snooze the offered tag for source installs whose version stays at the base.
-        Frozen builds use the full release stamp.
-        """
+        """Snooze the full offered tag because source base versions stay unchanged."""
         rel = self._pending_release
         if rel is not None and rel.tag and not updater.is_frozen():
             self._settings["update_snoozed"] = rel.tag
@@ -430,7 +403,7 @@ class UpdaterUiMixin:
     def _on_update_progress(self, pct: int, msg: str) -> None:
         self._upd_progress.setVisible(True)
         if pct < 0:
-            self._upd_progress.setRange(0, 0)         # indeterminate
+            self._upd_progress.setRange(0, 0)
         else:
             self._upd_progress.setRange(0, 100)
             self._upd_progress.setValue(pct)
@@ -440,7 +413,6 @@ class UpdaterUiMixin:
         try:
             self._handle_update_done(ok, msg)
         except Exception:  # noqa: BLE001
-            # Log callback failures and leave the banner available for diagnosis.
             print(f"_on_update_done raised: ok={ok!r} msg={msg!r}", file=sys.stderr)
             try:
                 ac.log_drop("update", f"_on_update_done raised (ok={ok!r})")
@@ -453,7 +425,6 @@ class UpdaterUiMixin:
         if not ok:
             self._upd_msg.setText(_("Update failed."))
             ac.QMessageBox.warning(self, _("Update failed"), msg)
-            # Offer a manual download after a failed Windows update.
             if (updater.install_kind() == "frozen-windows"
                     and self._pending_release is not None):
                 self._update_action = "openpage"
@@ -468,16 +439,13 @@ class UpdaterUiMixin:
                 if self._pending_release is not None:
                     self._on_update_available(self._pending_release)
             return
-        # Quit after the Windows handoff to release file locks. The staged updater
-        # relaunches the program.
+        # Quit after handoff to release Windows file locks.
         if msg == "__windows_handoff__":
             self._upd_msg.setText(_("Installing update - NyaaTriggers will reopen..."))
             self._quit_for_windows_handoff()
             return
         if self._pending_release is not None:
             self._update_applied_version = self._pending_release.version
-            # Snooze the tag for source installs because their base version remains
-            # unchanged after pulling.
             self._snooze_offered_update()
         self._upd_msg.setText(_("Update installed - restart to finish."))
         if ac.QMessageBox.question(
@@ -498,23 +466,17 @@ class UpdaterUiMixin:
             self._upd_notes_btn.setVisible(False)
 
     def _restart_for_update(self) -> None:
-        # Stop child processes before exec because they survive a process replacement.
-        # Isolate teardown steps so one failure cannot skip the rest.
         step = self._teardown_step
-        # Stop timers before teardown callbacks can run.
         self._stop_background_timers()
         step("clear status timers", lambda: self._clear_status_timers())
         step("clear seq runners", lambda: self._clear_seq_runners())
-        # Flush pending settings before replacing the process.
         step("settings save flush", lambda: self._flush_pending_settings_save())
-        # Finish the active encounter before restarting.
         step("meter encounter finalize", lambda: self._finalize_live_encounter())
         step("ws disconnect", lambda: self._ws.disconnect_from())
         # This path bypasses closeEvent, so finalize the pull capture here too.
         step("pull capture finalize", lambda: self._pull_capture.close())
         step("cactbot reader stop", lambda: self._stop_cactbot_reader())
-        # Wait for sidecar shutdown. exec would otherwise kill the escalation thread
-        # before it can stop a stubborn child.
+        # exec would kill the escalation thread before it stops a stubborn child.
         step("triggevent stop", lambda: self._stop_sidecar("_triggevent", wait=True))
         step("triggernometry stop", lambda: self._stop_sidecar("_triggernometry", wait=True))
         step("telesto stop", lambda: self._stop_sidecar("_telesto_client"))
@@ -544,12 +506,9 @@ class UpdaterUiMixin:
         self._maybe_update_triggevent(manual=True)
 
     def _maybe_update_triggevent(self, manual: bool = False) -> None:
-        """Pull and rebuild the engine in the background, reporting through
-        _te_update_signal. Manual requests always receive feedback.
-        """
+        """Rebuild in the background. Manual requests always receive feedback."""
         channel = "stable"
-        # Serialize engine builds in the shared target directory. Remember manual
-        # requests received during a run so they still get feedback.
+        # Serialize builds and remember overlapping manual requests for feedback.
         if getattr(self, "_te_update_running", False):
             if manual:
                 self._te_update_pending_manual = True
@@ -588,8 +547,7 @@ class UpdaterUiMixin:
         self._download_repo_triggers(self._update_trig_btn, _("Update Triggers"))
 
     def _download_repo_triggers(self, btn, label: str) -> None:
-        # Reload repository triggers while preserving local overrides. Track each
-        # download button separately so concurrent requests restore the right labels.
+        # Track each download button so concurrent requests restore the right labels.
         if btn in self._trig_dl_in_flight:
             return
         self._trig_dl_in_flight[btn] = label
@@ -608,11 +566,9 @@ class UpdaterUiMixin:
                 data = json.loads(raw)
                 if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
                     raise ValueError("Expected a list of trigger objects")
-                # Download to untracked cache names so source checkouts keep their
-                # tracked trigger files unchanged.
+                # Download to untracked cache names to preserve source checkouts.
                 _atomic_write_json(ac._REPO_TRIGGERS_FILE, data, indent=2)
-                # Refresh retirements too, without failing the trigger update if they
-                # are unavailable.
+                # Retirement refresh failures must not fail the trigger update.
                 try:
                     rreq = urllib.request.Request(
                         f"https://raw.githubusercontent.com/{updater.REPO}/{_REPO_TRIGGERS_BRANCH}/assets/retired.json",

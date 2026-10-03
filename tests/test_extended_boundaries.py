@@ -1,5 +1,3 @@
-"""Deadline enforcement and recovery from interrupted file operations."""
-
 from contextlib import ExitStack
 import json
 import os

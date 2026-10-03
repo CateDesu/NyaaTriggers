@@ -1,5 +1,3 @@
-"""Callout timing, duty filters and saved choices after duplicate consolidation."""
-
 from contextlib import ExitStack
 from copy import deepcopy
 import json

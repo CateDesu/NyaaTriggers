@@ -1,5 +1,3 @@
-"""Recovery ordering, log matching and the combatant request protocol."""
-
 from contextlib import ExitStack
 import json
 import sys

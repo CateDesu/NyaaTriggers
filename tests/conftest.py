@@ -1,5 +1,4 @@
-# Run all suites with python3 -m tests. Restrict pytest collection because other suites
-# execute checks on import and need separate processes.
+# Some suites execute on import and need isolated processes. Run python3 -m tests.
 import glob
 import os
 

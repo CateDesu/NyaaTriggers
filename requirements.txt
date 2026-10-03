@@ -1,23 +1,15 @@
 # Linux playback requires alsa-utils. Install PyQt6 through the package manager or pip.
-# espeak-ng is optional for system speech. Keep dependency versions pinned for
-# reproducible source runs.
 PyQt6==6.11.0
 
 # Synchronous WebSocket client for the overlay link worker. IINACT uses Qt WebSockets.
 websockets==16.1.1
 
-# Optional WebEngine support for cactbot. Its controls remain unavailable without this
-# package.
+# Cactbot controls need this optional WebEngine dependency.
 PyQt6-WebEngine==6.11.0
 
-# Neural voice dependencies are installed separately into the voice environment on
-# demand. Frozen builds bundle their own copies. Source pins live in the voice
-# installers, and release pins live in the workflow. Japanese speech uses kana readings
-# through espeak-ng.
+# Voice dependencies install separately on demand. Pins live in the installers and workflow.
 
-# Timeout capable matching for user trigger patterns. The standard regex library cannot
-# bound matching, so user patterns are refused without this dependency.
+# User patterns require bounded matching, which standard re cannot provide.
 regex==2026.7.19
 
-# Compare system package versions during source updates.
 packaging==26.3

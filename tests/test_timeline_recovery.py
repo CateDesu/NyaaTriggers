@@ -1,5 +1,3 @@
-"""Compare delayed timeline recovery with uninterrupted event delivery."""
-
 from itertools import product
 from pathlib import Path
 import unittest

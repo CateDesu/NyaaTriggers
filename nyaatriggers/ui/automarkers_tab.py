@@ -1,5 +1,3 @@
-"""Automarker controls, UMAD routing and Telesto retry queues for MainWindow."""
-
 import time
 import urllib.parse
 
@@ -27,7 +25,6 @@ from nyaatriggers.app_common import (
 
 class AutomarkersTabMixin:
     def _init_automarkers(self) -> None:
-        # Tests and status checks work even with automarkers disabled.
         self._telesto_client = TelestoClient(
             uri=self._settings.get("telesto_uri", DEFAULT_TELESTO_URI),
             enabled=bool(self._settings.get("telesto_enabled", False)))
@@ -59,14 +56,13 @@ class AutomarkersTabMixin:
             for token in ([h for h, _unused in _UMAD_AUTOMARK_PRESET]
                           + [str(r.get("status") or "") for r in self._automark_rules])
             for p in (_parse_compound(token) or ()))
-        self._actor_jobs: dict[int, int] = {}        # _actor_int value to ClassJob id
-        self._umad_actor_names: dict[int, str] = {}  # _actor_int value to name, chain targets only
+        self._actor_jobs: dict[int, int] = {}
+        self._umad_actor_names: dict[int, str] = {}
         self._umad_chain_enabled = bool(self._settings.get("umad_chain_enabled", False))
         self._umad_chains = BlackHoleChains(
             role_of=lambda aid: role_for_job(self._actor_jobs.get(_actor_int(aid))),
             markers=self._umad_chain_markers_from_settings())
         self._umad_chain_pending: list = []
-        # Track enqueue times separately without changing action tuples.
         self._umad_chain_pending_since: dict = {}
         self._umad_chain_flush_timer = QTimer(self)
         self._umad_chain_flush_timer.setSingleShot(True)
@@ -86,7 +82,6 @@ class AutomarkersTabMixin:
         self._ws.combatants.connect(self._on_ws_combatants_jobs)
 
     def _build_automark_settings(self, layout) -> None:
-        """Test and Clear can send while automarkers are disabled."""
         testing_note = QLabel(_("These automarkers need testing, please let me know."))
         testing_note.setWordWrap(True)
         testing_note.setStyleSheet("color: #8f8f9a; font-size: 11px;")
@@ -270,8 +265,7 @@ class AutomarkersTabMixin:
 
     @staticmethod
     def _sync_umad_preset_rules(rules: "list[dict]") -> "tuple[list[dict], int, int]":
-        """Retain assigned signs and other fights. New rules start unassigned.
-        Return added and removed counts."""
+        """Retain assigned signs and other fights. Return added and removed counts."""
         preset_keys = {_canon_status(h) for h, _label in _UMAD_AUTOMARK_PRESET}
         synced: "list[dict]" = []
         seen_umad: "set[str]" = set()
@@ -339,12 +333,10 @@ class AutomarkersTabMixin:
         eff_id_n = self._norm_hex(fields[2])
         eff_name = fields[3]
         fight = (self._current_fight_tag or "").casefold()
-        # Active chain mechanics own their statuses. Plain rules must not overwrite
-        # their signs.
+        # Chain mechanics own their statuses. Plain rules must not overwrite their signs.
         if (self._umad_chain_enabled and eff_id_n in _UMAD_CHAIN_IDS
                 and (not fight or fight == _UMAD_FIGHT_TAG_CF)):
             return
-        # Active gaze pairing owns Cursed Shriek signs.
         if (self._umad_gaze_enabled and eff_id_n in self._umad_gaze.ids
                 and (not fight or fight == _UMAD_FIGHT_TAG_CF)):
             return
@@ -432,14 +424,11 @@ class AutomarkersTabMixin:
         return combo
 
     def _umad_name_of(self, actor_id) -> str:
-        """Actor ID zero remains valid."""
         aid = _actor_int(actor_id)
         return "" if aid is None else self._umad_actor_names.get(aid, "")
 
     def _is_me_actor(self, actor_id: str, name: str = "") -> bool:
-        """Identify the local player by actor ID, falling back to name until the ID
-        arrives.
-        """
+        """Prefer actor ID, falling back to name until it arrives."""
         if self._me_id:
             a, m = _actor_int(actor_id), _actor_int(self._me_id)
             return a is not None and a == m
@@ -448,7 +437,6 @@ class AutomarkersTabMixin:
 
     def _mark_player(self, actor_id: str, marker: str, name: str = "",
                      is_me: "bool | None" = None) -> bool:
-        """Return False on unresolved slots or enqueue failure so callers can retry."""
         tc = self._telesto_client
         if tc is None:
             return False
@@ -467,7 +455,6 @@ class AutomarkersTabMixin:
         return markers
 
     def _umad_chain_line(self, fields: list[str]) -> None:
-        """Allow unknown current fights when routing UMAD statuses."""
         if not self._umad_chain_enabled or len(fields) < 9:
             return
         eff = self._norm_hex(fields[2])
@@ -510,7 +497,6 @@ class AutomarkersTabMixin:
         self._dispatch_umad_chain_actions(self._umad_chains.flush(time.monotonic()))
 
     def _retry_umad_chain_pending(self) -> None:
-        """Retain failed marks until their age limit."""
         if not self._umad_chain_pending:
             return
         since = getattr(self, "_umad_chain_pending_since", None)
@@ -540,7 +526,6 @@ class AutomarkersTabMixin:
         return markers
 
     def _umad_gaze_line(self, fields: list[str]) -> None:
-        """Route Neo Exdeath's VFX and the player gaze statuses."""
         if not self._umad_gaze_enabled or len(fields) < 9:
             return
         eff = self._norm_hex(fields[2])
@@ -590,7 +575,6 @@ class AutomarkersTabMixin:
         self._dispatch_umad_gaze_actions(actions)
 
     def _umad_gaze_reset(self, clear_marks: bool = False, force: bool = False) -> None:
-        """Force clears when disabling and skip them on zone changes."""
         record("gaze_state", kind="reset", sets=self._umad_gaze._sets_done,
                assigned=len(self._umad_gaze._assigned),
                marked=len(self._umad_gaze._marked))
@@ -630,8 +614,7 @@ class AutomarkersTabMixin:
 
     def _dispatch_mark_actions(self, actions, pending: list,
                                since: "dict | None" = None) -> list:
-        """New actions replace pending actions for the actor or sign.
-        Return unresolved actions and preserve first enqueue times in since."""
+        """Replace pending actions for the same actor or sign, preserving first enqueue times."""
         if not actions:
             return pending
         for action in actions:
@@ -660,7 +643,6 @@ class AutomarkersTabMixin:
             if not sent and len(pending) < 16:
                 pending.append(action)
                 if since is not None:
-                    # Preserve the first enqueue time across retries.
                     since.setdefault(action, time.monotonic())
         if since is not None:
             live = set(pending)
@@ -692,7 +674,6 @@ class AutomarkersTabMixin:
                    result="pending" if action in self._umad_gaze_pending else "queued")
 
     def _rearm_umad_chain_flush(self) -> None:
-        """Retry the chain debounce when new job data can resolve an open queue."""
         chains = getattr(self, "_umad_chains", None)
         timer = getattr(self, "_umad_chain_flush_timer", None)
         if (chains is not None and timer is not None and chains.has_open_queues()
@@ -746,7 +727,6 @@ class AutomarkersTabMixin:
             combo.setCurrentIndex(idx if idx >= 0 else 0)
 
     def _on_automark_assign_marker(self) -> None:
-        """Save marker changes only on user activation of the selector."""
         lst = getattr(self, "_automark_rules_list", None)
         if lst is None:
             return
@@ -790,7 +770,6 @@ class AutomarkersTabMixin:
     def _refresh_telesto_party(self) -> None:
         tc = getattr(self, "_telesto_client", None)
         if tc is not None and self._settings.get("telesto_enabled"):
-            # Reapply settings so Telesto can recover after connection failure.
             tc.set_enabled(True)
             tc.request_party_members(force=True)
             if self._umad_chain_enabled:
@@ -801,9 +780,7 @@ class AutomarkersTabMixin:
                 self._retry_automark_pending()
 
     def _retry_automark_pending(self) -> None:
-        """Retry unresolved rule marks until their age limit. Drop retries that would
-        overwrite another rule's current sign.
-        """
+        """Retry within the age limit without overwriting another rule's current sign."""
         if not self._automark_pending:
             return
         now = time.monotonic()
@@ -829,16 +806,13 @@ class AutomarkersTabMixin:
         self._automark_pending = [entry for entry in keep if (entry[0], entry[1]) not in sent]
 
     def _apply_automark_state(self) -> None:
-        """Refresh slots on enable and clear engine and rule signs before disabling."""
         tc = getattr(self, "_telesto_client", None)
         if tc is None:
             return
         enabled = bool(self._settings.get("telesto_enabled", False))
         if not enabled:
-            # Force cleanup before disabling, even if the client is already disabled.
             self._umad_chain_reset(clear_marks=True, force=True)
             self._umad_gaze_reset(clear_marks=True, force=True)
-            # Clear rule marks too. The me key uses clear_self instead of actor lookup.
             for key in list(self._automark_active):
                 if key == "me":
                     tc.clear_self(force=True)
@@ -873,8 +847,7 @@ class AutomarkersTabMixin:
         self._update_automark_status_label()
 
     def _on_telesto_status(self, _status: str, gen: "int | None" = None) -> None:
-        # The native Telesto client owns connection status. Ignore the engine probe and
-        # stale generations.
+        # The native Telesto client owns status. Ignore engine probes and stale generations.
         if ac._stale_gen(getattr(self, "_triggevent", None), gen):
             return
         return

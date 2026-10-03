@@ -1,6 +1,4 @@
-"""Record dropped callouts and Python exceptions, and capture native crash stacks.
-Throttle repeated reports per site while retaining evidence for missing callouts.
-"""
+"""Record dropped callouts and crashes, throttling repeated reports per site."""
 
 from __future__ import annotations
 
@@ -20,8 +18,7 @@ _LOG_FILE = data_root() / "nyaatriggers.log"
 _lock = threading.Lock()
 _last: dict[str, float] = {}
 
-# Rotate one retained generation at the size limit. Check and append under the same
-# lock.
+# Rotate and append under the same lock.
 _MAX_BYTES = 1 << 20
 _native_crash_file = None
 
@@ -37,7 +34,6 @@ def rotate_one_generation(path: Path) -> None:
 
 
 def _owner_only(path, flags):
-    # Create logs with owner access only.
     return os.open(path, flags, 0o600)
 
 
@@ -82,8 +78,7 @@ def enable_native_crash_log() -> bool:
     return True
 
 
-# Tighten permissions after the first write because creation mode does not affect
-# existing files.
+# Creation mode does not tighten permissions on existing files.
 _perms_tightened = False
 
 

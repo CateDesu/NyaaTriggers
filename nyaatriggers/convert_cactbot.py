@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Convert cactbot TypeScript triggers to local JSON. Run python3 -m
-nyaatriggers.convert_cactbot with the cactbot checkout path and an optional output file.
-Omit the file to write to stdout.
-"""
+"""Convert cactbot TypeScript triggers to local JSON."""
 
 import json
 import os
@@ -14,8 +11,7 @@ from pathlib import Path
 from nyaatriggers.paths import bundle_root
 
 
-# Share a fixed UUID namespace across converters so repeated imports preserve trigger
-# IDs.
+# A shared UUID namespace preserves IDs across repeated imports.
 _ID_NS = uuid.UUID('c6a2b8e4-9d31-4f75-a0b8-5e2c7d94f1a6')
 
 
@@ -118,7 +114,7 @@ OUTPUTS = {**RESPONSES, **{
     'out':        'Out',
     'in':         'In',
     'unknown':    '???',
-    'text':       None,   # dynamic, skip it
+    'text':       None,
 }}
 
 
@@ -152,9 +148,6 @@ _REGEX_KEYWORDS = {'return', 'typeof', 'case', 'in', 'of', 'new', 'delete',
 
 
 def _regex_can_start(out: str | list, i: int | None = None) -> bool:
-    """Decide whether a slash opens a regex using the preceding text. Passing an index
-    avoids copying the prefix during block scans.
-    """
     k = (len(out) if i is None else i) - 1
     while k >= 0 and out[k] in ' \t\r\n':
         k -= 1
@@ -167,9 +160,7 @@ def _regex_can_start(out: str | list, i: int | None = None) -> bool:
 
 
 def _regex_end(text: str, i: int) -> int:
-    """Return the end of a regex literal, respecting escapes and character classes. Stop at
-    a newline if no closing slash is found.
-    """
+    """Find the regex end, respecting escapes and classes. Stop at an unclosed newline."""
     i += 1
     in_class = False
     while i < len(text):
@@ -190,9 +181,7 @@ def _regex_end(text: str, i: int) -> int:
 
 
 def strip_js_comments(text: str) -> str:
-    """Replace JavaScript comments with spaces while preserving newlines, string literals
-    and regex literals.
-    """
+    """Blank JavaScript comments while preserving newlines, strings and regexes."""
     out: list[str] = []
     i, n = 0, len(text)
     in_str, sc = False, ''
@@ -226,8 +215,7 @@ def strip_js_comments(text: str) -> str:
             i = j
             continue
         if c == '/' and _regex_can_start(out):
-            # Copy regex literals unchanged, including comment markers inside them. An
-            # unescaped slash outside a character class ends the literal.
+            # Regex literals may contain comment markers.
             out.append(c)
             i += 1
             in_class = False
@@ -251,7 +239,6 @@ def strip_js_comments(text: str) -> str:
 
 
 def extract_top_blocks(text: str) -> list[str]:
-    """Extract trigger objects from a JavaScript array body."""
     blocks: list[str] = []
     depth, start, i = 0, -1, 0
     in_str, sc = False, ''
@@ -271,8 +258,7 @@ def extract_top_blocks(text: str) -> list[str]:
                     start = i
                 depth += 1
             elif c == '}':
-                # Clamp depth at zero so a stray closing brace cannot corrupt the next
-                # trigger block.
+                # A stray closing brace must not corrupt the next trigger block.
                 if depth > 0:
                     depth -= 1
                     if depth == 0 and start >= 0:
@@ -287,7 +273,6 @@ def extract_top_blocks(text: str) -> list[str]:
 
 
 def find_sub_block(text: str, keyword: str) -> str:
-    """Return the object block immediately following a keyword."""
     m = re.search(re.escape(keyword) + r'\s*:\s*\{', text)
     if not m:
         return ''
@@ -295,9 +280,7 @@ def find_sub_block(text: str, keyword: str) -> str:
 
 
 def _block_at(text: str, open_idx: int) -> str:
-    """Return a balanced object block, respecting strings and regexes. Return an empty
-    string if it is unclosed.
-    """
+    """Return a balanced object block, or an empty string if unclosed."""
     depth, i, in_str, sc = 0, open_idx, False, ''
     while i < len(text):
         c = text[i]
@@ -324,9 +307,7 @@ def _block_at(text: str, open_idx: int) -> str:
 
 
 def _array_at(text: str, open_idx: int) -> str:
-    """Return a balanced array, respecting strings and regexes. Return an empty string if
-    it is unclosed.
-    """
+    """Return a balanced array, or an empty string if unclosed."""
     depth, i, in_str, sc = 0, open_idx, False, ''
     while i < len(text):
         c = text[i]
@@ -352,15 +333,12 @@ def _array_at(text: str, open_idx: int) -> str:
     return ''
 
 
-# The string branches consume backslash escapes separately from other characters.
-# Keeping them disjoint avoids excessive backtracking on malformed input.
+# Disjoint escape branches avoid excessive backtracking on malformed input.
 _QSTR = r"(?P<q>['\"])(?P<v>(?:\\.|(?!(?P=q))[^\\])*)(?P=q)"
 
 
 def _unescape_js(s: str) -> str:
-    """Decode JavaScript escapes in one pass and replace escaped whitespace with spaces.
-    Escaped backslashes keep the following text literal.
-    """
+    """Decode escapes once so escaped backslashes keep following text literal."""
 
     def _sub(m):
         esc = m.group(1)
@@ -378,7 +356,6 @@ def _unescape_js(s: str) -> str:
 
 
 def _clean_callout(s: str | None) -> str | None:
-    """Decode an extracted string and reject values with no speakable content."""
     if not s:
         return None
     s = _unescape_js(s).strip()
@@ -388,7 +365,6 @@ def _clean_callout(s: str | None) -> str | None:
 
 
 def resolve_output_key(key: str, os_block: str) -> str | None:
-    """Look up the English string for `key` inside an outputStrings block."""
     # Require a key boundary so text cannot match context.
     m = re.search(
         r'(?<![\w$])[\'"]?' + re.escape(key) + r'[\'"]?\s*:\s*\{[^}]*en\s*:\s*' + _QSTR,
@@ -403,7 +379,6 @@ def resolve_output_key(key: str, os_block: str) -> str | None:
 
 
 def get_callout(block: str) -> str | None:
-    """Extract a simple English callout string from a trigger block."""
     m = re.search(r'\bresponse\s*:\s*Responses\.(\w+)\(', block)
     if m:
         callout = _clean_callout(RESPONSES.get(m.group(1)))
@@ -412,14 +387,12 @@ def get_callout(block: str) -> str | None:
 
     os_block = find_sub_block(block, 'outputStrings')
 
-    # Try later text fields if an earlier one has no usable callout.
     for fld in ('alarmText', 'alertText', 'infoText'):
         m = re.search(fld + r'\s*:\s*' + _QSTR, block)
         if m:
             callout = _clean_callout(m.group('v'))
         else:
-            # Keep output lookups inside this field so they cannot take a later field's
-            # key.
+            # Keep output lookups inside the field that owns them.
             m = re.search(fld + r'(?:(?!(?:alarmText|alertText|infoText|outputStrings)\s*:).)*?'
                           r'output\.(\w+)!\(\)', block, re.DOTALL)
             if not m:
@@ -434,7 +407,6 @@ def get_callout(block: str) -> str | None:
 
 
 def parse_netregex_ids(block: str) -> list[str]:
-    """Extract uppercase hex IDs from scalar or array netRegex fields."""
     nr = find_sub_block(block, 'netRegex')
     if not nr:
         # NetRegex calls wrap the ID object in their argument list.
@@ -461,8 +433,6 @@ EXISTING_JSON = bundle_root() / 'assets' / 'triggers.json'
 
 
 def _dedup_keys(log_type: str, ability_id: str) -> set[tuple[str, str]]:
-    """Expand pipe alternatives into individual log type and ID pairs for deduplication.
-    """
     lts = [p.strip() for p in str(log_type).split('|') if p.strip()]
     ids = [p.strip().upper() for p in str(ability_id).split('|') if p.strip()]
     return {(lt, aid) for lt in lts for aid in ids}
@@ -486,16 +456,14 @@ def convert_file(ts_path: Path, fight_tag: str) -> list[dict]:
     skipped = 0
 
     for block in blocks:
-        # Skip delayed or conditional triggers whose behavior cannot be preserved
-        # locally. Only an explicit disabled: true suppresses conversion.
+        # Skip delayed or conditional behavior that local triggers cannot preserve.
         if (re.search(r'\b(?:delaySeconds|condition|promise|preRun|suppressSeconds)\s*:',
                       block)
                 or re.search(r'\bdisabled\s*:\s*true\b', block)):
             skipped += 1
             continue
 
-        # Use only the first field as the trigger name. Nested ID fields belong to other
-        # objects.
+        # Nested ID fields belong to other objects.
         nm = re.match(r"\{\s*id\s*:\s*" + _QSTR, block)
         if not nm:
             continue
@@ -514,7 +482,6 @@ def convert_file(ts_path: Path, fight_tag: str) -> list[dict]:
 
         callout = get_callout(block)
         if not callout or '${' in callout:
-            # Report unmapped responses so upstream changes are visible.
             resp = re.search(r'\bresponse\s*:\s*Responses\.(\w+)\(', block)
             if resp and resp.group(1) not in RESPONSES:
                 print(f'  WARN: {ts_path.name}: dropping {trig_name!r}, '
@@ -524,8 +491,7 @@ def convert_file(ts_path: Path, fight_tag: str) -> list[dict]:
 
         ability_id = '|'.join(ids)
         dedup = (ability_id, fight_tag, log_type)
-        # Compare individual type and ID pairs so overlapping alternatives cannot
-        # duplicate callouts.
+        # Compare individual type and ID pairs to prevent duplicate callouts.
         keys = _dedup_keys(log_type, ability_id)
         if keys & seen:
             continue
@@ -569,7 +535,6 @@ def main() -> None:
               file=sys.stderr)
         sys.exit(1)
 
-    # Report overlaps with the shipped database before merging.
     existing_keys: set[tuple] = set()
     try:
         existing = json.loads(EXISTING_JSON.read_text(encoding='utf-8'))
@@ -609,12 +574,10 @@ def main() -> None:
     out = json.dumps(all_triggers, indent=2)
     if out_path:
         if not all_triggers:
-            # Keep the previous output when extraction produces no triggers.
             print(f'ERROR: 0 triggers extracted, refusing to overwrite {out_path}',
                   file=sys.stderr)
             sys.exit(1)
-        # Replace through a sibling temporary file to preserve the previous output if
-        # interrupted.
+        # A sibling temporary file preserves the previous output if interrupted.
         tmp_path = out_path.with_name(out_path.name + '.tmp')
         tmp_path.write_text(out, encoding='utf-8')
         os.replace(tmp_path, out_path)

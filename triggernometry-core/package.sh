@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Assemble the host and dependencies in triggernometry-core/bin for bridge discovery.
-# Run after building the engine and host.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ENGINE_BIN="${ENGINE_BIN:-$HERE/.engine/Source/Triggernometry/bin/Release}"

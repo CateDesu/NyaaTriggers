@@ -1,5 +1,3 @@
-"""Update archives belong to a private directory for each install attempt."""
-
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace

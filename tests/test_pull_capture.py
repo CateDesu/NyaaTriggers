@@ -1,4 +1,3 @@
-"""Pull capture boundaries, feed contents and recording controls."""
 import json
 import os
 import subprocess
@@ -35,7 +34,6 @@ with tempfile.TemporaryDirectory() as td:
     cap = PullCapture(Path(td))
     cap.context = lambda: ("DMU", "The Hole")
 
-    # Not recording: nothing buffers, nothing writes.
     cap.on_raw_message('{"type":"LogLine"}')
     cap.on_log_line(_BOSS_CAST)
     check("nothing is captured while recording is off", _pull_files(td) == [])
@@ -44,11 +42,9 @@ with tempfile.TemporaryDirectory() as td:
     cap.on_raw_message('{"type":"pre"}')
     check("no pull file before a combat start", _pull_files(td) == [])
 
-    # A player cast must not open a pull.
     cap.on_log_line("21|ts|10700001|Player|BAB9|Some Cast|10700001|Player|")
     check("a player ability does not open a pull", _pull_files(td) == [])
 
-    # A boss cast opens the pull, the buffered pre-pull line comes along.
     cap.on_log_line(_BOSS_CAST)
     files = _pull_files(td)
     check("a boss ability opens the pull file", len(files) == 1)
@@ -62,7 +58,6 @@ with tempfile.TemporaryDirectory() as td:
     check("raw newlines are flattened like the sidecar feed does",
           '{"type":"with newline"}' in content)
 
-    # A wipe finalizes and writes the meta.
     cap.on_log_line("33|ts|40001234|4000000F|00|")
     metas = _meta_files(td)
     check("a wipe writes the meta file", len(metas) == 1)
@@ -75,14 +70,12 @@ with tempfile.TemporaryDirectory() as td:
     check("nothing appends after the wipe",
           "after-wipe" not in files[0].read_text(encoding="utf-8"))
 
-    # Second pull ends on combat end, a clear.
     cap.on_log_line(_BOSS_CAST)
     check("a second pull opens", len(_pull_files(td)) == 2)
     cap.on_in_combat(True, False)
     meta2 = json.loads(_meta_files(td)[1].read_text(encoding="utf-8"))
     check("combat end finalizes as a clear", meta2.get("outcome") == "clear")
 
-    # Zone change resets, recording off ends.
     cap.on_log_line(_BOSS_CAST)
     cap.on_zone_changed(1234, "Elsewhere")
     meta3 = json.loads(_meta_files(td)[2].read_text(encoding="utf-8"))
@@ -99,18 +92,15 @@ with tempfile.TemporaryDirectory() as td:
     cap.context = lambda: ("..", "The Hole")
     cap.set_recording(True)
 
-    # An all-dots fight tag cannot escape the capture tree.
     cap.on_log_line(_BOSS_CAST)
     files = _pull_files(td)
     check("an all dots fight tag lands in Unknown",
           len(files) == 1 and files[0].parent.name == "Unknown")
 
-    # A raw zone line finalizes like the WS zone event does.
     cap.on_log_line("01|ts|1234|The Dead-End|")
     meta = json.loads(_meta_files(td)[0].read_text(encoding="utf-8"))
     check("a raw zone line finalizes as a reset", meta.get("outcome") == "reset")
 
-    # Feed loss closes the pull and reconnect starts a separate capture.
     cap.on_log_line(_BOSS_CAST)
     cap.on_status_changed(False, "Disconnected")
     meta = json.loads(_meta_files(td)[1].read_text(encoding="utf-8"))
@@ -126,7 +116,6 @@ with tempfile.TemporaryDirectory() as td:
     cap.context = lambda: ("Cap", "Zone")
     cap.set_recording(True)
 
-    # The pre-pull ring is bounded in count, not only in seconds.
     for i in range(pull_capture._PRE_PULL_MAX_MESSAGES + 100):
         cap.on_raw_message(f'{{"n":{i}}}')
     cap.on_log_line(_BOSS_CAST)
@@ -135,7 +124,6 @@ with tempfile.TemporaryDirectory() as td:
           '{"n":0}' not in content
           and f'{{"n":{pull_capture._PRE_PULL_MAX_MESSAGES + 99}}}' in content)
 
-    # Duration and size caps truncate a pull that never closes on its own.
     orig_s = pull_capture._MAX_PULL_SECONDS
     orig_b = pull_capture._MAX_PULL_BYTES
     try:
@@ -187,7 +175,6 @@ with tempfile.TemporaryDirectory() as td:
     finally:
         drop_log._LOG_FILE = orig_log
 
-# Optional replay against the real engine jar using actual feed lines.
 REPO = Path(__file__).resolve().parents[1]
 jar = REPO / "triggevent-core" / "target" / "triggevent-core.jar"
 if os.environ.get("NYAA_REPLAY_TEST") == "1" and jar.is_file():

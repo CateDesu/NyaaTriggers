@@ -1,5 +1,3 @@
-"""Persistence and update recovery regressions."""
-
 from pathlib import Path
 from datetime import datetime
 from contextlib import ExitStack

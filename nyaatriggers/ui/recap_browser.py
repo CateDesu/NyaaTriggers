@@ -1,5 +1,3 @@
-"""Saved pull selection and cancellable combat log imports."""
-
 from datetime import datetime
 
 from PyQt6.QtCore import QTimer, Qt

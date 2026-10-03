@@ -1,5 +1,3 @@
-"""Named snapshots of trigger choices and editable callout text."""
-
 from copy import deepcopy
 from uuid import uuid4
 

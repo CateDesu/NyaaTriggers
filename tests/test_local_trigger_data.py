@@ -1,5 +1,3 @@
-"""Local callouts stay in their duties and match decoded game events."""
-
 import json
 import os
 from pathlib import Path

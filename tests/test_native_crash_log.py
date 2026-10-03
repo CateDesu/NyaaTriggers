@@ -1,5 +1,3 @@
-"""Capture native failures that bypass the program's Python exception handler."""
-
 import os
 from pathlib import Path
 import signal

@@ -1,5 +1,3 @@
-"""Prog sessions and their saved pull summaries."""
-
 from copy import deepcopy
 from collections import Counter
 from pathlib import Path

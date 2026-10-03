@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Convert static Triggernometry XML callouts with finite hex IDs. Support pipe and colon
-log formats, expanding ID alternatives and skipping dynamic scripts. Run python3 -m
-nyaatriggers.convert_triggernometry to merge configured sources into
-assets/triggers.json, or pass an output file for a separate result.
-"""
+"""Convert static Triggernometry XML callouts with finite hex IDs from pipe or colon logs."""
 
 import collections
 import json
@@ -25,7 +21,6 @@ SOURCE_DIRS = [
     HOME / 'FFXIV-Triggernometry-TriggerCollection',
     HOME / 'Triggernometry-Triggers/Repositories',
     HOME / 'ffxiv-triggers/xml',
-    # Colon format sources. Missing directories produce a warning.
     HOME / 'xiv_triggernometry',          # lexxiesia, M1-M12 and FRU in cactbot colon format
     HOME / 'TriggernometryArchive/dist',  # decorwdyun mirror, S7 Arcadion, U7 FRU, Ex7
     HOME / 'Downloads',                   # loose XMLs pulled from the Discord sharing channel
@@ -33,8 +28,7 @@ SOURCE_DIRS = [
 
 EXISTING_JSON = bundle_root() / 'assets' / 'triggers.json'
 
-# Share a fixed UUID namespace across converters so repeated imports preserve trigger
-# IDs.
+# A shared UUID namespace preserves IDs across repeated imports.
 _ID_NS = uuid.UUID('c6a2b8e4-9d31-4f75-a0b8-5e2c7d94f1a6')
 
 HEX = set('0123456789ABCDEF')
@@ -115,7 +109,6 @@ JOB_MAP = {
 
 
 def _strip_num_prefix(s: str) -> str:
-    # Strip repeated numeric folder prefixes.
     while True:
         stripped = re.sub(r'^\d+[\d.]* ?[-–:] ?', '', s).strip()
         if stripped == s:
@@ -125,14 +118,12 @@ def _strip_num_prefix(s: str) -> str:
 
 
 def _strip_attribution(s: str) -> str:
-    # Strip trailing credits only. Preserve names such as Made By Heaven and words
-    # containing by.
+    # Trailing credits must not change names such as Made By Heaven.
     out = re.sub(r'\s*[\(\[]?\b(from|by|credit|made by|originally made by)\s+[^\)\]]+[\)\]]?\s*$', '', s, flags=re.I).strip()
     return out or s.strip()
 
 
 def _normalize_fight_name(name: str) -> str:
-    """Map a raw folder name to a canonical fight tag where possible."""
     m = re.match(r'^([pm])(\d+)(s|n)?$', name.lower())
     if m:
         prefix = m.group(1).upper()
@@ -156,7 +147,6 @@ def _word(pattern: str, text: str):
 def path_to_fight(path: str) -> str:
     parts = [p.strip() for p in path.split('/') if p.strip()]
 
-    # Strip versioned wrapper folders to expose the category.
     while len(parts) > 1 and parts[0].lower() not in _KNOWN_CATS \
             and 'misc' not in parts[0].lower() and 'positional' not in parts[0].lower() \
             and not parts[0].startswith('FFXIV Battle Jobs') \
@@ -191,8 +181,7 @@ def path_to_fight(path: str) -> str:
                         return abbrev + 'S'
 
         elif 'trial' in category:
-            # Sharing Channel adds a path component, so the fight name starts one level
-            # deeper.
+            # Sharing Channel adds one level before the fight name.
             for p in parts[3:]:
                 name = _strip_num_prefix(p)
                 name = _strip_attribution(name)
@@ -202,7 +191,6 @@ def path_to_fight(path: str) -> str:
                                                  'weaponcounter'):
                     return name
 
-        # Match whole category words, including Disciples of War.
         elif _word(r'disciples?', category) or _word(r'war', category):
             for p in reversed(parts):
                 m = re.search(r'\b(WHM|SCH|AST|SGE|BLM|SMN|RDM|PCT|MNK|DRG|NIN|SAM|RPR|VPR|BRD|MCH|DNC|PLD|WAR|DRK|GNB|BLU)\b', p)
@@ -225,10 +213,8 @@ def path_to_fight(path: str) -> str:
                 name = re.sub(r'\s*[\(\[].*?[\)\]]', '', name).strip()
                 n = _normalize_fight_name(_strip_num_prefix(name))
                 if re.match(r'^[PM]\d+[SN]?$', n):
-                    # Default to Savage when no difficulty is given.
                     return n if n[-1] in ('S','N') else n + 'S'
                 for key, abbrev in _RAID_ABBREV_FULL.items():
-                    # Match whole tags so ordinary words cannot match short fight names.
                     if re.search(r'\b' + re.escape(key) + r'\b', name, re.I):
                         return abbrev
             for p in reversed(parts[2:]):
@@ -263,7 +249,6 @@ def path_to_fight(path: str) -> str:
                 return clean
         return 'Eureka'
 
-    # Support the TriggerCollection folder layout.
     if top == 'Eureka' or ('Eureka' in path and 'Anemos' in path):
         if 'Anemos' in path:
             return 'Anemos'
@@ -277,7 +262,6 @@ def path_to_fight(path: str) -> str:
     if 'Pagos' in path:
         return 'Pagos'
 
-    # Match the plural Hunts category so trial names containing Hunt are not misfiled.
     if top == 'Hunts' or re.search(r'\bHunts\b', path):
         for p in parts:
             m = re.search(r'(\d+\.\d+)', p)
@@ -316,7 +300,6 @@ def path_to_fight(path: str) -> str:
                 return name
         return 'Dungeon'
 
-    # Ultimate folders use expansion and fight components.
     if top == 'Ultimate':
         low = path.lower()
         if 'futures rewritten' in low or 'fru' in low:
@@ -332,7 +315,6 @@ def path_to_fight(path: str) -> str:
                 return re.sub(r'\s*\(Ultimate\)', '', name).strip()
         return ''
 
-    # Alliance folders use expansion, raid and boss components.
     if top == 'Alliance':
         for p in parts[2:]:
             name = re.sub(r'\s*[\(\[].*?[\)\]]', '', _strip_num_prefix(p)).strip()
@@ -383,8 +365,7 @@ def path_to_fight(path: str) -> str:
                     name = _strip_num_prefix(p)
                     return re.sub(r'\s*\(Ultimate\)', '', name).strip()
 
-        # Default eligible raid tiers to Savage unless the folder specifies normal or
-        # story.
+        # Default eligible raid tiers to Savage unless normal or story is specified.
         is_savage = any(p.lower() == 'savage' or p.lower().endswith('(savage)') for p in parts)
         is_normal = any(p.lower() in ('normal', 'story') or p.lower().endswith('(normal)') for p in parts)
 
@@ -395,7 +376,6 @@ def path_to_fight(path: str) -> str:
                 if key.lower() in clean_nosav.lower():
                     return abbrev + ('N' if (is_normal and not is_savage) else 'S')
 
-        # Use the last substantive folder without adding a difficulty suffix.
         skip = {'savage', 'normal', '! - tts callouts', '# - settings',
                 'raids', '8-man raids', 'alliance raids', 'ultimates'}
         for p in reversed(parts):
@@ -407,7 +387,6 @@ def path_to_fight(path: str) -> str:
             if name:
                 return name
 
-    # Recognize bare fight tags anywhere in loose export paths. Default to Savage.
     for p in parts:
         n = _normalize_fight_name(p)
         if re.match(r'^[PM]\d+[NS]$', n):
@@ -458,12 +437,9 @@ def _expand_class(body: str) -> list[str] | None:
 
 
 def expand_id_expr(expr: str, cap: int = 32, level: int = 0) -> list[str] | None:
-    """Expand a finite hexadecimal regex fragment or return None. Apply the ID length
-    filter only to the final result so factored prefixes can combine with shorter
-    alternatives.
-    """
+    """Expand finite hex alternatives, or return None. Filter ID length after combining prefixes."""
     expr = expr.strip()
-    if not expr or level > 20:      # Stop excessive recursion.
+    if not expr or level > 20:
         return None
 
     def _finish(ids: Iterable[str]) -> list[str] | None:
@@ -472,8 +448,7 @@ def expand_id_expr(expr: str, cap: int = 32, level: int = 0) -> list[str] | None
         else:
             out = sorted({r for r in ids if 3 <= len(r) <= 6 and all(ch in HEX for ch in r)})
         return out or None
-    # Strip enclosing groups with a pass limit because each pass scans the full
-    # expression.
+    # Limit group stripping because each pass scans the full expression.
     for _ in range(64):
         m = re.match(r"^\((?:\?P?<[^>]+>|\?:|\?'[^']+')?(.*)\)$", expr, re.S)
         if not m:
@@ -491,7 +466,7 @@ def expand_id_expr(expr: str, cap: int = 32, level: int = 0) -> list[str] | None
             break
         expr = inner.strip()
     else:
-        return None   # Stop excessive nesting.
+        return None
     alts = _split_top(expr, '|')
     if len(alts) > 1:
         out: set[str] = set()
@@ -503,7 +478,6 @@ def expand_id_expr(expr: str, cap: int = 32, level: int = 0) -> list[str] | None
             if len(out) > cap:
                 return None
         return _finish(out)
-    # Concatenate alternatives as a Cartesian product.
     results = ['']
     i = 0
     while i < len(expr):
@@ -526,7 +500,6 @@ def expand_id_expr(expr: str, cap: int = 32, level: int = 0) -> list[str] | None
             results = [p + s for p in results for s in sub]
             i = j + 1
         elif c == '[':
-            # Find the first unescaped closing bracket.
             j = i + 1
             while j < len(expr) and expr[j] != ']':
                 j += 2 if expr[j] == '\\' else 1
@@ -541,7 +514,7 @@ def expand_id_expr(expr: str, cap: int = 32, level: int = 0) -> list[str] | None
             results = [p + c.upper() for p in results]
             i += 1
         else:
-            return None  # Only finite hexadecimal expressions can be expanded.
+            return None
         if len(results) > cap:
             return None
     return _finish(results)
@@ -554,8 +527,7 @@ def _normalize_repeats(rx: str) -> str:
         try:
             n = int(m.group(2))
         except ValueError:
-            # Leave excessive repeat counts literal, including values too long for
-            # Python to parse.
+            # Leave excessive repeat counts literal, including values too long to parse.
             return m.group(0)
         return inner * n if n <= 10 else m.group(0)
     return re.sub(r'\(\?:([^()]*?(?:\\\||:))\)\{(\d+)\}', rep, rx)
@@ -593,8 +565,7 @@ def _fields_colon(body: str) -> list[str]:
 
 PIPE_CAST = {'20', '21', '22', '23'}    # ability id at field index 3, after time, srcId, srcName
 PIPE_STATUS = {'26', '30'}              # effect id at field index 1, after time
-# Map colon hex types to decimal log types and ID columns. Preserve both 21 and 22 for
-# ability alternatives.
+# Preserve both log types 21 and 22 for ability alternatives.
 COLON_TYPES = {'14': ('20', 2), '15': ('21', 2), '16': ('22', 2),
                '1A': ('26', 0), '1E': ('30', 0), '1[56]': ('21|22', 2)}
 
@@ -603,8 +574,7 @@ def extract_ids(regex: str) -> list[tuple[str, str]]:
     """Return the log_type and ability_id pairs the regex pins to literal hex ids, empty list if none."""
     if not regex:
         return []
-    # ElementTree already decoded XML attributes. Unescaping again would change literal
-    # entity text.
+    # XML attributes are already unescaped. A second pass would alter literal entities.
     rx = _normalize_repeats(regex)
 
     m = re.match(r'^\^(\d+)\\\|(.*)$', rx, re.S)
@@ -632,7 +602,7 @@ def extract_ids(regex: str) -> list[tuple[str, str]]:
 
 
 def walk_xml(elem: ET.Element, path: str = '', depth: int = 0) -> Iterator[tuple[str, ET.Element]]:
-    if depth > 128:     # Bound folder nesting.
+    if depth > 128:
         return
     name = elem.attrib.get('Name', '')
     fullpath = (path + '/' + name).strip('/') if name else path
@@ -646,7 +616,7 @@ def walk_xml(elem: ET.Element, path: str = '', depth: int = 0) -> Iterator[tuple
 def extract_tts(trigger_elem) -> str | None:
     for action in trigger_elem.findall('.//Action[@ActionType="UseTTS"]'):
         if action.attrib.get('Enabled', '').lower() == 'false':
-            continue    # a disabled action never speaks
+            continue
         text = action.attrib.get('UseTTSTextExpression', '').strip()
         if text and '{' not in text and not text.startswith('_'):
             return text
@@ -661,9 +631,7 @@ _EXTRA_ZONES = {
 
 
 def _fallback_zone(fight: str, path: str) -> str:
-    """Use zone names as fallback patterns for field operations, alliance raids and
-    criterion dungeons. Trial boss names are not reliable zone names.
-    """
+    """Use zone names for field operations, alliance raids and criterion dungeons."""
     if not fight or re.match(r'^[A-Z]{1,3}\d+[NS]?$', fight) or fight.endswith('(Unreal)'):
         return ''
     if 'Field Operations' in path or 'Alliance' in path or 'Criterion' in path:
@@ -672,14 +640,12 @@ def _fallback_zone(fight: str, path: str) -> str:
 
 
 def load_zone_map(existing: list[dict]) -> dict[str, str]:
-    """Build a fight tag to zone regex map from the existing triggers, most common zone per fight."""
     counts: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
     for t in existing:
         if not isinstance(t, dict):
             continue
         fight, zone = t.get('fight', ''), t.get('zone_regex', '')
         if not isinstance(fight, str) or not isinstance(zone, str):
-            # Skip malformed rows whose values cannot serve as dictionary keys.
             continue
         if fight and zone:
             counts[fight][zone] += 1
@@ -697,16 +663,13 @@ def convert_xml(xml_path: Path, zone_map: dict[str, str], *,
                 content = source.read(MAX_XML_BYTES + 1)
         if len(content) > MAX_XML_BYTES:
             raise ValueError("The XML file exceeds the 16 MiB import limit")
-        # Scan the whole file for DTDs, including after long comments. Remove NULs to
-        # recognize UTF-16 declarations.
+        # Scan the whole file for DTDs. Remove NULs to recognize UTF-16 declarations.
         head = content.replace(b'\x00', b'')
         if b'<!DOCTYPE' in head or b'<!ENTITY' in head:
-            # Refuse DTDs because ElementTree expands their entities.
             raise ValueError("DOCTYPE and ENTITY declarations are not supported")
         root = ET.fromstring(content)
         if strict and (root.tag != 'TriggernometryExport' or root.find('ExportedFolder') is None):
             raise ValueError("The file is not a Triggernometry folder export")
-    # These errors cover unsupported encoding declarations.
     except (OSError, ET.ParseError, LookupError, ValueError) as e:
         if strict:
             raise
@@ -734,7 +697,6 @@ def convert_xml(xml_path: Path, zone_map: dict[str, str], *,
         multi = len(pairs) > 1
         for log_type, ability_id in pairs:
             # Include the fight in the stable ID because fights can reuse ability IDs.
-            # Add an occurrence suffix for repeated keys within one file.
             key = f'{fight}\n{log_type}\n{ability_id}'
             n = key_counts.get(key, 0)
             key_counts[key] = n + 1
@@ -773,9 +735,6 @@ def main() -> None:
         print(f"  ERROR: {EXISTING_JSON} must hold a JSON array of triggers", file=sys.stderr)
         sys.exit(1)
     def _dedup_keys(log_type: str, ability_id: str) -> set[tuple[str, str]]:
-        """Expand pipe alternatives into individual log type and ID pairs for
-        deduplication.
-        """
         lts = [p.strip() for p in str(log_type).split('|') if p.strip()]
         ids = [p.strip().upper() for p in str(ability_id).split('|') if p.strip()]
         return {(lt, aid) for lt in lts for aid in ids}
@@ -798,12 +757,10 @@ def main() -> None:
     xml_files: list[Path] = []
     for src in SOURCE_DIRS:
         if src.exists():
-            # Accept uppercase XML extensions on Linux too.
             xml_files.extend(p for p in src.rglob('*') if p.suffix.lower() == '.xml')
         else:
             print(f"  WARN: source dir not found: {src}", file=sys.stderr)
 
-    # Skip hidden directories and XML files unrelated to triggers.
     xml_files = [
         f for f in xml_files
         if not any(part.startswith('.') for part in f.parts) and 'pom.xml' not in f.name

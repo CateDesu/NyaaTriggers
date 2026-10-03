@@ -1,20 +1,15 @@
 name: Release
 
-# Tags build stable releases using the matching source version. Main pushes build
-# rolling releases stamped with the source version and run number. Pruning removes older
-# rolling releases while preserving milestone tags.
 on:
   push:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
-# Grant write access only to jobs that publish or prune releases.
 permissions:
   contents: read
 
-# Serialize builds per ref so newer main pushes supersede older rolling builds without
-# cancelling milestone tags.
+# Serialize per ref so main pushes supersede rolling builds while milestone tags finish.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
@@ -41,8 +36,6 @@ jobs:
           if [ "$REF_TYPE" = "tag" ]; then
             TAG="$REF_NAME"
             VER="${TAG#v}"
-            # Require the source version to match an explicit tag so the installed build
-            # reports the right version.
             BASE=$(grep -oP '^_VERSION\s*=\s*"\K[^"]+' nyaatriggers/app_common.py)
             if [ "$BASE" != "$VER" ]; then
               echo "::error::_VERSION $BASE does not match tag $TAG"; exit 1
@@ -54,7 +47,6 @@ jobs:
             BASE=$(grep -oP '^_VERSION\s*=\s*"\K[^"]+' nyaatriggers/app_common.py)
             if [ -z "$BASE" ]; then echo "::error::could not read _VERSION from nyaatriggers/app_common.py"; exit 1; fi
             VER="${BASE}.${{ github.run_number }}"
-            # Only main can publish rolling releases.
             if [ "$REF_NAME" != "main" ]; then
               echo "::error::branch $REF_NAME has no release channel"; exit 1
             fi
@@ -72,8 +64,6 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Building tag=$TAG version=$VER prerelease=$PRE rolling=$ROLL"
 
-      # Require rolling versions to advance beyond published releases. Ignore drafts
-      # that may belong to builds still running.
       - name: Refuse to regress the rolling channel
         if: steps.v.outputs.rolling == 'true'
         env:
@@ -85,7 +75,6 @@ jobs:
           jq 'add | map({tagName: .tag_name, isDraft: .draft, isPrerelease: .prerelease})' release-pages.json > releases.json
           python3 tools/release_policy.py check "$TAG" < releases.json
 
-  # Require all test suites to pass before building or publishing.
   test:
     runs-on: ubuntu-22.04
     timeout-minutes: 15
@@ -125,15 +114,14 @@ jobs:
           curl -fL --retry 3 --retry-all-errors -o voices/en_US-arctic-medium.onnx \
             "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/arctic/medium/en_US-arctic-medium.onnx"
 
-      # Check the voice against its pinned release checksum.
       - name: Verify voice model checksum
         run: echo "483303e294947a3ec2f910ea96093d876e1640f5772e9d89e511d6c82c667286  voices/en_US-arctic-medium.onnx" | sha256sum -c
 
       - name: Create/refresh the GitHub release with voice assets
         uses: softprops/action-gh-release@v3
         with:
-          # Pass the computed tag for rolling builds. Keep the release draft until both
-          # platform archives are ready.
+          # Keep the draft until both platform archives are ready.
+          # Rolling builds need the computed tag.
           tag_name: ${{ needs.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
           prerelease: ${{ needs.meta.outputs.prerelease }}
@@ -143,7 +131,6 @@ jobs:
             voices/en_US-arctic-medium.onnx
             voices/en_US-arctic-medium.onnx.json
 
-  # Build the engine jar once and share it with both platform jobs.
   build-sidecar:
     needs: [meta, test]
     runs-on: ubuntu-latest
@@ -184,8 +171,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      # Capture an optional startup inventory so fresh installs can list engine triggers
-      # before their first launch.
+      # Seed inventory lets fresh installs list triggers before the first engine launch.
       - name: Harvest Triggevent inventory seed
         continue-on-error: true
         run: |
@@ -261,8 +247,6 @@ jobs:
       - name: Verify source updates on Windows
         run: python -m tests test_updater_integration
 
-      # Stamp rolling builds with the release version so the updater recognizes them as
-      # current.
       - name: Stamp rolling version into _VERSION
         if: needs.meta.outputs.rolling == 'true'
         shell: bash
@@ -307,7 +291,6 @@ jobs:
         shell: bash
         run: |
           curl.exe -fL --retry 3 --retry-all-errors -o jre.zip "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jre/hotspot/normal/eclipse"
-          # Check the JRE archive against the checksum reported for this binary.
           python - <<'PY'
           import json, urllib.request, hashlib, sys
           url = ("https://api.adoptium.net/v3/assets/feature_releases/17/ga"
@@ -455,7 +438,6 @@ jobs:
         run: |
           curl -fL --retry 3 --retry-all-errors -o jre.tar.gz \
             "https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jre/hotspot/normal/eclipse"
-          # Check the JRE archive against the checksum reported for this binary.
           python3 - <<'PY'
           import json, urllib.request, hashlib, sys
           url = ("https://api.adoptium.net/v3/assets/feature_releases/17/ga"
@@ -534,15 +516,12 @@ jobs:
       - name: Upload Linux build to release
         run: |
           gh release upload ${{ needs.meta.outputs.tag }} NyaaTriggers-linux.tar.gz NyaaTriggers-linux.tar.gz.sha256 --clobber
-          # Publish the engine separately for independent updates, including its
-          # existing checksum sidecar.
           (cd triggevent-core/target && sha256sum triggevent-core.jar) > triggevent-core.jar.sha256
           gh release upload ${{ needs.meta.outputs.tag }} triggevent-core/target/triggevent-core.jar triggevent-core.jar.sha256 --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Publish after both platform archives are ready. Failed builds leave a draft so users
-  # retain the previous release.
+  # Failed builds leave a draft so users retain the previous release.
   publish:
     needs: [meta, build-windows, build-linux]
     runs-on: ubuntu-latest
@@ -566,8 +545,7 @@ jobs:
           gh release edit "$TAG" --draft=false --latest="$LATEST"
           echo "Published $TAG"
 
-  # Prune superseded rolling releases only after publication. Preserve milestone tags as
-  # rollback choices.
+  # Preserve milestone tags as rollback choices when pruning rolling releases.
   prune-rolling:
     needs: [meta, publish]
     if: needs.meta.outputs.rolling == 'true'

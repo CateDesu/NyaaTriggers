@@ -1,5 +1,3 @@
-"""Find sessions, navigate bookmarks, and copy observed pull details from Prog."""
-
 from copy import deepcopy
 import unittest
 from unittest.mock import patch

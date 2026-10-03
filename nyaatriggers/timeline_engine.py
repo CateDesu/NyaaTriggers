@@ -1,7 +1,4 @@
-"""Run cactbot format timelines against incoming log lines. Combat start or a nonplayer
-ability starts the clock. A wipe, zone change or lost feed resets it. Matching sync
-entries move the clock and mark callouts at or before the target as fired.
-"""
+"""Run cactbot timelines against log lines. Syncs move the clock and skip earlier callouts."""
 
 import re
 import time as _time
@@ -15,8 +12,6 @@ from nyaatriggers.drop_log import log_drop
 if TYPE_CHECKING:
     from nyaatriggers.timeline_parser import TimelineEntry
 
-# Map cactbot events and fields to ACT log columns. Reject entries with unmapped fields
-# because their constraints cannot be checked.
 _SYNC_TYPES: dict[str, tuple[tuple[str, ...], dict[str, int]]] = {
     "Ability":          (("21", "22"), {"id": 4, "source": 3}),
     "StartsUsing":      (("20",),      {"id": 4, "source": 3}),
@@ -37,9 +32,6 @@ SYNC_LOG_TYPES = frozenset(lt for types, _fields in _SYNC_TYPES.values() for lt 
 
 
 def _check_sync_type_collisions() -> None:
-    """Reject conflicting field maps for the same log type. Identical maps may share a
-    type.
-    """
     claimed: dict[str, tuple[str, dict[str, int]]] = {}
     for name, (types, idx_map) in _SYNC_TYPES.items():
         for lt in types:
@@ -54,13 +46,10 @@ _check_sync_type_collisions()
 
 
 def _field_matches(pattern: str, value: str) -> bool:
-    """Match cached cactbot regexes, falling back to literal comparison if compilation
-    fails.
-    """
+    """Match cached regexes, falling back to literal comparison on compilation failure."""
     rx = compile_user_regex(pattern, re.IGNORECASE)
     if rx is None:
-        # Log refused patterns once because a literal comparison cannot match regex
-        # alternatives.
+        # Report refused patterns once. Literal matching cannot handle regex alternatives.
         if pattern not in _fallback_logged:
             _fallback_logged.add(pattern)
             log_drop("timeline-sync",
@@ -72,7 +61,6 @@ def _field_matches(pattern: str, value: str) -> bool:
 
 _fallback_logged: set[str] = set()
 
-# Director update command for an instance wipe or reset.
 _WIPE_COMMAND = "4000000F"
 
 
@@ -104,14 +92,12 @@ class TimelineEngine(QObject):
         else:
             self.reset()
         self._entries = entries
-        # Report unsupported event types once when loading the timeline.
         unsupported = sorted({e.event_type for e in entries
                               if e.event_type and e.event_type not in _SYNC_TYPES})
         if unsupported:
             log_drop("timeline-sync",
                      "unsupported sync types, those entries never sync: "
                      + ", ".join(unsupported))
-        # Unmapped fields prevent an entry from syncing. Report them at load time.
         unmapped = sorted({f"{e.event_type}.{key}"
                            for e in entries if e.event_type in _SYNC_TYPES
                            for key in e.event_fields
@@ -120,7 +106,6 @@ class TimelineEngine(QObject):
             log_drop("timeline-sync",
                      "unsupported sync fields, those entries never sync: "
                      + ", ".join(unmapped))
-        # Legacy regex syncs are display only, so report those too.
         legacy = sum(1 for e in entries if e.legacy_sync and not e.event_type)
         if legacy:
             log_drop("timeline-sync",
@@ -185,9 +170,7 @@ class TimelineEngine(QObject):
         return _time.monotonic() if self._replay_now is None else self._replay_now
 
     def feed_status_changed(self, connected: bool, _msg: str = "") -> None:
-        """Reset on feed loss to stop stale callouts. Combat ending does not reset the
-        clock because fights can have intermissions.
-        """
+        """Reset on feed loss. Combat exit may be an intermission and must not reset the clock."""
         if not connected:
             self.reset()
 
@@ -195,14 +178,12 @@ class TimelineEngine(QObject):
         return (self._now() - self._t0) if self._active else 0.0
 
     def is_active(self) -> bool:
-        """Whether the fight clock is running."""
         return self._active
 
     def has_schedule(self) -> bool:
         return bool(self._entries)
 
     def upcoming(self) -> list[tuple[float, str]]:
-        """Return the full display schedule as time and label pairs."""
         return [(e.time, e.label) for e in self._entries
                 if e.label and not e.is_internal]
 
@@ -225,8 +206,7 @@ class TimelineEngine(QObject):
 
     @staticmethod
     def _is_combat_start(fields: list[str]) -> bool:
-        # InCombat 260 also starts the clock for targets such as striking dummies that
-        # never cast.
+        # InCombat also covers targets such as striking dummies that never cast.
         if fields[0] == "260":
             return len(fields) > 3 and fields[3] == "1"
         if fields[0] not in ("20", "21", "22"):
@@ -253,7 +233,6 @@ class TimelineEngine(QObject):
         for key, pattern in entry.event_fields.items():
             idx = idx_map.get(key)
             if idx is None:
-                # Reject constraints whose fields cannot be checked.
                 return False
             if len(fields) <= idx or not _field_matches(pattern, fields[idx]):
                 return False
@@ -261,9 +240,7 @@ class TimelineEngine(QObject):
 
 
     def _check_syncs(self, fields: list[str]) -> None:
-        # Keep syncs armed for their full window after a callout fires so late lines can
-        # correct the clock. Choose the nearest matching entry when windows overlap, or
-        # an earlier use of the same ability could pull the clock back.
+        # Keep fired syncs armed for late lines. Prefer the nearest match in overlapping windows.
         t = self.current_time()
         best_i = best_entry = None
         best_dist = None
@@ -282,21 +259,17 @@ class TimelineEngine(QObject):
         if best_entry is None:
             return
         target = best_entry.jump if best_entry.jump is not None else best_entry.time
-        # Fire the callout before a forward snap marks it as skipped. _fire ignores
-        # entries already spoken.
+        # Speak before a forward snap skips the cue. _fire ignores already spoken entries.
         self._fire(best_i, best_entry)
-        # A sync jump to zero stops the timeline. Only a forcejump reached by the clock
-        # loops to zero.
+        # A sync jump to zero stops the clock. Only a timed forcejump loops.
         if best_entry.jump is not None and best_entry.jump == 0:
             self.reset()
             return
         self._snap(target, keep_fired=best_i)
 
     def _snap(self, target: float, keep_fired: "int | None" = None) -> None:
-        """Move the clock to target. Mark entries at or before target as fired to skip
-        missed callouts. A backward jump rearms later entries. keep_fired preserves the
-        entry that caused the jump so duplicate sync lines cannot speak it again.
-        """
+        """Skip cues through target and rearm later cues on backward jumps.
+keep_fired preserves the triggering entry against duplicate sync lines."""
         old_t = self.current_time()
         self._t0 = self._now() - target
         self._jumped = {i for i, entry in enumerate(self._entries)
@@ -339,9 +312,7 @@ class TimelineEngine(QObject):
                 self._jumped.add(i)
             self._fire(i, entry)
             if jump_ready:
-                # The jump changes the clock, so resume iteration on the next tick.
-                # Backward jumps rearm this entry for another loop. Other jumps keep it
-                # fired to avoid repeating every tick.
+                # Only backward jumps rearm the entry for another loop.
                 self._snap(entry.jump,
                            keep_fired=i if entry.jump >= entry.time else None)
                 return

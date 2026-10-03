@@ -1,6 +1,4 @@
-"""Schedule status warnings before expiry. Track each trigger, effect, source and target
-separately. Refresh events reset the timer, and matching loss events cancel it.
-"""
+"""Track expiry warnings by trigger, effect, source and target. Refreshes reset the timer."""
 
 import math
 import time
@@ -10,7 +8,6 @@ from PyQt6.QtCore import QObject, QTimer, Qt
 
 
 class StatusTimerRunner(QObject):
-
     def __init__(self, trigger, captured: dict, effect_id: str, source_id: str,
                  target_id: str, delay_ms: float, on_complete, parent=None):
         super().__init__(parent)
@@ -41,7 +38,6 @@ class StatusTimerRunner(QObject):
         self._timer.start(math.ceil(min(remaining * 1000, 2**31 - 1)))
 
     def matches_loss(self, effect_id: str, source_id: str, target_id: str) -> bool:
-        """True when this LosesEffect should cancel the pending warning."""
         return (self.effect_id == effect_id
                 and self.source_id == source_id
                 and self.target_id == target_id)

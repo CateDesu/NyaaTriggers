@@ -1,5 +1,3 @@
-"""Recovery from malformed files and restoration of saved preferences."""
-
 import contextlib
 import json
 import os

@@ -1,5 +1,3 @@
-"""Saved prog sessions and a selectable pull duration chart."""
-
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRectF

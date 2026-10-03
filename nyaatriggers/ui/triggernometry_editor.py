@@ -1,5 +1,3 @@
-"""Open native packs from the trigger list and apply saved edits."""
-
 import uuid
 
 from PyQt6.QtWidgets import QInputDialog, QMessageBox

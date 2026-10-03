@@ -6,10 +6,7 @@ cd "$(dirname "$0")"
 echo "=== NyaaTriggers Setup ==="
 echo
 
-# Install system dependencies through the package manager. Voice setup runs on first
-# launch.
 
-# Use sudo only when needed and available.
 SUDO=()
 if [ "$(id -u)" -ne 0 ]; then
     SUDO=(sudo)
@@ -21,7 +18,6 @@ if command -v pacman &>/dev/null; then
     ${SUDO[@]+"${SUDO[@]}"} pacman -S --needed --noconfirm python-pyqt6 qt6-websockets python-websockets python-regex python-packaging alsa-utils
 elif command -v apt &>/dev/null; then
     echo "Detected apt - installing system packages..."
-    # Refresh package lists for minimal installations.
     ${SUDO[@]+"${SUDO[@]}"} apt update
     # Debian packages the Qt WebSockets binding separately.
     ${SUDO[@]+"${SUDO[@]}"} apt install -y python3-pyqt6 python3-pyqt6.qtwebsockets python3-websockets python3-regex python3-packaging python3-venv alsa-utils

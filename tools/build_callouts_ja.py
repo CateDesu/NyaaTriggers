@@ -1,7 +1,4 @@
-"""Build Japanese callout display text, kana readings and names from the phrase maps and
-shipped triggers. Preserve every source, target and count token in display and speech.
-Report readings containing kanji. Run python tools/build_callouts_ja.py.
-"""
+"""Build Japanese callouts and readings, preserving source, target and count tokens."""
 from __future__ import annotations
 
 import json
@@ -17,8 +14,7 @@ _NAMES = _REPO / "tools" / "trigger_names_ja.json"
 _OUT = _REPO / "assets" / "callouts_ja.json"
 _MAIN = _REPO / "nyaatriggers/app_common.py"
 
-# Preserve runtime substitution tokens. Other engine tokens are already resolved before
-# phrase matching and may be omitted from translations.
+# Preserve runtime tokens. Other engine tokens resolve before phrase matching.
 _SUBST_TOKENS = ("source", "target", "count")
 # Preserve token counts as well as names.
 _TOKENS = lambda s: {t: s.count("{" + t + "}") for t in _SUBST_TOKENS if "{" + t + "}" in s}
@@ -35,7 +31,6 @@ def _str_field(v) -> str:
 
 
 def _norm_phrase_map(raw: dict) -> dict:
-    """Normalize English phrase entries into display and reading pairs."""
     out = {}
     for k, v in raw.items():
         k = k.strip()
@@ -50,8 +45,6 @@ def _norm_phrase_map(raw: dict) -> dict:
         if not disp:
             continue
         if k in out:
-            # Trim keys as the runtime does. Keep the first entry if trimmed keys
-            # collide.
             print(f"  WARNING: duplicate phrase key after stripping whitespace: "
                   f"{k!r}, keeping first", file=sys.stderr)
             continue
@@ -77,13 +70,11 @@ def main() -> int:
     for t in triggers:
         tid, text = t.get("id"), _str_field(t.get("tts_text"))
         if isinstance(tid, str) and tid and text in valid:
-            # Warn when a reused ID would replace an earlier callout.
             if tid in callouts and callouts[tid] != valid[text][0]:
                 print(f"  WARNING: duplicate trigger id {tid!r} with a different "
                       f"callout, keeping last", file=sys.stderr)
             callouts[tid] = valid[text][0]
     phrases = {eng: disp for eng, (disp, _r) in valid.items()}
-    # Warn when shared display text has conflicting readings.
     by_disp = {}
     for _e, (disp, read) in valid.items():
         if read and read != disp:
@@ -93,7 +84,6 @@ def main() -> int:
 
     name_map = {}
     if _NAMES.exists():
-        # Trim name keys to match runtime lookup.
         names_raw = json.loads(_NAMES.read_text(encoding="utf-8"))
         name_map = {ks: v.strip() for k, v in names_raw.items()
                     if (ks := k.strip()) and not ks.startswith("_")
@@ -122,11 +112,9 @@ def main() -> int:
         "phrases": dict(sorted(phrases.items())),
         "readings": dict(sorted(readings.items())),
         "names": dict(sorted(names.items())),
-        # Include translations by name for engine rows without known IDs.
         "names_text": dict(sorted(name_map.items())),
     }
-    # Replace through a sibling temporary file to preserve previous output if
-    # interrupted.
+    # A sibling temporary file preserves the previous output if interrupted.
     tmp = _OUT.with_name(_OUT.name + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, _OUT)

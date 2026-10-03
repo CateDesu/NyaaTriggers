@@ -1,8 +1,4 @@
-### SAMPLE FIGHT (striking dummy test)
-# Zone-locked to Middle La Noscea (Summerford Farms dummies).
-# Syncs on combat start; bars cycle for two minutes and then LOOP until you
-# leave combat; every entry also speaks, so the plugin alert path and TTS get
-# exercised along with the bars. Leaving combat resets the run.
+# Exercise timeline bars and spoken alerts on Middle La Noscea striking dummies.
 # reset-on-combat-end
 
 hideall "--Reset--"

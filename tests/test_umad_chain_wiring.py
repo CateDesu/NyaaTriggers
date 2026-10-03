@@ -1,4 +1,3 @@
-"""UMAD chain role backfill, debounce retries and marker dispatch."""
 import os
 import sys
 
@@ -16,16 +15,16 @@ def check(name, cond):
         FAILS.append(name)
 
 
-# The cast mirrors test_umad_chains.py, D4 and H2 carry Accretion.
+# D4 and H2 carry Accretion.
 JOBS = {
     "10000001": 34,   # D1 SAM
     "10000002": 38,   # D2 DNC
     "10000003": 42,   # D3 PCT
-    "10000004": 41,   # D4 VPR   (Accretion)
+    "10000004": 41,   # D4 VPR
     "10000011": 19,   # T1 PLD
     "10000012": 21,   # T2 WAR
     "10000021": 24,   # H1 WHM
-    "10000022": 40,   # H2 SGE   (Accretion)
+    "10000022": 40,   # H2 SGE
 }
 D1, D2, D3, D4 = "10000001", "10000002", "10000003", "10000004"
 T1, T2, H1, H2 = "10000011", "10000012", "10000021", "10000022"
@@ -48,9 +47,6 @@ class FakeTimer:
 
 
 class FakeWindow:
-    """The chain half of MainWindow with fake leaf collaborators. Jobs start
-    empty, the mid-instance restart the backfill exists for."""
-
     _norm_hex = staticmethod(mw.MainWindow._norm_hex)
     _umad_chain_line = mw.MainWindow._umad_chain_line
     _dispatch_umad_chain_actions = mw.MainWindow._dispatch_umad_chain_actions
@@ -108,7 +104,6 @@ def markmap(w):
     return {a: m for a, m in w.marks}
 
 
-# roles unknown at the burst: only the Accretion queue marks
 w = FakeWindow()
 w.feed_assignment()
 check("unknown roles: the fast path marks only the Accretion head",
@@ -116,7 +111,6 @@ check("unknown roles: the fast path marks only the Accretion head",
 w._on_umad_chain_flush()
 check("unknown roles: the debounce flush stays closed", len(w.marks) == 1)
 
-# the PartyChanged backfill lands late: it re-arms the flush
 before = w._umad_chain_flush_timer.armed
 w._on_ws_party_jobs({int(a, 16): j for a, j in JOBS.items()})
 check("party jobs re-arm the flush while queues are open",
@@ -126,7 +120,6 @@ mm = markmap(w)
 check("flush after the backfill marks the role heads",
       mm.get(D1) == "attack1" and mm.get(T1) == "attack2")
 
-# the getCombatants backfill re-arms it the same way
 w = FakeWindow()
 w.feed_assignment()
 w._on_umad_chain_flush()
@@ -140,7 +133,6 @@ w._on_umad_chain_flush()
 check("flush after the combatants backfill marks the role heads",
       len(w.marks) == 3)
 
-# a cold engine re-arms nothing
 w = FakeWindow()
 before = w._umad_chain_flush_timer.armed
 w._on_ws_party_jobs({int(D1, 16): 34})

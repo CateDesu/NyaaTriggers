@@ -1,4 +1,3 @@
-"""Triggernometry folder mapping, ID expansion and input limits."""
 import os
 import sys
 import tempfile
@@ -21,7 +20,6 @@ def check(name, cond):
         raise AssertionError(name)
 
 
-# Hunts, the word boundary keeps trial folders out
 def test_hunts_boundary_keeps_trials_out():
     check("trial folder named The Hunt Line stays a trial",
           path_to_fight("Trials/6.3/The Hunt Line/some trigger") == "The Hunt Line")
@@ -38,7 +36,6 @@ def test_hunts_legit_paths_unchanged():
           path_to_fight("Downloads/Hunts 6.0/Some Mark/some trigger") == "Hunts 6.0")
 
 
-# Trials run after Party Finder, so the boundary matters there too
 def test_party_finder_boundary():
     check("trial folder named Partywide Mechanics stays a trial",
           path_to_fight("Trials/6.3/Partywide Mechanics/some trigger") == "Partywide Mechanics")
@@ -48,7 +45,6 @@ def test_party_finder_boundary():
           path_to_fight("Downloads/Party Finder/some trigger") == "Party Finder")
 
 
-# sharing channel TOP, STOP and DESKTOP can't mistag
 def test_top_boundary():
     check("TOP share still tags TOP",
           path_to_fight("Sharing Channel/Ultimate/TOP/some trigger") == "TOP")
@@ -58,7 +54,6 @@ def test_top_boundary():
           path_to_fight("Sharing Channel/Ultimate/DESKTOP Icons/some trigger") == "")
 
 
-# sharing channel job category, a name like Edwards stays out
 def test_job_category_boundary():
     check("disciples of war category still finds the job",
           path_to_fight("Sharing Channel/Disciples of War/WHM/some trigger") == "WHM")
@@ -68,7 +63,6 @@ def test_job_category_boundary():
           path_to_fight("Sharing Channel/Edwards Stuff/Some Fight") == "Some Fight")
 
 
-# Eureka BA, uppercase words like ZABAN can't mistag
 def test_ba_boundary():
     check("BA folder still tags BA",
           path_to_fight("Eureka-Like/BA/some trigger") == "BA")
@@ -78,7 +72,6 @@ def test_ba_boundary():
           path_to_fight("Eureka-Like/ZABAN/some trigger") == "ZABAN")
 
 
-# snake_case folders file like their spaced forms
 def test_word_bounds_treat_underscore_as_separator():
     check("snake_case job category finds the job",
           path_to_fight("Sharing Channel/disciples_of_war/1 - WHM/stuff") == "WHM")
@@ -91,7 +84,6 @@ def test_word_bounds_treat_underscore_as_separator():
           and path_to_fight("Eureka-Like/BA Raid/thing") == "BA")
 
 
-# a repeat count past 4300 digits must not kill the scan
 _GIANT_RX = r'^21\|(?:[^|]*\|){' + '9' * 5000 + r'}8B5F\|'
 
 
@@ -118,20 +110,18 @@ def test_sane_repeat_counts_expand_as_before():
           extract_ids(r'^21\|(?:[^|]*\|){11}8B5F\|') == [])
 
 
-# non scalar fight or zone rows are skipped, the map still builds
 def test_load_zone_map_skips_non_scalar_rows():
     existing = [
         {"fight": "DSR", "zone_regex": " Dragonsong"},
-        {"fight": ["DSR"], "zone_regex": " Dragonsong"},   # Invalid fight type.
-        {"fight": "TOP", "zone_regex": 42},                # Invalid zone type.
+        {"fight": ["DSR"], "zone_regex": " Dragonsong"},
+        {"fight": "TOP", "zone_regex": 42},
         "not a dict",
-        {"fight": "", "zone_regex": "x"},                  # empty fight ignored
+        {"fight": "", "zone_regex": "x"},
     ]
     check("non scalar rows are skipped and good rows build the map",
           load_zone_map(existing) == {"DSR": " Dragonsong"})
 
 
-# every enclosing group form strips before the id expands
 def test_named_group_forms_strip_in_expand():
     check(".NET single quote named group strips",
           expand_id_expr("(?'id'8B5F)") == ["8B5F"])

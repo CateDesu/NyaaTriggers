@@ -1,7 +1,4 @@
-"""Store pulls as JSONL with bounded retention. Roll files when a fight reaches its pull
-limit or adding a fight would exceed the distinct fight limit. Keep the active log in
-addition to the retained completed logs. Manage generated top-level JSONL files.
-"""
+"""Store pulls in JSONL with bounded retention. Keep the active log and retained completed logs."""
 
 from __future__ import annotations
 
@@ -30,9 +27,7 @@ _LOG_NAME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}(?
 
 
 def write_pull(log_dir, data: dict, when: "datetime | None" = None) -> Path:
-    """Append a pull, roll if needed and prune old logs. Return the written path. Log
-    retention failures without discarding the new pull.
-    """
+    """Append a pull and return its path. Retention failures do not discard the new pull."""
     global _last_written
     with _write_lock:
         when = when or datetime.now()
@@ -50,8 +45,7 @@ def write_pull(log_dir, data: dict, when: "datetime | None" = None) -> Path:
         # Create logs with owner access only, independently of the process umask.
         def _owner_only(path, flags):
             return os.open(path, flags, 0o600)
-        # Finish any partial final line before appending so crash damage cannot corrupt
-        # the next record.
+        # A partial final line must not corrupt the next record.
         needs_newline = False
         try:
             with open(path, "rb") as fh:
@@ -79,15 +73,11 @@ def write_pull(log_dir, data: dict, when: "datetime | None" = None) -> Path:
 
 def enforce_retention(log_dir, max_logs: "int | None" = None,
                       keep: "Path | None" = None) -> None:
-    """Prune completed logs while preserving the active file and keep. Track activity by
-    the last write rather than filename order because the system clock may move
-    backward.
-    """
+    """Preserve the active file and keep. Use write activity because the clock may move backward."""
     if max_logs is None:
         max_logs = MAX_LOGS
     files = _log_files(Path(log_dir))
-    # Fall back to the newest filename when this process has no active file in the
-    # directory.
+    # Use filename order only when this process has no active file.
     active = _last_written if _last_written in files \
         else (files[-1] if files else None)
     retired = [p for p in files if p != active and p != keep]
@@ -99,7 +89,6 @@ def enforce_retention(log_dir, max_logs: "int | None" = None,
 
 
 def _current_log(log_dir: Path) -> "Path | None":
-    """Return the last filename in sorted order."""
     files = _log_files(log_dir)
     return files[-1] if files else None
 
@@ -139,7 +128,6 @@ def _new_log(log_dir: Path, when: datetime) -> Path:
 
 
 def _title_of(raw: str) -> str:
-    """Use Unknown for malformed records so they still count toward rollover limits."""
     try:
         title = json.loads(raw).get("title")
     except (ValueError, AttributeError, RecursionError):
@@ -148,15 +136,11 @@ def _title_of(raw: str) -> str:
 
 
 def _is_full(path: Path, title: str) -> bool:
-    """Check whether appending this fight would exceed a pull or distinct fight limit.
-    """
     counts: "dict[str, int]" = {}
     try:
         # Replace invalid bytes so one damaged line cannot prevent future recording.
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError as exc:
-        # Keep the active log on transient read errors instead of creating a file for
-        # every pull.
         log_drop("dps-store", f"active log unreadable, roll caps skipped: {exc}")
         return False
     for raw in lines:

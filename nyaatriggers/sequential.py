@@ -1,5 +1,3 @@
-"""Wait for follow-up events and the callout delay before firing a trigger."""
-
 import math
 import re
 import time
@@ -26,7 +24,6 @@ def _ability_action_key(fields):
 
 
 class SequentialRunner(QObject):
-
     def __init__(self, trigger, captured: dict,
                  on_complete, on_expire, parent=None, cooldown_key="", start_fields=None):
         super().__init__(parent)
@@ -60,11 +57,8 @@ class SequentialRunner(QObject):
         if action_key is not None and action_key in self._seen_abilities:
             return False
         step = self.trigger.sequence[self._step]
-        # Normalize step log types using the same default and whitespace handling as
-        # Trigger.from_dict.
         log_type = _str_or(step.get("log_type"), "20").strip() or "20"
-        # For alternative log types, select this line's layout before reading field
-        # indices.
+        # Select this line's layout when log types have alternatives.
         if "|" in log_type:
             if fields[0] not in (p.strip() for p in log_type.split("|")):
                 return False
@@ -74,8 +68,7 @@ class SequentialRunner(QObject):
 
         ability_id = str(step.get("ability_id", "") or "")
         ability_regex = str(step.get("ability_regex", "") or "")
-        # Ignore ability IDs for line types without an ID field and use regex matching
-        # instead.
+        # Use regex matching for line types without an ability ID field.
         if ability_id and log_type in _ID_IDX:
             id_idx = _ID_IDX[log_type]
             if len(fields) <= id_idx:
@@ -126,8 +119,7 @@ class SequentialRunner(QObject):
             self._arm_delay()
             return
         timeout_s = self.trigger.sequence[self._step].get("timeout_s")
-        # Use ten seconds for invalid, nonfinite or sub-millisecond timeouts instead of
-        # creating an immediately expiring timer.
+        # Invalid or sub-millisecond timeouts fall back to ten seconds.
         try:
             timeout_ms = 10000 if timeout_s is None else int(float(timeout_s) * 1000)
         except (TypeError, ValueError, OverflowError):

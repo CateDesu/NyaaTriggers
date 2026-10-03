@@ -1,4 +1,3 @@
-"""UMAD gaze routing, mode gates, retries and plain rule suppression."""
 import os
 import sys
 import types
@@ -28,8 +27,6 @@ FAKE, REAL = FAKE_GAZE_VFX, REAL_GAZE_VFX
 
 
 class FakeWindow:
-    """Composes the real gaze wiring with fake leaf collaborators."""
-
     _norm_hex = staticmethod(mw.MainWindow._norm_hex)
     _umad_gaze_line = mw.MainWindow._umad_gaze_line
     _umad_gaze_cast = mw.MainWindow._umad_gaze_cast
@@ -99,7 +96,6 @@ def markmap(w):
     return {a: m for a, m in w.marks}
 
 
-# happy path: the labeled pull shape, fake VFX then real VFX
 w = FakeWindow(slots={A: 1, B: 2, C: 3, D: 4})
 w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
@@ -114,19 +110,16 @@ check("real wave gets the ignore signs (by slot)",
 w.feed("26", CURSED_SHRIEK, A, dur="60.00")
 check("duplicate gaze gain after both pairs sends no clears", w.clears == [])
 
-# The elemental casts must not arm either gaze direction.
 for cast in ("BB1E", "BB1F", "BB20", "BB21"):
     w = FakeWindow()
     w.cast(cast)
     w.gaze([(A, "60.00"), (B, "60.00")])
     check(f"{cast} alone cannot select gaze signs", w.marks == [])
 
-# no VFX, no marks
 w = FakeWindow()
 w.gaze([(A, "60.00"), (B, "60.00"), (C, "69.00"), (D, "69.00")])
 check("gains without a VFX tell mark nothing", w.marks == [])
 
-# gating
 w = FakeWindow(gaze_on=False)
 w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
@@ -149,19 +142,17 @@ check("unknown fight (started mid-instance) still marks",
       markmap(w) == {A: BND1, B: BND2})
 
 w = FakeWindow()
-w.feed("26", "BA94", A)          # a non-gaze status id is not routed
-w.cast("BA94")                    # Mystery Magic is not a followup id
+w.feed("26", "BA94", A)
+w.cast("BA94")
 w.gaze([(A, "60.00"), (B, "60.00")])
 check("unrelated cast ids arm nothing, the set fails closed", w.marks == [])
 
-# a non-numeric duration field is not load-bearing anymore
 w = FakeWindow()
 w.vfx(FAKE)
 w.gaze([(A, "bad"), (B, "60.00")])
 check("an unparseable duration still marks, the tell is the VFX",
       markmap(w) == {A: BND1, B: BND2})
 
-# slot-unknown marks are queued and retried, not lost
 w = FakeWindow(mark_ok=False)
 w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
@@ -171,14 +162,12 @@ w._mark_ok = True
 w._retry_umad_gaze_pending()
 check("the party-refresh retry sends the held gaze marks", len(w.marks) == 2)
 
-# a loss clears the sign through the transport
 w = FakeWindow()
 w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
 w.feed("30", CURSED_SHRIEK, A)
 check("losing the gaze clears that player's sign", w.clears == [A])
 
-# wipe reset clears outstanding signs
 w = FakeWindow()
 w.vfx(FAKE)
 w.gaze([(A, "60.00"), (B, "60.00")])
@@ -187,7 +176,6 @@ w.gaze([(C, "69.00"), (D, "69.00")])
 w._umad_gaze_reset(clear_marks=True)
 check("wipe/abort clears all four outstanding signs", sorted(w.clears) == [A, B, C, D])
 
-# the plain 15A7 rule is suspended while the gaze toggle is on
 rule15a7 = [{"fight": "UMAD", "status": "15A7", "marker": "circle",
              "scope": "party", "enabled": True}]
 w = FakeWindow(gaze_on=True, rules=rule15a7)

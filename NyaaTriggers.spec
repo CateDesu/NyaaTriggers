@@ -22,8 +22,7 @@ _version_stamp = Path(_version_root.name) / 'nyaatriggers.version'
 _version_stamp.write_text(_source_version.group(1), encoding='utf-8')
 datas.append((str(_version_stamp), '.'))
 
-# Collect the voice libraries and their data together. Japanese speech needs the
-# espeak-ng data as well as the Python modules.
+# Japanese speech also needs espeak-ng data.
 for pkg in ('piper', 'piper_phonemize', 'onnxruntime',
             'kokoro_onnx', 'espeakng_loader', 'phonemizer', 'language_tags'):
     d, b, h = collect_all(pkg)
@@ -31,18 +30,15 @@ for pkg in ('piper', 'piper_phonemize', 'onnxruntime',
     binaries      += b
     hiddenimports += h
 
-# Include the Triggernometry converter explicitly for frozen imports.
 hiddenimports += ['nyaatriggers.convert_triggernometry']
 
-# The reader imports WebEngine lazily. Include its modules so their hooks bundle the
-# browser process and resources.
+# Lazy WebEngine imports need explicit hooks for browser resources.
 hiddenimports += [
     'PyQt6.QtWebChannel',
     'PyQt6.QtWebEngineCore',
     'PyQt6.QtWebEngineWidgets',
 ]
 
-# Fail the build when WebEngine is missing instead of shipping an unusable reader.
 try:
     _webengine_spec = importlib.util.find_spec('PyQt6.QtWebEngineCore')
 except ModuleNotFoundError:
@@ -52,8 +48,8 @@ if _webengine_spec is None:
         '[spec] PyQt6-WebEngine is not installed in the build environment: '
         'pip install PyQt6-WebEngine==6.11.0 (keep in sync with requirements.txt)')
 
-# The plugin link imports websockets optionally in source runs, but packaged builds
-# require it. find_spec can return None or raise when a parent package is missing.
+# Packaged builds require websockets despite the optional source import.
+# find_spec may raise when a parent package is missing.
 try:
     _ws_client_spec = importlib.util.find_spec('websockets.sync.client')
 except ModuleNotFoundError:
@@ -69,31 +65,24 @@ for f in sorted(glob.glob('voices/en_US-*.onnx') + glob.glob('voices/en_US-*.onn
 
 datas += [
     ('assets/triggers.json', 'assets'),
-    # Ship retirements and callout rewrites so withdrawn triggers are removed from local
-    # overrides.
+    # Retirements must also remove withdrawn triggers from local overrides.
     ('assets/retired.json', 'assets'),
-    # English zone names allow local triggers to match on other client languages.
     ('assets/zone_names.json', 'assets'),
-    # The cactbot zone index supports timelines without local trigger files.
     ('assets/cactbot_timelines.json', 'assets'),
     ('assets/callout_defaults.json', 'assets'),
-    # Bundle the local UMAD timeline. The sample timeline remains a source example.
     ('timelines/UMAD.txt', 'timelines'),
     ('assets/icon_nyaa.png', 'assets'),
     ('assets/sakura_trees.png', 'assets'),
     ('assets/recap_icons.zip', 'assets'),
 ]
 
-# Bundle committed cactbot timelines for offline use. Writable downloads use separate
-# cache names and take precedence.
+# Writable timeline downloads take precedence over the offline bundle.
 for f in sorted(glob.glob('timelines/*.cactbot.txt')):
     datas.append((f, 'timelines'))
 
-# Bundle the Kosugi Maru font with its Apache 2.0 license.
 for f in sorted(glob.glob('fonts/*')):
     datas.append((f, 'fonts'))
 
-# Bundle UI translations for use before any network request.
 for f in sorted(glob.glob('lang/*.json')):
     datas.append((f, 'lang'))
 from PyQt6.QtCore import QLibraryInfo
@@ -102,20 +91,18 @@ datas.append((os.path.join(qt_translations, 'qtbase_ja.qm'), 'lang'))
 datas.append(('lang/SOURCES.txt', 'lang'))
 datas.append(('assets/game_data_ja.json', 'assets'))
 
-# Seed engine rows before the first sidecar launch. The writable cache takes precedence.
+# Seed engine rows before launch. The writable cache takes precedence.
 if os.path.isfile('triggevent_inventory.seed.json'):
     datas.append(('triggevent_inventory.seed.json', '.'))
 
-# Bundle Japanese callout translations as the offline copy. Downloads use a separate
-# cache.
+# Japanese callout downloads use a separate cache.
 if os.path.isfile('assets/callouts_ja.json'):
     datas.append(('assets/callouts_ja.json', 'assets'))
 
 for f in sorted(glob.glob('sounds/*.wav')):
     datas.append((f, 'sounds'))
 
-# Bundle the engine jar and JRE so no Java installation is needed. Missing files fail
-# the build unless NYAA_ALLOW_NO_ENGINE is set for development.
+# NYAA_ALLOW_NO_ENGINE permits development builds without Java assets.
 _allow_no_engine = os.environ.get('NYAA_ALLOW_NO_ENGINE') == '1'
 
 
@@ -131,7 +118,6 @@ def _require_engine(problem):
 
 _jar = os.path.join('triggevent-core', 'target', 'triggevent-core.jar')
 if os.path.isfile(_jar):
-    # Reject invalid or truncated jar downloads before packaging.
     with open(_jar, 'rb') as _fh:
         _magic = _fh.read(2)
     _have_jar = _magic == b'PK' and os.path.getsize(_jar) >= 1_000_000
@@ -149,8 +135,7 @@ if not _have_jre:
     _require_engine('no bundled JRE in ./jre')
 jre_tree = Tree('jre', prefix='jre') if _have_jre else None
 
-# Bundle the committed Triggernometry host, engine and stubs. They use .NET Framework on
-# Windows and Mono on Linux.
+# Triggernometry uses .NET Framework on Windows and Mono on Linux.
 _tn_bin = os.path.join('triggernometry-core', 'bin')
 _tn_exe = os.path.join(_tn_bin, 'triggernometry-core.exe')
 _have_tn = os.path.isfile(_tn_exe)
@@ -158,7 +143,6 @@ if not _have_tn:
     _require_engine(f'{_tn_exe} is missing')
 tn_bin_tree = Tree(_tn_bin, prefix=_tn_bin) if _have_tn else None
 
-# Use an ICO on Windows, falling back to PNG conversion when Pillow is available.
 _icon_candidates = ('assets/icon_nyaa.ico', 'assets/icon_nyaa.png')
 _icon = next((c for c in _icon_candidates if os.path.exists(c)), None)
 
@@ -174,8 +158,7 @@ a = Analysis(
     noarchive=False,
 )
 
-# Keep both keyboard libraries from the build environment to avoid incompatible X11
-# versions.
+# Exclude keyboard libraries that can bring incompatible X11 versions.
 if sys.platform.startswith('linux'):
     required_x11 = {
         'libxkbcommon.so.0', 'libxkbcommon-x11.so.0', 'libxcb-xkb.so.1',

@@ -1,5 +1,3 @@
-"""Inventory from a stopped Triggevent process must not replace current rows."""
-
 import json
 import unittest
 from unittest.mock import Mock

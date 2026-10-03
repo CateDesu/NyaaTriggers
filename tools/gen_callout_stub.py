@@ -1,8 +1,4 @@
-"""Generate a callout translation template from shipped trigger IDs and English text.
-Translate its values while preserving source, target and count tokens. Skip silent
-triggers. Run python tools/gen_callout_stub.py with optional --locale and --out
-arguments.
-"""
+"""Generate a callout translation template, preserving source, target and count tokens."""
 from __future__ import annotations
 
 import argparse
@@ -19,7 +15,6 @@ _MAIN = _REPO / "nyaatriggers/app_common.py"
 
 
 def _app_version() -> str:
-    """Read the source version from app_common.py."""
     m = re.search(r'^_VERSION\s*=\s*"([^"]+)"', _MAIN.read_text(encoding="utf-8"), re.M)
     return m.group(1) if m else "0.0.0"
 

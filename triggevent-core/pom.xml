@@ -9,7 +9,7 @@
     <version>1.0.0</version>
     <packaging>jar</packaging>
 
-    <!-- NyaaTriggers sidecar linking the GPL-3.0 event-trigger engine. This artifact is GPL-3.0. Build the engine modules with build.sh first. Trigger modules must be on the runtime classpath for discovery. -->
+    <!-- This sidecar links the GPL-3.0 event-trigger engine and is GPL-3.0. -->
 
     <properties>
         <maven.compiler.release>17</maven.compiler.release>
@@ -34,7 +34,7 @@
             <artifactId>trigger-support</artifactId>
             <version>${tv.version}</version>
         </dependency>
-        <!-- The triggers module is an aggregator. Include each trigger code submodule for runtime discovery. -->
+        <!-- triggers is an aggregator. Runtime discovery needs each code submodule. -->
         <dependency>
             <groupId>gg.xp</groupId>
             <artifactId>triggers-general</artifactId>
@@ -70,13 +70,13 @@
             <artifactId>timelines</artifactId>
             <version>${tv.version}</version>
         </dependency>
-        <!-- Include Telesto handlers for engine marker commands without the optional Telesto interface modules. -->
+        <!-- Marker commands need Telesto handlers without its optional interface modules. -->
         <dependency>
             <groupId>gg.xp</groupId>
             <artifactId>telesto-core</artifactId>
             <version>${tv.version}</version>
         </dependency>
-        <!-- Use the engine's transitive Jackson dependency so the parser and annotations stay compatible across engine updates. -->
+        <!-- Engine Jackson dependencies keep the parser and annotations compatible. -->
 
     </dependencies>
 
@@ -100,7 +100,7 @@
                                         <Nyaa-Engine-Commit>${nyaa.engine.commit}</Nyaa-Engine-Commit>
                                     </manifestEntries>
                                 </transformer>
-                                <!-- Merge service files used by Groovy, Pico and Reflections. -->
+                                <!-- Preserve services used by Groovy, Pico and Reflections. -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>
                             <filters>

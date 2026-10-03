@@ -41,8 +41,7 @@ def _regex_syntax_error(pattern: str) -> bool:
     # Do not compile again after a resource guard refuses a pattern.
     if _regex_resource_limit(pattern):
         return False
-    # Use the matching engine to distinguish syntax errors from resource limits. Deep
-    # nesting can also raise RecursionError.
+    # The matching engine distinguishes syntax errors from resource limits.
     try:
         if _HAVE_REGEX:
             _regex_mod.compile(pattern)
@@ -110,13 +109,11 @@ class _StepRow(QWidget):
                 timeout = float(data.get("timeout_s", 10.0))
             except (TypeError, ValueError, OverflowError):
                 timeout = 10.0
-            # Use the default for nonfinite timeouts.
             if not math.isfinite(timeout):
                 timeout = 10.0
             self._timeout.setValue(timeout)
             if self._timeout.value() != timeout:
                 self._timeout_clamped = timeout
-                # A user edit clears the warning for the loaded value.
                 self._timeout.valueChanged.connect(self._clear_timeout_clamp)
 
     def _clear_timeout_clamp(self, _=None) -> None:
@@ -192,7 +189,6 @@ class TriggerDialog(QDialog):
         self.setMinimumWidth(520)
         self._current_zone = current_zone
         self._fight_picker = fight_picker
-        # Keep the original value before the widget clamps it.
         self._clamped = []
         self._build_ui()
         if current_fight and not trigger:
@@ -215,7 +211,6 @@ class TriggerDialog(QDialog):
         self._type_custom.setPlaceholderText(_("type number"))
         self._type_custom.setVisible(False)
         self._type_combo.currentIndexChanged.connect(self._on_type_changed)
-        # Update applicable fields when a custom log type is typed.
         self._type_custom.textChanged.connect(lambda _=None: self._update_dur_row_visibility())
         self._type_custom.textChanged.connect(lambda _=None: self._update_id_enabled())
         type_row = QWidget()
@@ -241,7 +236,6 @@ class TriggerDialog(QDialog):
         self._regex.textChanged.connect(self._update_regex_dot)
         layout.addRow(_("Ability Regex:"), regex_row)
 
-        # Duration filters apply only to status gain lines.
         self._dur_min = QDoubleSpinBox()
         self._dur_max = QDoubleSpinBox()
         for sb in (self._dur_min, self._dur_max):
@@ -352,8 +346,7 @@ class TriggerDialog(QDialog):
         self._zone.textChanged.connect(self._update_zone_dot)
         layout.addRow(_("Zone Regex:"), zone_row)
 
-        # Cooldown spaces reminders without blocking timer refreshes. It also combines
-        # bursts from the same AoE.
+        # Cooldown spaces reminders and combines bursts without blocking timer refreshes.
         self._cooldown = QDoubleSpinBox()
         self._cooldown.setRange(0.0, 3600.0)
         self._cooldown.setDecimals(1)
@@ -446,14 +439,13 @@ class TriggerDialog(QDialog):
             self._form.setRowVisible(self._count_row, status_visible)
             self._form.setRowVisible(self._scope, status_visible)
             self._form.setRowVisible(self._warn_row, warn_visible)
-        else:  # Older Qt versions can hide only the fields.
+        else:
             self._dur_row.setVisible(dur_visible)
             self._count_row.setVisible(status_visible)
             self._scope.setVisible(status_visible)
             self._warn_row.setVisible(warn_visible)
 
     def _update_id_enabled(self) -> None:
-        # ID filtering requires an ID field in every selected log type.
         self._ability_id.setEnabled(self._log_type_parts() <= _ID_IDX.keys())
 
     def _browse_sound(self) -> None:
@@ -479,7 +471,6 @@ class TriggerDialog(QDialog):
         sub = lambda m: self._PREVIEW_TOKENS.get(m.group(1), m.group(1))
         preview = re.sub(r"\{(\w+)\}", sub, text)
         from nyaatriggers.tts import speak, reading_for
-        # Resolve the kana reading before substituting tokens.
         reading = reading_for(text)
         spoken = re.sub(r"\{(\w+)\}", sub, reading) if reading else None
         speak(preview, speed=self._speed.value(), reading=spoken)
@@ -493,8 +484,7 @@ class TriggerDialog(QDialog):
             self._fight.setText(chosen)
 
     def _load_spin(self, spin, value, label: str) -> None:
-        # Clamp before converting to a C++ integer and keep the original for the save
-        # warning.
+        # Keep the original value for warnings before clamping to a C++ integer.
         spin.setValue(max(spin.minimum(), min(spin.maximum(), value)))
         if spin.value() != value:
             self._clamped.append((spin, label, value))
@@ -545,13 +535,11 @@ class TriggerDialog(QDialog):
         return {p.strip() for p in self._log_type().split("|") if p.strip()}
 
     def _usable_ability_id(self) -> str:
-        # Ignore a stale ID filter when the selected types have no ID field.
         if self._log_type_parts() <= _ID_IDX.keys():
             return self._ability_id.text().strip()
         return ""
 
     def _pending_clamps(self) -> list:
-        # Warn only about clamped fields that will be saved.
         keep_dur = bool(self._log_type_parts() & _DURATION_TYPES)
         keep_count = bool(self._log_type_parts() & _STATUS_TYPES)
         keep_warn = ("26" in self._log_type_parts()
@@ -580,7 +568,6 @@ class TriggerDialog(QDialog):
                       "several pipe-separated like 21|22. Anything else never "
                       "matches a log line, so this trigger would never fire."))
                 return
-        # The ID filter takes precedence over regex.
         aid = self._usable_ability_id()
         if aid and not re.fullmatch(r"[0-9A-Fa-f]+(\|[0-9A-Fa-f]+)*", aid):
             QMessageBox.warning(
@@ -589,7 +576,6 @@ class TriggerDialog(QDialog):
                   "like A55D|A55E. Anything else never matches a log line, so "
                   "this trigger would never fire."))
             return
-        # Validate regex only when no ID filter is set.
         pattern = self._regex.text().strip()
         if (pattern and not aid
                 and compile_user_regex(pattern) is None):
@@ -606,7 +592,6 @@ class TriggerDialog(QDialog):
                          "enter an Ability ID.")
             QMessageBox.warning(self, title, body)
             return
-        # Sequence steps use the same ID first validation.
         for n, row in enumerate(self._sequence._rows, 1):
             step_aid = row._id.text().strip()
             if step_aid and not re.fullmatch(r"[0-9A-Fa-f]+(\|[0-9A-Fa-f]+)*",
@@ -633,7 +618,6 @@ class TriggerDialog(QDialog):
                              "the regex or clear it.")
                 QMessageBox.warning(self, title, body.format(n=n))
                 return
-        # A nonempty zone regex always applies.
         zone = self._zone.text().strip()
         if zone and compile_user_regex(zone) is None:
             if _regex_syntax_error(zone):
@@ -648,7 +632,6 @@ class TriggerDialog(QDialog):
                          "Simplify the regex or leave the zone blank.")
             QMessageBox.warning(self, title, body)
             return
-        # Zero leaves the upper bound open.
         parts = self._log_type_parts()
         if parts & _DURATION_TYPES:
             if 0 < self._dur_max.value() < self._dur_min.value():
@@ -666,7 +649,6 @@ class TriggerDialog(QDialog):
                       "trigger would never fire. Fix the window, or set max "
                       "to 0 for no upper bound."))
                 return
-        # Require an ID or regex to avoid matching every line.
         if not aid and not pattern:
             QMessageBox.warning(
                 self, _("No matcher"),
@@ -694,7 +676,6 @@ class TriggerDialog(QDialog):
     def get_trigger(self, existing_id: str | None = None) -> Trigger:
         lt = self._log_type()
         parts = self._log_type_parts()
-        # Save only fields supported by the selected log types.
         has_dur = bool(parts & _DURATION_TYPES)
         has_status = bool(parts & _STATUS_TYPES)
         dmin = self._dur_min.value() if has_dur else 0.0
@@ -702,8 +683,7 @@ class TriggerDialog(QDialog):
         cmin = self._count_min.value() if has_status else 0
         cmax = self._count_max.value() if has_status else 0
         scope = self._scope.currentData() if has_status else "self"
-        # Expiry requires status types including gain 26. Mixed ability types are not
-        # eligible.
+        # Expiry needs status types including gain 26.
         warn = (self._warn.value()
                 if "26" in parts and parts <= _STATUS_TYPES else 0.0)
         return Trigger(

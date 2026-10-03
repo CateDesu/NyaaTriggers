@@ -1,5 +1,3 @@
-"""Exercise local HTTP routing and feed recovery against real peers."""
-
 import base64
 import hashlib
 import http.server

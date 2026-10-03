@@ -1,5 +1,3 @@
-"""Visual editing of native Triggernometry trigger definitions."""
-
 from copy import deepcopy
 import xml.etree.ElementTree as ET
 

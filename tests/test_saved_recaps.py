@@ -1,5 +1,3 @@
-"""Persistent recap history and its association with prog attempts."""
-
 from copy import deepcopy
 import os
 from pathlib import Path

@@ -1,8 +1,6 @@
 name: Prune old releases
 
-# Manual cleanup retains only the latest release and its tag. Run with no Release builds
-# in progress because drafts or newly published builds can be deleted. dry_run lists
-# targets without deleting them.
+# Run with no Release builds in progress, since drafts and new builds can be deleted.
 on:
   workflow_dispatch:
     inputs:

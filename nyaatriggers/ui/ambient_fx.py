@@ -1,7 +1,3 @@
-"""Sakura scenery and drifting petals for MainWindow. Pause animation while unfocused and
-resume from the same frame.
-"""
-
 import time
 
 from PyQt6.QtCore import Qt, QTimer
@@ -19,7 +15,7 @@ class AmbientFxMixin:
         self._fx_freeze_t = None   # petal clock value while parked
         self._fx_last_t = None   # petal clock value at the previous tick
         self._fx_timer = QTimer(self)
-        self._fx_timer.setInterval(50)   # About 20 frames per second.
+        self._fx_timer.setInterval(50)
         self._fx_timer.timeout.connect(self._fx_tick)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self._start_fx()
@@ -58,8 +54,7 @@ class AmbientFxMixin:
             self.update()
 
     def _fx_tick(self) -> None:
-        # Repaint only the old and new petal areas to avoid updating every widget each
-        # frame.
+        # Repaint only old and new petal areas to spare other widgets.
         t = time.monotonic() - self._fx_start
         prev = self._fx_last_t
         if prev is None:

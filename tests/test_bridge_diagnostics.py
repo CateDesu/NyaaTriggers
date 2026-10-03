@@ -1,5 +1,3 @@
-"""Bridge diagnostics retain delivery evidence without callout or player text."""
-
 from contextlib import ExitStack
 import io
 import json

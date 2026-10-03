@@ -1,5 +1,3 @@
-"""Phase evidence, logical attempts, and durable observations."""
-
 from copy import deepcopy
 import json
 from pathlib import Path

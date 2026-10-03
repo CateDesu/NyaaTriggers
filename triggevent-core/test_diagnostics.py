@@ -1,5 +1,3 @@
-"""Verify private diagnostic records through the packaged engine."""
-
 import os
 from pathlib import Path
 import subprocess

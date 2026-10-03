@@ -1,5 +1,3 @@
-"""Bounded support records containing only approved diagnostic fields."""
-
 from __future__ import annotations
 
 import builtins

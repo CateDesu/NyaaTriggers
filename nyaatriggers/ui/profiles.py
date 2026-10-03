@@ -1,5 +1,3 @@
-"""Save and apply named trigger setups from the Triggers page."""
-
 from copy import deepcopy
 
 from PyQt6.QtWidgets import (

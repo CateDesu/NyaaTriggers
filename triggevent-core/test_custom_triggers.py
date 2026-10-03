@@ -1,5 +1,3 @@
-"""Replay a builder definition through the compiled Triggevent host."""
-
 import json
 import os
 from pathlib import Path

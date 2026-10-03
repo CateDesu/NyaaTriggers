@@ -1,5 +1,3 @@
-"""Game status metadata needed by combat recording without Qt."""
-
 from functools import lru_cache
 import json
 from zipfile import BadZipFile, ZipFile

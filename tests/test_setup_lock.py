@@ -1,4 +1,3 @@
-"""Exclusive environment setup, abandoned locks and bounded waiting."""
 import os
 import sys
 import tempfile
@@ -22,13 +21,11 @@ def check(name, cond):
 
 
 def _patched_lock(td):
-    """Point the lock at a temp dir. Returns the saved module state."""
     saved = install._SETUP_LOCK
     install._SETUP_LOCK = Path(td) / "ffxiv.setup.lock"
     return saved
 
 
-# acquire and release
 def test_setup_lock_acquire_release():
     with tempfile.TemporaryDirectory() as td:
         saved = _patched_lock(td)
@@ -45,7 +42,6 @@ def test_setup_lock_acquire_release():
             install._SETUP_LOCK = saved
 
 
-# a live holder serializes a waiter
 def test_setup_lock_serializes_waiter():
     with tempfile.TemporaryDirectory() as td:
         saved = _patched_lock(td)
@@ -69,8 +65,7 @@ def test_setup_lock_serializes_waiter():
             check("holder takes the lock", held.wait(10))
             w = threading.Thread(target=waiter)
             w.start()
-            # The waiter polls once a second, so after this it must still be
-            # blocked if the lock really excludes it.
+            # Wait beyond the one-second poll interval to prove the lock still excludes the waiter.
             time.sleep(2.5)
             check("waiter stays blocked while held", not order)
             release.set()
@@ -82,7 +77,6 @@ def test_setup_lock_serializes_waiter():
             install._SETUP_LOCK = saved
 
 
-# An old abandoned marker can be reclaimed under the guard.
 def test_setup_lock_breaks_stale():
     with tempfile.TemporaryDirectory() as td:
         saved = _patched_lock(td)
@@ -101,7 +95,6 @@ def test_setup_lock_breaks_stale():
             install._SETUP_LOCK = saved
 
 
-# a waiter that cannot take the lock bows out with a clear message
 def test_setup_lock_bows_out():
     with tempfile.TemporaryDirectory() as td:
         saved = (install._SETUP_LOCK, install._SETUP_WAIT_S)
@@ -123,7 +116,6 @@ def test_setup_lock_bows_out():
             install._SETUP_LOCK, install._SETUP_WAIT_S = saved
 
 
-# both installers hold the lock around the venv build
 def test_setup_lock_used_by_both_installers():
     install_src = (REPO_DIR / "install.py").read_text(encoding="utf-8")
     main_src = (REPO_DIR / "main.py").read_text(encoding="utf-8")

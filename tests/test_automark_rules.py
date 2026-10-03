@@ -1,4 +1,3 @@
-"""Compound automarker matching and shared status tracking."""
 import os
 import sys
 import time
@@ -22,9 +21,6 @@ P1, P2 = "10AAA111", "10BBB222"
 
 
 class FakeWindow:
-    """Just enough of MainWindow for _match_automark_rules: rules, cooldowns,
-    pair tracker, fight tag, and a recording _mark_player."""
-
     _norm_hex = staticmethod(mw.MainWindow._norm_hex)
 
     def __init__(self, chains_on=False, fight="UMAD", rules=None, mark_ok=True):
@@ -44,8 +40,8 @@ class FakeWindow:
                             + [str(r.get("status") or "") for r in self._automark_rules])
             for p in (mw._parse_compound(token) or ()))
         self._automark_cooldowns = {}
-        self._automark_active = {}                # placed-by map for clear-on-loss
-        self._automark_pending = []               # queued retries on a cold slot map
+        self._automark_active = {}
+        self._automark_pending = []
         self._automark_clear_on_loss = True
         self._mark_ok = mark_ok
         self.marks = []
@@ -68,8 +64,6 @@ class FakeWindow:
         return True
 
     def feed(self, ltype, eff, tgt, name="name"):
-        """Mirror the _on_log_line wiring: tracker first, then the 26 match /
-        the 30 unmark."""
         fields = [ltype, "ts", eff, name, "10", "src", "srcn", tgt, "tgtn"]
         if ltype in ("26", "30") and tgt.startswith("10"):
             n = self._norm_hex(eff)
@@ -84,7 +78,6 @@ class FakeWindow:
             mw.MainWindow._match_automark_unmark(self, fields)
 
 
-# Compound pair fires exactly once, either arrival order
 w = FakeWindow()
 w.feed("26", "BBC", P1)
 check("in-Line alone marks nothing", w.marks == [])
@@ -94,10 +87,9 @@ w.feed("26", "644", P2)
 w.feed("26", "BBD", P2)
 check("reverse order fires the 2nd-in-line sign", w.marks[-1] == (P2, "attack2"))
 n = len(w.marks)
-w.feed("26", "644", P1)        # refresh while the pair is still held
+w.feed("26", "644", P1)
 check("compound cooldown blocks a same-pair double fire", len(w.marks) == n)
 
-# Losses break the pair. A fresh application re-fires
 w.feed("30", "644", P1)
 w.feed("30", "BBC", P1)
 w._automark_cooldowns.clear()
@@ -105,7 +97,6 @@ w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
 check("re-fires after losses (next black hole)", w.marks[-1] == (P1, "attack1"))
 
-# Guards
 w = FakeWindow(chains_on=True)
 w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
@@ -128,37 +119,33 @@ w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
 check("unassigned compound rules are inert", w.marks == [])
 
-# Non-preset compound rules are tracked from the loaded rules
 w = FakeWindow(rules=[{"fight": "", "status": "8D1+8D2", "marker": "circle",
                        "scope": "party", "enabled": True}])
 w.feed("26", "8D1", P2)
 w.feed("26", "8D2", P2)
 check("hand-added compound rule fires", w.marks == [(P2, "circle")])
 
-# Exact-name rules containing '+' stay on the name-match path
 w = FakeWindow(rules=[{"fight": "", "status": "Damage Up+", "marker": "cross",
                        "scope": "party", "enabled": True}])
 w.feed("26", "FFF", P1, name="Damage Up+")
 check("name rule with '+' fires via name match, not as a dead compound",
       w.marks == [(P1, "cross")])
 
-# Clear-on-loss: a rule sign falls with the debuff that placed it
 w = FakeWindow()
 w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
 w.feed("26", "644", P2)
 w.feed("26", "BBD", P2)
 check("setup: both accretion carriers marked", len(w.marks) == 2)
-w.feed("30", "154E", P1)     # Primordial Crust is not part of the pair
+w.feed("30", "154E", P1)
 check("losing an unrelated debuff keeps the sign", w.clears == [])
-w.feed("30", "644", P1)      # cleansed: Accretion falls off
+w.feed("30", "644", P1)
 check("losing Accretion clears that player's sign", w.clears == [P1])
-w.feed("30", "BBC", P1)      # the other half of the pair falls right after
+w.feed("30", "BBC", P1)
 check("the rest of the burst does not re-clear", w.clears == [P1])
 w.feed("30", "644", P2)
 check("the second carrier clears on their own cleanse", w.clears == [P1, P2])
 
-# Toggle off: losses leave signs alone
 w = FakeWindow()
 w._automark_clear_on_loss = False
 w.feed("26", "BBC", P1)
@@ -166,7 +153,6 @@ w.feed("26", "644", P1)
 w.feed("30", "644", P1)
 check("clear-on-loss off leaves the sign up", w.clears == [])
 
-# An engine mark (chains/gaze) invalidates the rule's placed-by entry
 w = FakeWindow()
 w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
@@ -176,7 +162,6 @@ w.feed("30", "644", P1)
 check("a chain sign on the same player is not cleared by the rule's loss",
       w.clears == [])
 
-# Lower-case feed ids: the rule path normalizes like the engines
 P1L = P1.lower()
 w = FakeWindow()
 w.feed("26", "BBC", P1L)
@@ -196,24 +181,20 @@ w.feed("30", "644", P1L)
 check("lower-case feed: clear-on-loss still finds the placed sign",
       w.clears == [P1])
 
-# A loss with nothing placed purges the queued retry for that debuff
 w = FakeWindow(mark_ok=False)
 w.feed("26", "BBC", P1)
 w.feed("26", "644", P1)
 check("cold slot map queues the party mark",
       w.marks == [] and len(w._automark_pending) == 1)
-w.feed("30", "154E", P1)     # an unrelated debuff falling off keeps the retry
+w.feed("30", "154E", P1)
 check("unrelated loss keeps the queued retry", len(w._automark_pending) == 1)
-w.feed("30", "644", P1)      # the debuff that queued it is gone
+w.feed("30", "644", P1)
 check("losing the debuff purges its queued retry", w._automark_pending == [])
 w._mark_ok = True
 mw.MainWindow._retry_automark_pending(w)
 check("the 10s retry can no longer place the stale mark", w.marks == [])
 
-# Zone change tears down the placed-by bookkeeping too
 class ZoneWin:
-    """Just enough of MainWindow for _apply_zone: zone state, the automark
-    bookkeeping, and stubbed UI and plugin link."""
     _apply_zone = mw.MainWindow._apply_zone
     _clear_actor_state = mw.MainWindow._clear_actor_state
 

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Combat event timeline starts, sync constraints and sample fight resets."""
 import os
 import sys
 import time
@@ -65,7 +64,6 @@ class FakeLink:
 
 
 def make_window():
-    """Duck-typed host for MainWindow._on_in_combat (unbound method call)."""
     class W:
         pass
 
@@ -75,7 +73,6 @@ def make_window():
     w._timeline = TimelineEngine()
     w._queue_timeline_event = lambda fields: MainWindow._queue_timeline_event(w, fields)
     w._plugin_link = FakeLink()
-    # _on_in_combat also feeds the DPS meter (settings-gated). Provide both.
     w._settings = {"dps_meter_enabled": True}
     w._dps_meter = DpsMeter()
     w._push_timeline_to_plugin = lambda: MainWindow._push_timeline_to_plugin(w)
@@ -86,18 +83,15 @@ def call(w, act, game):
     MainWindow._on_in_combat(w, act, game)
 
 
-# Engine: combat start via the 260 InCombat line
 
 eng = TimelineEngine()
 eng.load(sample_entries())
 spoken = []
 eng.tts.connect(spoken.append)
 
-# Player abilities do not start the clock.
 eng.process_line(["21", "", "10000001", "10000001", "Test", "00", "", ""])
 check("player ability does not start the clock", not eng.is_active())
 
-# The synthetic 260 with game combat on starts the clock and arms the sync.
 eng.process_line(["260", "", "1", "1"])
 check("260 inGameCombat=1 starts the clock", eng.is_active())
 
@@ -108,36 +102,31 @@ while time.monotonic() < deadline:
     time.sleep(0.02)
 check("sample entry speaks after its time passes", "Tankbuster" in spoken)
 
-# A 260 with game combat OFF does not start anything by itself.
 eng2 = TimelineEngine()
 eng2.load(sample_entries())
 eng2.process_line(["260", "", "0", "0"])
 check("260 inGameCombat=0 does not start the clock", not eng2.is_active())
 
-# A non-player ability still starts the clock the classic way.
 eng3 = TimelineEngine()
 eng3.load(sample_entries())
 eng3.process_line(["21", "", "40001234", "40001234", "Test", "00", "", ""])
 check("non-player ability starts the clock", eng3.is_active())
 
-# Window glue: leave-combat reset is opt-in via the file marker
 
 w = make_window()
 w._timeline.load(sample_entries())
 w._timeline_reset_on_combat_end = True
-call(w, True, True)   # engage
+call(w, True, True)
 check("window: engage starts the clock", w._timeline.is_active())
-call(w, True, False)  # leave combat
+call(w, True, False)
 check("window: leave with marker resets the clock", not w._timeline.is_active())
 check("window: leave with marker clears the plugin once", w._plugin_link.clears == 1)
 check("window: timeline reset preserves DPS", w._plugin_link.clear_keeps_dps == [True])
 check("window: schedule re-armed after reset", len(w._plugin_link.schedules) == 1)
 
-# Re-engaging re-syncs from zero.
 call(w, True, True)
 check("window: re-engage restarts the clock", w._timeline.is_active())
 
-# Keep the clock running through intermissions unless reset is enabled.
 w2 = make_window()
 w2._timeline.load(sample_entries())
 call(w2, True, True)
@@ -145,7 +134,6 @@ call(w2, True, False)
 check("window: leave without marker keeps the clock", w2._timeline.is_active())
 check("window: leave without marker sends no clear", w2._plugin_link.clears == 0)
 
-# Full chain: ws_client parses the event and the handler drives the engine
 
 import json
 
@@ -167,7 +155,6 @@ check("chain: combat end resets + clears", not w3._timeline.is_active() and w3._
 wc._on_message(json.dumps({"type": "InCombat", "inACTCombat": True, "inGameCombat": True}))
 check("chain: re-engage restarts the clock", w3._timeline.is_active())
 
-# Engine: forcejump loop re-arms the run while still in combat
 
 LOOP = """hideall "--sync--"
 hideall "--loop--"
@@ -188,21 +175,18 @@ deadline = time.monotonic() + 7.5
 while time.monotonic() < deadline:
     _app.processEvents()
     time.sleep(0.02)
-# 1s entry fires, 2s loop snaps back to 0, the 1s entry fires again.
 check("loop: entry fires twice around the forcejump", spoken4.count("Tankbuster") >= 2)
 
-# Window glue: a pull starting with an empty schedule re-arms the timeline
 
 w4 = make_window()
 loads = []
 w4._match_zone = "Dancing Mad (Ultimate)"
 w4._load_timeline_for_zone = lambda zone: (loads.append(zone), w4._timeline.load(sample_entries()))
-call(w4, True, True)   # engage with nothing loaded (mid-instance restart)
+call(w4, True, True)
 check("empty schedule on engage re-arms from the current zone",
       loads == ["Dancing Mad (Ultimate)"])
 check("re-armed timeline starts its clock on the same engage", w4._timeline.is_active())
 
-# A loaded schedule must not be re-armed (that would reset a running clock).
 w5 = make_window()
 w5._timeline.load(sample_entries())
 w5._match_zone = "Dancing Mad (Ultimate)"
@@ -212,18 +196,15 @@ w5._load_timeline_for_zone = _no_reload
 call(w5, True, True)
 check("loaded schedule is left alone on engage", w5._timeline.is_active())
 
-# Out-of-combat flips never re-arm.
 w6 = make_window()
 w6._match_zone = "Dancing Mad (Ultimate)"
 w6._load_timeline_for_zone = _no_reload
 call(w6, False, False)
 check("no engage, no re-arm", not w6._timeline.is_active())
 
-# Window glue: a wipe re-pushes the schedule it just cleared
 
 w7 = make_window()
 w7._timeline.load(sample_entries())
-# Provide inactive automarker engines for wipe cleanup.
 w7._status_timers = []
 w7._seq_runners = []
 w7._umad_chains = BlackHoleChains(role_of=lambda aid: None)
@@ -256,13 +237,11 @@ check("wipe re-push is the loaded schedule, not an empty one",
 check("wipe with no pull just ended sends no dps frame",
       w7._plugin_link.dps_frames == [])
 
-# Repeated wipes preserve the meter without sending an ending for another pull.
 MainWindow._dispatch_log_line(w7, ["33", "ts", "0", "4000000F"], "33|ts|0|4000000F")
 check("repeated wipes preserve the meter", w7._plugin_link.clear_keeps_dps == [True, True])
 check("repeated wipes do not invent an encounter ending", w7._plugin_link.dps_frames == [])
 check("second wipe clears the plugin again", w7._plugin_link.clears == 2)
 
-# Window glue: re-enabling local callouts re-pushes the schedule
 
 w8 = make_window()
 w8._timeline.load(sample_entries())
@@ -279,7 +258,6 @@ check("local re-enable re-pushes the schedule",
       len(w8._plugin_link.schedules) == 1
       and w8._plugin_link.schedules[0] == w8._timeline.upcoming())
 
-# Parser: array syntax inside a quoted scalar fabricates no sync key
 
 e = timeline_parser.parse(
     "1.0 \"x\" AddedCombatant { name: \"id: ['9D00', '9D01']\", source: \"Boss\" }"
@@ -295,7 +273,6 @@ e = timeline_parser.parse(
 check("real array field still folds to an alternation",
       e.event_fields.get("id") == "(?:9D00|9D01)")
 
-# Parser: hideall on a plain label silences it like cactbot
 
 hid = timeline_parser.parse(
     'hideall "Secret Tech"\n'
@@ -313,7 +290,6 @@ eng5.load(hid)
 check("hidden entries stay off the bar schedule",
       [lbl for _t, lbl in eng5.upcoming()] == ["Loud Tech"])
 
-# Parser: an apostrophe outside quotes must not save the comment
 
 e = timeline_parser.parse(
     "10.0 \"adds\" sync /Boss's Add/ # window 9 jump 0"
@@ -328,7 +304,6 @@ e = timeline_parser.parse(
 check("single-quoted value parses and its trailing comment strips",
       e.event_fields.get("id") == "8B42" and e.window_before == 2.5)
 
-# Parser: clauses inside a quoted jump target stay inside it
 
 ent = timeline_parser.parse(
     '10.0 "X" jump "the window 14 door"\n'
@@ -356,7 +331,6 @@ x = timeline_parser.parse('10.0 "X" jump "sync /foo/"')[0]
 check("a sync regex inside a jump label fakes no legacy flag",
       not x.legacy_sync and x.jump_label == "sync /foo/")
 
-# Parser: jump text inside quoted values and sync bodies arms nothing
 
 x = timeline_parser.parse(
     '100.0 "Chat call" GameLog { line: ".*jump 5.*" } code: "0038"'
@@ -404,7 +378,6 @@ check("a real jump label still resolves", x.jump == 3.0)
 x = timeline_parser.parse('10.0 "x" forcejump 12')[0]
 check("a real forcejump still parses", x.jump == 12.0 and x.force_jump)
 
-# Parser: an escaped quote stays inside its quoted event value
 
 x = timeline_parser.parse(
     '1.0 "x" StartsUsing { name: "say \\"hi\\"", id: "8B42" }'
@@ -430,7 +403,6 @@ import re as _re
 check("the kept escape still matches the literal text downstream",
       _re.fullmatch(x.event_fields["id"], '9D"0') is not None)
 
-# Engine: SystemLogMessage seals distinguish bosses on param1
 SEALS = """hideall "--sync--"
 
 0.0 "--sync--" InCombat { inGameCombat: "1" } window 0,1
@@ -462,7 +434,6 @@ eng.process_line(["41", "", "0", "7DC", "0", "9999", "0"])
 check("a seal with an unlisted param1 syncs nothing",
       eng.current_time() < 5.0)
 
-# Engine: a sync field with no index disqualifies the entry
 UNMAPPED = """hideall "--sync--"
 
 0.0 "--sync--" InCombat { inGameCombat: "1" } window 0,1
@@ -484,7 +455,6 @@ eng.process_line(["260", "", "1", "1"])
 eng.process_line(["41", "", "0", "7DC", "0", "0", "5"])
 check("an unindexed sync field never matches", eng.current_time() < 5.0)
 
-# Engine: GameLog syncs check the speaker name
 CHAT = """hideall "--sync--"
 
 0.0 "--sync--" InCombat { inGameCombat: "1" } window 0,1

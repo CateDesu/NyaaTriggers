@@ -1,5 +1,3 @@
-"""Overlay protocol, delivery and reconnect behavior against a local WebSocket server.
-"""
 import json
 import os
 import queue
@@ -31,14 +29,11 @@ def wait_for(pred, timeout=6.0):
 
 
 class FakePlugin:
-    """Tiny WS server standing in for the Dalamud plugin. Sends the hello on
-    connect, then records every handshake's headers and every received frame."""
-
     def __init__(self, protocol=1, dps_retention=None):
         self.protocol = protocol
         self.dps_retention = dps_retention
-        self.frames = []          # decoded JSON frames, in arrival order
-        self.handshakes = []      # request headers per handshake
+        self.frames = []
+        self.handshakes = []
         self.connections = 0
         self._conns = set()
         self._lock = threading.Lock()
@@ -82,7 +77,6 @@ class FakePlugin:
             return list(self.frames)
 
     def drop(self):
-        """Close every live connection server-side (plugin reload / eviction)."""
         with self._lock:
             conns = list(self._conns)
         for conn in conns:
@@ -98,13 +92,11 @@ class FakePlugin:
 
 
 def make_link(fake, **kwargs):
-    """A link on the fake plugin's port, not yet started. Callers connect
-    status_changed first, so the worker's first report can't race them."""
+    """Connect status signals before starting the worker to avoid racing its first report."""
     kwargs.setdefault("idle_ping_s", 0.6)
     return pl.PluginLink(port=fake.port, **kwargs)
 
 
-# frame builders (pure)
 check("tick frame exact",
       pl.tick_frame(12.5) == {"c": "tick", "t": 12.5})
 check("tick frame int seconds become float",
@@ -128,7 +120,6 @@ check("clear frame exact", pl.clear_frame() == {"c": "clear", "keepDps": False})
 check("wipe clear preserves DPS", pl.clear_frame(keep_dps=True) == {"c": "clear", "keepDps": True})
 check("ping frame exact", pl.ping_frame() == {"c": "ping"})
 
-# pure helpers: port parsing and the dps capability check
 check("port parse accepts the plugin's clamp range",
       pl.parse_port(27080) == 27080 and pl.parse_port("27081") == 27081
       and pl.parse_port(1024) == 1024 and pl.parse_port(65535) == 65535)
@@ -158,7 +149,6 @@ check("handshake is a plain upgrade",
       all(h.get("upgrade") == "websocket" and h.get("sec-websocket-version") == "13"
           for h in fake.handshakes))
 
-# exact frames over the wire
 link.send_alert("Stack", "alarm")
 check("alert frame arrives verbatim",
       wait_for(lambda: {"c": "alert", "text": "Stack", "sev": "alarm"} in fake.snapshot()))
@@ -180,7 +170,6 @@ check("clear frame arrives verbatim",
 check("liveness ping on idle",
       wait_for(lambda: {"c": "ping"} in fake.snapshot(), timeout=5.0))
 
-# reconnect after the server drops the connection
 before = len(fake.snapshot())
 fake.drop()
 check("reconnects after a server-side drop",
@@ -240,7 +229,6 @@ for capability in (True, None, "true"):
     link.stop()
     fake.shutdown()
 
-# an alert queued during reconnect backoff survives to delivery
 fake = FakePlugin()
 link = make_link(fake)
 link.start()
@@ -270,7 +258,6 @@ check("alert queued during backoff arrives after the reconnect",
 link.stop()
 fake.shutdown()
 
-# an alert whose send fails is re-queued and survives the reconnect
 fake = FakePlugin()
 link = make_link(fake)
 link.start()
@@ -297,7 +284,6 @@ check("the send fault fired exactly once", len(failed_once) == 1)
 link.stop()
 fake.shutdown()
 
-# set_port re-dials a live link
 fake_a = FakePlugin()
 fake_b = FakePlugin()
 link = make_link(fake_a)
@@ -313,7 +299,6 @@ link.stop()
 fake_a.shutdown()
 fake_b.shutdown()
 
-# protocol mismatch: gate, do not drive
 fake = FakePlugin(protocol=2)
 link = make_link(fake)
 link.start()
@@ -327,7 +312,6 @@ check("protocol mismatch reports why",
 link.stop()
 fake.shutdown()
 
-# disabled gate: no connect, no frames, live re-enable
 fake = FakePlugin()
 link = make_link(fake, enabled=False)
 link.start()
@@ -341,7 +325,6 @@ check("re-enabling connects promptly",
 link.stop()
 fake.shutdown()
 
-# stale worker exit keeps the live generation's status
 fake = FakePlugin()
 link = make_link(fake)
 link.start()
@@ -349,8 +332,7 @@ check("stale generation: connected before the churn",
       wait_for(link.is_connected) and fake.connections >= 1)
 old_stopping = link._stopping
 old_thread = link._thread
-# Set stop events without the sentinel to keep the old worker waiting until the new
-# start runs.
+# Omit sentinels to keep old workers waiting until their replacement starts.
 old_stopping.set()
 link._wake.set()
 link.start()
@@ -363,7 +345,6 @@ check("stale worker exit leaves the live status alone",
 link.stop()
 fake.shutdown()
 
-# a flooding peer cannot wedge the inbound drain
 fake = FakePlugin()
 link = make_link(fake)
 link.start()
@@ -386,7 +367,7 @@ def flood():
 
 flood_thread = threading.Thread(target=flood, daemon=True)
 flood_thread.start()
-time.sleep(0.2)   # let the flood keep the link's inbound busy
+time.sleep(0.2)
 link.send_alert("Flood", "alert")
 check("flood: outbound frames still flow",
       wait_for(lambda: {"c": "alert", "text": "Flood", "sev": "alert"}
@@ -398,11 +379,9 @@ stop_flood.set()
 flood_thread.join(timeout=2)
 fake.shutdown()
 
-# Use a receiver that always returns a frame to verify the drain limit
-# deterministically.
+# An endless receiver makes the drain limit deterministic.
 class EndlessFloodWS:
-    """recv stand-in whose frames never run out. Optionally trips a stopping
-    event partway through, a stop request landing mid drain."""
+    """Supply endless frames, optionally stopping mid-drain."""
 
     def __init__(self, stopping=None, stop_after=0):
         self.stopping = stopping
@@ -433,7 +412,6 @@ pl.PluginLink._drain_inbound(fake_ws, stopping)
 check("drain sweep with stopping already set reads nothing",
       fake_ws.recvd == 0)
 
-# non-finite floats never reach the wire
 INF, NAN = float("inf"), float("nan")
 for bad in (INF, -INF, NAN):
     check(f"tick frame drops non-finite seconds ({bad})",
@@ -470,7 +448,6 @@ check("dps JSON carries no bare Infinity or NaN token",
                                                [["Me", "BLM", bad, 50.0, 1.0, True]]))
           for bad in (INF, -INF, NAN) for token in ("Infinity", "NaN")))
 
-# outbox eviction keeps alerts and logs the loss
 link = pl.PluginLink()
 alerts = [pl.alert_frame(f"keep{i}") for i in range(4)]
 ticks = [pl.tick_frame(float(i)) for i in range(pl.OUTBOX_CAPACITY - len(alerts))]
@@ -502,7 +479,6 @@ check("the outbox stays at capacity", len(survivors) == pl.OUTBOX_CAPACITY)
 check("eviction leaves a drop-log line",
       any(site == "plugin-drop" for site, _detail in drops))
 
-# An alerts only queue rejects and logs new frames when full.
 link = pl.PluginLink()
 for i in range(pl.OUTBOX_CAPACITY):
     link._enqueue(pl.alert_frame(f"x{i}"))
@@ -535,5 +511,4 @@ print("all passed")
 
 
 def test_module_suite():
-    """pytest entry: the checks above run at import; report them as one test."""
     assert not FAILS

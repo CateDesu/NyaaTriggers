@@ -1,7 +1,6 @@
 #!/bin/sh
 # nyaa-linux-recovery: 1
-# Restore a missing runtime from an update backup before starting the program.
-# The frozen executable cannot run Python recovery without that runtime.
+# A missing runtime prevents Python recovery, so restore it before launch.
 set -u
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -68,8 +67,7 @@ if [ "$internal_ok" -eq 0 ]; then
         echo "NyaaTriggers: runtime recovery needs flock and access to the install lock." >&2
         exit 1
     fi
-    # Try backups from newest to oldest. Split only on newlines to preserve spaces in
-    # paths and continue if a restore fails.
+    # Split backup paths on newlines to preserve spaces.
     ifs=$IFS
     IFS='
 '

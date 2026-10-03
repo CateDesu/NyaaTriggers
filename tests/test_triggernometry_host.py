@@ -1,5 +1,3 @@
-"""Replay complex callouts through the vendored Triggernometry engine."""
-
 from contextlib import contextmanager
 import json
 import os
@@ -78,8 +76,7 @@ def replay(pack, relay=None, extra_packs=()):
         if relay:
             environment["NYAA_TRIGGERNOMETRY_TELESTO_RELAY"] = relay.url
             environment["NYAA_TRIGGERNOMETRY_CALLBACK_URI"] = relay.callback_url
-        # Ubuntu's xvfb-run merges stderr into stdout. Collect both streams
-        # and keep diagnostics alongside the JSON replies on every distro.
+        # Ubuntu xvfb-run merges stderr into stdout, so collect diagnostics from both.
         proc = subprocess.Popen(
             ["xvfb-run", "-a", "mono", str(CORE / "bin" / "triggernometry-core.exe"),
              temp, "--serve", str(pack), *map(str, extra_packs)],
@@ -296,8 +293,7 @@ class TriggernometryHostTests(unittest.TestCase):
 
     def check_zelenia_bloom(self, pack):
         with replay(pack, extra_packs=[PACKS / "zelenia-state-observer.xml"]) as host:
-            # The marker proves the asynchronous cleanup finished as well
-            # as the phase assignment before the map event arrives.
+            # The marker confirms asynchronous cleanup before the map event.
             host.send(t="log", line="NYAA_REPLAY_PREPARE")
             self.assertEqual(host.call(), "NYAA_REPLAY_PREPARED")
             host.log("20", "40001234", "Zelenia", "AA14", "Bloom", "E0000000", "", "4.0", "100", "100", "0", "0")

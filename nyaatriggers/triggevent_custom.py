@@ -1,5 +1,3 @@
-"""Saved definitions for the Triggevent callout builder."""
-
 import json
 import re
 import uuid
@@ -20,7 +18,6 @@ MAX_BYTES = 4 << 20
 
 
 def fight_choices():
-    """Match bundled fight patterns to the bundled zone names."""
     assets = bundle_root() / "assets"
     try:
         triggers = json.loads((assets / "triggers.json").read_text(encoding="utf-8"))

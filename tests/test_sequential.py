@@ -1,4 +1,3 @@
-"""Sequence steps with alternative log types, normalized inputs and ID filtering."""
 import os
 import sys
 
@@ -18,7 +17,6 @@ def check(name, cond):
 
 
 def make_runner(sequence):
-    """A runner over `sequence` with its completion/expire callbacks recorded."""
     done, expired = [], []
     r = SequentialRunner(Trigger(sequence=sequence), {},
                          lambda runner, cap: done.append(cap),
@@ -33,7 +31,6 @@ def ability_line(lt, ability_id, name="Some Ability", source="Boss",
             "10001111", target]
 
 
-# a pipe-separated step advances on either concrete type
 seq = [{"log_type": "21|22", "ability_id": "A55B"}]
 
 r, done, _expired = make_runner(seq)
@@ -54,7 +51,6 @@ check("pipe step ignores a non-member log type",
 check("pipe step ignores a wrong id on a member type",
       r.try_advance(ability_line("22", "A55C")) is False and done == [])
 
-# the ability regex also resolves against the concrete line's name field
 r, done, _expired = make_runner([{"log_type": "21|22", "ability_regex": "Exaflare"}])
 check("pipe step regex advances on a 22 line",
       r.try_advance(ability_line("22", "1234", name="Exaflare")) is True
@@ -64,7 +60,6 @@ check("pipe step regex rejects a non-matching 21 line",
       r.try_advance(ability_line("21", "1234", name="Glare")) is False
       and done == [])
 
-# a bare pipe step advances mid-sequence on either type
 r, done, _expired = make_runner([{"log_type": "21|22"}, {"log_type": "20"}])
 check("bare pipe step advances on 22 without completing the sequence",
       r.try_advance(ability_line("22", "9999")) is False and done == [])
@@ -73,17 +68,14 @@ check("the next step still waits for its own type",
 check("the next step completes on its own type",
       r.try_advance(ability_line("20", "9999")) is True and len(done) == 1)
 
-# whitespace around the pipe parts is tolerated, as in Trigger.matches
 r, done, _expired = make_runner([{"log_type": "21 | 22"}])
 check("spaced pipe parts still match",
       r.try_advance(ability_line("22", "9999")) is True and len(done) == 1)
 
-# a null step log_type falls back to "20" instead of matching nothing
 r, done, _expired = make_runner([{"log_type": None}])
 check("null step log_type advances on a 20 line",
       r.try_advance(ability_line("20", "9999")) is True and len(done) == 1)
 
-# an ability_id on a type with no ID field is ignored, regex decides
 chat_line = ["00", "ts", "10001111", "Tini Poutini", "resonance is up"]
 
 r, done, _expired = make_runner([{"log_type": "00", "ability_id": "1234"}])
@@ -100,7 +92,6 @@ r, done, _expired = make_runner([{"log_type": "00", "ability_id": "1234",
 check("unindexed type with a regex rejects non-matching chat text",
       r.try_advance(chat_line) is False and done == [])
 
-# a hand edited step log_type is stripped at match time
 r, done, _expired = make_runner([{"log_type": " 21 "}])
 check("padded step log_type strips and matches",
       r.try_advance(ability_line("21", "9999")) is True and len(done) == 1)

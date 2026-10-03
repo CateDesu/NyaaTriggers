@@ -1,5 +1,3 @@
-"""Preserve local engine work while updating real disposable Git checkouts."""
-
 from contextlib import ExitStack
 import json
 import os

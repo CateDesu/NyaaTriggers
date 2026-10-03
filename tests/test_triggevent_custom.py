@@ -1,5 +1,3 @@
-"""Builder definitions, safe saves, editing and engine delivery."""
-
 from copy import deepcopy
 import json
 import os

@@ -1,5 +1,3 @@
-"""Bounded Piper config checks shared by setup and voice selection."""
-
 import json
 import math
 from pathlib import Path

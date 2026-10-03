@@ -1,6 +1,3 @@
-"""FFLogs token caching, zone matching and failure handling with an injected HTTP
-transport.
-"""
 import json
 import os
 import sys
@@ -26,9 +23,6 @@ ZONES = [{"id": 93, "name": "Everkeep"},
 
 
 class FakeHTTP:
-    """Scripted http_post: token endpoint and GraphQL endpoint replies,
-    plus a record of every call for the cache assertions."""
-
     def __init__(self, token_status=200, token_body=None,
                  api_status=200, rankings=None, zones=None):
         self.token_status = token_status
@@ -72,7 +66,6 @@ RANKINGS = {"rankings": [
      "bestAmount": 12345.6},
 ]}
 
-# happy path
 fake = FakeHTTP(rankings=RANKINGS)
 c = fresh_client(fake)
 res = c.fetch_best("Tini Poutini", "tonberry", "JP", "Everkeep")
@@ -81,14 +74,12 @@ check("happy path parses the exact encounter match (not the substring one)",
 check("zone matched case-insensitively (exact)",
       fake.api_bodies[-1]["variables"]["zone"] == 93)
 
-# Reuse cached tokens and zones so only rankings need another request.
 res2 = c.fetch_best("Tini Poutini", "tonberry", "JP", "everkeep")
 check("second fetch returns the same data", res2 == res)
 check("token requested once and reused", fake.token_calls == 1)
 check("zone list cached (one zones query for two fetches)",
       sum("worldData" in b["query"] for b in fake.api_bodies) == 1)
 
-# zone matching variants
 fake = FakeHTTP(rankings={"rankPercent": 55.0, "bestAmount": 9000.0})
 c = fresh_client(fake)
 res = c.fetch_best("Tini Poutini", "tonberry", "JP", "voidcast dais")
@@ -97,7 +88,6 @@ check("substring/casefold zone match + top-level fallback",
 res = c.fetch_best("Tini Poutini", "tonberry", "JP", "Not A Real Zone")
 check("unknown zone -> None", res is None)
 
-# per-floor game names resolve to the tier level FFLogs zone
 fake = FakeHTTP(rankings={"rankPercent": 77.0, "bestAmount": 5000.0},
                 zones=[{"id": 68, "name": "AAC Cruiserweight (Savage)"},
                        {"id": 69, "name": "AAC Heavyweight (Savage)"},
@@ -114,7 +104,6 @@ check("most tokens wins: light-heavyweight, not heavyweight",
 check("a normal floor does not resolve to the savage tier zone",
       c.fetch_best("Tini Poutini", "tonberry", "JP", "AAC Cruiserweight M4") is None)
 
-# Ignore punctuation when matching floor names to raid tiers.
 fake = FakeHTTP(rankings={"rankPercent": 60.0, "bestAmount": 4000.0},
                 zones=[{"id": 49, "name": "Asphodelos (Savage)"}])
 c = fresh_client(fake)
@@ -122,7 +111,6 @@ res = c.fetch_best("Tini Poutini", "tonberry", "JP", "Asphodelos: The First Circ
 check("colon punctuation in the floor name still resolves",
       res is not None and res["zone"] == "Asphodelos (Savage)")
 
-# empty zones response: not cached, the next call refetches
 fake = FakeHTTP(rankings=RANKINGS, zones=[])
 c = fresh_client(fake)
 check("empty zones list -> None",
@@ -134,7 +122,6 @@ check("later call refetches zones and succeeds",
 check("zones queried twice, the empty response was never cached",
       sum("worldData" in b["query"] for b in fake.api_bodies) == 2)
 
-# rankings fallbacks
 fake = FakeHTTP(rankings={"allStars": [{"rankPercent": 66.0},
                                        {"rankPercent": 71.5}]})
 c = fresh_client(fake)
@@ -165,14 +152,12 @@ DpsTabMixin._on_fflogs_result(ui, 1, {"amount": float("nan"), "percent": float("
 check("nonfinite FFLogs values show no data",
       label.value == "FFLogs: no data")
 
-# zoneRankings arriving as a JSON string (some proxies double-encode).
 fake = FakeHTTP(rankings=json.dumps(RANKINGS))
 c = fresh_client(fake)
 res = c.fetch_best("Tini Poutini", "tonberry", "JP", "Everkeep")
 check("string-encoded zoneRankings still parses",
       res == {"percent": 82.5, "amount": 12345.6, "zone": "Everkeep"})
 
-# Skip malformed encounter entries and keep valid siblings.
 fake = FakeHTTP(rankings={"rankings": [
     {"encounter": "Garuda", "rankPercent": 99.0, "bestAmount": 1.0},
     {"encounter": {"name": "Everkeep"}, "rankPercent": 82.5,
@@ -183,7 +168,6 @@ res = c.fetch_best("Tini Poutini", "tonberry", "JP", "Everkeep")
 check("a non-dict encounter skips only its own entry",
       res == {"percent": 82.5, "amount": 12345.6, "zone": "Everkeep"})
 
-# failure paths: everything is None, nothing raises
 fake = FakeHTTP(token_status=403, rankings=RANKINGS)
 c = fresh_client(fake)
 check("token rejected -> None", c.fetch_best("a", "b", "JP", "Everkeep") is None)
@@ -192,7 +176,7 @@ fake = FakeHTTP(api_status=500, rankings=RANKINGS)
 c = fresh_client(fake)
 check("api non-200 -> None", c.fetch_best("a", "b", "JP", "Everkeep") is None)
 
-fake = FakeHTTP(rankings=None)            # unknown character: character is null
+fake = FakeHTTP(rankings=None)
 c = fresh_client(fake)
 check("unknown character -> None", c.fetch_best("a", "b", "JP", "Everkeep") is None)
 
@@ -217,7 +201,6 @@ c = fresh_client(FakeHTTP(rankings=RANKINGS))
 check("missing inputs -> None without a single HTTP call",
       c.fetch_best("", "b", "JP", "Everkeep") is None)
 
-# Auth header shape: HTTP Basic with the client credentials.
 fake = FakeHTTP(rankings=RANKINGS)
 c = fresh_client(fake)
 c.fetch_best("Tini Poutini", "tonberry", "JP", "Everkeep")

@@ -1,5 +1,3 @@
-"""Edit native Triggernometry packs without discarding unexposed settings."""
-
 from copy import deepcopy
 from pathlib import Path
 import os

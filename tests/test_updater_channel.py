@@ -1,4 +1,3 @@
-"""Stable release lookup, version display and update eligibility."""
 import email.message
 import io
 import json
@@ -29,9 +28,6 @@ ERROR_PAYLOAD = json.dumps({"message": "API rate limit exceeded"}).encode()
 
 
 def fetch_stubbed(channel=None, payload=PAYLOAD):
-    """Run fetch_latest_release with urllib.request.urlopen stubbed out.
-    channel=None calls it with no channel argument. Returns
-    (release_or_None, urls_hit, error_or_None)."""
     urls = []
 
     class Resp:
@@ -90,8 +86,6 @@ check("API error payload raises on the master channel too",
 check("_pick_master_release is gone", not hasattr(updater, "_pick_master_release"))
 
 
-# Both API budget and secondary limits use the cached release fallback. Other 403
-# responses remain errors.
 def _http_error(code, headers):
     msg = email.message.Message()
     for k, v in headers.items():
@@ -100,7 +94,6 @@ def _http_error(code, headers):
 
 
 def fetch_error_stubbed(exc):
-    """Run fetch_latest_release with urlopen raising exc. Returns the error."""
     def fake_urlopen(req, timeout=None):
         raise exc
 
@@ -127,13 +120,10 @@ check("plain 403 without rate markers still propagates",
       and not isinstance(err, updater.RateLimited))
 
 
-# The rolling scheme's run-numbered tag must sort above its own base stable.
 check("rolling tag outranks its base stable",
       updater.parse_version("1.1.4.40-master") > updater.parse_version("1.1.4"))
 
 
-# Compare complete tags for every install kind. Source base versions can still be
-# offered rolling releases.
 check("git checkout sees a rolling tag on the same base as an update",
       updater.is_update_for_here("1.1.3.46", "1.1.3", kind="git"))
 check("git checkout at the release's own version is up to date",
@@ -153,7 +143,6 @@ check("frozen install still compares the full rolling version",
 check("frozen install on the same rolling version is up to date",
       not updater.is_update_for_here("1.1.3.46", "1.1.3.46", kind="frozen-windows"))
 
-# Trailing zero version segments do not affect ordering.
 check("git checkout at 1.2.0 sees the 1.2.1 patch release",
       updater.is_update_for_here("1.2.1", "1.2.0", kind="git"))
 check("source copy at 1.2.0 sees the 1.2.1 patch release",
@@ -174,7 +163,6 @@ check("frozen install at 1.2.0 sees 1.2.1 (strict compare)",
       updater.is_update_for_here("1.2.1", "1.2.0", kind="frozen-linux"))
 
 
-# Display frozen stamps, matching git tags or a source suffix as appropriate.
 check("frozen display is the stamped version",
       updater.display_version("1.3.0.175", kind="frozen-linux") == "1.3.0.175")
 check("windows frozen display is the stamped version",
@@ -184,7 +172,6 @@ check("source copy display is marked -src",
 check("this git checkout's display stays on the 1.3.0 line",
       updater.display_version("1.3.0", kind="git").startswith("1.3.0"))
 
-# _describe_label: exact tag, commits-past form, and the rejections.
 check("exact rolling tag shows as the plain tag version",
       updater._describe_label("1.3.0", "v1.3.0.165") == "1.3.0.165")
 check("commits past a rolling tag shows the plain tag",
@@ -200,8 +187,6 @@ check("a tag from a newer base line is rejected",
 check("a non-version describe result is rejected",
       updater._describe_label("1.3.0", "deadbee") is None)
 
-# Suppress offers when HEAD contains the upstream tip. Fall back to version checks when
-# git cannot confirm it.
 import subprocess
 import tempfile
 from pathlib import Path
@@ -239,7 +224,6 @@ with tempfile.TemporaryDirectory() as td:
         check("checkout ahead of upstream is covered",
               _commit(clone, "two", "two").returncode == 0
               and updater.git_covers_upstream(clone))
-        # The tip object is unknown to the clone, the ancestor test errors.
         check("checkout behind upstream is not covered",
               _commit(remote, "three", "three").returncode == 0
               and not updater.git_covers_upstream(clone))

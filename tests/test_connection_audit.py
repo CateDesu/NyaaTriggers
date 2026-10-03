@@ -1,5 +1,3 @@
-"""Recovery must remain paused until a lost feed reconnects."""
-
 import builtins
 from contextlib import ExitStack
 from datetime import datetime

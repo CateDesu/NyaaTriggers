@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""Generate assets/zone_names.json from cactbot English zone names so local trigger
-patterns work across client languages. Run python tools/gen_zone_names.py.
-"""
+"""Build English zone names so local patterns work across client languages."""
 import json
 import os
 import re
@@ -14,7 +12,6 @@ from nyaatriggers.http_fetch import fetch_bytes
 SRC = ("https://raw.githubusercontent.com/OverlayPlugin/cactbot/main/"
        "resources/zone_info.ts")
 OUT = Path(__file__).resolve().parent.parent / "assets" / "zone_names.json"
-# Bound the source response size.
 _MAX_BYTES = 16 << 20
 
 
@@ -31,11 +28,9 @@ def main() -> None:
     if len(zones) < 500:
         raise SystemExit(f"only {len(zones)} zones parsed - refusing to write")
 
-    # Sort entries by numeric ID for readable diffs.
     body = ",\n".join(f'  "{zid}": {json.dumps(zones[zid], ensure_ascii=False)}'
                       for zid in sorted(zones, key=int))
-    # Replace through a sibling temporary file to preserve previous output if
-    # interrupted.
+    # A sibling temporary file preserves the previous output if interrupted.
     tmp = OUT.with_name(OUT.name + ".tmp")
     tmp.write_text("{\n" + body + "\n}\n", encoding="utf-8")
     os.replace(tmp, OUT)

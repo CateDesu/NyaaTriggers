@@ -1,5 +1,3 @@
-"""Runtime evidence stays useful without recording the data being delivered."""
-
 from contextlib import ExitStack
 import json
 from pathlib import Path
@@ -45,7 +43,6 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
         raw = "00|2026-09-28T12:00:00.000Z|0038|" + PRIVATE
         client._on_message(raw)
         client._on_message(json.dumps({"type": "ChangePrimaryPlayer", "charName": PRIVATE, "charID": 123}))
-        # Diagnostics must not raise while counting an invalid Unicode payload.
         client._on_message('{"type":"probe","text":"\ud800"}')
         self.assertEqual(received[0], raw)
         self.assertEqual(len(received), 3)

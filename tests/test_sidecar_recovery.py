@@ -1,5 +1,3 @@
-"""Reader failures and surviving child processes must not strand a sidecar."""
-
 from contextlib import ExitStack
 import io
 import json

@@ -1,5 +1,3 @@
-"""Locations shared by source runs and frozen builds."""
-
 import sys
 import sysconfig
 from pathlib import Path
@@ -29,7 +27,6 @@ def resolve_voice_venv(value, default: Path | None = None) -> Path:
 
 
 def voice_venv_version(directory: Path) -> tuple[int, int] | None:
-    """Read the interpreter version recorded when the voice environment was created."""
     try:
         config = Path(directory) / "pyvenv.cfg"
         if not config.is_file():

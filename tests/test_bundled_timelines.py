@@ -1,4 +1,3 @@
-"""Bundled timeline coverage, cache naming and supported sync fields."""
 import json
 import os
 import re
@@ -29,14 +28,12 @@ check("no two cactbot timelines share a filename stem", not clashes)
 for stem, paths in clashes.items():
     print(f"  {stem}: {', '.join(paths)}")
 
-# The dungeon set is the one the build promises on a fresh install.
 dungeon_tags = {e["tag"] for e in index.values() if "/dungeon/" in e["txt_path"]}
 missing = sorted(dungeon_tags - shipped)
 check("every dungeon timeline in the index ships", not missing)
 if missing:
     print("  missing:", ", ".join(missing))
 
-# A shipped file the index never resolves is dead weight at best.
 dead = sorted(shipped - {e["tag"] for e in index.values()})
 check("every shipped cactbot timeline resolves to an index tag", not dead)
 if dead:
@@ -47,8 +44,6 @@ check("no shipped timeline is empty", not empty)
 for name in empty:
     print(f"  empty: {name}")
 
-# Download caches must use names separate from shipped files. Exclude bundled path reads
-# from this source check.
 tl_src = (ROOT / "nyaatriggers" / "ui" / "timeline_tab.py").read_text(encoding="utf-8")
 bare_writes = [
     ln.strip() for ln in tl_src.splitlines()
@@ -61,7 +56,6 @@ check("runtime never writes a cactbot timeline under a shipped name",
 for ln in bare_writes:
     print(f"  {ln}")
 
-# Require indexed fields for every shipped sync constraint.
 sys.path.insert(0, str(ROOT))
 from nyaatriggers import timeline_parser
 from nyaatriggers.timeline_engine import _SYNC_TYPES

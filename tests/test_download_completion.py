@@ -1,5 +1,3 @@
-"""Keep a complete timeline when an HTTP response ends early."""
-
 from http.client import IncompleteRead
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from contextlib import nullcontext

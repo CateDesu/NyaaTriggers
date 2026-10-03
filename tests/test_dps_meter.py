@@ -1,5 +1,3 @@
-"""Combat effect decoding, aggregation, encounter boundaries and overlay meter frames.
-"""
 import os
 import sys
 
@@ -18,8 +16,6 @@ def check(name, cond):
 
 
 class Clock:
-    """Injectable monotonic clock. Tests advance it explicitly."""
-
     def __init__(self, base=1000.0):
         self.t = base
 
@@ -30,7 +26,6 @@ class Clock:
         self.t = 1000.0 + t
 
 
-# line builders
 def dmg(amount):
     """Plain damage field: the high word is the amount."""
     return f"{amount << 16:X}"
@@ -38,9 +33,7 @@ def dmg(amount):
 
 def ability(lt, sid, sname, aname, tid, tname, pairs,
             target_index=0, target_count=1, owner="00", owner_name=""):
-    """A 21/22 line: header fields, eight [flags, damage] pairs, then the
-    trailing block with targetIndex/targetCount/ownerId/ownerName at the
-    documented wire positions 45-48."""
+    """Build 21/22 lines with eight effect pairs and owner fields at wire positions 45 to 48."""
     f = [lt, "2026-08-05T00:00:00", sid, sname, "A1", aname, tid, tname]
     for i in range(8):
         if i < len(pairs):
@@ -71,8 +64,6 @@ BOSS2 = "40012346"
 
 
 def roster(m):
-    """Zone + me + two players (one lowercase id, to prove id normalization),
-    a pet with an 03 ownerId, and the boss (job 00 = NPC)."""
     m.process(["01", "ts", "4B0", "Everkeep"], "")
     m.process(["02", "ts", ME, ME_NAME], "")
     m.process(["03", "ts", ME, ME_NAME, "21", "5A", "0000"], "")      # 0x21 = 33 AST
@@ -82,11 +73,9 @@ def roster(m):
     m.process(["03", "ts", BOSS2, "Zeromus", "00", "5A", "0000"], "")
 
 
-# effect decode: doc examples and edge kinds
 check("unpack basic damage (doc: Grand Cross Alpha 18216)",
       _unpack_effect("750003", "47280000") == ("damage", 18216, False, False))
-# Use the LogGuide decoding formula, which gives 82539. Its older caption differs by
-# one.
+# The LogGuide formula gives 82539. Its older caption differs by one.
 check("unpack big damage (doc formula: D A B)",
       _unpack_effect("750003", "426B4001") == ("damage", 82539, False, False))
 check("unpack big damage (doc: 999999)",
@@ -102,8 +91,6 @@ check("unpack crit + DH severity",
 check("unpack status application is none",
       _unpack_effect("1E00000E", "320000")[0] == "none")
 
-# Actor parsing agrees with Telesto for valid IDs and rejects sentinels and malformed
-# values.
 check("actor int plain hex", _actor_int("10FF0001") == 0x10FF0001)
 check("actor int lowercase hex", _actor_int("10ff0001") == 0x10FF0001)
 check("actor int int passthrough", _actor_int(0x10FF0001) == 0x10FF0001)
@@ -118,7 +105,6 @@ check("actor int blank", _actor_int("") is None)
 check("actor int None", _actor_int(None) is None)
 check("actor int garbage", _actor_int("ZZZ") is None)
 
-# the scripted mini-fight
 clk = Clock()
 m = DpsMeter(clock=clk)
 ended = []
@@ -134,40 +120,39 @@ m.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
                   [("750003", dmg(10000))]), "")
 clk.set(2)
 m.process(ability("21", ME, ME_NAME, "Malefic", BOSS, "Zeromus",
-                  [("752003", dmg(20000))]), "")                     # crit
+                  [("752003", dmg(20000))]), "")
 clk.set(3)
 m.process(ability("21", ME, ME_NAME, "Gravity", BOSS, "Zeromus",
-                  [("756003", dmg(30000))]), "")                     # crit + DH
+                  [("756003", dmg(30000))]), "")
 clk.set(3.5)
 m.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
-                  [("750003", f"{(9000 << 16) | 0x0100:X}")]), "")   # hallowed: 0
+                  [("750003", f"{(9000 << 16) | 0x0100:X}")]), "")
 clk.set(4)
 m.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
-                  [("750001", "0")]), "")                            # miss
+                  [("750001", "0")]), "")
 clk.set(5)
-# Use two AoE targets and a lowercase source ID to check actor resolution.
 m.process(ability("22", P2.lower(), P2_NAME, "Auto Crossbow", BOSS, "Zeromus",
                   [("750003", dmg(5000))], target_index=0, target_count=2), "")
 m.process(ability("22", P2.lower(), P2_NAME, "Auto Crossbow", BOSS2, "Zeromus",
                   [("750003", dmg(5000))], target_index=1, target_count=2), "")
 clk.set(6)
 m.process(ability("21", PET, "Eos", "Rock Buster", BOSS, "Zeromus",
-                  [("750003", dmg(3000))]), "")                      # pet via 03
+                  [("750003", dmg(3000))]), "")
 clk.set(6.5)
 # Second pet: no 03 line at all. Ownership comes from the 21 line's [47].
 m.process(ability("21", PET2, "Carbuncle", "Gouge", BOSS, "Zeromus",
                   [("750003", dmg(1500))], owner=ME, owner_name=ME_NAME), "")
 clk.set(7)
-m.process(dot("DoT", BOSS, "Zeromus", "3E8", ME, ME_NAME), "")       # 1000 to me
+m.process(dot("DoT", BOSS, "Zeromus", "3E8", ME, ME_NAME), "")
 clk.set(8)
-m.process(dot("DoT", P2, P2_NAME, "1F4", BOSS, "Zeromus"), "")       # 500 taken
+m.process(dot("DoT", P2, P2_NAME, "1F4", BOSS, "Zeromus"), "")
 clk.set(9)
-m.process(dot("HoT", ME, ME_NAME, "2BC", P2, P2_NAME), "")           # 700 healed
+m.process(dot("HoT", ME, ME_NAME, "2BC", P2, P2_NAME), "")
 clk.set(10)
-m.process(["25", "ts", P2, P2_NAME], "")                             # potato dies
+m.process(["25", "ts", P2, P2_NAME], "")
 clk.set(11)
 m.process(ability("21", BOSS, "Zeromus", "Void Bolt", ME, ME_NAME,
-                  [("750003", dmg(4000))]), "")                      # 4000 taken
+                  [("750003", dmg(4000))]), "")
 
 clk.set(12)
 snap = m.snapshot()
@@ -236,7 +221,6 @@ check("final duration trims to last combat action (t=11, not finalize t=12)",
       final["Encounter"]["DURATION"] == 11
       and final["Encounter"]["duration"] == "00:11")
 
-# lifecycle edges
 clk2 = Clock()
 m2 = DpsMeter(clock=clk2)
 ended2 = []
@@ -246,13 +230,11 @@ m2.set_in_combat(True, True)
 m2.set_in_combat(False, False)
 check("empty encounter produces no callback", ended2 == [])
 
-# Either combat flag can start or end an encounter, including game only combat on a
-# dummy.
 m2b = DpsMeter(clock=Clock())
 ended2b = []
 m2b.on_encounter_end = ended2b.append
 roster(m2b)
-m2b.set_in_combat(False, True)                       # game combat only
+m2b.set_in_combat(False, True)
 m2b.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
                     [("750003", dmg(1000))]), "")
 m2b.set_in_combat(False, False)
@@ -263,22 +245,21 @@ m2c = DpsMeter(clock=Clock())
 ended2c = []
 m2c.on_encounter_end = ended2c.append
 roster(m2c)
-for _ in range(2):                                   # act pinned high both pulls
+for _ in range(2):
     m2c.set_in_combat(True, True)
     m2c.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
                         [("750003", dmg(1000))]), "")
     m2c.set_in_combat(True, False)
 check("game drop splits pulls while ACT flag stays high", len(ended2c) == 2)
 
-# A falling flag and rising flag in one message separate the two pulls.
 m2d = DpsMeter(clock=Clock())
 ended2d = []
 m2d.on_encounter_end = ended2d.append
 roster(m2d)
-m2d.set_in_combat(True, False)                       # act combat only
+m2d.set_in_combat(True, False)
 m2d.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
                     [("750003", dmg(1000))]), "")
-m2d.set_in_combat(False, True)                       # act falls as game rises
+m2d.set_in_combat(False, True)
 check("mixed edge finalizes the old encounter",
       len(ended2d) == 1
       and ended2d[0]["Combatant"][ME_NAME]["damage"] == 1000)
@@ -290,7 +271,6 @@ check("the post-edge pull stands alone",
       len(ended2d) == 2
       and ended2d[1]["Combatant"][ME_NAME]["damage"] == 2000)
 
-# Status only abilities cannot start an encounter. The first combat effect can.
 m3 = DpsMeter(clock=Clock())
 ended3 = []
 m3.on_encounter_end = ended3.append
@@ -307,11 +287,9 @@ m3.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
                    [("750003", dmg(1000))]), "")
 check("first combat effect starts encounter lazily", m3.current is not None)
 
-# Wipe finalizes.
 m3.process(["33", "ts", "80034E52", "4000000F", "00", "00", "00", "00"], "")
 check("wipe (33/4000000F) finalizes", len(ended3) == 1 and m3.current is None)
 
-# Zone log lines finalize the encounter even when the name repeats.
 m4 = DpsMeter(clock=Clock())
 ended4 = []
 m4.on_encounter_end = ended4.append
@@ -321,7 +299,6 @@ m4.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
 m4.process(["01", "ts", "4B0", "Everkeep"], "")
 check("even a same-name 01 finalizes (instance re-entry = new pull)",
       len(ended4) == 1 and m4.current is None)
-# New combat cannot inherit the previous zone's identity or jobs.
 check("zone change clears identity and actor metadata",
       m4._me_id is None and not m4._jobs and not m4._owners and not m4._names)
 m4.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
@@ -336,14 +313,12 @@ m4.process(["01", "ts", "4B1", "The Voidcast Dais"], "")
 check("zone change finalizes", len(ended4) == 2 and m4.current is None)
 check("zone change title was the old zone",
       ended4[1]["Encounter"]["title"] == "Everkeep")
-# Player actor IDs remain recognizable while fresh job metadata is pending.
 m4.process(ability("21", P2, P2_NAME, "Auto Crossbow", BOSS, "Zeromus",
                    [("750003", dmg(5000))]), "")
 check("zone change clears job knowledge without discarding player damage",
       m4.snapshot()["Combatant"][P2_NAME]["Job"] == ""
       and m4.snapshot()["Combatant"][P2_NAME]["damage"] == 5000)
 
-# Malformed lines never raise and never corrupt state.
 m5 = DpsMeter(clock=Clock())
 for junk in (["21"], ["21", "only"], ["24", "ts"], ["03", "ts", "ZZ", "Name"],
              ["", ""], []):
@@ -352,7 +327,6 @@ m5.set_in_combat(True, False)
 m5.set_in_combat(False, False)
 check("malformed lines are survived", m5.current is None)
 
-# A truncated zone line cannot end the pull or clear actor data.
 m5b = DpsMeter(clock=Clock())
 roster(m5b)
 m5b.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
@@ -361,7 +335,6 @@ m5b.process(["01"], "")
 check("a bare 01 keeps the open pull and the roster",
       m5b.current is not None and len(m5b._jobs) == 2)
 
-# Pet damage uses the owner's roster name or the owner name carried in the ability line.
 m6 = DpsMeter(clock=Clock())
 roster(m6)
 m6.process(ability("21", PET, "Eos", "Rock Buster", BOSS, "Zeromus",
@@ -380,7 +353,6 @@ check("pet-first row is named after the owner (21 ownerName)",
       list(snap7["Combatant"]) == [ME_NAME]
       and snap7["Combatant"][ME_NAME]["damage"] == 1500)
 
-# Pet damage taken and deaths do not count against the owner.
 m8 = DpsMeter(clock=Clock())
 roster(m8)
 m8.set_in_combat(True, True)
@@ -392,16 +364,14 @@ m8.process(ability("21", BOSS, "Zeromus", "Void Bolt", P2, P2_NAME,
 check("enemy hits on a pet do not inflate the owner's damage taken",
       m8.snapshot()["Combatant"][P2_NAME]["damagetaken"] == 700)
 
-# Self inflicted DoT damage counts as damage dealt only.
 m9 = DpsMeter(clock=Clock())
 roster(m9)
 m9.set_in_combat(True, True)
-m9.process(dot("DoT", ME, ME_NAME, "1F4", ME, ME_NAME), "")    # 500 self tick
+m9.process(dot("DoT", ME, ME_NAME, "1F4", ME, ME_NAME), "")
 me9 = m9.snapshot()["Combatant"][ME_NAME]
 check("a self dot tick credits damage but never damage taken",
       me9["damage"] == 500 and me9["damagetaken"] == 0)
 
-# damage-idle pause, display reset, full-pull capture
 pclk = Clock()
 mp = DpsMeter(clock=pclk)
 endedp = []
@@ -428,7 +398,6 @@ check("paused clock freezes encdps",
       abs(snap["Encounter"]["encdps"] - 20000 / 130) < 1e-6)
 check("overlay rows show the frozen segment",
       mp.overlay_rows()[0][2] == round(20000 / 130, 1))
-# Damage resumes past the gap. The display resets to a fresh segment.
 pclk.set(5001)
 mp.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
                    [("750003", dmg(10000))]), "")
@@ -443,8 +412,6 @@ mp.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
 snap = mp.snapshot()
 check("new segment ticks", snap["Encounter"]["DURATION"] == 1)
 check("new segment totals", snap["Encounter"]["damage"] == 20000)
-# The pull itself was never split. The final log keeps everything,
-# downtime included.
 pclk.set(5003)
 mp.set_in_combat(False, False)
 check("finalize fires for the gapped fight", len(endedp) == 1)
@@ -465,7 +432,6 @@ check("a new pull replaces the preserved one",
       snap_new["isActive"] is True
       and snap_new["Encounter"]["damage"] == 1000)
 
-# The timeout is configurable: 30s here.
 sclk = Clock()
 ms = DpsMeter(clock=sclk)
 ms.set_idle_timeout(30)
@@ -486,7 +452,6 @@ ms.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
 check("custom timeout resets the view",
       ms.snapshot()["Encounter"]["damage"] == 5000)
 
-# Heals are not damage. A heal-only stretch neither pauses-early nor resets.
 hclk = Clock()
 mh = DpsMeter(clock=hclk)
 roster(mh)
@@ -501,7 +466,6 @@ check("a HoT neither holds nor resets the view",
       mh.snapshot()["Encounter"]["DURATION"] == 120
       and mh.snapshot()["Encounter"]["damage"] == 10000)
 
-# dps_frame contract (plugin_link)
 frame = pl.dps_frame({"t": "Everkeep", "d": "00:12", "dps": 6291.7}, rows)
 check("dps frame command + show", frame["c"] == "dps" and frame["show"] is True)
 check("dps frame enc shape",
@@ -528,11 +492,10 @@ check("dps ending can carry the complete final snapshot",
       ended_frame["show"] is False and ended_frame["enc"]["dps"] == 6291.7
       and ended_frame["enc"]["hasDamage"] is True and ended_frame["rows"] == frame["rows"])
 
-# roster feeds from outside the log stream
 m10 = DpsMeter(clock=Clock())
 m10.process(["01", "ts", "4B0", "Everkeep"], "")
 m10.set_me(int(ME, 16))
-m10.note_job(int(P2, 16), 31)          # decimal job id, the WS feed's shape
+m10.note_job(int(P2, 16), 31)
 m10.process(ability("21", P2, P2_NAME, "Auto Crossbow", BOSS, "Zeromus",
                     [("750003", dmg(5000))]), "")
 snap10 = m10.snapshot()
@@ -549,7 +512,6 @@ check("a blank or malformed ws id never clobbers the self id",
 m10.note_job(int(BOSS, 16), 0)
 check("a zero job notes nothing", int(BOSS, 16) not in m10._jobs)
 
-# actor-map trim evicts the stalest, not the first arrival
 m11 = DpsMeter(clock=Clock())
 m11._note(m11._jobs, 1, 33)
 for i in range(2, 1100):
@@ -560,13 +522,12 @@ m12 = DpsMeter(clock=Clock())
 m12._note(m12._jobs, 1, 33)
 for i in range(2, 600):
     m12._note(m12._jobs, i, 1)
-m12._note(m12._jobs, 1, 33)            # seen again, fresh again
+m12._note(m12._jobs, 1, 33)
 for i in range(600, 1200):
     m12._note(m12._jobs, i, 1)
 check("a re-noted actor survives the flood", m12._jobs.get(1) == 33)
 check("the trim still holds the cap", len(m12._jobs) == 1024)
 
-# Roster refresh preserves active party members during combatant cache eviction.
 m13 = DpsMeter(clock=Clock())
 m13.process(["01", "ts", "4B0", "Everkeep"], "")
 m13.process(["02", "ts", ME, ME_NAME], "")
@@ -574,7 +535,7 @@ m13.process(["03", "ts", P2, P2_NAME, "1F", "5A", "0000"], "")
 strangers = [f"{0x20000000 + i:X}" for i in range(1100)]
 for s in strangers[:550]:
     m13.process(["03", "ts", s, "Stranger", "01", "5A", "0000"], "")
-m13.note_job(int(P2, 16), 31)          # the WS burst re-notices the party
+m13.note_job(int(P2, 16), 31)
 for s in strangers[550:]:
     m13.process(["03", "ts", s, "Stranger", "01", "5A", "0000"], "")
 m13.set_in_combat(True, True)
@@ -583,7 +544,6 @@ m13.process(ability("21", P2, P2_NAME, "Auto Crossbow", BOSS, "Zeromus",
 check("a re-noted party member still credits after the flood",
       m13.snapshot()["Combatant"].get(P2_NAME, {}).get("damage") == 5000)
 
-# A late roster update must fill the owner's job even when a pet opened the row first.
 m14 = DpsMeter(clock=Clock())
 m14.process(["01", "ts", "4B0", "Everkeep"], "")
 m14.set_me(int(ME, 16))
@@ -591,7 +551,7 @@ m14.process(ability("21", PET, "Eos", "Rock Buster", BOSS, "Zeromus",
                     [("750003", dmg(3000))], owner=ME, owner_name=ME_NAME), "")
 check("a pet-opened row of a jobless self starts at job 0",
       m14.current.combatants[int(ME, 16)].job == 0)
-m14.note_job(int(ME, 16), 33)          # the WS burst lands late
+m14.note_job(int(ME, 16), 33)
 check("a late roster job upgrades the pet-opened row",
       m14.current.combatants[int(ME, 16)].job == 33)
 check("the view row upgrades too",
@@ -599,7 +559,6 @@ check("the view row upgrades too",
 check("the late job shows on the snapshot row",
       m14.snapshot()["Combatant"][ME_NAME]["Job"] == "AST")
 
-# Late job data fills blanks without replacing an existing job.
 m15 = DpsMeter(clock=Clock())
 roster(m15)
 m15.set_in_combat(True, True)
@@ -609,7 +568,6 @@ m15.note_job(int(P2, 16), 36)
 check("a roster note never clobbers a known job",
       m15.current.combatants[int(P2, 16)].job == 31)
 
-# Trust NPCs with real ClassJob ids are not noted as players
 m16 = DpsMeter(clock=Clock())
 m16.process(["01", "ts", "4B0", "Everkeep"], "")
 m16.process(["03", "ts", "4000C001", "Thancred", "17", "5A", "0000"], "")
@@ -617,7 +575,6 @@ m16.process(["03", "ts", ME, ME_NAME, "21", "5A", "0000"], "")
 check("a trust NPC job is not noted", int("4000C001", 16) not in m16._jobs)
 check("a player job is still noted", m16._jobs.get(int(ME, 16)) == 33)
 
-# a blank or garbage 02 id keeps the pinned self id
 m17 = DpsMeter(clock=Clock())
 m17.process(["01", "ts", "4B0", "Everkeep"], "")
 m17.process(["02", "ts", ME, ME_NAME], "")
@@ -633,7 +590,6 @@ check("a valid 02 line corrects the pin",
 check("the corrected pin notes the new name",
       m17._names.get(int(P2, 16)) == P2_NAME)
 
-# feed loss: the encounter closes and the combat edge resets
 m18 = DpsMeter(clock=Clock())
 ended18 = []
 m18.on_encounter_end = ended18.append
@@ -644,7 +600,6 @@ m18.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
 m18.feed_lost()
 check("feed loss finalizes the open pull",
       len(ended18) == 1 and ended18[0]["Combatant"][ME_NAME]["damage"] == 1000)
-# Resetting the combat edge lets reconnect start a separate pull.
 roster(m18)
 m18.set_in_combat(True, True)
 m18.process(ability("21", ME, ME_NAME, "Glare", BOSS, "Zeromus",
@@ -653,7 +608,6 @@ m18.set_in_combat(True, False)
 check("the post-reconnect pull does not merge into the old one",
       len(ended18) == 2 and ended18[1]["Combatant"][ME_NAME]["damage"] == 2000)
 
-# zone metadata from cached ChangeZone replay
 m19 = DpsMeter(clock=Clock())
 ended19 = []
 m19.on_encounter_end = ended19.append

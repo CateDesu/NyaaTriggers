@@ -1,5 +1,3 @@
-"""Shared paths, constants and data helpers for the main window and UI modules."""
-
 from contextlib import contextmanager
 import json
 import os
@@ -28,9 +26,7 @@ TRIGGERS_FILE       = _ASSETS_DIR / "triggers.json"
 TRIGGERS_LOCAL_FILE = _DATA_DIR   / "triggers.local.json"
 # Retired IDs stop local edits from reviving withdrawn triggers.
 RETIRED_FILE        = _ASSETS_DIR / "retired.json"
-# English aliases let zone patterns match localized clients.
 ZONE_NAMES_FILE     = _ASSETS_DIR / "zone_names.json"
-# Generated zone ID index with FIGHT_TO_CACTBOT_TXT as fallback.
 CACTBOT_TIMELINES_FILE = _ASSETS_DIR / "cactbot_timelines.json"
 # Version stamps let newer bundled triggers replace cached downloads.
 _REPO_TRIGGERS_FILE    = _DATA_DIR / "triggers.repo.json"
@@ -48,17 +44,13 @@ TIMELINES_DIR       = _DATA_DIR   / "timelines"
 # Keep downloads separate from bundled timelines.
 _BUNDLE_TIMELINES_DIR = _BUNDLE_DIR / "timelines"
 _SETTINGS_FILE              = _DATA_DIR   / "nyaatriggers_settings.json"
-# Cached inventory lets trigger rows appear before the engine starts.
 _TRIGGEVENT_INVENTORY_CACHE = _DATA_DIR   / "triggevent_inventory.json"
-# Fresh installs use this seed until the writable cache is populated.
 _TRIGGEVENT_INVENTORY_SEED  = _BUNDLE_DIR / "triggevent_inventory.seed.json"
 # Triggernometry inventory has no bundled seed because packs are imported by users.
 _TRIGGERNOMETRY_INVENTORY_CACHE = _DATA_DIR / "triggernometry_inventory.json"
 # Imported sounds live with user data so updates preserve them.
 _USER_SOUNDS_DIR = _DATA_DIR / "sounds"
-# Keep imported voices outside the replaceable bundle.
 _USER_VOICES_DIR = _DATA_DIR / "voices"
-# Japanese callouts use the cache before the bundled fallback.
 _CALLOUTS_JA_BUNDLE = _ASSETS_DIR / "callouts_ja.json"
 _CALLOUTS_JA_CACHE  = _DATA_DIR   / "callouts_ja.cache.json"
 _CALLOUTS_JA_MAX_BYTES = 4_000_000
@@ -133,7 +125,6 @@ def defer_persistence_warnings(window):
 
 
 def _atomic_write_json(path: "Path", data, *, indent: "int | None" = None) -> None:
-    """Atomically replace JSON and propagate write failures."""
     tmp = path.with_suffix(path.suffix + f".{os.getpid()}.{threading.get_ident()}.tmp")
     payload = json.dumps(data, indent=indent, ensure_ascii=False)
     try:
@@ -172,7 +163,6 @@ def _fsync_file(path: "Path") -> None:
 
 
 def _next_bad_name(path: "Path", cap: int = 100) -> "Path":
-    """Reuse the final backup name once the cap is reached."""
     candidate = path.with_name(path.name + ".bad")
     for n in range(1, cap):
         if not candidate.exists():
@@ -195,7 +185,6 @@ def _repo_download_version() -> "str | None":
 
 
 def _sweep_stale_update_parts(tmpdir: "Path", older_than_s: float = 3600.0) -> None:
-    """Preserve recent downloads that another instance may still be writing."""
     cutoff = time.time() - older_than_s
     try:
         for part in Path(tmpdir).glob("NyaaTriggers-*.part"):
@@ -234,9 +223,7 @@ def _hex_id(value: str) -> int:
 
 
 def _bare_fight_tag(tag: str) -> str:
-    """Reject fight tags containing path traversal. Use the same normalized value for
-    loading and redetection comparisons.
-    """
+    """Normalize fight tags and reject path traversal."""
     if "/" in tag or "\\" in tag or ".." in tag:
         return ""
     return tag
@@ -246,9 +233,7 @@ _zone_names_cache: "dict | None" = None
 
 
 def canonical_zone_name(zone_id: int) -> str:
-    """Look up an English zone name lazily. Return an empty string when unavailable so
-    callers can use the reported name.
-    """
+    """Return the English zone name, or an empty string if unavailable."""
     global _zone_names_cache
     if _zone_names_cache is None:
         try:
@@ -267,9 +252,7 @@ _cactbot_tl_cache: "dict | None" = None
 
 
 def cactbot_timeline_for_zone(zone_id: int) -> "tuple[str, str]":
-    """Look up a cactbot timeline tag and relative path by zone ID. Return an empty tuple
-    when unavailable so callers can use name matching.
-    """
+    """Return the cactbot timeline tag and path, or an empty tuple if unavailable."""
     global _cactbot_tl_cache
     if _cactbot_tl_cache is None:
         try:
@@ -447,20 +430,17 @@ _DISCORD_URL = "https://discord.com/invite/TQJrbZcgKF"
 
 _PIPER_VOICES_URL = "https://rhasspy.github.io/piper-samples/"
 
-# Match the Telesto engine endpoint default.
 DEFAULT_TELESTO_URI = "http://localhost:45678/"
 
-# UMAD preset rules start without assigned markers. Compound statuses require both
-# effects on one player and defer to the chain controller when enabled. Status evidence
-# is in docs/UMAD-DEBUFFS.md.
+# Compound statuses require both effects on one player and defer to the chain controller.
+# UMAD preset rules start unassigned. Status evidence is in docs/UMAD-DEBUFFS.md.
 _UMAD_FIGHT_TAG = "UMAD"
 _UMAD_FIGHT_TAG_CF = _UMAD_FIGHT_TAG.casefold()
 _UMAD_AUTOMARK_PRESET: "list[tuple[str, str]]" = [
     # Distinguish Accretion carriers by their line order status.
     ("644+BBC", "Accretion (1st in Line) - cleansed first"),
     ("644+BBD", "Accretion (2nd in Line) - cleansed second"),
-    # Phase four real and fake statuses. The preset selects real wounds 15A5 and 15A6,
-    # excluding fake variants 1317 and 1318.
+    # Use real wounds 15A5 and 15A6, excluding fake variants 1317 and 1318.
     ("15A7", "Cursed Shriek - gaze (real: look away / fake: look at)"),
     ("15A8", "Forked Lightning - real: spread / fake: stack"),
     ("15A9", "Compressed Water - stack marker"),
@@ -471,12 +451,11 @@ _UMAD_AUTOMARK_PRESET: "list[tuple[str, str]]" = [
     ("1C6",  "Allagan Field - real: avoid lethal / fake: must take lethal"),
 ]
 
-# Use _canon_status for these keys because they include compound statuses.
 _UMAD_STATUS_LABELS: "dict[str, str]" = {
     _canon_status(h): label for h, label in _UMAD_AUTOMARK_PRESET
 }
 
-# Fight tags must match triggers.json. Display expansions from newest to oldest.
+# Fight tags must match triggers.json.
 _FIGHT_TREE = [
     (N_("Ultimates"), [
         (N_("Dawntrail"),      ["FRU", "UMAD"]),
@@ -543,21 +522,16 @@ _FIGHT_TREE = [
     ]),
 ]
 
-# Official tags outside this set appear under TBD.
 _TREE_FIGHTS = {fight for _cat, _exps in _FIGHT_TREE
                 for _exp, _fights in _exps for fight in _fights}
 
 
-# Recognize placeholder names without rejecting real names such as Dead or Face. Bare
-# hex IDs require a digit and at least four characters.
+# Keep real names such as Dead or Face. Hex placeholders need a digit and four characters.
 _UNKNOWN_NAME_RE = re.compile(r"^\s*unknown_[0-9a-f]+\s*$", re.IGNORECASE)
 _BARE_HEX_RE     = re.compile(r"^\s*(0x[0-9a-f]+|(?=[0-9a-f]*[0-9])[0-9a-f]{4,})\s*$", re.IGNORECASE)
 
 
 def _clean_ability_name(raw: str, fallback: str = "New Trigger") -> str:
-    """Remove placeholder names and normalize whitespace. Use fallback when no usable name
-    remains.
-    """
     name = (raw or "").strip()
     if not name:
         return fallback
@@ -568,9 +542,7 @@ def _clean_ability_name(raw: str, fallback: str = "New Trigger") -> str:
 
 def _prefill_name_tts(raw_name: str, source: str = "", target: str = "",
                       me: str = "") -> tuple[str, str]:
-    """Build trigger text with a target qualifier for the local player or a distinct
-    target. Omit it for self casts or missing targets.
-    """
+    """Qualify distinct targets, omitting self casts and missing targets."""
     name = _clean_ability_name(raw_name)
     tgt  = (target or "").strip()
     src  = (source or "").strip()
@@ -583,7 +555,6 @@ def _prefill_name_tts(raw_name: str, source: str = "", target: str = "",
     return name, name + suffix
 
 
-# Specific tokens must precede general patterns.
 _TV_PREVIEW_TOKENS = [
     (re.compile(r"\{event\.estimatedRemainingDuration[^{}]*\}", re.IGNORECASE), "5 seconds"),
     (re.compile(r"\{event\.target(?:\.[\w().]+)?\}", re.IGNORECASE), "you"),
@@ -602,9 +573,7 @@ _VOICE_LANG_TAGS = {"en": "ENG", "ja": "JPN", "de": "GER", "fr": "FRE", "es": "S
 
 
 def _voice_display(stem: str) -> str:
-    """Display en_US-arctic-medium as the English Arctic voice. Keep unrecognized filenames
-    unchanged.
-    """
+    """Keep unrecognized voice filenames unchanged."""
     m = re.match(r"([a-z]{2})_[A-Z]{2}-([A-Za-z0-9]+)", stem)
     if m:
         lang = _VOICE_LANG_TAGS.get(m.group(1), m.group(1).upper())

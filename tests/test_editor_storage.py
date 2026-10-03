@@ -1,5 +1,3 @@
-"""Edits and background results must apply to the state that is still current."""
-
 from contextlib import ExitStack
 from copy import deepcopy
 import json

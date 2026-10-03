@@ -1,5 +1,3 @@
-"""Saved death recaps grouped by session and pull."""
-
 from copy import deepcopy
 from pathlib import Path
 

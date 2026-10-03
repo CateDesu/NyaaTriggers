@@ -1,7 +1,3 @@
-"""UI locale selection and translation. English source strings are lookup keys and
-fallbacks for missing translations. Qt is imported only when detecting the system
-locale.
-"""
 from __future__ import annotations
 
 import json
@@ -12,11 +8,9 @@ from nyaatriggers.paths import bundle_root
 _BUNDLE_DIR = bundle_root()
 _LANG_DIR = _BUNDLE_DIR / "lang"
 
-# Add a supported code and its lang catalog to offer another locale.
 DEFAULT_LOCALE = "en"
 SUPPORTED_LOCALES = ("en", "ja")
 
-# Set once at startup so translation calls need no context.
 _active_locale: str = DEFAULT_LOCALE
 
 # Cache missing or invalid catalogs too so lookups do not repeatedly read disk.
@@ -26,7 +20,6 @@ _qt_translator = None
 
 
 def normalize_locale(loc: str | None) -> str:
-    """Normalize a locale name to a supported code, falling back to English."""
     if not loc:
         return DEFAULT_LOCALE
     code = loc.strip().lower().replace("-", "_").split("_", 1)[0].split(".", 1)[0]
@@ -34,9 +27,7 @@ def normalize_locale(loc: str | None) -> str:
 
 
 def _system_locale_name() -> str:
-    """Read the system locale from Qt, then environment variables. Return an empty string
-    if unavailable.
-    """
+    """Read the system locale from Qt, then the environment, or return an empty string."""
     try:
         from PyQt6.QtCore import QLocale  # lazy, keeps Qt off the module-load path
         name = QLocale.system().name()
@@ -53,9 +44,7 @@ def _system_locale_name() -> str:
 
 
 def effective_locale(setting: str, *, system_name: str | None = None) -> str:
-    """Resolve an explicit UI language or detect the system locale for auto. system_name
-    can supply a locale for tests.
-    """
+    """Resolve an explicit language or detect the system locale for auto."""
     s = (setting if isinstance(setting, str) else "").strip().lower()
     if s == "auto":
         name = system_name if system_name is not None else _system_locale_name()
@@ -64,7 +53,6 @@ def effective_locale(setting: str, *, system_name: str | None = None) -> str:
 
 
 def set_locale(loc: str) -> None:
-    """Set the active supported locale, falling back to English."""
     global _active_locale
     _active_locale = normalize_locale(loc)
     _install_qt_translation()
@@ -92,15 +80,12 @@ def _install_qt_translation() -> None:
 
 
 def active_locale() -> str:
-    """Return the active locale."""
     return _active_locale
 
 
 
 def _load_catalog(loc: str) -> dict[str, str]:
-    """Load and cache a locale catalog. Ignore nonstring entries and return an empty
-    catalog on failure.
-    """
+    """Cache valid string entries, returning an empty catalog on failure."""
     # Validate the locale before using it in a file path.
     if loc not in SUPPORTED_LOCALES:
         return {}
@@ -122,14 +107,11 @@ def _load_catalog(loc: str) -> dict[str, str]:
 
 
 def reload_catalogs() -> None:
-    """Clear cached catalogs so subsequent lookups read them again."""
     _catalogs.clear()
 
 
 def _(key: str) -> str:
-    """Translate a source string using the cached catalog. Missing or empty translations
-    fall back to the source.
-    """
+    """Translate using the cached catalog, falling back to the source string."""
     if not isinstance(key, str):
         return key
     if _active_locale == DEFAULT_LOCALE:
@@ -138,8 +120,7 @@ def _(key: str) -> str:
 
 
 def N_(text: str) -> str:
-    """Mark a literal for catalog extraction while leaving translation until render time.
-    """
+    """Mark a literal for extraction without translating until render time."""
     return text
 
 
@@ -169,7 +150,6 @@ def engine_status(text: str) -> str:
 
 
 def has_japanese(text: str) -> bool:
-    """Detect kana and kanji characters used to select Japanese speech."""
     for ch in text:
         o = ord(ch)
         if (0x3040 <= o <= 0x309F or 0x30A0 <= o <= 0x30FF or 0xFF65 <= o <= 0xFF9F

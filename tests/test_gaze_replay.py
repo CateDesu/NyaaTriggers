@@ -1,5 +1,3 @@
-"""Replay anonymized gaze events from 44 recorded UMAD pulls."""
-
 import json
 from pathlib import Path
 import types

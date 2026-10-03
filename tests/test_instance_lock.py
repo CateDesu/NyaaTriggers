@@ -1,5 +1,3 @@
-"""Separate launches cannot overwrite one data folder's saved choices."""
-
 from contextlib import ExitStack
 import os
 from pathlib import Path

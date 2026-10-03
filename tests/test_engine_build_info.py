@@ -1,5 +1,3 @@
-"""Engine revisions must travel with the jar distributed to users."""
-
 import json
 from pathlib import Path
 import tempfile

@@ -1,7 +1,4 @@
-"""Queue marker commands through the Telesto HTTP endpoint. Resolve actor IDs to party
-slots using GetPartyMembers order and skip unknown targets. A worker sends
-commands serially with configured delays and reports connection failures.
-"""
+"""Send marker commands serially through Telesto, resolving actor IDs to GetPartyMembers slots."""
 
 from __future__ import annotations
 
@@ -19,7 +16,7 @@ import urllib.request
 
 from nyaatriggers.drop_log import log_drop
 from nyaatriggers.diagnostics import record
-from nyaatriggers.locale_util import N_   # Translate marker labels when rendering the selector.
+from nyaatriggers.locale_util import N_
 
 try:
     from PyQt6.QtCore import QObject, pyqtSignal
@@ -50,7 +47,6 @@ except Exception:  # pragma: no cover
         return _Dummy()
 
 
-# Protocol constants, TelestoMain.java and DoodleProcessor.java.
 VERSION = 1
 GAME_CMD_ID = 1_000_000
 PARTY_UPDATE_ID = 1_000_001
@@ -169,8 +165,7 @@ def read_telesto_response(request, timeout: float, stopping: threading.Event,
 
 _STOP = object()
 
-# Marker tokens follow the English client. Ignore markers use localized tokens on other
-# clients.
+# Ignore marker tokens vary by client language. Other markers use English tokens.
 MARKERS: list[tuple[str, str]] = [
     (N_("Attack 1"), "attack1"), (N_("Attack 2"), "attack2"), (N_("Attack 3"), "attack3"),
     (N_("Attack 4"), "attack4"), (N_("Attack 5"), "attack5"), (N_("Attack 6"), "attack6"),
@@ -184,7 +179,6 @@ MARKER_TOKENS = frozenset(tok for _label, tok in MARKERS)
 
 
 def make_message(msg_id: int, msg_type: str, payload=None) -> dict:
-    """Build the Telesto envelope with an empty dictionary as the default payload."""
     return {
         "version": VERSION,
         "id": int(msg_id),
@@ -217,7 +211,6 @@ def _record_marker_transport(msg, result):
 
 
 def _slot_token(slot) -> str:
-    """Normalize slot numbers and named placeholders to angle brackets."""
     s = str(slot).strip()
     if s.startswith("<") and s.endswith(">"):
         return s
@@ -225,9 +218,7 @@ def _slot_token(slot) -> str:
 
 
 def _actor_int(actor_id) -> "int | None":
-    """Parse numeric or hexadecimal actor IDs with decimal fallback. Reject invalid IDs and
-    no-target sentinels.
-    """
+    """Normalize actor IDs, rejecting invalid IDs and no-target sentinels."""
     if actor_id is None:
         return None
     if isinstance(actor_id, bool):          # bool is an int subclass
@@ -253,9 +244,7 @@ def _actor_int(actor_id) -> "int | None":
 
 
 def mark_command(marker, target) -> str:
-    """Use the next attack marker for empty or unknown tokens. Log unknown tokens so
-    invalid rules are visible.
-    """
+    """Empty or unknown tokens use the next attack marker. Log unknown tokens."""
     m = (str(marker).strip() if marker is not None else "")
     if m not in MARKER_TOKENS:
         if m:
@@ -265,10 +254,9 @@ def mark_command(marker, target) -> str:
 
 
 class TelestoClient(QObject):
-    """Queued HTTP client for the Telesto plugin. Thread-safe public API."""
+    """Thread-safe queued HTTP client for Telesto."""
 
-    # Reachable, message and degraded flags. HTTP errors indicate a reachable but
-    # failing endpoint.
+    # reachable, message, degraded
     status_changed = pyqtSignal(bool, str, bool)
     error = pyqtSignal(str)
 
@@ -276,7 +264,6 @@ class TelestoClient(QObject):
                  delay_base_ms: int = 100, delay_plus_ms: int = 100,
                  timeout: float = 4.0, max_queue: int = 1000, parent=None) -> None:
         super().__init__(parent)
-        # Validate endpoint types because settings may contain arbitrary JSON values.
         self._uri = uri if isinstance(uri, str) and uri else DEFAULT_URI
         self._enabled = bool(enabled)
         self._command_epoch = 0
@@ -293,8 +280,6 @@ class TelestoClient(QObject):
         self._lock = threading.RLock()
         self._reachable: "tuple[bool, bool] | None" = None
         self._warned_sends: set = set()        # unexpected send failures already logged
-        # Actor IDs to party slots. Keep empty until a valid roster arrives and skip
-        # unknown actors.
         self._slot_by_actor: "dict[int, int]" = {}
         self._request_context = threading.local()
 
@@ -340,7 +325,6 @@ class TelestoClient(QObject):
             return self._enabled
 
     def last_status(self) -> "tuple[bool, bool] | None":
-        """Current reachability and degraded flags, or None before the endpoint is checked."""
         with self._lock:
             return self._reachable
 
@@ -354,8 +338,7 @@ class TelestoClient(QObject):
             t = self._thread
             if t and t.is_alive() and not self._stopping.is_set():
                 return
-            # A replacement must not replay old commands or share its queue with a
-            # worker that is still finishing a request.
+            # Replacement workers need separate queues without old commands.
             if self._stopping.is_set():
                 self._queue = queue.Queue(maxsize=self._max_queue)
             self._stopping = threading.Event()
@@ -365,15 +348,13 @@ class TelestoClient(QObject):
             self._thread.start()
 
     def request_stop(self) -> None:
-        """Request shutdown without joining so callers can overlap client shutdown waits.
-        """
+        """Request shutdown without joining so callers can overlap client waits."""
         with self._lock:
             self._stopping.set()
             q = self._queue
         try:
             q.put_nowait(_STOP)
         except queue.Full:
-            # Free a slot for the stop sentinel. The worker also checks its stop event.
             try:
                 q.get_nowait()
                 q.put_nowait(_STOP)
@@ -386,8 +367,7 @@ class TelestoClient(QObject):
         if t and t.is_alive():
             t.join(timeout=timeout)
             if t.is_alive():
-                # Retain the handle if HTTP is still blocked so later stops can join the
-                # worker.
+                # Retain blocked worker handles for later joins.
                 return
         with self._lock:
             if self._thread is t:
@@ -397,7 +377,6 @@ class TelestoClient(QObject):
         self.request_stop()
         self.join_stopped(join_timeout)
 
-    # Return whether the command was queued so callers consume cooldown only on success.
     def send_game_command(self, command: str, force: bool = False) -> bool:
         """Queue a delayed command. force bypasses the enabled setting for testing."""
         if not command:
@@ -414,9 +393,7 @@ class TelestoClient(QObject):
         return self.mark(marker, int(slot), force=force)
 
     def mark_actor(self, actor_id, marker, force: bool = False) -> bool:
-        """Resolve the actor's current party slot and queue a mark. Return false when the
-        slot is unknown or queueing fails.
-        """
+        """Mark the current party slot. Return false for unknown slots or queue failure."""
         with self._lock:
             slot = self.slot_of_actor(actor_id)
             if not slot:
@@ -425,7 +402,6 @@ class TelestoClient(QObject):
                                  delay=True, force=force, actor=_actor_int(actor_id))
 
     def slot_of_actor(self, actor_id) -> "int | None":
-        """Return the actor's current party slot, or None."""
         aid = _actor_int(actor_id)
         if aid is None:
             return None
@@ -441,7 +417,6 @@ class TelestoClient(QObject):
                              delay=True, force=force, cleanup=True)
 
     def clear_actor(self, actor_id, force: bool = False) -> bool:
-        """Clear the actor's marker only when its party slot is known."""
         with self._lock:
             slot = self.slot_of_actor(actor_id)
             if not slot:
@@ -456,16 +431,14 @@ class TelestoClient(QObject):
                               delay=True, force=force, cleanup=True)
 
     def request_party_members(self, force: bool = False) -> None:
-        """Refresh the party mapping and connection status."""
         self._enqueue(party_members_message(), delay=False, force=force)
 
     def ping(self) -> None:
-        """Probe reachability even while marking is disabled."""
         self.request_party_members(force=True)
 
     def _enqueue(self, msg: dict, delay: bool, force: bool = False, cleanup: bool = False,
                  actor: int | None = None) -> bool:
-        """Return false if disabled or the queue is full."""
+        """Return false if disabled or full."""
         try:
             with self._lock:
                 if not force and not self._enabled:
@@ -487,8 +460,6 @@ class TelestoClient(QObject):
                     and (force or self._enabled and epoch == self._command_epoch))
 
     def _discard_cancelled_commands(self) -> None:
-        # The caller holds the settings lock. Hold the queue mutex too so the worker
-        # cannot overtake forced commands while they are being retained.
         q = self._queue
         with q.mutex:
             keep = [item for item in q.queue
@@ -507,7 +478,6 @@ class TelestoClient(QObject):
         self._request_context.stopping = stopping
         while not stopping.is_set():
             try:
-                # Poll the stop event even if the queue cannot accept its sentinel.
                 item = q.get(timeout=1.0)
             except queue.Empty:
                 continue
@@ -524,7 +494,6 @@ class TelestoClient(QObject):
                 continue
             if delay:
                 self._sleep_command_delay(stopping)
-            # Recheck shutdown after dequeue before issuing a request.
             if stopping.is_set():
                 break
             if not self._can_send(force, epoch, endpoint, encounter, cleanup):
@@ -541,7 +510,7 @@ class TelestoClient(QObject):
                 self._request_context.command = (force, epoch, endpoint, encounter, cleanup)
                 self._request_context.endpoint = endpoint
                 self._post(msg)
-            except Exception as exc:  # Continue processing after a failed command.
+            except Exception as exc:
                 key = f"{type(exc).__name__}: {exc}"[:200]
                 if key not in self._warned_sends and len(self._warned_sends) < 32:
                     self._warned_sends.add(key)
@@ -575,8 +544,7 @@ class TelestoClient(QObject):
                 if msg.get("id") == PARTY_UPDATE_ID:
                     self._update_party_slots(body)
         except urllib.error.HTTPError as exc:
-            # HTTP errors mean the endpoint is reachable but degraded. Close the
-            # response before continuing.
+            # HTTP errors mean the endpoint is reachable but degraded.
             exc.close()
             with self._lock:
                 if not self._response_current(endpoint):
@@ -586,7 +554,6 @@ class TelestoClient(QObject):
             log_drop("telesto-http", f"HTTP {exc.code} for {msg.get('type')}")
         except (urllib.error.URLError, OSError, ValueError,
                 http.client.HTTPException) as exc:
-            # Report transport failures without stopping the client.
             with self._lock:
                 if not self._response_current(endpoint):
                     return
@@ -601,7 +568,6 @@ class TelestoClient(QObject):
                 and not getattr(self._request_context, "stopping", self._stopping).is_set())
 
     def _read_response(self, request, timeout: float) -> tuple[int, bytes]:
-        """Abort a stalled request even when its peer keeps sending bytes."""
         stopping = getattr(self._request_context, "stopping", self._stopping)
         command = getattr(self._request_context, "command", None)
         is_current = (lambda: self._can_send(*command)) if command is not None else None
@@ -617,7 +583,6 @@ class TelestoClient(QObject):
         if not isinstance(members, list):
             return
         if not members:
-            # Clear stale slots on a valid empty roster.
             with self._lock:
                 self._slot_by_actor = {}
             return
@@ -640,7 +605,6 @@ class TelestoClient(QObject):
             self._slot_by_actor = slots
 
     def _report_reachable(self, reachable: bool, message: str, degraded: bool = False) -> None:
-        # Report transitions in both reachability and degraded state.
         state = (reachable, degraded)
         with self._lock:
             changed = self._reachable != state

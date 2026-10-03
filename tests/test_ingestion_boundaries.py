@@ -1,5 +1,3 @@
-"""Exercise connection changes and capture limits at their real transport boundaries."""
-
 import json
 import os
 from pathlib import Path

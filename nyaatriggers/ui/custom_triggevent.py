@@ -1,5 +1,3 @@
-"""Create and manage callouts made with the Triggevent builder."""
-
 from copy import deepcopy
 import re
 import uuid

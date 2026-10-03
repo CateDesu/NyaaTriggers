@@ -1,4 +1,3 @@
-"""Japanese speech routing, phonemizer inputs, volume and interruption behavior."""
 import atexit
 import contextlib
 import io
@@ -36,7 +35,6 @@ def check(name, cond):
         FAILS.append(name)
 
 
-# Japanese auto routing is enabled before any settings call.
 check("_jp_auto module default is True (fix c)", tts._jp_auto is True)
 
 
@@ -47,7 +45,6 @@ def _fake_proc(cmd, text, stdin_text, no_window=False, gen=None):
 
 
 def speak_via(os_name, text, *, jp_auto, jp_voice="", avail=("spd-say",)):
-    """Run _system_speak under a simulated OS. Return the captured command."""
     tts.platform.system = lambda: os_name
     shutil.which = lambda n: ("/usr/bin/" + n) if n in avail else None
     tts.set_jp_auto(jp_auto)
@@ -61,23 +58,19 @@ JP = "フレア来ます"
 EN = "stack"
 
 _orig_proc, _orig_sys, _orig_which = tts._run_speak_proc, tts.platform.system, shutil.which
-_orig_auto = tts._jp_auto            # restore the module default, not force it False
+_orig_auto = tts._jp_auto
 tts._run_speak_proc = _fake_proc
 try:
-    # Linux spd-say
     cmd = speak_via("Linux", JP, jp_auto=True, avail=("spd-say",))
     check("linux spd-say: JP -> -l ja", "-l" in cmd and cmd[cmd.index("-l") + 1] == "ja")
     cmd = speak_via("Linux", EN, jp_auto=True, avail=("spd-say",))
     check("linux spd-say: English not routed", "-l" not in cmd)
 
-    # Linux espeak (no spd-say)
     cmd = speak_via("Linux", JP, jp_auto=True, avail=("espeak",))
     check("linux espeak: JP -> -v ja", cmd and cmd[0] == "espeak" and "-v" in cmd and cmd[cmd.index("-v") + 1] == "ja")
     cmd = speak_via("Linux", EN, jp_auto=True, avail=("espeak",))
     check("linux espeak: English not routed", "-v" not in cmd)
 
-    # Without a Japanese backend, suppress the Japanese fallback to an English voice.
-    # English can still use Piper.
     tts.platform.system = lambda: "Linux"
     shutil.which = lambda n: None
     tts.set_jp_auto(True)
@@ -86,7 +79,6 @@ try:
     check("linux none: English with no backend -> False (falls to Piper)",
           tts._system_speak(EN, 1.0, 1.0) is False)
 
-    # Windows PowerShell
     cmd = speak_via("Windows", JP, jp_auto=True, jp_voice="Microsoft Haruka Desktop")
     ps = cmd[-1] if cmd else ""
     check("win: explicit voice -> SelectVoice(...)", "SelectVoice('Microsoft Haruka Desktop')" in ps)
@@ -104,14 +96,13 @@ try:
     ps = cmd[-1] if cmd else ""
     check("win: single-quote in voice name is PS-escaped", "SelectVoice('O''Brien JP')" in ps)
 
-    # Speech receives kana readings and strips unknown kanji.
     tts.platform.system = lambda: "Linux"
     shutil.which = lambda n: ("/usr/bin/" + n) if n == "espeak" else None
     tts.set_jp_auto(True); tts.set_jp_voice("")
     CAP.clear(); tts._system_speak("全体攻撃", 1.0, 1.0, "ぜんたいこうげき")
     check("linux: espeak speaks the kana reading, not the kanji display",
           CAP.get("text") == "ぜんたいこうげき")
-    CAP.clear(); tts._system_speak("全体攻撃カナ", 1.0, 1.0)   # no reading known
+    CAP.clear(); tts._system_speak("全体攻撃カナ", 1.0, 1.0)
     check("linux: unknown kanji stripped from espeak input (keeps kana)",
           CAP.get("text") == "カナ")
     tts.platform.system = lambda: "Windows"
@@ -119,7 +110,6 @@ try:
     check("win: SAPI receives the kanji display (it reads kanji natively)",
           "全体攻撃" in (CAP.get("text") or ""))
 
-    # Linux speech supports amplified volume. SAPI caps at full volume.
     tts.set_master_volume(2.0)
     cmd = speak_via("Linux", EN, jp_auto=True, avail=("espeak",))
     check("linux espeak: 200% master volume -> -a 200",
@@ -142,7 +132,6 @@ finally:
     tts.set_jp_auto(_orig_auto)
     tts.set_jp_voice("")
 
-# Report backend startup failures even when speech is suppressed.
 def _raising_proc(*a, **k):
     raise OSError("spawn blew up")
 
@@ -169,27 +158,24 @@ finally:
     shutil.which = _orig_which
     tts.set_jp_auto(_orig_auto)
 
-# Use Python child exit codes to verify synthesis failure reporting.
 check("exit 0 -> True (handled/spoke)",
       tts._run_speak_proc([_PY, "-c", "import sys;sys.exit(0)"], "", stdin_text=False) is True)
 check("nonzero exit -> False (caller falls back)",
       tts._run_speak_proc([_PY, "-c", "import sys;sys.exit(1)"], "", stdin_text=False) is False)
 
-# An interrupted process counts as handled so Piper cannot replay the cancelled callout.
 _res = {}
 _th = threading.Thread(
     target=lambda: _res.__setitem__(
         "r", tts._run_speak_proc([_PY, "-c", "import time;time.sleep(5)"], "", stdin_text=False)))
 _th.start()
-for _ in range(500):        # wait until the proc registers as _current_proc, up to 10 s
+for _ in range(500):
     time.sleep(0.02)
     if tts._current_proc is not None:
         break
-tts.interrupt()             # terminates it -> nonzero exit, but intentional
+tts.interrupt()
 _th.join(timeout=5)
 check("interrupt-terminated proc returns True (no Piper replay)", _res.get("r") is True)
 
-# Fall back to Piper only when system speech fails.
 _o_ss, _o_lp, _o_pw, _o_eng = tts._system_speak, tts._load_piper, tts._play_wav, tts._engine
 _calls = []
 try:
@@ -207,7 +193,7 @@ try:
             wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(22050)
             wf.writeframes(b"\x00\x00")
 
-    tts._load_piper = lambda: _FakeVoice()   # _load_piper returns the voice
+    tts._load_piper = lambda: _FakeVoice()
     tts._play_wav = lambda p, gen=None: _calls.append("played")
     tts._pipeline("hello", 1.0, 1.0)
     check("_pipeline falls back to Piper when the system voice failed", "played" in _calls)
@@ -215,7 +201,6 @@ finally:
     tts._system_speak, tts._load_piper, tts._play_wav = _o_ss, _o_lp, _o_pw
     tts._engine, tts._piper_voice = _o_eng, None
 
-# Japanese auto routing also applies while Piper is selected.
 _o_ss2, _o_lp2, _o_pw2, _o_eng2, _o_auto2 = (
     tts._system_speak, tts._load_piper, tts._play_wav, tts._engine, tts._jp_auto)
 _routed: list = []
@@ -227,7 +212,7 @@ class _FakeVoice2:
 
 
 try:
-    tts.set_engine("piper")          # English-only neural engine
+    tts.set_engine("piper")
     tts.set_jp_auto(True)
     tts._system_speak = lambda text, *a, **k: (_routed.append(text), True)[1]
     tts._pipeline("フレア来ます", 1.0, 1.0)
@@ -235,23 +220,21 @@ try:
           len(_routed) == 1 and tts.has_japanese(_routed[0]))
 
     _routed.clear()
-    tts._load_piper = lambda: _FakeVoice2()  # _load_piper returns the voice
+    tts._load_piper = lambda: _FakeVoice2()
     tts._play_wav = lambda p, gen=None: None
-    tts._pipeline("stack", 1.0, 1.0)   # English under Piper -> Piper, not the system voice
+    tts._pipeline("stack", 1.0, 1.0)
     check("_pipeline: English under Piper does not force the system voice", not _routed)
 finally:
     (tts._system_speak, tts._load_piper, tts._play_wav, tts._engine, tts._jp_auto) = (
         _o_ss2, _o_lp2, _o_pw2, _o_eng2, _o_auto2)
     tts._piper_voice = None
 
-# The real subprocess path writes Japanese stdin as UTF-8.
 _reader = [_PY, "-c",
            "import sys; sys.stdin.reconfigure(encoding='utf-8'); "
            "sys.exit(0 if sys.stdin.read() == 'フレア来ます' else 7)"]
 check("stdin_text: Japanese round-trips as UTF-8 to the child",
       tts._run_speak_proc(_reader, "フレア来ます", stdin_text=True) is True)
 
-# Reject FIFO sounds before playback. Stub the player so failure cannot hang the suite.
 if hasattr(os, "mkfifo"):
     import tempfile
     _dir = tempfile.mkdtemp()
@@ -276,7 +259,6 @@ if hasattr(os, "mkfifo"):
     finally:
         tts._play_wav_detached = _o_detached
 
-# Pass Piper speed through SynthesisConfig using a stub config module.
 _o_lp3, _o_pw3, _o_eng3 = tts._load_piper, tts._play_wav, tts._engine
 _prior = {k: sys.modules.get(k) for k in ("piper", "piper.config")}
 _seen: dict = {}
@@ -315,7 +297,6 @@ finally:
             sys.modules[_k] = _v
     tts._piper_voice = None
 
-# kokoro loader tests share a pair of dummy model files.
 _tmpdir = tempfile.mkdtemp()
 _kmodel = os.path.join(_tmpdir, "kokoro-v1.0.onnx")
 _kvoices = os.path.join(_tmpdir, "voices-v1.0.bin")
@@ -336,7 +317,6 @@ def _restore_kokoro():
         sys.modules["kokoro_onnx"] = _prior_kokoro_mod
 
 
-# Retry an import interrupted by environment module cleanup.
 _attempts = {"n": 0}
 _purges = {"n": 0}
 
@@ -376,11 +356,9 @@ finally:
     tts._purge_stale_venv_modules = _o_purge
     _restore_kokoro()
 
-# a wedged kokoro model load is capped by _SYNTH_TIMEOUT_S instead of blocking the
-# single TTS worker forever.
 class _WedgedKokoro:
     def __init__(self, model, voices):
-        time.sleep(30)   # stands in for a native hang, abandoned when the cap fires
+        time.sleep(30)
 
 
 _kokoro_stub2 = types.ModuleType("kokoro_onnx")
@@ -401,7 +379,6 @@ finally:
     tts._SYNTH_TIMEOUT_S = _o_timeout
     _restore_kokoro()
 
-# A setting change during construction prevents publication of the old session.
 class _EpochBumpKokoro:
     def __init__(self, model, voices):
         tts.set_jp_neural(False)
@@ -425,7 +402,6 @@ finally:
     tts._kokoro_epoch = _e0
     _restore_kokoro()
 
-# Cache failed Kokoro imports until setup changes.
 try:
     sys.modules["kokoro_onnx"] = None
     tts._KOKORO_MODEL, tts._KOKORO_VOICES = Path(_kmodel), Path(_kvoices)
@@ -441,7 +417,6 @@ finally:
     tts._kokoro_import_failed = False
     _restore_kokoro()
 
-# Check the Piper session limit with stub dependencies.
 _pmodel = os.path.join(_tmpdir, "voice.onnx")
 open(_pmodel, "wb").close()
 with open(_pmodel + ".json", "w", encoding="utf-8") as _f:
@@ -516,14 +491,12 @@ finally:
         else:
             sys.modules[_k2] = _v2
 
-# Read durations from RIFF chunks for formats unsupported by wave.
 def _wav_blob(tag, sr=8000, channels=1, bits=32, frames=4000):
     block = channels * bits // 8
     data = b"\x00" * (frames * block)
     fmt = struct.pack("<HHIIHH", tag, channels, sr, sr * block, block, bits)
     if tag == 0xFFFE:
-        # Extensible appends 22 bytes, cbSize, valid bits, channel mask and
-        # the subformat GUID, the float one here.
+        # Extensible WAV adds 22 bytes with valid bits, channel mask and the float subformat GUID.
         fmt += struct.pack("<H", 22) + struct.pack("<HI", bits, 0) \
             + bytes.fromhex("0300000000001000800000aa00389b71")
     return (b"RIFF" + struct.pack("<I", 4 + 8 + len(fmt) + 8 + len(data)) + b"WAVE"
@@ -555,7 +528,6 @@ check("a junk wav still reads as 0", tts._wav_seconds(b"RIFF\x00\x00\x00\x00WAVE
 check("a missing wav still reads as 0",
       tts._wav_seconds(os.path.join(_tmpdir, "nope.wav")) == 0.0)
 
-# Keep model files after a transient constructor failure.
 class _LockFailKokoro:
     def __init__(self, model, voices):
         raise MemoryError("stands in for a transient build failure")
@@ -577,7 +549,6 @@ try:
 finally:
     _restore_kokoro()
 
-# Retry setup using existing models and clear failure state.
 _o_urls = tts._KOKORO_URLS
 _o_kif = tts._kokoro_import_failed
 _o_mdir = tts._MODEL_DIR
@@ -596,7 +567,6 @@ finally:
     tts._MODEL_DIR = _o_mdir
     tts._kokoro_failed, tts._kokoro_import_failed = _o_kf, _o_kif
 
-# the notification worker enforces the same 32 MiB cap as the TTS worker.
 _big = os.path.join(_tmpdir, "big.wav")
 with open(_big, "wb") as _f:
     _f.truncate(tts._MAX_SOUND_BYTES + 1)
@@ -606,7 +576,6 @@ try:
     tts._play_wav_detached = lambda p: _played.append(p)
     tts.log_drop = lambda site, detail, throttle_s=1.0: _drops.append(site)
     tts._master_volume = 1.0
-    # The worker releases a chime slot in its finally, so hold one first.
     check("a chime slot is free for the notification test",
           tts._notification_slots.acquire(timeout=5))
     tts._notification_worker(_big, 1.0)
@@ -620,7 +589,6 @@ try:
 finally:
     tts._play_wav_detached, tts.log_drop, tts._master_volume = _o_pwd, _o_ld, _o_mv
 
-# Iterate a snapshot so concurrent stale module updates cannot interrupt cleanup.
 class _IterBomb(set):
     def __iter__(self):
         raise RuntimeError("iterated the live stale set")
@@ -644,8 +612,6 @@ finally:
     tts._stale_venv_sps = _o_stale
     sys.modules.pop("zz_stale_probe", None)
 
-# A voice environment without an interpreter cannot install into the program
-# interpreter.
 _o_venv = tts._FFXIV_VENV
 try:
     _bogus = Path(_tmpdir) / "bogus_venv"
@@ -665,7 +631,6 @@ try:
 finally:
     tts._FFXIV_VENV = _o_venv
 
-# Keep model files after transient constructor failure and report recovery options.
 class _TransientFailKokoro:
     def __init__(self, model, voices):
         raise MemoryError("session build OOM")
@@ -692,7 +657,6 @@ finally:
     tts.log_drop = _o_log_drop
     _restore_kokoro()
 
-# Stub process creation to verify interruption checks before synthesis and playback.
 _spawned: list = []
 
 
@@ -733,7 +697,6 @@ finally:
     tts._generation = 0
     tts._current_proc = None
 
-# Interrupt during synthesis and check that stale audio is discarded.
 class _InterruptingVoice:
     def synthesize_wav(self, text, wf, **kw):
         tts._generation += 1
@@ -755,7 +718,6 @@ finally:
     tts._load_piper, tts._play_wav, tts._engine = _o_lp4, _o_pw4, _o_eng4
     tts._jp_neural = False
 
-# Queued speech keeps the generation from enqueue time.
 while not tts._queue.empty():
     tts._queue.get_nowait()
 tts._generation = 100
@@ -772,7 +734,6 @@ tts._enqueue(("tts", "z", 1.0, 1.0, None))
 check("a post interrupt enqueue carries the new stamp",
       tts._queue.get_nowait().gen == 101)
 
-# Ignore invalid reading entries.
 tts.set_readings({"全体攻撃": "ぜんたいこうげき", "bad": 5, 7: "x", "empty": "",
                   "k": None, ("t",): "y"})
 check("set_readings keeps only str keys with non empty str values",
@@ -781,7 +742,6 @@ check("reading_for resolves a known display",
       tts.reading_for("全体攻撃") == "ぜんたいこうげき")
 tts.set_readings({})
 
-# Mute prevents synthesis because minimum backend volume can still be audible.
 _o_mv2 = tts._master_volume
 _fired: list = []
 try:
@@ -793,13 +753,11 @@ finally:
     tts._master_volume = _o_mv2
     tts._load_piper = _o_lp4
 
-# a missing notification path no-ops without eating a chime slot.
 _slots_before = tts._notification_slots._value
 tts.play_notification(os.path.join(_tmpdir, "no-such-chime.wav"))
 check("a missing notification path no-ops and leaks no slot",
       tts._notification_slots._value == _slots_before)
 
-# NumPy and pure Python PCM scaling agree. Skip when NumPy is unavailable.
 if tts._np is None:
     print("SKIP  scale_pcm parity needs numpy")
 else:
@@ -827,7 +785,6 @@ else:
           tts._scale_pcm(b"\x01\x02\x03", 2, 1.0)
           == tts._scale_pcm(b"\x01\x02", 2, 1.0))
 
-# Clamp Kokoro speed and write clipped mono PCM at the model rate. Requires NumPy.
 try:
     import numpy as _npmod   # noqa: F401
     _have_np = True
@@ -854,7 +811,6 @@ else:
         sys.modules["kokoro_onnx"] = _shape_stub
         tts._KOKORO_MODEL, tts._KOKORO_VOICES = Path(_kmodel), Path(_kvoices)
         tts._kokoro, tts._kokoro_failed, tts._kokoro_epoch = None, False, 0
-        # a non default token, so a hardcoded jf_alpha in the synth call fails
         _o_jpv = tts._jp_neural_voice
         tts._jp_neural_voice = "jm_kumo"
         tts._kokoro_synth("こんにちは", 3.0)
@@ -881,13 +837,11 @@ else:
             sys.modules["kokoro_onnx"] = _prior_shape
         _restore_kokoro()
 
-# A failed backend leaves a diagnostic while Japanese still avoids Piper.
 with patch.object(tts, "log_drop") as drops:
     check("failed speech process reports failure",
           not tts._run_speak_proc([_PY, "-c", "import sys; sys.exit(7)"], "", stdin_text=False))
     check("failed speech process logs exit status", drops.call_count == 1 and "7" in drops.call_args.args[1])
 
-# The catalog builder must flag every ideograph that the voice strips.
 from tools import build_callouts_ja
 for cp in [0x3005, 0x3400, 0x4DBF, 0x4E00, 0x9FFF, 0xF900, 0xFAFF,
            0x20000, 0x2A6DF, 0x2A700, 0x2CEAF, 0x4DC0]:

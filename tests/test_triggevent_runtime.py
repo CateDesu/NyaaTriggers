@@ -1,5 +1,3 @@
-"""Rebuilding a jar must not break classes loaded later in a pull."""
-
 from contextlib import ExitStack
 from pathlib import Path
 import shutil

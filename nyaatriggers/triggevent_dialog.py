@@ -1,5 +1,3 @@
-"""Build conditional Triggevent callouts without scripts."""
-
 from copy import deepcopy
 
 from PyQt6.QtCore import Qt

@@ -1,9 +1,5 @@
-"""Send timeline, callout and DPS frames to the companion overlay over loopback WebSocket.
-One worker owns the socket and bounded queue. Reconnect after established sessions drop,
-with backoff for failed connections. Discard stale schedules and ticks while retaining
-alerts for delivery. Validate the greeting protocol and send no Origin header because
-the plugin rejects browser connections.
-"""
+"""Send loopback WebSocket frames to the companion overlay through one socket worker.
+Keep alerts across reconnects while discarding stale schedules and ticks."""
 
 from __future__ import annotations
 
@@ -58,10 +54,8 @@ DEFAULT_PORT = 27080
 # Must match BridgeHost.ProtocolVersion in the plugin.
 PROTOCOL_VERSION = 1
 
-# Bound the wait for the plugin greeting.
 HELLO_TIMEOUT_S = 5.0
 
-# Retry after five seconds, doubling up to sixty seconds.
 RECONNECT_BASE_S = 5.0
 RECONNECT_MAX_S = 60.0
 
@@ -70,12 +64,10 @@ RECONNECT_MAX_S = 60.0
 IDLE_PING_S = 15.0
 PONG_TIMEOUT_S = 10.0
 
-# Bound blocking sends so an unresponsive peer cannot stop delivery until the OS TCP
-# timeout.
+# Bound blocking sends so an unresponsive peer cannot stall delivery.
 SEND_TIMEOUT_S = 10.0
 
-# Bound queued frames without blocking the GUI. Preserve alerts when selecting an
-# eviction.
+# Evict queued frames without blocking the GUI, preserving alerts.
 OUTBOX_CAPACITY = 256
 
 # Bound receive draining so continuous replies cannot starve sends or shutdown.
@@ -93,12 +85,9 @@ class _QueuedFrame(dict):
         self.alert_epoch = alert_epoch
 
 
-# Frame builders
 def tick_frame(seconds) -> dict:
-    """Round valid fight time to centiseconds. Return None for invalid values."""
     try:
         ft = float(seconds)
-        # Reject nonfinite values that the plugin JSON parser cannot read.
         if not math.isfinite(ft):
             raise ValueError("non-finite tick seconds")
         return {"c": "tick", "t": round(ft, 2)}
@@ -108,7 +97,6 @@ def tick_frame(seconds) -> dict:
 
 
 def timeline_kind(label) -> str:
-    """Infer a cue kind from its label. Use mechanic when no known pattern matches."""
     text = str(label).lower()
     if "tankbuster" in text or "tank buster" in text:
         return "tankbuster"
@@ -118,7 +106,6 @@ def timeline_kind(label) -> str:
 
 
 def timeline_frame(entries) -> dict:
-    """Tag timeline time and label pairs with cue kinds, skipping malformed entries."""
     clean = []
     for entry in entries:
         try:
@@ -134,15 +121,14 @@ def timeline_frame(entries) -> dict:
 
 
 def alert_frame(text, severity="info") -> dict:
-    """Build an alert with a valid severity. Omit ttl so plugin duration settings apply.
-    """
+    """Omit ttl so plugin duration settings apply."""
     sev = str(severity)
     return {"c": "alert", "text": str(text),
             "sev": sev if sev in _SEVERITIES else "info"}
 
 
 def clear_frame(keep_dps=False) -> dict:
-    """Clear the schedule and alerts. Wipes can retain the meter."""
+    """Clear schedules and alerts, optionally retaining the meter on wipes."""
     return {"c": "clear", "keepDps": bool(keep_dps)}
 
 
@@ -151,12 +137,8 @@ def ping_frame() -> dict:
 
 
 def dps_frame(enc, rows, show=True) -> dict:
-    """Build a live or ended DPS frame. Rows contain name, job, DPS, share, HPS, local
-    flag and deaths. Supply defaults for missing trailing fields and reject invalid
-    values. A trailing object can supply additional combat statistics.
-    The optional hasDamage flag includes damage taken and survives DPS rounding.
-    Endings include final values when enc is supplied.
-    """
+    """Build a DPS frame with optional trailing combat statistics.
+hasDamage includes damage taken and survives rounding. enc supplies final values."""
     if not show and enc is None:
         return {"c": "dps", "show": False}
     enc = enc if isinstance(enc, dict) else {}
@@ -191,7 +173,6 @@ def dps_frame(enc, rows, show=True) -> dict:
                         pass
                 clean_rows[-1].append(details)
         except (TypeError, ValueError, IndexError, OverflowError):
-            # Skip rows whose integer fields cannot be converted.
             continue
     encounter = {"t": str(enc.get("t", "")), "d": str(enc.get("d", "")), "dps": dps}
     for key in ("id", "zone"):
@@ -210,9 +191,6 @@ def dps_frame(enc, rows, show=True) -> dict:
 
 
 def parse_port(value) -> "int | None":
-    """Accept integer ports in the plugin range. Reject booleans and invalid settings
-    values.
-    """
     if isinstance(value, bool):
         return None
     try:
@@ -223,9 +201,7 @@ def parse_port(value) -> "int | None":
 
 
 def plugin_supports_dps(version: str) -> bool:
-    """DPS requires plugin version 0.2.0 but shares protocol 1 with older builds. Treat
-    unknown version formats as supported to avoid false warnings.
-    """
+    """DPS needs version 0.2.0 but shares protocol 1. Treat unknown versions as supported."""
     try:
         parts = [int(piece) for piece in str(version).split(".")]
     except (TypeError, ValueError):
@@ -273,7 +249,7 @@ class _DpsProtocol:
 
 
 class PluginLink(QObject):
-    """WebSocket client for the companion plugin. Thread-safe public API."""
+    """Thread-safe client for the companion overlay."""
 
     # Connected flag and user-facing status. Detailed failures go to the log.
     status_changed = pyqtSignal(bool, str)
@@ -289,7 +265,7 @@ class PluginLink(QObject):
         self._queue: "queue.Queue" = queue.Queue(maxsize=OUTBOX_CAPACITY)
         self._thread: "threading.Thread | None" = None
         self._stopping = threading.Event()
-        self._wake = threading.Event()   # Wake the worker during backoff or disabled waits.
+        self._wake = threading.Event()
         self._lock = threading.RLock()
         self._connected = False
         self._reported: "tuple | None" = None
@@ -313,18 +289,14 @@ class PluginLink(QObject):
             return self._connected
 
     def last_status(self) -> tuple:
-        """Return the last connection status, defaulting to Off before the worker reports.
-        """
         with self._lock:
             return self._reported or (False, "Off")
 
     def plugin_version(self) -> str:
-        """Version from the latest greeting, used for feature support checks."""
         with self._lock:
             return self._plugin_version
 
     def set_port(self, port: int) -> None:
-        """Change the destination port and wake the worker to reconnect."""
         with self._lock:
             self._port = int(port)
         self._wake.set()
@@ -334,8 +306,7 @@ class PluginLink(QObject):
             t = self._thread
             if t and t.is_alive() and not self._stopping.is_set():
                 return
-            # Give replacement workers separate queues because an older worker may still
-            # be connecting.
+            # Replacement workers need separate queues while old workers finish connecting.
             if self._stopping.is_set():
                 self._queue = queue.Queue(maxsize=OUTBOX_CAPACITY)
             self._stopping = threading.Event()
@@ -349,8 +320,7 @@ class PluginLink(QObject):
             self._thread.start()
 
     def request_stop(self) -> None:
-        """Request shutdown without joining so callers can overlap client shutdown waits.
-        """
+        """Request shutdown without joining so callers can overlap client waits."""
         with self._lock:
             self._stopping.set()
             self._wake.set()
@@ -358,7 +328,6 @@ class PluginLink(QObject):
         try:
             q.put_nowait(_STOP)
         except queue.Full:
-            # Free a slot for the stop sentinel. The worker also checks its stop event.
             try:
                 q.get_nowait()
                 q.put_nowait(_STOP)
@@ -371,8 +340,7 @@ class PluginLink(QObject):
         if t and t.is_alive():
             t.join(timeout=timeout)
             if t.is_alive():
-                # Retain the handle if the worker is still blocked so later stops can
-                # join it.
+                # Retain blocked worker handles for later joins.
                 return
         with self._lock:
             if self._thread is t:
@@ -421,8 +389,7 @@ class PluginLink(QObject):
         self._enqueue(dps_frame(enc, rows, show))
 
     def _enqueue(self, msg: dict) -> None:
-        # Keep the enabled check and eviction atomic. Queue operations remain
-        # nonblocking.
+        # Check enabled state and evict under one lock.
         with self._lock:
             if not self._enabled:
                 return
@@ -430,7 +397,6 @@ class PluginLink(QObject):
             try:
                 self._queue.put_nowait(msg)
             except queue.Full:
-                # Preserve callouts and the clears that retire them.
                 dropped = self._evict_oldest(self._queue, msg)
                 if dropped is not None:
                     kind = dropped.get("c") if isinstance(dropped, dict) else "sentinel"
@@ -472,7 +438,6 @@ class PluginLink(QObject):
             self._connected = connected
 
     def _report(self, connected: bool, msg: str, stopping=None) -> None:
-        # Report only connection state transitions.
         state = (connected, msg)
         with self._lock:
             if stopping is not None and (self._stopping is not stopping
@@ -485,9 +450,7 @@ class PluginLink(QObject):
             self.status_changed.emit(connected, msg)
 
     def _connect(self):
-        """Connect and validate the greeting, allowing failures to trigger backoff. Omit
-        Origin because the plugin rejects it.
-        """
+        """Validate the greeting. Omit Origin because the plugin rejects browser connections."""
         if not _HAVE_WS:
             raise RuntimeError("the websockets package is not installed "
                                "(source runs: pip install -r requirements.txt)")
@@ -515,8 +478,7 @@ class PluginLink(QObject):
 
     @staticmethod
     def _discard_queued(q: "queue.Queue", keep_alerts: bool = False) -> None:
-        # Discard frames that will be rebuilt on reconnect. Preserve alerts because they
-        # are emitted only once.
+        # Reconnect rebuilds ticks and schedules, but alerts are emitted only once.
         keep = []
         discarded = 0
         while True:
@@ -538,7 +500,6 @@ class PluginLink(QObject):
 
     @staticmethod
     def _drain_inbound(ws, stopping: threading.Event) -> bool:
-        """Read a bounded batch and report whether a pong arrived."""
         pong = False
         for _ in range(INBOUND_DRAIN_BATCH):
             if stopping.is_set():
@@ -579,10 +540,7 @@ class PluginLink(QObject):
 
     @staticmethod
     def _kill_socket(ws, done: threading.Event) -> None:
-        """Abort the raw socket when send stalls. Connection.close could block on the send
-        mutex. Recheck completion after a short grace to avoid closing a send that just
-        finished.
-        """
+        """Abort stalled sends through the raw socket to avoid the send mutex. Recheck after a grace period."""
         if done.is_set():
             return
         if done.wait(0.1):
@@ -593,7 +551,6 @@ class PluginLink(QObject):
             pass
 
     def _send(self, ws, msg: dict) -> None:
-        """Apply a deadline to blocking WebSocket sends."""
         done = threading.Event()
         killer = threading.Timer(SEND_TIMEOUT_S, self._kill_socket, args=(ws, done))
         killer.daemon = True
@@ -626,7 +583,6 @@ class PluginLink(QObject):
                         self._close_quietly(ws)
                         ws = None
                         self._set_connected(False, stopping)
-                    # Report Off even if disabling occurred during backoff.
                     self._report(False, "Off", stopping)
                     wake.wait(0.5)
                     wake.clear()
@@ -644,8 +600,7 @@ class PluginLink(QObject):
                         dps_protocol = _DpsProtocol(native_retention)
                     except Exception as exc:  # noqa: BLE001
                         log_drop("plugin-link", f"connect failed: {exc}")
-                        # Show actionable configuration errors. Connection refusal
-                        # usually means the game is unavailable.
+                        # Connection refusal usually means the game is unavailable.
                         self._report(False, str(exc) if isinstance(exc, RuntimeError)
                                      else "Waiting for the game plugin", stopping)
                         wake.wait(delay)
@@ -657,8 +612,6 @@ class PluginLink(QObject):
                     delay = RECONNECT_BASE_S
                     next_ping = time.monotonic() + self._idle_ping_s
                     pong_deadline = None
-                    # Discard stale ticks and schedules accumulated during the greeting
-                    # wait, retaining alerts.
                     with self._lock:
                         self._discard_queued(q, keep_alerts=True)
                         if self._stopping is not stopping or stopping.is_set():
@@ -669,7 +622,6 @@ class PluginLink(QObject):
                                        if plugin_version else "Connected", stopping)
 
                 if dialed != self._port:
-                    # Reconnect if settings changed the port during connection.
                     self._close_quietly(ws)
                     ws = None
                     self._set_connected(False, stopping)
@@ -709,7 +661,7 @@ class PluginLink(QObject):
                     if pong_deadline is None and time.monotonic() >= next_ping:
                         self._send(ws, ping_frame())
                         pong_deadline = time.monotonic() + PONG_TIMEOUT_S
-                except Exception as exc:  # Keep the worker running after send failures.
+                except Exception as exc:
                     log_drop("plugin-link", f"connection lost: {exc}")
                     # Retry failed alert sends because reconnect does not recreate them.
                     self._retry_alert(q, msg)
@@ -720,8 +672,7 @@ class PluginLink(QObject):
         finally:
             if ws is not None:
                 self._close_quietly(ws)
-            # A worker that outlives shutdown must not overwrite its replacement's
-            # status.
+            # Old workers must not overwrite replacement status.
             if self._stopping is stopping:
                 self._set_connected(False, stopping)
                 self._report(False, "Off", stopping)

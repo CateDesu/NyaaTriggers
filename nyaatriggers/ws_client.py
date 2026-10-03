@@ -1,7 +1,3 @@
-"""Read IINACT combat events for local triggers and the meter, and forward raw messages to
-engine sidecars. The meter uses log lines rather than CombatData summaries.
-"""
-
 import json
 import math
 import os
@@ -14,13 +10,11 @@ from PyQt6.QtWebSockets import QWebSocket
 from nyaatriggers.combatant_responses import CombatantResponses, extract_raw as _extract_raw, request_tag
 from nyaatriggers.diagnostics import record
 
-# Subscribe to combat logs and world state for local processing and sidecar replay.
 _SUBSCRIBE = json.dumps({"call": "subscribe", "events": [
     "LogLine", "CombatData", "ChangePrimaryPlayer", "ChangeZone", "PartyChanged",
     "InCombat",
 ]})
 
-# Bound message size before JSON parsing on the GUI thread.
 _MAX_WS_MESSAGE = 4 << 20
 _PING_INTERVAL_MS = 15000
 _PONG_TIMEOUT_MS = 10000
@@ -44,10 +38,8 @@ class WSClient(QObject):
         self._reopen_on_disconnect = False   # connect_to over a live socket means reopen once closed
         self._player_id = 0             # tracked from ChangePrimaryPlayer, for combatant "me"
         self._party_types: dict = {}    # combatant_id -> 1 party, 2 alliance, from PartyChanged
-        # Avoid a second status update when Qt emits disconnected after an error.
         self._error_reported = False
-        # Cache subscription state for sidecars that start after these events arrive.
-        self._state_cache: dict = {}    # msgtype -> raw_msg
+        self._state_cache: dict = {}
         self._combatant_sequence = 0
         self._combatant_responses = CombatantResponses()
         self._diag_frames = 0
@@ -72,7 +64,7 @@ class WSClient(QObject):
         self._reconnect_timer = QTimer(self)
         self._reconnect_timer.setSingleShot(True)
         self._reconnect_timer.timeout.connect(self._open)
-        self._reconnect_delay = 5000    # ms, doubled per retry up to 60 s
+        self._reconnect_delay = 5000
 
         # Each engine keeps polling enabled while it needs live combatants.
         self._poll_timer = QTimer(self)
@@ -88,7 +80,6 @@ class WSClient(QObject):
         self._refresh_timer.timeout.connect(self._flush_combatant_requests)
 
     def connect_to(self, url: str) -> None:
-        # Validate WebSocket schemes before passing the address to Qt.
         if url:
             scheme = QUrl(url).scheme().lower()
             if scheme not in ("ws", "wss"):
@@ -98,7 +89,6 @@ class WSClient(QObject):
         self._url = url
         self._auto_reconnect = True
         self._reconnect_timer.stop()
-        # Reset backoff for a user-requested reconnect.
         self._reconnect_delay = 5000
         state = self._ws.state()
         if state in (QAbstractSocket.SocketState.HostLookupState,
@@ -110,8 +100,7 @@ class WSClient(QObject):
             self._open()
             return
         if state != QAbstractSocket.SocketState.UnconnectedState:
-            # Wait for asynchronous close before reopening so its disconnect callback
-            # cannot abort a new connection.
+            # Wait for close so its callback cannot abort a new connection.
             self._reopen_on_disconnect = True
             self._stop_heartbeat()
             self._ws.close()
@@ -134,12 +123,10 @@ class WSClient(QObject):
         if state == QAbstractSocket.SocketState.ConnectedState:
             return
         if state == QAbstractSocket.SocketState.ConnectingState:
-            # Abort a handshake that outlived its attempt deadline before starting
-            # another.
+            # Abort an expired handshake before starting another.
             self._ws.abort()
         self._ws.open(QUrl(self._url))
         record("ws_state", state="connecting")
-        # Arm a deadline for this handshake. Successful connection cancels it.
         self._schedule_reconnect()
 
     def _on_connected(self) -> None:
@@ -174,7 +161,6 @@ class WSClient(QObject):
         if self._reopen_on_disconnect:
             self._reopen_on_disconnect = False
             self._open()
-        # Retain a retry timer if immediate reopening fails.
         self._schedule_reconnect()
 
     def _stop_heartbeat(self) -> None:
@@ -202,8 +188,7 @@ class WSClient(QObject):
         pending = self._pending_ping
         if pending is None:
             return
-        # IINACT adds two zero bytes before the echoed payload. Accept that
-        # reply too while still requiring the token from the current probe.
+        # Accept IINACT's two zero prefix bytes while still checking the current probe token.
         if bytes(payload) not in (pending, b"\x00\x00" + pending):
             record("ws_state", state="pong_rejected")
             return
@@ -214,7 +199,6 @@ class WSClient(QObject):
         record("ws_state", state="pong_accepted", elapsed_ms=_elapsed)
 
     def set_combatant_polling(self, enabled: bool) -> None:
-        """Poll combatants while connected and requested by an engine."""
         self._poll_enabled = bool(enabled)
         self._update_combatant_polling()
 
@@ -258,20 +242,16 @@ class WSClient(QObject):
         self._refresh_all = False
 
     def request_combatants_once(self) -> None:
-        """Request one combatant snapshot to fill jobs missed before subscription."""
         self._request_combatants()
 
     def replay_state(self) -> None:
-        """Replay cached identity and combat state to newly started sidecars, then request
-        current combatants.
-        """
+        """Replay cached state before requesting current combatants."""
         for msg in self.state_snapshot():
             self.raw_message.emit(msg)
             self.engine_message.emit(msg)
         self._request_combatants()
 
     def state_snapshot(self) -> tuple[str, ...]:
-        """Current world state for a new engine or pull recording."""
         return tuple(self._state_cache[key] for key in
                      ("changeprimaryplayer", "changezone", "partychanged", "incombat")
                      if key in self._state_cache)
@@ -298,8 +278,6 @@ class WSClient(QObject):
         except (ValueError, RecursionError):
             self._combatant_responses.observe_raw(msg.strip(), self._combatant_sequence)
             self.engine_message.emit(msg)
-            # Catch excessive JSON nesting separately because RecursionError is not a
-            # ValueError.
             raw = msg.strip()
             if raw:
                 self._emit_log_line(raw)
@@ -324,7 +302,6 @@ class WSClient(QObject):
             self._state_cache[mtype] = msg
 
         if mtype == "incombat":
-            # Preserve both combat flags because sync rules can match either.
             self.in_combat.emit(bool(data.get("inACTCombat")), bool(data.get("inGameCombat")))
             return
 
@@ -340,8 +317,7 @@ class WSClient(QObject):
             return
 
         if mtype == "partychanged":
-            # Use PartyChanged for party membership because IINACT may report PartyType
-            # as zero. Forward roster jobs for connections that missed spawn lines.
+            # Use PartyChanged membership because IINACT may report PartyType as zero.
             pt: dict = {}
             jobs: dict = {}
             party = data.get("party")
@@ -354,7 +330,7 @@ class WSClient(QObject):
                 except (TypeError, ValueError, OverflowError):
                     continue
                 inp = m.get("inParty")
-                pt[mid] = 1 if inp or inp is None else 2   # unknown counts as party
+                pt[mid] = 1 if inp or inp is None else 2
                 try:
                     job = int(m.get("job") or 0)
                 except (TypeError, ValueError, OverflowError):
@@ -419,7 +395,6 @@ def _signal_id(value) -> int:
 
 
 def _ci(v) -> int:
-    # Integer conversion can overflow on nonfinite JSON numbers.
     try:
         return int(v)
     except (TypeError, ValueError, OverflowError):
@@ -439,9 +414,7 @@ def _cf(v) -> float:
 
 
 def _map_combatants(combs: list, party_types: dict = None) -> list:
-    """Normalize combatant field casing and numeric values for Triggernometry. Use
-    PartyChanged membership when available.
-    """
+    """Normalize Triggernometry combatants, using PartyChanged membership when available."""
     party_types = party_types or {}
     out: list = []
     for c in combs:

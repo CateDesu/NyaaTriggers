@@ -1,5 +1,3 @@
-"""Native reader output must respect checkbox changes before GUI delivery."""
-
 import json
 import os
 import subprocess

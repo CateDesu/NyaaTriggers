@@ -1,8 +1,5 @@
-"""Sync locale catalogs with literal translation calls in program sources. Preserve
-existing translations and add empty entries for new keys. --prune removes stale keys.
---check reports drift without writing. Run python tools/extract_strings.py with an
-optional --locale.
-"""
+"""Sync literal translation keys while preserving existing translations.
+--prune removes stale keys. --check reports drift without writing."""
 from __future__ import annotations
 
 import argparse
@@ -13,8 +10,6 @@ import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
-# Scan program modules while excluding tests, tools, vendored code and build
-# environments at every directory level.
 _SKIP_DIRS = {"tools", "tests", "triggevent-core", "triggernometry-core", ".git", "jre",
               ".venv", "venv", "env", "site-packages", "node_modules",
               "__pycache__", "build", "dist", "local"}
@@ -31,9 +26,7 @@ def _iter_py_files() -> list[Path]:
 
 
 def _keys_in(path: Path) -> set[str] | None:
-    """Collect literal _ and N_ calls. Return None for unreadable or invalid sources so
-    pruning cannot remove their live keys.
-    """
+    """Collect literal translation calls, returning None on read failure to prevent unsafe pruning."""
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, ValueError):
@@ -61,8 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     for f in _iter_py_files():
         keys = _keys_in(f)
         if keys is None:
-            # Fail on unreadable sources so their keys cannot be mistaken for stale
-            # translations.
+            # Unreadable sources must not make live keys appear stale.
             print(f"cannot parse {f.relative_to(_REPO)}, catalog left untouched",
                   file=sys.stderr)
             return 1
@@ -105,12 +97,10 @@ def main(argv: list[str] | None = None) -> int:
               + (" ..." if len(stale_keys) > 20 else ""))
 
     if args.check:
-        # Report both missing and stale keys.
         return 1 if (new_keys or stale_keys) else 0
 
     cat_path.parent.mkdir(parents=True, exist_ok=True)
-    # Replace through a sibling temporary file to preserve previous output if
-    # interrupted.
+    # A sibling temporary file preserves the previous output if interrupted.
     tmp = cat_path.with_name(cat_path.name + ".tmp")
     tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n",
                    encoding="utf-8")

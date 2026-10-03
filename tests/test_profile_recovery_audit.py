@@ -1,5 +1,3 @@
-"""Profile changes survive interruption without replacing Default with mixed choices."""
-
 from contextlib import nullcontext
 from copy import deepcopy
 import json
@@ -23,11 +21,15 @@ from tests import test_session_ui as session_fixture
 def fixture(root=None):
     case = session_fixture.SessionUiTests()
     case.setUpClass()
-    if root is None:
-        case.setUp()
-    else:
-        with patch("tests.test_session_ui.tempfile.TemporaryDirectory", return_value=nullcontext(str(root))):
+    try:
+        if root is None:
             case.setUp()
+        else:
+            with patch("tests.test_session_ui.tempfile.TemporaryDirectory", return_value=nullcontext(str(root))):
+                case.setUp()
+    except BaseException:
+        case.doCleanups()
+        raise
     return case
 
 
@@ -95,6 +97,25 @@ def crash_fixture(directory, transition, boundary):
 
 
 class ProfileRecoveryTests(unittest.TestCase):
+    def test_failed_fixture_setup_restores_global_paths_and_ui_hooks(self):
+        saved = (ac._DATA_DIR, ac._SETTINGS_FILE, ac.TRIGGERS_LOCAL_FILE,
+                 session_fixture.mw.QTimer.singleShot, ac.QMessageBox.warning)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "evidence.txt"
+            evidence.write_text("keep")
+            for target in (None, root):
+                with self.subTest(root=target):
+                    case = session_fixture.SessionUiTests()
+                    self.addCleanup(case.doCleanups)
+                    with patch.object(session_fixture, "SessionUiTests", return_value=case), \
+                            patch.object(session_fixture.mw, "MainWindow", side_effect=RuntimeError("startup failed")):
+                        with self.assertRaisesRegex(RuntimeError, "startup failed"):
+                            fixture(target)
+                    self.assertEqual((ac._DATA_DIR, ac._SETTINGS_FILE, ac.TRIGGERS_LOCAL_FILE,
+                                      session_fixture.mw.QTimer.singleShot, ac.QMessageBox.warning), saved)
+            self.assertEqual(evidence.read_text(), "keep")
+
     def start(self):
         case = fixture()
         self.addCleanup(case.doCleanups)

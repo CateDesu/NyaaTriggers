@@ -1,9 +1,5 @@
-"""Capture raw WebSocket messages for engine replay when recording is enabled. Each pull
-has JSONL and metadata files under pull_logs. Include initial identity and combat state
-plus buffered messages before the first enemy ability. End on wipe, combat exit, zone
-change, feed loss or recording stop. Bound each capture and retain recent pulls per
-folder. All slots run on the GUI thread.
-"""
+"""Capture bounded pull logs for engine replay, including buffered initial state.
+All slots run on the GUI thread."""
 
 from __future__ import annotations
 
@@ -19,15 +15,12 @@ from PyQt6.QtCore import QObject, pyqtSlot
 
 from nyaatriggers import drop_log
 
-# Start recording on an ability from a non-player caster.
 _ABILITY_TYPES = {"20", "21", "22"}
 _WIPE_COMMAND = "4000000F"
-# Include recent messages before the pull so replay has the initial state. Bound both
-# count and bytes.
+# Replay needs messages from before the first enemy ability.
 _PRE_PULL_SECONDS = 15.0
 _PRE_PULL_MAX_MESSAGES = 500
 _PRE_PULL_MAX_BYTES = 8 << 20
-# Cap captures that never receive an ending event.
 _MAX_PULL_SECONDS = 45 * 60
 _MAX_PULL_BYTES = 64 << 20
 _KEEP_CAPTURES = 20
@@ -39,16 +32,13 @@ def _owner_only(path, flags):
 
 
 def _sanitize(name: str) -> str:
-    """Filesystem-safe folder name for a fight or zone."""
     cleaned = re.sub(r"[^A-Za-z0-9._ \-]+", "_", name).strip()
     if not cleaned.strip(". "):
-        # Reject empty names and dot-only paths.
         return "Unknown"
     return cleaned
 
 
 class PullCapture(QObject):
-
     def __init__(self, log_dir: Path, parent=None, *, state_snapshot=None) -> None:
         super().__init__(parent)
         self._log_dir = Path(log_dir)
@@ -69,7 +59,6 @@ class PullCapture(QObject):
         self._awaiting_zone_metadata = False
         self._warned_write = False
         self._state_snapshot = state_snapshot or (lambda: ())
-        # The caller supplies fight and zone names for capture paths.
         self.context = lambda: ("", "")
 
     def set_recording(self, recording: bool) -> None:
@@ -78,7 +67,6 @@ class PullCapture(QObject):
             return
         self._recording = recording
         if recording:
-            # Allow another warning when recording is enabled again.
             self._warned_write = False
         else:
             self._buffer.clear()
@@ -87,7 +75,6 @@ class PullCapture(QObject):
 
     @pyqtSlot(str)
     def on_raw_message(self, msg: str) -> None:
-        """Record messages during a pull and buffer recent messages between pulls."""
         if not self._recording:
             return
         # Keep each raw message on one JSONL line.
@@ -106,7 +93,6 @@ class PullCapture(QObject):
 
     @pyqtSlot(str)
     def on_log_line(self, raw: str) -> None:
-        """Parsed ACT log line, used for pull segmentation only."""
         if not self._recording and not raw.startswith("01|"):
             return
         fields = raw.split("|")
@@ -166,9 +152,7 @@ class PullCapture(QObject):
 
     @pyqtSlot(bool, str)
     def on_status_changed(self, connected: bool, _msg: str) -> None:
-        """Mark feed loss separately so reconnect events cannot merge pulls or relabel the
-        ending.
-        """
+        """Keep feed loss separate so reconnect events cannot merge pulls or relabel the ending."""
         if not connected:
             self._finalize("feed-lost")
             self._zone_id = 0
@@ -242,7 +226,6 @@ class PullCapture(QObject):
             self._finalize("truncated")
 
     def _warn_write(self, what: str, err: OSError) -> None:
-        """Report the first write failure in each recording period."""
         if self._warned_write:
             return
         self._warned_write = True
@@ -251,7 +234,6 @@ class PullCapture(QObject):
                           throttle_s=0)
 
     def _prune(self, folder: Path, keep: Path | None = None) -> None:
-        """Keep the current capture and the newest other names in this folder."""
         try:
             files = sorted(folder.glob("*.jsonl"))
             retired = [p for p in files if p != keep]

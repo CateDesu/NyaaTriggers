@@ -1,5 +1,3 @@
-"""Compare observed phase reach using complete and compatible attempts."""
-
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path

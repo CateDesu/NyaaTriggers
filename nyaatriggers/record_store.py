@@ -1,5 +1,3 @@
-"""Local JSON records for sessions and trigger profiles."""
-
 import json
 import os
 import tempfile

@@ -1,5 +1,3 @@
-"""Connection deadlines, cleanup and retry for comparison and voice downloads."""
-
 import contextlib
 import hashlib
 import io

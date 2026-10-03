@@ -1,5 +1,3 @@
-"""Exercise the session pages and profile switching in the real window."""
-
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

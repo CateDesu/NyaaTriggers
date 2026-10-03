@@ -1,6 +1,6 @@
 <configuration debug="false">
 
-    <!-- Send engine logs to stderr so they cannot corrupt the JSON protocol on stdout. Omit ANSI colors from bridge logs. -->
+    <!-- Engine logs use stderr to preserve the JSON protocol on stdout. -->
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <target>System.err</target>

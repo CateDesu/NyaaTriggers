@@ -1,5 +1,3 @@
-"""Timeline loading, plugin schedules and sequence handling for MainWindow."""
-
 import os
 import sys
 import threading
@@ -18,7 +16,7 @@ from nyaatriggers.app_common import (
 
 
 def _local_timeline_path(fight: str):
-    """Find a writable local timeline, then its bundled fallback, or return None."""
+    """Prefer a writable local timeline over its bundled fallback, or return None."""
     p = ac.TIMELINES_DIR / f"{fight}.txt"
     if p.exists():
         return p
@@ -28,7 +26,6 @@ def _local_timeline_path(fight: str):
 
 class TimelineTabMixin:
     def _on_timeline_tts(self, text: str) -> None:
-        # Cactbot schedules drive bars only because the reader already supplies speech.
         if getattr(self, "_timeline_from_cactbot", False):
             return
         # Check local switches again when the timer fires.
@@ -40,8 +37,7 @@ class TimelineTabMixin:
     def _on_seq_complete(self, runner: SequentialRunner, captured: dict) -> None:
         trigger = runner.trigger
         self._drop_seq_runner(runner)
-        # Check mode and object identity so disabled, replaced or deleted triggers
-        # cannot complete stale sequences.
+        # Recheck mode and identity to prevent stale sequence completion.
         if (not self._local_enabled or not trigger.enabled
                 or not any(x is trigger for x in self._triggers)
                 or not self._trigger_zone_matches(trigger)):
@@ -52,31 +48,25 @@ class TimelineTabMixin:
         self._drop_seq_runner(runner)
 
     def _drop_seq_runner(self, runner: SequentialRunner) -> None:
-        """Stop and delete a sequence runner so its persistent window parent cannot retain
-        it.
-        """
+        """Delete stopped runners so their persistent window parent cannot retain them."""
         runner.cancel()
         if runner in self._seq_runners:
             self._seq_runners.remove(runner)
         runner.deleteLater()
 
     def _clear_seq_runners(self) -> None:
-        # Cancel sequences at encounter boundaries so later log lines cannot finish
-        # them.
+        # Cancel at encounter boundaries so later lines cannot finish old sequences.
         for r in list(self._seq_runners):
             self._drop_seq_runner(r)
 
     def _timeline_fight_tag(self, zone: str) -> str:
-        """Resolve the timeline tag from the zone index or local fight name."""
         cb = self._cactbot_zone_entry()
         if cb:
             return cb[0]
         return _bare_fight_tag(self._fight_tag_for_zone(zone)[0]) if zone else ""
 
     def _push_timeline_to_plugin(self, *, reconnect: bool = False) -> None:
-        """Push the current schedule when its mode is enabled. Preserve cactbot bars while
-        local callouts are off.
-        """
+        """Keep cactbot bars while local callouts are off."""
         if (not getattr(self, "_awaiting_zone_metadata", False)
                 and (getattr(self, "_cactbot_mode", False)
                      or (getattr(self, "_local_enabled", True)
@@ -113,7 +103,6 @@ class TimelineTabMixin:
             local_fight, _unused = self._fight_tag_for_zone(zone) if zone else ("", "")
             # Require a bare fight tag before using it as a timeline filename.
             local_fight = _bare_fight_tag(local_fight)
-            # Prefer the zone ID index, falling back to the known fight map.
             cb = self._cactbot_zone_entry()
             if (not cb and self._cactbot_mode
                     and local_fight in FIGHT_TO_CACTBOT_TXT):
@@ -122,14 +111,12 @@ class TimelineTabMixin:
             path = None
             if cb:
                 ctag, rel = cb
-                # Prefer writable downloads over bundled cactbot files. Both use names
-                # separate from user timelines.
+                # Writable cactbot downloads take precedence and remain separate from user timelines.
                 cb_path = ac.TIMELINES_DIR / f"{ctag}.cactbot.cache.txt"
                 if not cb_path.exists():
                     cb_path = ac._BUNDLE_TIMELINES_DIR / f"{ctag}.cactbot.txt"
                 if cb_path.exists():
-                    # Serve the existing copy during a background refresh after its TTL
-                    # expires.
+                    # Serve stale copies during background refresh.
                     try:
                         if time.time() - cb_path.stat().st_mtime > _CACTBOT_TIMELINE_TTL_S:
                             self._fetch_cactbot_timeline(ctag, rel)
@@ -163,7 +150,6 @@ class TimelineTabMixin:
                 if cb:
                     fight = ""
         except Exception as exc:  # noqa: BLE001
-            # Log loading errors before the next periodic retry.
             ac.log_drop("timeline", f"{zone!r} load failed: {exc!r}")
             if preserve_time:
                 return
@@ -172,22 +158,17 @@ class TimelineTabMixin:
             from_cactbot = False
             # Leave the fight unstamped after failure so periodic detection retries.
             fight = ""
-        # Record the loaded fight so unchanged zones do not reload.
         self._timeline_fight = fight
         self._timeline_from_cactbot = from_cactbot
-        # Replace the plugin schedule on load or clear, respecting the current mode.
         self._push_timeline_to_plugin()
         if getattr(self, "_pending_timeline_events", None):
             self._resume_timeline_events()
 
     def _fetch_cactbot_timeline(self, tag: str, rel: str) -> None:
-        """Download a cactbot timeline to the writable cache in the background and signal
-        for reload. Allow one fetch per tag and leave bundled files untouched.
-        """
+        """Fetch each tag once into the writable cache, leaving bundled timelines untouched."""
         if not rel:
             return
-        # Protect fetch membership checks and updates because workers remove entries
-        # from another thread.
+        # Workers remove fetch entries from another thread, so lock membership changes.
         with self._cactbot_tl_lock:
             if tag in self._cactbot_tl_fetching:
                 return
@@ -211,7 +192,6 @@ class TimelineTabMixin:
                 os.replace(tmp, dest)
                 self._cactbot_tl_signal.emit(tag)
             except Exception:  # noqa: BLE001
-                # Log download failures and leave later refreshes able to retry.
                 print(f"cactbot timeline fetch failed for {tag}", file=sys.stderr)
             finally:
                 if tmp is not None:
@@ -229,7 +209,6 @@ class TimelineTabMixin:
                 self._cactbot_tl_fetching.discard(tag)
 
     def _on_cactbot_timeline_ready(self, fight: str) -> None:
-        """Reload a downloaded timeline if it still matches the current zone."""
         if not self._cactbot_mode:
             return
         if self._timeline_fight_tag(self._match_zone) == fight:

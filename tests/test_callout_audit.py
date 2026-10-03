@@ -1,5 +1,3 @@
-"""Callout captures and timeline loops under repeated or missing events."""
-
 import builtins
 import io
 from contextlib import ExitStack, contextmanager

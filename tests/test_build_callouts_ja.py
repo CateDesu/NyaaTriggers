@@ -1,4 +1,3 @@
-"""Japanese callout generation with malformed input fields."""
 import json
 import os
 import sys
@@ -34,7 +33,6 @@ check("good phrase entries survive",
 
 
 def run_main(triggers, phrases):
-    """main() against temp inputs, with every path constant redirected."""
     tmp = Path(tempfile.mkdtemp())
     (tmp / "triggers.json").write_text(json.dumps(triggers), encoding="utf-8")
     (tmp / "phrases.json").write_text(json.dumps(phrases), encoding="utf-8")

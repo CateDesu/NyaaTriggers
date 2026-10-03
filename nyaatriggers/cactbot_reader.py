@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Capture live cactbot callouts from a headless QtWebEngine page. A DOM observer captures
-display text and severity. A WebSocket send hook captures cactbotSay speech. WebEngine
-is optional and imported only when starting the reader.
-"""
+"""Capture cactbot display text and speech through optional QtWebEngine."""
 
 from __future__ import annotations
 
@@ -16,12 +13,10 @@ from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from nyaatriggers.drop_log import log_drop
 from nyaatriggers.trigger_engine import compile_user_regex, _safe_sub
 
-# The Cactbot URL setting can override this hosted build.
 DEFAULT_CACTBOT_URL = "https://overlayplugin.github.io/cactbot/ui/raidboss/raidboss.html"
 
 
 def is_available() -> bool:
-    """True if PyQt6-WebEngine and QtWebChannel can be imported."""
     try:
         import PyQt6.QtWebChannel     # noqa: F401
         import PyQt6.QtWebEngineCore  # noqa: F401
@@ -38,11 +33,9 @@ _HARVEST_JS = r"""
   var queue = [];
   function report(kind, payload) {
     if (bridge) { try { bridge.fromCactbot(kind, payload); } catch (e) {} }
-    // Bound queued events while waiting for the bridge.
     else if (queue.length < 200) { queue.push([kind, payload]); }
   }
 
-  // Back off while waiting for the injected transport.
   var connectDelay = 50;
   function connect() {
     if (typeof qt === 'undefined' || !qt.webChannelTransport) {
@@ -61,8 +54,43 @@ _HARVEST_JS = r"""
   }
   connect();
 
-  // Hook sends before cactbot connects to capture speech and subscriptions.
+  // Hook sends before cactbot connects.
   try {
+    var userRequests = new WeakMap(), listeners = new WeakMap();
+    var origAdd = WebSocket.prototype.addEventListener;
+    var origRemove = WebSocket.prototype.removeEventListener;
+    WebSocket.prototype.addEventListener = function (kind, listener, options) {
+      var callback = listener;
+      if (kind === 'message' && listener &&
+          (typeof listener === 'function' || typeof listener === 'object')) {
+        callback = listeners.get(listener);
+        if (!callback) {
+          callback = function (event) {
+            try {
+              var requests = userRequests.get(this);
+              var reply = requests && requests.size && JSON.parse(event.data);
+              if (reply && requests.delete(String(reply.rseq)) && !reply.$error && reply.detail) {
+                var files = reply.detail.localUserFiles;
+                if (files == null) files = reply.detail.localUserFiles = {};
+                if (files && typeof files === 'object' && !Array.isArray(files)) {
+                  var path = 'raidboss/__nyaa_reader__.js';
+                  while (Object.prototype.hasOwnProperty.call(files, path)) path = path.replace('.js', '_.js');
+                  files[path] = 'window.__nyaaCaptureOptions(Options);';
+                  Object.defineProperty(event, 'data', { value: JSON.stringify(reply) });
+                }
+              }
+            } catch (e) {}
+            if (typeof listener === 'function') return listener.apply(this, arguments);
+            return listener.handleEvent(event);
+          };
+          listeners.set(listener, callback);
+        }
+      }
+      return origAdd.call(this, kind, callback, options);
+    };
+    WebSocket.prototype.removeEventListener = function (kind, listener, options) {
+      return origRemove.call(this, kind, kind === 'message' && listeners.get(listener) || listener, options);
+    };
     var origSend = WebSocket.prototype.send;
     WebSocket.prototype.send = function (data) {
       try {
@@ -72,6 +100,15 @@ _HARVEST_JS = r"""
             report('say', JSON.stringify({ text: m.text }));
           else if (m && m.call === 'subscribe')
             report('status', JSON.stringify({ event: 'subscribe', events: m.events || [] }));
+          else if (m && m.call === 'cactbotLoadUser' &&
+                   (!m.overlayName || m.overlayName === 'raidboss') && m.rseq != null) {
+            var requests = userRequests.get(this);
+            if (!requests) {
+              requests = new Set();
+              userRequests.set(this, requests);
+            }
+            requests.add(String(m.rseq));
+          }
         }
       } catch (e) {}
       return origSend.apply(this, arguments);
@@ -115,38 +152,93 @@ _HARVEST_JS = r"""
   }
   attach();
 
-  // Look for optional trigger enumeration and suppression controls.
-  // The host keeps the checklist hidden if enumeration is unavailable.
   function findOptions() {
-    var cands = [window.Options, window.gOptions, window.options];
+    var cands = [window.__nyaaCactbotOptions, window.Options, window.gOptions, window.options];
     for (var i = 0; i < cands.length; i++) {
       var o = cands[i];
       if (o && typeof o === 'object' && 'DisabledTriggers' in o) return o;
     }
     return null;
   }
+  var disabledTarget = null, originals = new Map();
+  window.__nyaaSetDisabledTriggers = function (disabled) {
+    window.__nyaaDisabledTriggers = disabled;
+    var o = findOptions();
+    if (!o) return false;
+    var target = o.DisabledTriggers || (o.DisabledTriggers = {});
+    if (target !== disabledTarget) {
+      disabledTarget = target;
+      originals.clear();
+    }
+    originals.forEach(function (descriptor, id) {
+      if (descriptor) Object.defineProperty(target, id, descriptor);
+      else delete target[id];
+    });
+    originals.clear();
+    Object.keys(disabled).forEach(function (id) {
+      if (!disabled[id]) return;
+      originals.set(id, Object.getOwnPropertyDescriptor(target, id));
+      Object.defineProperty(target, id, {value: true, writable: true, configurable: true, enumerable: true});
+    });
+    return true;
+  };
+  window.__nyaaCaptureOptions = function (options) {
+    window.__nyaaCactbotOptions = options;
+    setTimeout(applyAndEnumerate, 0);
+  };
+  var bundledSets = null;
+  function bundledTriggerSets() {
+    if (bundledSets !== null) return bundledSets;
+    bundledSets = [];
+    var chunks = window.webpackChunkcactbot;
+    if (!Array.isArray(chunks)) return bundledSets;
+    var ids = new Set();
+    chunks.forEach(function (chunk) {
+      Object.keys(chunk[1] || {}).forEach(function (id) { ids.add(id); });
+    });
+    try {
+      chunks.push([['nyaa-reader'], {}, function (load) {
+        ids.forEach(function (id) {
+          try {
+            Object.values(load(id)).forEach(function (files) {
+              if (!files || typeof files !== 'object') return;
+              Object.keys(files).forEach(function (path) {
+                var set = files[path];
+                if (/\.(js|ts)$/.test(path) && set && Array.isArray(set.triggers))
+                  bundledSets.push(Object.assign({filename: path}, set));
+              });
+            });
+          } catch (e) {}
+        });
+      }]);
+    } catch (e) {}
+    return bundledSets;
+  }
   var enumerated = false, tries = 0;
   function applyAndEnumerate() {
     tries++;
     var o = findOptions();
     if (o) {
-      o.DisabledTriggers = o.DisabledTriggers || {};
-      // Reread the map because live toggles replace it.
-      var disabled = (window.__nyaaDisabledTriggers || {});
-      for (var k in disabled) { if (disabled[k]) o.DisabledTriggers[k] = true; }
+      window.__nyaaSetDisabledTriggers(window.__nyaaDisabledTriggers || {});
       if (!enumerated) {
-        var src = window.__raidbossLoadedTriggers || o.Triggers || null;
-        if (Array.isArray(src)) {
-          var list = src.map(function (t) {
-            return {
-              id: t.id || '',
-              name: t.id || '',
-              // Prefer a zone name for grouping, falling back to its ID.
-              zone: (t.zoneName || t.__zone || (t.zoneId != null ? String(t.zoneId) : '')),
-            };
-          }).filter(function (t) { return t.id; });
-          if (list.length) { enumerated = true; report('triggers', JSON.stringify(list)); }
+        var src = bundledTriggerSets().concat(window.__raidbossLoadedTriggers || [], o.Triggers || []);
+        var sets = new Map(), triggers = new Map();
+        src.forEach(function (set) { if (set && Array.isArray(set.triggers)) sets.set(set.id || set, set); });
+        function add(trigger, set) {
+          if (!trigger || !trigger.id) return;
+          triggers.set(trigger.id, {
+            id: trigger.id, name: trigger.id,
+            zone: set.zoneName || set.__zone || set.id || (set.zoneId != null ? String(set.zoneId) : ''),
+          });
         }
+        src.forEach(function (set) {
+          if (!set || (Array.isArray(set.triggers) && sets.get(set.id || set) !== set)) return;
+          if (Array.isArray(set.triggers)) {
+            set.triggers.concat(set.timelineTriggers || []).forEach(function (trigger) { add(trigger, set); });
+          } else add(set, set);
+        });
+        var list = Array.from(triggers.values());
+        if (list.length) { enumerated = true; report('triggers', JSON.stringify(list)); }
       }
     }
     if (tries < 40) setTimeout(applyAndEnumerate, 500);
@@ -157,8 +249,6 @@ _HARVEST_JS = r"""
 
 
 class _Bridge(QObject):
-    """The QWebChannel-exposed object the injected JS talks to."""
-
     relay = pyqtSignal(str, str)   # kind, json payload
 
     @pyqtSlot(str, str)
@@ -167,9 +257,6 @@ class _Bridge(QObject):
 
 
 class CactbotReader(QObject):
-    """Capture headless cactbot callouts through the TriggeventBridge signal interface.
-    """
-
     callout = pyqtSignal(str, str)   # text, severity in {info, alert, alarm}
     tts     = pyqtSignal(str)        # exact spoken cactbotSay text
     status  = pyqtSignal(bool, str)  # active, message
@@ -184,7 +271,6 @@ class CactbotReader(QObject):
         self._bridge = None
         self._active = False
         self._ws_url = ""
-        # Replace the rule list atomically so readers need no lock.
         self._replacements: list[dict] = []
         self._seen: dict[str, None] = {}      # ordered set of observed phrases
         self._disabled: set[str] = set()
@@ -201,15 +287,11 @@ class CactbotReader(QObject):
 
     def start(self, ws_url: str, cactbot_url: str = DEFAULT_CACTBOT_URL,
               disabled_triggers=None) -> None:
-        """Start cactbot with the IINACT URL and disabled trigger IDs. Requires WebEngine.
-        Repeated starts while active do nothing.
-        """
+        """Start once with the IINACT URL and disabled trigger IDs. Requires WebEngine."""
         if self._active:
             return
         ws_url = ws_url.strip()
 
-        # Custom URLs share the mixed content allowance needed for the local IINACT
-        # feed. Warn for remote hosts and load the configured URL.
         if cactbot_url != DEFAULT_CACTBOT_URL:
             host = (urllib.parse.urlparse(cactbot_url).hostname or "").lower()
             if host and host not in ("localhost", "127.0.0.1", "::1"):
@@ -217,7 +299,6 @@ class CactbotReader(QObject):
                       f"remote host {host!r} with insecure content allowed; "
                       f"only point this at hosts you trust", file=sys.stderr)
 
-        # Defer imports so the program can run without WebEngine.
         from PyQt6.QtCore import QFile, QIODevice, QUrl
         from PyQt6.QtWebChannel import QWebChannel
         from PyQt6.QtWebEngineCore import (
@@ -232,7 +313,6 @@ class CactbotReader(QObject):
         finally:
             f.close()
 
-        # Use an off the record profile and a page without a view.
         self._profile = QWebEngineProfile(self)
         self._page = QWebEnginePage(self._profile, self)
         # The hosted HTTPS page needs mixed content enabled to reach IINACT over
@@ -279,15 +359,12 @@ class CactbotReader(QObject):
         self.status.emit(False, "Off")
 
     def _teardown(self) -> None:
-        """Clear active state and delete the browser objects so a later start can retry.
-        """
+        """Release browser objects so a later start can retry."""
         self._active = False
         self._ws_url = ""
-        # Clear observed phrases so a new session can emit them again.
         self._seen.clear()
         if self._page is not None:
-            # Disconnect before deletion so queued signals from the old page cannot
-            # reach the new session.
+            # Disconnect old page signals before starting another session.
             try:
                 self._page.loadFinished.disconnect(self._on_load_finished)
             except TypeError:
@@ -302,8 +379,7 @@ class CactbotReader(QObject):
             except Exception:  # noqa: BLE001
                 pass
             self._page.deleteLater()
-        # Delete the page before its profile. Both need explicit deletion because their
-        # parent reader remains alive.
+        # Delete the page before its profile. The reader outlives both.
         if self._bridge is not None:
             try:
                 self._bridge.relay.disconnect(self._on_message)
@@ -318,21 +394,17 @@ class CactbotReader(QObject):
         self._profile = None
 
     def set_disabled_triggers(self, ids) -> None:
-        """Update disabled trigger IDs without reloading. The caller saves the setting.
-        """
         new = {str(t) for t in (ids or [])}
         self._disabled = new
         if not self._active or self._page is None:
             return
         from PyQt6.QtWebEngineCore import QWebEngineScript
-        payload = json.dumps({t: True for t in new})   # full replace also re-enables removed ids
+        payload = json.dumps({t: True for t in new})
         js = (
             "(function(m){"
-            "  var c=[window.Options,window.gOptions,window.options];"
-            "  for(var i=0;i<c.length;i++){var o=c[i];"
-            "    if(o&&typeof o==='object'&&'DisabledTriggers' in o){"
-            "      o.DisabledTriggers=m;window.__nyaaDisabledTriggers=m;return true;}}"
-            "  window.__nyaaDisabledTriggers=m;return false;"
+            "  window.__nyaaDisabledTriggers=m;"
+            "  return typeof window.__nyaaSetDisabledTriggers==='function'"
+            "    &&window.__nyaaSetDisabledTriggers(m);"
             "})(" + payload + ");"
         )
         try:
@@ -341,9 +413,7 @@ class CactbotReader(QObject):
             pass
 
     def set_replacements(self, rules: list) -> None:
-        """Replace find and replace rules atomically. An empty replacement result silences
-        the callout.
-        """
+        """Replace callout rules atomically. An empty result silences the callout."""
         self._replacements = list(rules or [])
 
     def seen_phrases(self) -> list:
@@ -386,19 +456,16 @@ class CactbotReader(QObject):
             return
         if ok:
             self.status.emit(True, "Reading cactbot")
-            # Restore the current disabled set after a reload.
             self.set_disabled_triggers(self._disabled)
         else:
-            # Clear active state before reporting failure so the program can unmute
-            # callouts and a later start can retry.
+            # Clear active state so the program can unmute callouts and retry.
             self._teardown()
             self.status.emit(False, "Failed to load cactbot (check the URL / connection)")
 
     def _on_render_process_terminated(self, status, exit_code) -> None:
         if not self._active:
             return
-        # A renderer crash leaves the page loaded but unable to call out. Tear it down
-        # as for a failed load.
+        # A crashed renderer cannot call out even if the page appears loaded.
         self._teardown()
         self.status.emit(False, "Cactbot renderer crashed, local callouts are back")
 
@@ -407,7 +474,6 @@ class CactbotReader(QObject):
             data = json.loads(payload)
         except (ValueError, RecursionError):
             return
-        # Only the triggers message accepts a list payload.
         if kind == "triggers":
             if isinstance(data, list) and data:
                 self.triggers_enumerated.emit(payload)

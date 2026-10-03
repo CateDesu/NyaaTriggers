@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
-"""Replay captured JSONL feeds through the engine and report callouts, chain failures and
-expected text matches. Run python3 tools/replay_pull.py pull.jsonl with optional
---expect text. Pace by ACT timestamps so delayed sequences behave as in the original
-pull. --speed shortens runtime at the cost of timing fidelity. Exit zero only when the
-engine runs and all expectations match.
-"""
+"""Replay a pull at ACT timestamps and report callouts and expected matches.
+--speed trades timing fidelity for runtime. Exit zero only when all expectations pass."""
 from __future__ import annotations
 
 import argparse
@@ -26,7 +22,6 @@ from nyaatriggers.combatant_responses import CombatantResponses
 
 _DEFAULT_JAR = _REPO / "triggevent-core" / "target" / "triggevent-core.jar"
 
-# Allow extra time for engine startup and shutdown beyond the paced feed duration.
 _TIMEOUT_MARGIN_S = 120.0
 
 
@@ -38,7 +33,6 @@ def _java_cmd() -> "list[str]":
             java = str(candidate)
     if java is None:
         return []
-    # Use a temporary display because the engine creates Swing overlays during startup.
     if shutil.which("xvfb-run"):
         return ["xvfb-run", "-a", "-s", "-screen 0 1024x768x24", java]
     return [java]
@@ -64,9 +58,7 @@ def _line_time(line: str):
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
-    """Kill the whole replay process group, including the JVM behind xvfb-run. Fall back to
-    the direct child if needed.
-    """
+    """Kill the replay group, including the JVM behind Xvfb, falling back to the child if needed."""
     try:
         if os.name == "posix":
             os.killpg(proc.pid, signal.SIGKILL)
@@ -147,7 +139,6 @@ def main() -> int:
                         stderr=subprocess.PIPE, text=True,
                         encoding="utf-8", errors="replace")
     if os.name == "posix":
-        # Create a process group so timeout cleanup reaches the JVM through xvfb-run.
         popen_kwargs["start_new_session"] = True
     proc = subprocess.Popen([*java, "-jar", str(args.jar)], **popen_kwargs)
 

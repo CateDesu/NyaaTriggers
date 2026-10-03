@@ -1,6 +1,4 @@
-"""Parse cactbot timeline entries, sync windows and jump targets. Unsupported sync clauses
-remain visible for diagnostics and cannot match log lines.
-"""
+"""Parse cactbot timelines, retaining unsupported sync clauses for diagnostics."""
 
 import math
 import re
@@ -10,18 +8,13 @@ _LINE_RE = re.compile(
     r'^(?P<time>-?[\d.]+)\s+(?P<labelkw>label\s+)?"(?P<label>[^"]*)"\s*(?P<rest>.*)$'
 )
 _EVENT_RE = re.compile(r"\b(?P<event>[A-Za-z]\w*)\s*\{(?P<fields>(?:[^{}\"']|\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*')*)\}")
-# Keep unsupported nested fields for diagnostics so an empty constraint set cannot match
-# every line.
+# Unsupported nested fields must not become an empty constraint that matches every line.
 _EVENT_KW_RE = re.compile(r"\b([A-Za-z]\w*)\s*\{")
-# A single window value applies on both sides of the entry.
 _WINDOW_RE = re.compile(r'\bwindow\s+(?P<before>[\d.]+)(?:\s*,\s*(?P<after>[\d.]+))?')
 _JUMP_RE = re.compile(r'\b(?P<force>force)?jump\s+(?:"(?P<jlabel>[^"]*)"|(?P<jtime>-?[\d.]+))')
-# Accept quoted or bare values and preserve regex escapes.
 _KV_RE = re.compile(r"(\"\w+\"|'\w+'|\b\w+)\s*:\s*(?:\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'|([^\s,\[\]{},\"']+))")
-# Parse arrays explicitly so ID alternatives are not lost.
 _KV_ARRAY_START_RE = re.compile(r"(\"\w+\"|'\w+'|\b\w+)\s*:\s*\[")
 _ARRAY_ITEM_RE = re.compile(r"\"((?:[^\"\\]|\\.)*)\"|'((?:[^'\\]|\\.)*)'")
-# Remove legacy regex sync bodies before searching for event clauses.
 _LEGACY_SYNC_RE = re.compile(r'\bsync\s*/(?:[^/\\]|\\.)*/')
 # Hidden entries can still sync the clock.
 _HIDEALL_RE = re.compile(r'^hideall\s+"([^"]+)"')
@@ -35,7 +28,6 @@ def _array_fields(fields_text: str) -> list[tuple[str, str | None, int, int]]:
         c = fields_text[i]
         m = _KV_ARRAY_START_RE.match(fields_text, i)
         if c in '"\'' and m is None:
-            # Skip quoted text as one value.
             q = c
             i += 1
             while i < n and fields_text[i] != q:
@@ -69,9 +61,7 @@ def _array_fields(fields_text: str) -> list[tuple[str, str | None, int, int]]:
 
 
 def _strip_comment(line: str) -> str:
-    """Strip comments outside quoted values. Apostrophes inside bare regexes do not start
-    quoted strings.
-    """
+    """Strip unquoted comments. Apostrophes inside bare regexes are literal."""
     quote = ''
     esc = False
     prev = ''
@@ -102,7 +92,6 @@ def _strip_comment(line: str) -> str:
 
 
 def _find_jump(rest: str) -> re.Match[str] | None:
-    """Find jump clauses outside quoted values and legacy regex sync bodies."""
     quote = ''
     esc = False
     prev = ''
@@ -173,7 +162,6 @@ def parse(text: str) -> list[TimelineEntry]:
             time = float(m.group('time'))
         except ValueError:
             continue
-        # Reject nonfinite times.
         if not math.isfinite(time):
             continue
 
@@ -196,7 +184,6 @@ def parse(text: str) -> list[TimelineEntry]:
                     continue
             rest = rest[:jm.start()] + ' ' + rest[jm.end():]
 
-        # Exclude legacy regex bodies from event clause parsing.
         legacy_sync = False
         lm = _LEGACY_SYNC_RE.search(rest)
         if lm:
@@ -205,12 +192,10 @@ def parse(text: str) -> list[TimelineEntry]:
 
         event_type = ''
         event_fields: dict[str, str] = {}
-        # Clauses can appear in any order.
         em = _EVENT_RE.search(rest)
         if em:
             event_type = em.group('event')
             fields_text = em.group('fields') or ''
-            # Parse arrays before scanning scalar fields.
             arrays = _array_fields(fields_text)
             scalar_chars = list(fields_text)
             for key, body, start, end in arrays:
@@ -218,8 +203,7 @@ def parse(text: str) -> list[TimelineEntry]:
             scalar_text = ''.join(scalar_chars)
             event_fields = {key.strip("\"'"): dq or sq or bq
                             for key, dq, sq, bq in _KV_RE.findall(scalar_text)}
-            # Join array values as regex alternatives. An explicit scalar for the same
-            # key takes precedence.
+            # Scalar fields take precedence over arrays of alternatives.
             for key, body, start, end in arrays:
                 if key in event_fields:
                     continue
@@ -234,8 +218,7 @@ def parse(text: str) -> list[TimelineEntry]:
                     event_fields[key] = '(?!)'
             rest = rest[:em.start()] + ' ' + rest[em.end():]
         else:
-            # Mark unsupported nested fields so the entry cannot match without checking
-            # them.
+            # Unsupported nested constraints must prevent matching.
             kw = _EVENT_KW_RE.search(rest)
             if kw:
                 event_type = kw.group(1) + " nested fields"

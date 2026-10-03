@@ -1,5 +1,3 @@
-"""Verify native speech timing and cancellation through the compiled engine."""
-
 import os
 from pathlib import Path
 import subprocess

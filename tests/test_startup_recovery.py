@@ -1,5 +1,3 @@
-"""Damaged saved data must not crash callbacks or replace unrelated choices."""
-
 from contextlib import ExitStack
 import json
 import os

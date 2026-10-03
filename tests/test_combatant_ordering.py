@@ -1,5 +1,3 @@
-"""Delayed IINACT replies cannot restore old positions or remove newer actors."""
-
 import json
 import os
 import unittest

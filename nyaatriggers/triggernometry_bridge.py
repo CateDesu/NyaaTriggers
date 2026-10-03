@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
-"""Run the MIT-licensed paissaheavyindustries/Triggernometry engine through
-triggernometry-core. Send log lines, zone changes and combatant snapshots as JSON lines
-on stdin. Read callout, sound and status messages from stdout and relay them as Qt
-signals. Mono is required on POSIX. The host supports runtime C# scripts and resolves
-combatant data without FFXIV_ACT_Plugin.
-"""
+"""Relay JSON lines to the MIT-licensed paissaheavyindustries/Triggernometry engine.
+The host supports C# scripts. POSIX requires Mono."""
 
 from __future__ import annotations
 
@@ -32,10 +28,8 @@ from nyaatriggers.telesto_client import DEFAULT_URI as DEFAULT_TELESTO_URI
 
 _STOP = object()
 
-# Discard oversized stdout lines without buffering them whole.
 _MAX_LINE = 1 << 20
 
-# Bound queued bytes as well as message count because feed frames can be large.
 _MAX_QUEUE_BYTES = 64 << 20
 
 
@@ -45,7 +39,6 @@ def _read_lines_bounded(stream):
         line = stream.readline(_MAX_LINE + 1)
         if not line:
             return
-        # A complete line at the limit includes its newline and remains valid.
         if len(line) > _MAX_LINE and not line.endswith("\n"):
             while True:
                 more = stream.readline(_MAX_LINE + 1)
@@ -56,9 +49,7 @@ def _read_lines_bounded(stream):
 
 
 class _ByteQueue(queue.Queue):
-    """Bound queued strings by retained bytes and item count. The stop sentinel uses no
-    byte budget but still needs an item slot.
-    """
+    """Bound queued strings by bytes and count. Stop sentinels still need an item slot."""
 
     def __init__(self, maxsize: int, maxbytes: int = _MAX_QUEUE_BYTES) -> None:
         super().__init__(maxsize)
@@ -80,7 +71,6 @@ class _ByteQueue(queue.Queue):
 
 
 def _bundle_bases() -> "list[Path]":
-    """Search candidate bundle directories in priority order without duplicates."""
     bases: list[Path] = []
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
@@ -104,9 +94,6 @@ def _bundle_bases() -> "list[Path]":
 
 
 def _find_exe() -> "Path | None":
-    """Find the host executable beside its engine dependencies. Use that directory as the
-    working directory.
-    """
     env = os.environ.get("NYAA_TRIGGERNOMETRY_EXE")
     if env and Path(env).is_file():
         return Path(env)
@@ -130,7 +117,6 @@ def _find_mono() -> "str | None":
 
 
 def _make_bundled_mono_executable() -> None:
-    """Restore executable permissions lost when bundled Mono is packaged as data."""
     for base in _bundle_bases():
         mono_dir = base / "mono"
         if (mono_dir / "bin" / "mono").is_file():
@@ -144,7 +130,6 @@ def _make_bundled_mono_executable() -> None:
 
 
 def _rundata_dir() -> Path:
-    """Use a writable user directory for host configuration and sound cache."""
     if os.name == "nt":
         # An empty APPDATA must fall back to home rather than the current directory.
         root = Path(os.environ.get("APPDATA") or Path.home())
@@ -169,14 +154,11 @@ def _log_path() -> "Path | None":
         return None
 
 
-# Serialize log rotation and append across GUI and reader threads.
 _LOG_LOCK = threading.Lock()
 
 
 def _log(msg: str) -> None:
-    """Write diagnostics to a persistent log and stderr. Logging failures must not stop the
-    engine.
-    """
+    """Write persistent diagnostics without interrupting the engine on logging failure."""
     try:
         print(f"[triggernometry] {msg}", file=sys.stderr)
     except Exception:  # noqa: BLE001
@@ -224,7 +206,6 @@ def _pack_stamp(path):
 
 
 def has_mono() -> bool:
-    """Windows needs no Mono runtime."""
     return os.name == "nt" or _find_mono() is not None
 
 
@@ -233,14 +214,12 @@ def has_exe() -> bool:
 
 
 def is_available() -> bool:
-    """Require both the host and its platform runtime."""
     return has_exe() and has_mono()
 
 
 class TriggernometryBridge(QObject):
 
-    # Stamp UI signals with the sidecar generation so queued output can be rejected
-    # after restart.
+    # Generation stamps let UI slots reject stale output after restarts.
     callout   = pyqtSignal(str, str, int)   # on-screen text, severity in {info, alert, alarm}, generation
     tts       = pyqtSignal(str, int)        # spoken text, generation
     sound     = pyqtSignal(str, int, int)   # sound file path, volume 0-100, generation
@@ -261,13 +240,11 @@ class TriggernometryBridge(QObject):
         self._wq: queue.Queue = _ByteQueue(maxsize=20000)
         self._active = False
         self._pack_stamps = {}
-        # Increment on start and stop. An active flag alone cannot distinguish output
-        # from a replaced reader.
+        # An active flag alone cannot distinguish replaced readers.
         self._gen = 0
         self._overflow_gen = -1
         self._replacements: list = []
         self._disabled: frozenset = frozenset()
-        # Makes the stop and reader-exit check-and-clear of _proc and _active atomic.
         self._state_lock = threading.Lock()
 
     @staticmethod
@@ -284,11 +261,9 @@ class TriggernometryBridge(QObject):
                 and self._pack_stamps.get(Path(path).absolute()) == stamp)
 
     def generation(self) -> int:
-        """Current generation used by UI slots to reject stale signals."""
         return self._gen
 
     def _gen_live(self, gen: "int | None") -> bool:
-        """Accept only the active generation."""
         return gen is not None and gen == self._gen and self._active
 
     def set_replacements(self, rules: list) -> None:
@@ -309,21 +284,16 @@ class TriggernometryBridge(QObject):
                 self._enqueue({"t": "endpoint", "body": body})
 
     def set_disabled(self, ids) -> None:
-        """Update disabled callout IDs for the next firing without restarting."""
-        # Normalize IDs before sorting settings values.
         self._disabled = frozenset(str(x) for x in (ids or ()))
         self._send_command({"t": "set_disabled", "ids": sorted(self._disabled)})
 
     def set_callout(self, cid: str, tts: "str | None" = None,
                     text: "str | None" = None, enable: "bool | None" = None) -> None:
-        """Update the spoken template while preserving token substitution. None restores
-        defaults. Route enable changes through set_disabled.
-        """
+        """Preserve template tokens. None restores defaults. Use set_disabled for enable changes."""
         if not cid:
             return
         if tts is None and text is None and enable is not None:
-            # An enable-only edit must not send null text, which would erase a custom
-            # template.
+            # Enable-only edits must not send null text and erase a custom template.
             ids = set(self._disabled)
             if enable:
                 ids.discard(str(cid))
@@ -343,9 +313,7 @@ class TriggernometryBridge(QObject):
 
     @staticmethod
     def _launch_cmd(exe: Path, packs: list[str]) -> "list[str]":
-        """Use Xvfb and Mono on POSIX because the engine constructs WinForms controls.
-        Windows runs the executable directly.
-        """
+        """POSIX needs Xvfb for WinForms controls and Mono. Windows runs the host directly."""
         cfg = str(_rundata_dir())
         argv = [str(exe), cfg, "--serve", "--"] + packs
         if os.name == "nt":
@@ -358,7 +326,6 @@ class TriggernometryBridge(QObject):
         return cmd
 
     def start(self) -> None:
-        """Start if not already running. Check availability first."""
         if self._active:
             return
         _log(f"start() requested (os={os.name})")
@@ -369,7 +336,6 @@ class TriggernometryBridge(QObject):
             self.status.emit(False, "Mono runtime or triggernometry-core.exe not found", self._gen)
             return
 
-        # Restore executable permissions on bundled files.
         if os.name == "posix":
             _make_bundled_mono_executable()
 
@@ -386,15 +352,13 @@ class TriggernometryBridge(QObject):
         popen_kwargs = dict(
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             bufsize=1, text=True, encoding="utf-8", errors="replace",
-            cwd=str(exe.parent),  # the engine DLLs live next to the exe
+            cwd=str(exe.parent),
         )
         if os.name == "posix":
-            popen_kwargs["start_new_session"] = True   # own process group for stop
-            # Let stdin EOF stop the host after parent death. A parent-death signal
-            # would stop the Xvfb wrapper before it cleans up its child.
+            popen_kwargs["start_new_session"] = True
+            # Use stdin EOF on parent death so Xvfb can clean up its child.
         if os.name == "nt":
-            popen_kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
-        # Restore system library paths for Mono and its shell children.
+            popen_kwargs["creationflags"] = 0x08000000
         popen_kwargs["env"] = proc_env.child_env()
 
         gen = self._gen + 1
@@ -435,8 +399,7 @@ class TriggernometryBridge(QObject):
         self._reader.start()
         self._errpump.start()
         self._writer.start()
-        # Replay disabled IDs after startup. Offline commands were discarded and emitted
-        # callouts have no IDs for local filtering.
+        # Replay disabled IDs because offline commands were discarded and callouts carry no IDs.
         self._send_command({"t": "set_disabled", "ids": sorted(self._disabled)})
         self.status.emit(True, "Starting Triggernometry engine...", gen)
 
@@ -447,14 +410,12 @@ class TriggernometryBridge(QObject):
             return
         with self._state_lock:
             self._active = False
-            # Invalidate queued output from the stopped generation.
             self._gen += 1
             gen = self._gen
             proc, self._proc = self._proc, None
             relay, self._telesto = self._telesto, None
             wq = self._wq
         self._close_telesto(relay, wait=wait)
-        # Free a queue slot for the writer stop sentinel.
         try:
             wq.put_nowait(_STOP)
         except queue.Full:
@@ -464,8 +425,7 @@ class TriggernometryBridge(QObject):
             except (queue.Empty, queue.Full):
                 pass
         if proc is not None:
-            # Signal the process group before returning because the parent may exit
-            # before a background reaper runs.
+            # Signal the group now because the parent may exit before the background reaper.
             self._signal_group(proc, graceful=True)
             if wait:
                 self._reap(proc)
@@ -504,7 +464,6 @@ class TriggernometryBridge(QObject):
     @classmethod
     def _reap(cls, proc: subprocess.Popen) -> None:
         """Allow the sidecar to exit, then kill any surviving group members."""
-        # Serialize cleanup shared by the reader and explicit stop.
         lock = proc.__dict__.setdefault("_nyaa_reap_lock", threading.Lock())
         with lock:
             if getattr(proc, "_nyaa_reaped", False):
@@ -518,7 +477,6 @@ class TriggernometryBridge(QObject):
                 else:
                     if os.name != "posix":
                         return
-                    # Check child processes as well as the Xvfb wrapper.
                     while time.monotonic() < deadline:
                         try:
                             os.killpg(proc.pid, 0)
@@ -537,7 +495,6 @@ class TriggernometryBridge(QObject):
 
 
     def _enqueue(self, obj: dict) -> None:
-        """Queue a JSON message without blocking the caller."""
         if not self._active:
             return
         try:
@@ -554,15 +511,12 @@ class TriggernometryBridge(QObject):
                 self.feed_overflow.emit(generation)
 
     def feed_log(self, line: str) -> None:
-        """Queue a raw log line from the GUI thread without blocking."""
         if not self._active or not line:
             return
         # The host also derives zone changes from raw zone lines.
         self._enqueue({"t": "log", "line": line})
 
     def feed_combatants(self, payload: dict) -> None:
-        """Forward actor snapshots for identity, position, HP and party script variables.
-        """
         if not self._active or not isinstance(payload, dict):
             return
         self._enqueue({"t": "combatants", "me": payload.get("me", 0), "list": payload.get("list", [])})
@@ -678,7 +632,6 @@ class TriggernometryBridge(QObject):
         for r in rules:
             if not r.get("enabled", True):
                 continue
-            # Normalize edited replacement rules before dispatch.
             find = r.get("find") or ""
             if not isinstance(find, str):
                 find = str(find)
@@ -691,15 +644,13 @@ class TriggernometryBridge(QObject):
             rx = compile_user_regex(pat, re.IGNORECASE)
             if rx is None:
                 continue
-            # Bound regex substitution and preserve the callout if the replacement is
-            # invalid.
+            # Preserve callouts when bounded regex substitution fails.
             out = _safe_sub(rx, repl, out)
         return out.strip()
 
     def _dispatch(self, msg: dict, gen: "int | None" = None) -> None:
         kind = msg.get("t")
-        # Reject output from old generations before dispatch and again in queued UI
-        # slots.
+        # Reject old generations here and again in queued UI slots.
         if kind in ("callout", "sound", "status", "inventory") and not self._gen_live(gen):
             return
         if kind == "callout":
@@ -715,7 +666,6 @@ class TriggernometryBridge(QObject):
         elif kind == "sound":
             f = msg.get("file") or ""
             if f:
-                # Resolve relative pack sounds against the pack directory.
                 if not os.path.isabs(f):
                     f = str(_packs_dir() / f)
                 try:

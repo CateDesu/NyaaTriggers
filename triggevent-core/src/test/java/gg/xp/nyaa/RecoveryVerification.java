@@ -253,7 +253,6 @@ public final class RecoveryVerification {
             setting.set(delay);
         }
         catch (RuntimeException ignored) {
-            // The verification engine keeps settings in memory.
         }
         check(setting.get() == delay, "Command delay did not change");
     }
@@ -286,8 +285,7 @@ public final class RecoveryVerification {
         dist.registerHandler(RawModifiedCallout.class, (c, e) -> calls.add(e.getDescription()));
         dist.registerHandler(SequentialTriggerFailedEvent.class, (c, e) -> failures.add(e.toString()));
         Instant boundary = ZonedDateTime.parse(lines.get(cut).split("\\|")[1]).toInstant();
-        // Keep the synthetic live boundary ahead of the test process timeout so
-        // slow history loading cannot make the first live callouts stale.
+        // Leave time for slow history loading so the first live callouts are not stale.
         Duration shift = Duration.between(boundary, Instant.now().plusSeconds(120));
         System.out.println("TIME_SHIFT " + shift.toMillis());
         var calloutId = TriggeventCore.class.getDeclaredMethod("calloutId", CalloutEvent.class);

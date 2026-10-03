@@ -1,5 +1,3 @@
-"""Keep automarker actor slots stable when Telesto returns a malformed roster."""
-
 import unittest
 
 from nyaatriggers.telesto_client import TelestoClient

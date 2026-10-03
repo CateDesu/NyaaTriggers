@@ -1,6 +1,3 @@
-"""Match triggers against log lines and expand captured fields without Qt dependencies.
-"""
-
 import functools
 import math
 import re
@@ -10,8 +7,7 @@ from dataclasses import dataclass, field
 
 from nyaatriggers.drop_log import log_drop
 
-# User patterns require the timeout capable regex engine. The standard library has no
-# bounded fallback.
+# User patterns need bounded matching, which the standard library cannot provide.
 try:
     import regex as _regex_mod
     _HAVE_REGEX = True
@@ -19,7 +15,6 @@ except ImportError:  # pragma: no cover - optional dependency
     _regex_mod = None
     _HAVE_REGEX = False
 
-# Maximum time for one regex operation.
 _MATCH_TIMEOUT = 0.5
 
 # Ability and status lines store IDs and actors in different columns.
@@ -56,13 +51,11 @@ _DURATION_IDX: dict[str, int] = {"26": 4}
 _COUNT_IDX: dict[str, int] = {"26": 9, "30": 9}
 
 
-# Reject oversized or deeply nested patterns before compilation.
 _MAX_PATTERN_LEN = 512
 _MAX_REPEAT_COST = 8192
 
 
 def _regex_resource_limit(pattern: str) -> bool:
-    """Bound numeric repeats before compiling a pattern."""
     if len(pattern) > _MAX_PATTERN_LEN:
         return True
     # Count repeats individually so a literal # cannot hide them.
@@ -84,9 +77,6 @@ def _regex_resource_limit(pattern: str) -> bool:
 
 
 def _looks_catastrophic(pattern: str) -> bool:
-    """Reject likely excessive nested repetition before compilation. Matching also has a
-    timeout.
-    """
     if re.search(r"\([^()]*[*+][^()]*\)\s*[*+{]", pattern):
         return True
     return _has_nested_unbounded(pattern)
@@ -104,7 +94,6 @@ def _has_nested_unbounded(pattern: str) -> bool:
                 return (m.group(2) is not None and m.group(3) == ""), i + m.end()
         return False, i
 
-    # Track quantifiers inside each group.
     contains = [False]
     i, n = 0, len(pattern)
     while i < n:
@@ -126,12 +115,11 @@ def _has_nested_unbounded(pattern: str) -> bool:
             i += 1
         elif c == ")":
             if len(contains) < 2:
-                return False        # Leave syntax errors to the compiler.
+                return False
             inner = contains.pop()
             unbounded, i = _outer_quant_unbounded(i + 1)
             if unbounded and inner:
                 return True
-            # Include a group quantifier in its parent count.
             contains[-1] |= inner or unbounded
         elif c in "*+":
             contains[-1] = True
@@ -163,7 +151,6 @@ def compile_user_regex(pattern: str, flags: int = 0):
 
 
 def _is_regex_mod_pattern(rx) -> bool:
-    """Select timeout arguments for the compiled pattern type."""
     return _HAVE_REGEX and isinstance(rx, _regex_mod.Pattern)
 
 
@@ -215,12 +202,10 @@ def _safe_sub(rx, repl, text):
 
 @functools.lru_cache(maxsize=2048)
 def _id_set(ability_id: str) -> frozenset:
-    """Match IDs as literal alternatives rather than regexes."""
     return frozenset(p.strip().upper() for p in ability_id.split("|") if p.strip())
 
 
 def cooldown_source_id(fields: list[str]) -> str:
-    """Read the caster ID from ability and status lines."""
     if not fields:
         return ""
     index = 5 if fields[0] in _STATUS_TYPES else 2
@@ -228,7 +213,6 @@ def cooldown_source_id(fields: list[str]) -> str:
 
 
 def _as_float(value, default: float) -> float:
-    """Read a finite number or return the fallback."""
     if value is None or value == "":
         return default
     try:
@@ -239,7 +223,6 @@ def _as_float(value, default: float) -> float:
 
 
 def _as_int(value, default: int) -> int:
-    """Read an integer from a numeric value or string."""
     if value is None or value == "":
         return default
     try:
@@ -253,7 +236,6 @@ def _as_int(value, default: int) -> int:
 
 
 def _str_or(value, default: str) -> str:
-    """Convert scalar configuration values to text."""
     if isinstance(value, str):
         return value or default
     if isinstance(value, (int, float, bool)):
@@ -262,7 +244,6 @@ def _str_or(value, default: str) -> str:
 
 
 def _as_bool(value, default: bool) -> bool:
-    """Read booleans without treating the string false as true."""
     if isinstance(value, bool):
         return value
     if value is None:
@@ -348,11 +329,9 @@ class Trigger:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Trigger":
-        # Coerce edited configuration values without failing startup.
         seq = d.get("sequence")
         if not isinstance(seq, list):
             seq = []
-        # Normalize log type spacing and default to 20 for stable round trips.
         log_type = _str_or(d.get("log_type"), "20").strip() or "20"
         parts = {p.strip() for p in log_type.split("|") if p.strip()}
         ability_id = _str_or(d.get("ability_id"), "")
@@ -364,8 +343,7 @@ class Trigger:
                      f"{_str_or(d.get('name'), '?')!r} now matches on type alone")
         warn = _as_float(d.get("expiry_warn_s"), 0.0)
         if "26" not in parts or not parts <= _STATUS_TYPES:
-            # Expiry needs only status types and at least one gain type. Mixed ability
-            # types must keep their normal match behavior.
+            # Expiry needs status types including gain 26. Mixed ability types keep normal matching.
             warn = 0.0
         return cls(
             id=_str_or(d.get("id"), str(uuid.uuid4())),
@@ -387,7 +365,6 @@ class Trigger:
             duration_max=_as_float(d.get("duration_max"), 0.0),
             count_min=_as_int(d.get("count_min"), 0),
             count_max=_as_int(d.get("count_max"), 0),
-            # Use self scope if the saved value is invalid.
             status_scope=(d.get("status_scope")
                           if d.get("status_scope") in ("self", "by_me", "any")
                           else "self"),
@@ -399,11 +376,9 @@ class Trigger:
         return "*" if self.cooldown_scope == "trigger" else source_id.upper()
 
     def matches(self, fields: list[str], me: str = "", me_id: str = "") -> dict | None:
-        """Match a log line using the current player for personal scope."""
         if not self.enabled or not fields:
             return None
-        # Select fields using the actual incoming type when the trigger has
-        # alternatives.
+        # Use the incoming type's field layout when the trigger has alternatives.
         lt = self.log_type
         if "|" in lt:
             if fields[0] not in (p.strip() for p in lt.split("|")):
@@ -413,7 +388,6 @@ class Trigger:
             return None
 
         if self.ability_id:
-            # Match literal hexadecimal alternatives without case sensitivity.
             id_idx = _ID_IDX.get(lt, 4)
             if len(fields) <= id_idx:
                 return None
@@ -450,7 +424,6 @@ class Trigger:
                       or fields[idx].casefold() != me.casefold()):
                     return None
 
-        # Check duration before consuming the cooldown.
         dur_idx = _DURATION_IDX.get(lt)
         if dur_idx is not None and (self.duration_min > 0 or self.duration_max > 0):
             if len(fields) <= dur_idx:
@@ -459,7 +432,6 @@ class Trigger:
                 dur = float(fields[dur_idx])
             except ValueError:
                 return None
-            # Reject nonfinite durations.
             if not math.isfinite(dur):
                 return None
             if dur < self.duration_min:
@@ -480,8 +452,7 @@ class Trigger:
             if self.count_max > 0 and cnt > self.count_max:
                 return None
 
-        # Expiry gains and losses bypass cooldown so they can reset timers. Timer
-        # firing applies the shared reminder cooldown.
+        # Expiry events bypass cooldown to refresh timers. Firing applies the reminder cooldown.
         if not (self.expiry_warn_s > 0 and lt in _STATUS_TYPES):
             source_id = self.cooldown_key(cooldown_source_id(fields))
             now = time.monotonic()
@@ -490,14 +461,12 @@ class Trigger:
                 log_drop("cooldown", f"{self.name!r} suppressed ({self.cooldown_s:g}s cooldown, src {source_id})")
                 return None
             self._last_fired[source_id] = now
-            # Discard expired cooldown entries.
             if len(self._last_fired) > 256:
                 cutoff = now - max(self.cooldown_s, 1.0)
                 self._last_fired = {k: v for k, v in self._last_fired.items()
                                     if v >= cutoff}
         src_idx = _SOURCE_IDX.get(lt, 3)
         tgt_idx = _TARGET_IDX.get(lt, 7)
-        # Convert hexadecimal counts to decimal for substitutions.
         count_str = ""
         if cnt_idx is not None and len(fields) > cnt_idx:
             try:

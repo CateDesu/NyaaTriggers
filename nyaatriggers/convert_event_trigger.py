@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Convert static Java callouts to local JSON, translating supported source and target
-tokens. Run python3 -m nyaatriggers.convert_event_trigger with the engine checkout path
-and an optional output file.
-"""
+"""Convert static Java callouts to local JSON with source and target substitutions."""
 
 import json
 import os
@@ -13,12 +10,10 @@ from pathlib import Path
 
 from nyaatriggers.paths import bundle_root
 
-# Share a fixed UUID namespace across converters so repeated imports preserve trigger
-# IDs.
+# A shared UUID namespace preserves IDs across repeated imports.
 _ID_NS = uuid.UUID('c6a2b8e4-9d31-4f75-a0b8-5e2c7d94f1a6')
 
-# Map CalloutRepo names to fight tags. Empty mappings are deliberately skipped. Unknown
-# names produce a warning.
+# Empty repository mappings are deliberately skipped.
 REPO_TO_FIGHT: dict[str, str] = {
     # DT ultimate
     "DMU Triggers":          "UMAD",
@@ -65,11 +60,7 @@ REPO_TO_FIGHT: dict[str, str] = {
 
 
 def parse_hex_ids(annotation_body: str) -> list[str]:
-    """Extract uppercase hex IDs from annotation values, accepting decimal and hexadecimal
-    tokens. Ignore named tuning parameters and IDs outside the supported three to six
-    digit range.
-    """
-    # Parse each value separately to preserve mixed decimal and hexadecimal IDs.
+    """Extract three to six digit hex IDs from decimal or hex tokens. Ignore named parameters."""
     value = re.search(r'\bvalue\s*=\s*(\{[^}]*\}|[^,]+)', annotation_body)
     body = value.group(1) if value else annotation_body
     body = body.strip()
@@ -92,18 +83,13 @@ def parse_hex_ids(annotation_body: str) -> list[str]:
 
 
 def map_event_tokens(s: str) -> str:
-    """Translate event source and target tokens to local substitutions without case
-    sensitivity.
-    """
     s = re.sub(r'\{event\.(?i:target)(?:\.[\w.]+)?\}', '{target}', s)
     s = re.sub(r'\{event\.(?i:source)(?:\.[\w.]+)?\}', '{source}', s)
     return s
 
 
 def normalize_callout(s: str) -> str:
-    """Convert sequence arrows to spoken pauses and remove unsupported dynamic tokens.
-    Preserve source and target substitutions.
-    """
+    """Turn sequence arrows into pauses and keep only supported dynamic tokens."""
     s = re.sub(r'\\[ntr]', ' ', s)
     s = s.replace('\\', '')
     s = re.sub(r'\s*=+>\s*', ', then ', s)
@@ -141,9 +127,7 @@ def convert_file(java_path: Path) -> list[dict]:
     results: list[dict] = []
     seen: set[tuple] = set()
 
-    # Match the callout annotation and its field declaration, allowing intervening
-    # comments and annotations. Accept factory calls, explicit type arguments and
-    # constructors. String captures preserve Java escapes.
+    # Allow comments and annotations between callout annotations and field declarations.
     pattern = re.compile(
         # Anchor annotations to the line so commented declarations are skipped.
         r'(?m)^[ \t]*@NpcCastCallout\(([^)]+)\)'
@@ -156,14 +140,11 @@ def convert_file(java_path: Path) -> list[dict]:
     )
 
     def _unescape(s: str) -> str:
-        # Decode quotes and backslashes here. Leave whitespace escapes for
-        # normalize_callout.
         return re.sub(r'\\(["\\])', r'\1', s)
 
     for match in pattern.finditer(text):
         annotation_body = match.group(1)
-        # Translate supported event tokens first. Remaining dynamic tokens require the
-        # sidecar.
+        # Remaining dynamic tokens require the sidecar.
         raw_tts = map_event_tokens(_unescape(match.group(3)))
         if re.search(r'\{(?!source\}|target\})[^{}]*\}', raw_tts):
             continue
@@ -180,15 +161,13 @@ def convert_file(java_path: Path) -> list[dict]:
         # Compare individual IDs so overlapping alternatives cannot duplicate callouts.
         keys = _dedup_keys("20", ability_id)
         if seen & keys:
-            # Report duplicate callouts dropped during conversion.
             print(f'  WARN: {java_path.name}: duplicate callout for '
                   f'{fight_tag} ability {ability_id}, dropped', file=sys.stderr)
             continue
         seen |= keys
 
         results.append({
-            # Include the repository name because multiple repositories can share a
-            # fight tag.
+            # Multiple repositories can share a fight tag.
             "id":            str(uuid.uuid5(_ID_NS, '\n'.join((repo_name, ability_id, fight_tag)))),
             "name":          f"{fight_tag} - {label}",
             "fight":         fight_tag,
@@ -207,9 +186,6 @@ EXISTING_JSON = bundle_root() / 'assets' / 'triggers.json'
 
 
 def _dedup_keys(log_type: str, ability_id: str) -> set[tuple[str, str]]:
-    """Expand ability ID alternatives for deduplication. Keep log_type whole because
-    shipped alternatives use a single type.
-    """
     ids = [p.strip().upper() for p in str(ability_id).split('|') if p.strip()]
     return {(str(log_type), aid) for aid in ids}
 
@@ -259,7 +235,6 @@ def main() -> None:
 
     print(f'\nTotal: {len(all_triggers)} triggers', file=sys.stderr)
 
-    # Report overlaps with the shipped database before merging.
     shipped = EXISTING_JSON
     if shipped.is_file():
         existing_keys: set[tuple] = set()
@@ -285,12 +260,10 @@ def main() -> None:
     out = json.dumps(all_triggers, indent=2)
     if out_path:
         if not all_triggers:
-            # Keep the previous output when extraction produces no triggers.
             print(f'ERROR: 0 triggers extracted, refusing to overwrite {out_path}',
                   file=sys.stderr)
             sys.exit(1)
-        # Replace through a sibling temporary file to preserve the previous output if
-        # interrupted.
+        # A sibling temporary file preserves the previous output if interrupted.
         tmp_path = out_path.with_name(out_path.name + '.tmp')
         tmp_path.write_text(out, encoding='utf-8')
         os.replace(tmp_path, out_path)

@@ -1,12 +1,9 @@
-// Expose IINACT combatants through the plugin members Triggernometry reflects.
-// DataRepository supplies player and combatant data, and DataSubscription supplies zone
-// changes. Member names and types must match the engine's dynamic access.
+// Expose IINACT data using member names and types required by engine reflection.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using Triggernometry;
 
-// Match the combatant member names and types used by BridgeFFXIV dynamic access.
 public sealed class FakeCombatant
 {
     public string Name { get; set; } = "";
@@ -90,14 +87,11 @@ public static class CombatantBridge
 
     public static void RaiseZoneChanged(uint zoneId, string zoneName)
     {
-        // Update the static zone too because the first zone event may arrive before the
-        // worker subscribes.
+        // The first zone event may arrive before the worker subscribes.
         Triggernometry.PluginBridges.BridgeFFXIV.ZoneID = zoneId;
         _fake.DataSubscription.RaiseZoneChanged(zoneId, zoneName);
     }
 
-    // Keep the bridge available with an empty snapshot. Player lookup then returns
-    // null.
     public static RealPlugin.PluginWrapper Instance() =>
         new RealPlugin.PluginWrapper { pluginObj = _fake, state = 1, fileversion = "0.0.0.0", expectedversion = "0.0.0.0" };
 }

@@ -30,11 +30,11 @@ triggers.custom.backup.json
 triggers.local.json.bak
 triggers.json.bak
 
-# Build artifacts (fetched/generated at release time, bundled, never committed)
+# Generated release assets
 jre/
 triggevent_inventory.seed.json
 
-# Self-update runtime leftovers (created in the install dir, not the source tree)
+# Update runtime leftovers
 .nyaa-boot-ok
 *.nyaa-old
 .nyaa-version-x
@@ -43,9 +43,8 @@ triggevent_inventory.seed.json
 .nyaa-linux-update*
 .nyaa-timeline-backups/
 
-# Local scratch (agent handoff/audit notes, plans) - never committed
+# Local scratch and audit notes
 local/
 latest_release.json
 
-# Local agent instructions
 AGENTS.md

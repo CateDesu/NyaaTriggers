@@ -1,5 +1,3 @@
-"""Settings persistence, language controls and player identity for MainWindow."""
-
 from pathlib import Path
 import json
 import os
@@ -37,26 +35,21 @@ class SettingsTabMixin:
                 self._settings = {}
                 bad = bad or "not a settings object"
             if bad:
-                # Keep rotated recovery copies of unreadable settings and warn before
-                # defaults can be saved.
+                # Preserve unreadable settings before defaults can overwrite them.
                 backup = _next_bad_name(ac._SETTINGS_FILE)
                 try:
                     shutil.copy2(ac._SETTINGS_FILE, backup)
                 except OSError:
                     backup = None
                     self._settings_backup_pending = True
-                # Show the warning after applying the language loaded from these
-                # settings.
+                # Apply the saved language before displaying warnings.
                 self._settings_load_warning = (bad, backup)
-            # Preserve enabled local triggers for older settings that predate the
-            # switch.
+            # Older settings predate the local trigger switch.
             if self._settings and "local_enabled" not in self._settings:
                 self._settings["local_enabled"] = True
-            # Replace the removed sound selection with a working default.
             if self._settings.get("overlay_sound_file") == "__egg_sound__":
                 self._settings["overlay_sound_file"] = "ding.wav"
-            # Migrate only the old localhost default to IPv4 because OverlayPlugin does
-            # not listen on IPv6.
+            # Migrate only the old localhost default. OverlayPlugin does not listen on IPv6.
             if self._settings.get("ws_url") == "ws://localhost:10501/ws":
                 self._settings["ws_url"] = "ws://127.0.0.1:10501/ws"
             for key in ("triggers_enabled", "triggevent_enabled", "update_channel"):
@@ -77,11 +70,9 @@ class SettingsTabMixin:
             return False
 
     def _save_settings_debounced(self) -> None:
-        """Combine rapid settings edits into one save."""
         self._settings_save_timer.start()
 
     def _warn_save_failed(self, what: str, exc: Exception) -> None:
-        """Report the first failed save in a session."""
         print(f"[NyaaTriggers] could not save {what}: {exc}", file=sys.stderr)
         if self._save_warned:
             return
@@ -101,7 +92,6 @@ class SettingsTabMixin:
             'github.com/CateDesu/NyaaTriggers-Overlay</a>')
         repo_lbl.setOpenExternalLinks(True)
         layout.addWidget(repo_lbl)
-        # Support a second game client using another overlay port.
         port_row = QHBoxLayout()
         port_row.addWidget(QLabel(_("Port:")))
         saved_port = parse_port(self._settings.get("plugin_port"))
@@ -125,8 +115,6 @@ class SettingsTabMixin:
         layout.addWidget(lbl)
 
     def _set_me_name(self, name: str) -> None:
-        """Save the player name and update its field from either the feed or manual edits.
-        """
         name = name.strip()
         self._me_name = name
         self._settings["char_name"] = name
@@ -142,7 +130,7 @@ class SettingsTabMixin:
         if lang == self._settings.get("ui_language", "auto"):
             return
         self._settings["ui_language"] = lang
-        self._save_settings()                   # Save before restarting.
+        self._save_settings()
         if ac.QMessageBox.question(
                 self, _("Restart NyaaTriggers"),
                 _("The interface language changed. Restart NyaaTriggers now to apply it?"),
@@ -150,8 +138,7 @@ class SettingsTabMixin:
             self._restart_for_update()
 
     def _save_raw_log(self) -> None:
-        """Export the complete captured feed, including lines hidden by display filters.
-        """
+        """Export the captured feed, including lines hidden by filters."""
         lines = list(self._raw_capture)
         if not lines:
             ac.QMessageBox.information(
@@ -166,8 +153,7 @@ class SettingsTabMixin:
             return
         path = dlg.selectedFiles()[0]
         try:
-            # Export through a sibling temporary file to preserve the previous log if
-            # interrupted.
+            # A sibling temporary file preserves the previous export if interrupted.
             dest = Path(path)
             tmp = dest.with_suffix(dest.suffix + ".tmp")
             try:
@@ -232,9 +218,7 @@ class SettingsTabMixin:
         self._ability_log.ensureCursorVisible()
 
     def _localize_text(self, text: str) -> str:
-        """Translate engine callouts by exact text, then tokenized phrase patterns.
-        Preserve unmatched text and respect the localization switch.
-        """
+        """Translate exact text, then tokenized templates, preserving unmatched text."""
         if not text or not self._settings.get("callouts_localized", active_locale() == "ja"):
             return text
         ja = self._callouts_phrases_ja.get(text)
@@ -247,9 +231,7 @@ class SettingsTabMixin:
         return text
 
     def _reading_for(self, text: str) -> str:
-        """Return a kana reading for Japanese speech, preserving text without a known
-        reading.
-        """
+        """Return the kana reading, or the original text if unknown."""
         reading = self._callouts_readings.get(text)
         if reading:
             return reading
@@ -260,9 +242,7 @@ class SettingsTabMixin:
         return text
 
     def _localized_name(self, t: Trigger) -> str:
-        """Translate a trigger name for display using its ID, then its current wording.
-        Preserve names without a translation.
-        """
+        """Translate by trigger ID, then wording, or keep the original name."""
         if not self._settings.get("callouts_localized", active_locale() == "ja"):
             return t.name
         return (self._callouts_names_ja.get(t.id)
@@ -270,7 +250,6 @@ class SettingsTabMixin:
                 or t.name)
 
     def _flush_pending_settings_save(self) -> None:
-        """Flush pending settings before the process exits."""
         if self._settings_save_timer.isActive() or getattr(self, "_settings_save_failed", False):
             self._settings_save_timer.stop()
             self._save_settings()

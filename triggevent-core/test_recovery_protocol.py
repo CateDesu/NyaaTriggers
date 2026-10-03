@@ -1,5 +1,3 @@
-"""Exercise slow history loading through the real bridge and stdin protocol."""
-
 from datetime import datetime, timedelta, timezone
 import json
 import os

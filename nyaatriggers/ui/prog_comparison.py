@@ -1,5 +1,3 @@
-"""Phase progress and comparisons between saved sessions in one duty."""
-
 from datetime import datetime
 
 from PyQt6.QtCore import Qt

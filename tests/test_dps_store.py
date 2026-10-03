@@ -1,4 +1,3 @@
-"""DPS log rotation and retention in temporary directories."""
 import json
 import os
 import sys
@@ -45,7 +44,6 @@ def at(sec):
     return BASE + timedelta(seconds=sec)
 
 
-# basic layout: one active log, fights mixed inside
 with tempfile.TemporaryDirectory() as tmp:
     d = Path(tmp) / "logs"
     p1 = dps_store.write_pull(d, pull("Everkeep"), when=at(0))
@@ -59,14 +57,12 @@ with tempfile.TemporaryDirectory() as tmp:
     check("unicode title round-trips",
           titles_in(p1)[-1] == "極ゼロムス討滅戦")
 
-# roll-over and retention, with small patched caps
 saved = (dps_store.MAX_PULLS_PER_LOG, dps_store.MAX_FIGHTS_PER_LOG,
          dps_store.MAX_LOGS)
 dps_store.MAX_PULLS_PER_LOG = 3
 dps_store.MAX_FIGHTS_PER_LOG = 2
 dps_store.MAX_LOGS = 3
 try:
-    # Pull cap: a log fills at 3 pulls of the same fight, then rolls.
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp) / "logs"
         for i in range(3):
@@ -80,8 +76,6 @@ try:
         check("the new log starts the fight over",
               titles_in(files[1]) == ["Everkeep"])
 
-        # Fight cap on the fresh log: 2 distinct fights fit, the 3rd rolls,
-        # and a roll in the same second still gets an ordered name.
         dps_store.write_pull(d, pull("The Voidcast Dais"), when=at(3))
         check("second fight joins the active log",
               titles_in(files[1]) == ["Everkeep", "The Voidcast Dais"])
@@ -93,10 +87,8 @@ try:
         check("the rolled log holds the new fight",
               titles_in(rolled) == ["Everkeep EX"])
 
-    # Retention: only 3 full logs survive. The active one never counts.
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp) / "logs"
-        # Ten one-pull fights: with cap 2 per log this fills 5 logs.
         for i in range(10):
             dps_store.write_pull(d, pull(f"Fight {i:02d}"), when=at(i))
         files = logs_in(d)
@@ -114,7 +106,6 @@ finally:
     (dps_store.MAX_PULLS_PER_LOG, dps_store.MAX_FIGHTS_PER_LOG,
      dps_store.MAX_LOGS) = saved
 
-# robustness: corrupt lines, foreign files, under-cap no-op
 with tempfile.TemporaryDirectory() as tmp:
     d = Path(tmp) / "logs"
     d.mkdir(parents=True)
@@ -132,11 +123,10 @@ with tempfile.TemporaryDirectory() as tmp:
     check("under-cap retention is a no-op",
           p.read_text(encoding="utf-8") == before)
 
-# a pre-existing 0644 log is tightened to owner-only on the next write
 with tempfile.TemporaryDirectory() as tmp:
     d = Path(tmp) / "logs"
     p = dps_store.write_pull(d, pull("Everkeep"), when=at(7200))
-    os.chmod(p, 0o644)   # a restored backup or a pre-hardening file
+    os.chmod(p, 0o644)
     dps_store.write_pull(d, pull("Everkeep"), when=at(7201))
     check("0644 log tightened to 0600 on append",
           (p.stat().st_mode & 0o777) == 0o600)

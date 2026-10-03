@@ -1,5 +1,3 @@
-"""Closed windows and update handoffs cannot keep emitting timeline cues."""
-
 import unittest
 from unittest.mock import patch
 

@@ -1,5 +1,3 @@
-"""Read the engine revision shipped inside a jar or an older local build stamp."""
-
 import json
 from pathlib import Path
 import re

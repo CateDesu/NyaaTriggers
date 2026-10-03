@@ -1,5 +1,3 @@
-"""Death selection and the observed events leading up to it."""
-
 from datetime import datetime
 from pathlib import Path
 import time

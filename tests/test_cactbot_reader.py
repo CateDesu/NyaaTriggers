@@ -1,4 +1,3 @@
-"""Cactbot relay payload validation and diagnostic routing."""
 import json
 import os
 import sys
@@ -38,7 +37,6 @@ check("string say text still lands", spoken == ["Spread"])
 r._on_message("popup", json.dumps({"text": None}))
 check("null text is dropped", callouts == [("Tank buster", "alert")])
 
-# non subscribe status dicts go to the drop log, not stderr
 from nyaatriggers import cactbot_reader
 
 drops = []

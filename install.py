@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""Install the CC0 en_US-arctic-medium voice and piper-tts environment before launching
-NyaaTriggers. Run with python install.py.
-"""
 
 import contextlib
 import errno
@@ -42,18 +39,14 @@ VOICE_ONNX_SHA256 = (
     "483303e294947a3ec2f910ea96093d876e1640f5772e9d89e511d6c82c667286"
 )
 
-# Limit download size even when Content-Length is missing or incorrect.
 _MAX_DOWNLOAD_BYTES = 1 << 30
-# Enforce stall and total deadlines outside the read because socket timeouts reset on
-# each received byte.
+# Socket timeouts reset on every byte, so enforce total and stall deadlines separately.
 _READ_STALL_S = 60
 _DOWNLOAD_DEADLINE_S = 3600
 
 
 def _unblock_reader(resp) -> None:
-    """Try to shut down the socket without waiting for the reader to release its buffer
-    lock.
-    """
+    """Wake the reader without waiting for its buffer lock."""
     try:
         resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
     except Exception:  # noqa: BLE001
@@ -69,7 +62,6 @@ def _sha256(path: Path) -> str:
 
 
 def _voice_model_ok(path: Path) -> bool:
-    """Check an existing model against the pinned checksum before reusing it."""
     try:
         return path.exists() and _sha256(path) == VOICE_ONNX_SHA256
     except OSError:
@@ -169,8 +161,7 @@ def run_setup_command(args: list[str], timeout: int, *, capture_output=False, en
 
 def download_voice() -> None:
     VOICES_DIR.mkdir(exist_ok=True)
-    # Remove abandoned partial downloads. The age limit preserves other running
-    # installers' files.
+    # Preserve recent partial files that another installer may be writing.
     for stale in VOICES_DIR.glob(f"{VOICE_STEM}.*.part"):
         try:
             if stale.stat().st_mtime < time.time() - 3600:
@@ -202,7 +193,6 @@ def download_voice() -> None:
         if dest.exists():
             valid = _voice_model_ok(dest) if ext == ".onnx" else voice_config_ok(dest)
             if valid:
-                # Fetch only missing files. Verify an existing model before reusing it.
                 print(f"Already present: {dest}")
                 continue
             if ext == ".onnx":
@@ -212,7 +202,6 @@ def download_voice() -> None:
         print(f"Downloading {VOICE_STEM}{ext} {label} ...")
         print(f"  Source: {url}")
         last_pct[0] = -1
-        # Write to a temporary file unique to this process and rename after completion.
         part = dest.with_name(f"{dest.name}.{os.getpid()}.part")
         deadline = time.monotonic() + _DOWNLOAD_DEADLINE_S
         try:
@@ -222,7 +211,6 @@ def download_voice() -> None:
                     total = int(resp.headers.get("Content-Length", 0) or 0)
                 except ValueError:
                     total = 0
-                # Read in a helper so the caller can enforce both deadlines.
                 done = threading.Event()
                 progress = [0]
                 reader_error = [None]
@@ -251,10 +239,7 @@ def download_voice() -> None:
                 while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
                     now = time.monotonic()
                     if progress[0] == last_seen or now > deadline:
-                        # Shut down the socket to wake the reader without waiting for
-                        # its read lock.
                         _unblock_reader(resp)
-                        # Report a stall only after the full quiet window has elapsed.
                         if now - last_change >= _READ_STALL_S:
                             raise OSError(
                                 f"download stalled, no new bytes for {_READ_STALL_S} seconds: {url}")
@@ -265,8 +250,7 @@ def download_voice() -> None:
                 if reader_error[0]:
                     raise reader_error[0]
                 got = progress[0]
-            # A connection can close early without raising, so check the expected
-            # length.
+            # Early connection closure may not raise an error.
             if total and got < total:
                 raise OSError(
                     f"Download incomplete: received {got} of {total} bytes")
@@ -290,7 +274,6 @@ def download_voice() -> None:
         print(f"  Saved to {dest}")
 
 
-# Serialize environment creation and pip installation across program instances.
 _SETUP_LOCK = VENV_DIR.parent / "ffxiv.setup.lock"
 _SETUP_LOCK_S = 900
 _SETUP_WAIT_S = 900
@@ -473,7 +456,7 @@ def _start_voice_repair(directory: Path, backup: Path, version=None) -> None:
 
 
 def prepare_voice_venv(directory: Path, run=None) -> None:
-    """Repair interpreter upgrades while holding setup_lock. Preserve the old environment."""
+    """Repair interpreter upgrades under setup_lock while preserving the old environment."""
     directory = Path(directory)
     run = run or _run
     incomplete = _voice_install_marker(directory).exists()

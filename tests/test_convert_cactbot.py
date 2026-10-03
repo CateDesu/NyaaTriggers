@@ -1,4 +1,3 @@
-"""Cactbot parsing, callout extraction and stable conversion."""
 import os
 import re
 import sys
@@ -25,7 +24,6 @@ def check(name, cond):
         FAILS.append(name)
 
 
-# the plain block form is unchanged
 check("plain block form ids",
       parse_netregex_ids("netRegex: { id: '8B5F', capture: false },")
       == ["8B5F"])
@@ -33,7 +31,6 @@ check("plain find_sub_block unchanged",
       find_sub_block("x netRegex: { id: '8B5F' }, y", "netRegex")
       == "{ id: '8B5F' }")
 
-# the call form feeds the object inside the parens to the same path
 check("call form scalar id",
       parse_netregex_ids(
           "netRegex: NetRegex.ability({ id: '8B5F', capture: false }),")
@@ -60,7 +57,6 @@ check("call form without ids returns []",
 check("no netRegex returns []",
       parse_netregex_ids("{ id: '8B5F' }") == [])
 
-# end to end: a call-form trigger survives convert_file
 FIXTURE = """\
 const triggerSet = {
   triggers: [
@@ -95,7 +91,6 @@ if len(res) == 2:
     check("plain form trigger still converts",
           res[1]["ability_id"] == "8B60" and res[1]["log_type"] == "20")
 
-# disabled: true triggers skip, disabled: false still converts
 FIXTURE = """\
 const triggerSet = {
   triggers: [
@@ -128,7 +123,6 @@ if len(res) == 1:
           res[0]["name"] == "Test Explicitly Enabled"
           and res[0]["ability_id"] == "8B62")
 
-# output key lookup: a short key must not match inside a longer one
 check("object form: text does not resolve to context",
       resolve_output_key(
           "text",
@@ -169,7 +163,6 @@ with tempfile.TemporaryDirectory() as td:
 check("context defined before text still ships the text callout",
       len(res) == 1 and res[0]["tts_text"] == "Look away")
 
-# a regex literal with an unbalanced brace must not corrupt extraction
 FIXTURE = """\
 const triggerSet = {
   triggers: [
@@ -211,7 +204,6 @@ check("neighbors of a regex-literal trigger still convert",
       and res[0]["name"] == "Test After Regex One"
       and res[1]["name"] == "Test After Regex Two")
 
-# JS string escapes: \uXXXX and \xXX resolve to their char
 check("unicode escape resolves", _unescape_js(r"Don\u2019t") == "Don\u2019t")
 check("hex escape resolves", _unescape_js(r"a\x41b") == "aAb")
 check("single char escapes still work",
@@ -225,7 +217,6 @@ check("escaped backslash then a real unicode escape",
 check("astral pair still recombines",
       _unescape_js(r"\uD83D\uDE00") == "\U0001F600")
 
-# trigger name: a nested netRegex id must not name the trigger
 FIXTURE = """\
 const triggerSet = {
   triggers: [
@@ -264,7 +255,6 @@ if len(res) == 1:
     check("id-first trigger keeps its name and the nested id as ability",
           res[0]["name"] == "Own Id Leads" and res[0]["ability_id"] == "8B66")
 
-# RESPONSES map: real cactbot names resolve, unknown names warn
 check("renamed responses use the real cactbot names",
       RESPONSES.get("goFront") == "Go Front"
       and RESPONSES.get("getInThenOut") == "In => Out"
@@ -324,7 +314,6 @@ check("unknown response name drops with a WARN naming the trigger",
       "notARealResponse" in err.getvalue()
       and "Test Unknown Response" in err.getvalue())
 
-# a non-list shipped triggers.json warns instead of crashing main
 with tempfile.TemporaryDirectory() as td:
     (Path(td) / "ui" / "raidboss" / "data").mkdir(parents=True)
     bad = Path(td) / "triggers.json"

@@ -1,5 +1,3 @@
-"""Live meter, encounter recording and FFLogs controls for MainWindow."""
-
 from datetime import datetime
 from pathlib import Path
 import math
@@ -22,7 +20,6 @@ class DpsTabMixin:
     def _init_dps(self) -> None:
         # Feed the meter independently of trigger mode.
         self._dps_meter = DpsMeter()
-        # Use the same supported timeout value in the meter and selector.
         try:
             self._dps_idle_timeout = int(self._settings.get("dps_idle_timeout", 120))
         except (TypeError, ValueError, OverflowError):
@@ -99,7 +96,6 @@ class DpsTabMixin:
 
     @staticmethod
     def _fmt_maxhit(value) -> str:
-        """Format numeric skill placeholders for display."""
         s = str(value or "")
         if "-" not in s:
             return s
@@ -126,7 +122,6 @@ class DpsTabMixin:
                 table.setItem(r, column, cell)
 
     def _populate_dps_table(self, table, snap) -> None:
-        """Display a live or recorded meter snapshot."""
         rows = sorted(snap["Combatant"].values(),
                       key=lambda c: c.get("encdps", 0.0), reverse=True)
         table.setRowCount(len(rows))
@@ -167,9 +162,7 @@ class DpsTabMixin:
         self._update_live_dps()
 
     def _on_meter_encounter_end(self, snapshot: dict) -> None:
-        """Finish encounter display and recording, preserving final values in the table and
-        starting any FFLogs lookup.
-        """
+        """Retain final encounter values and start any FFLogs lookup."""
         enc = snapshot.get("Encounter") or {}
         self._plugin_link.send_dps(
             {"t": enc["title"], "d": enc["duration"],
@@ -184,12 +177,10 @@ class DpsTabMixin:
         if self._settings.get("dps_enabled", False):
             self._write_dps_snapshot(snapshot)
         self._maybe_fetch_fflogs(title)
-        # Clear deduplication state between pulls.
         self._clear_callout_dedup()
         # Reset cooldowns because status effect IDs remain the same across pulls.
         for t in self._triggers:
             t._last_fired.clear()
-        # Keep bounded session history with the newest pull first.
         self._dps_history.insert(0, {"snapshot": snapshot,
                                      "when": datetime.now().strftime("%H:%M:%S")})
         del self._dps_history[80:]
@@ -197,9 +188,6 @@ class DpsTabMixin:
         self._refresh_dps_history_list()
 
     def _write_dps_snapshot(self, snapshot: dict) -> None:
-        """Append a finalized encounter to the rolling DPS log. dps_store manages rotation
-        and retention.
-        """
         enc = snapshot.get("Encounter") or {}
         title = (enc.get("title") or "").strip() or "Unknown"
         try:
@@ -240,8 +228,7 @@ class DpsTabMixin:
         except (OSError, ValueError, TypeError) as exc:
             ac.log_drop("dps-snapshot", f"write failed: {exc!r}")
             return
-        # Write logs outside the GUI thread and track workers so quitting can wait for
-        # pending saves.
+        # Track background writers so quitting can wait for pending saves.
         log_dir = str(self._dps_dir())
 
         def work() -> None:
@@ -268,9 +255,6 @@ class DpsTabMixin:
                 self._settings.get("fflogs_client_id"), self._settings.get("fflogs_client_secret"))
 
     def _maybe_fetch_fflogs(self, title: str) -> None:
-        """Fetch configured FFLogs comparisons in the background and deliver through
-        _fflogs_signal.
-        """
         self._fflogs_request_id = getattr(self, "_fflogs_request_id", 0) + 1
         request_id = self._fflogs_request_id
         lbl = getattr(self, "_fflogs_lbl", None)
@@ -352,8 +336,6 @@ class DpsTabMixin:
         row.addStretch(1)
         layout.addLayout(row)
 
-        # Show comparisons once credentials and server are set. Reuse the connection
-        # character name by default.
         cmp_note = QLabel(
             _("Show your FFLogs best next to the meter after a fight. Needs a "
               "personal API client from your fflogs.com profile page."))
@@ -394,7 +376,6 @@ class DpsTabMixin:
         layout.addLayout(srv_row)
 
     def _on_fflogs_credentials_changed(self) -> None:
-        """Save FFLogs fields and update comparison visibility."""
         region_raw = self._fflogs_region_edit.text().strip()
         region = region_raw.upper()
         if region != region_raw:
@@ -421,14 +402,12 @@ class DpsTabMixin:
         self._update_fflogs_visibility()
 
     def _finalize_live_encounter(self) -> None:
-        """Finalize the active encounter before quitting so recording can save it."""
         finish_activity = getattr(self, "_finish_activity", None)
         if finish_activity is not None:
             finish_activity()
         if self._dps_meter.current is not None:
             self._dps_meter.finalize("program-closed")
-        # Wait for writers under one deadline so quitting preserves the final pull
-        # without waiting indefinitely.
+        # Use one deadline for all writers to bound quit time.
         deadline = time.monotonic() + 5.0
         for worker in self._dps_write_threads:
             worker.join(timeout=max(0.0, deadline - time.monotonic()))

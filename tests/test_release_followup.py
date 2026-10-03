@@ -1,5 +1,3 @@
-"""Release recovery and error handling regressions."""
-
 import io
 import os
 from pathlib import Path

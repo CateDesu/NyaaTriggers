@@ -1,5 +1,3 @@
-"""Bounded death history from the observed combat feed."""
-
 from collections import OrderedDict, deque
 from copy import deepcopy
 import math

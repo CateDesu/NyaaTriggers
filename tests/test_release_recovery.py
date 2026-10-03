@@ -1,5 +1,3 @@
-"""Exercise update failures with real files, processes and HTTP peers."""
-
 from contextlib import ExitStack
 import io
 import json

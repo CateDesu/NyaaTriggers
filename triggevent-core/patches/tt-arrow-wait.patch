@@ -1,16 +1,5 @@
-# Tele-trouncing (P1 arrows) callout drops: the two findOrWaitForBuff waits split
-# the player's arrow buffs on a hard 8.5s initial-duration boundary, set 1 ~7s vs
-# set 2 ~10s. On some pulls one side of the split never matched, the ttSq
-# invocation burned its whole 180s budget waiting, and every TT callout after
-# the initial 'Arrows' silently vanished for the pull (verified in sidecar logs:
-# SequentialTriggerTimeoutException at DMU.java findOrWaitForBuff, exactly 180s
-# after the Arrows call, twice in one raid night). The waits now take the
-# player's two arrow buffs in any order and sort by initial duration, shorter
-# resolves first, so duration jitter cannot strand the chain. If no arrow buff
-# ever lands the trigger speaks its existing TT: Error callout and logs every
-# arrow-id buff in the state at ERROR, which distinguishes a missing 26-line
-# feed (empty list) from an isThePlayer mismatch (other players listed).
-# Against the event-trigger pin in build.sh, after dmu-crash-guards.patch. Upstream candidate.
+# Avoid stalled TT arrow waits when buff durations cross the old cutoff.
+# Apply after dmu-crash-guards.patch against the engine pin in build.sh.
 diff --git a/triggers/triggers-dt/src/main/java/gg/xp/xivsupport/triggers/ultimate/DMU.java b/triggers/triggers-dt/src/main/java/gg/xp/xivsupport/triggers/ultimate/DMU.java
 --- a/triggers/triggers-dt/src/main/java/gg/xp/xivsupport/triggers/ultimate/DMU.java
 +++ b/triggers/triggers-dt/src/main/java/gg/xp/xivsupport/triggers/ultimate/DMU.java
@@ -22,7 +11,7 @@ diff --git a/triggers/triggers-dt/src/main/java/gg/xp/xivsupport/triggers/ultima
  import gg.xp.xivsupport.events.triggers.seq.SqtTemplates;
  import gg.xp.xivsupport.events.triggers.support.NpcCastCallout;
  import gg.xp.xivsupport.events.triggers.support.PlayerStatusCallout;
-@@ -412,14 +413,31 @@
+@@ -412,14 +413,25 @@
  			AbilityCastStart.class, acs -> acs.abilityIdMatches(0xBAB9),
  			(e1, s) -> {
  				s.updateCall(ttInitial, e1);
@@ -34,13 +23,7 @@ diff --git a/triggers/triggers-dt/src/main/java/gg/xp/xivsupport/triggers/ultima
 -				var longBuff = s.findOrWaitForBuff(buffs, ba -> ba.getTarget().isThePlayer()
 -				                                                && ba.buffIdMatches(0x130C, 0x130D, 0x130E, 0x130F, 0x13D7, 0x13D8, 0x13D9, 0x13DA)
 -				                                                && ba.getInitialDuration().toMillis() > 8_500);
-+				// NyaaTriggers: the two waits used to split on a hard 8.5s boundary,
-+				// set 1 ~7s vs set 2 ~10s. On some pulls one side of the split never
-+				// matched, the invocation then ran out its whole 180s budget, and every
-+				// TT callout after "Arrows" silently vanished for the pull. Take the
-+				// player's two arrow buffs in any order and sort by initial duration,
-+				// shorter resolves first. A timeout now speaks ttError and logs what
-+				// the engine actually saw, instead of dying quietly.
++				// An 8.5-second split can miss a buff and stall the remaining callouts.
 +				BuffApplied firstArrow;
 +				BuffApplied secondArrow;
 +				java.util.function.Predicate<BuffApplied> arrowBuff = ba -> ba.getTarget().isThePlayer()

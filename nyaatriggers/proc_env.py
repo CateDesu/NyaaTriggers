@@ -1,13 +1,9 @@
-"""Restore system library paths for child processes in frozen builds. PyInstaller prepends
-its bundled libraries and saves the original path in LD_LIBRARY_PATH_ORIG. Inheriting
-the bundle path can make Java, Mono or their shells load incompatible libraries.
-"""
+"""Remove PyInstaller library paths so Java and Mono use compatible system libraries."""
 import os
 import sys
 
 
 def child_env() -> dict:
-    """Copy the environment with PyInstaller library path changes removed."""
     env = dict(os.environ)
     if not getattr(sys, "frozen", False):
         return env

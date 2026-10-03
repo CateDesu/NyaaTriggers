@@ -1,5 +1,3 @@
-"""Read progress follows incoming bytes even before a large buffer fills."""
-
 from contextlib import contextmanager
 import http.server
 import hashlib

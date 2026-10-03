@@ -34,9 +34,7 @@ LINUX_ASSET     = "NyaaTriggers-linux.tar.gz"
 WINDOWS_ASSET   = "NyaaTriggers-windows.zip"
 _USER_AGENT     = "NyaaTriggers"
 _BACKUP_SUFFIX  = ".nyaa-old"     # marks files left behind for next-launch cleanup
-# The staged Windows updater checks this after startup.
 _BOOT_OK_MARKER = ".nyaa-boot-ok"
-# Keep recovery diagnostics beside the install. Logging must not raise.
 _UPDATE_LOG_NAME = "nyaatriggers-update.log"
 _REJECTED_NAME   = ".nyaa-update-rejected"
 _STAGED_VERSION_NAME = ".nyaa-update-version"
@@ -54,9 +52,7 @@ _RELEASE_CACHE_NAME = "latest_release.json"
 
 
 def _unblock_reader(resp) -> None:
-    """Try to shut down the socket without waiting for the reader to release its buffer
-    lock.
-    """
+    """Wake the reader without waiting for its buffer lock."""
     try:
         resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
     except Exception:  # noqa: BLE001
@@ -89,7 +85,6 @@ def _strip_v(tag: str) -> str:
 
 
 def parse_version(s: str) -> tuple[int, ...]:
-    """Ignore suffixes and trailing zero segments."""
     out: list[int] = []
     for seg in _raw_segments(s):
         digits = ""
@@ -116,7 +111,7 @@ def is_newer(remote: str, current: str) -> bool:
 
 
 def is_update_for_here(remote: str, current: str, kind: str | None = None) -> bool:
-    """Compare complete version tags. kind remains for compatibility and is ignored."""
+    """Compare full tags. kind is ignored for compatibility."""
     return is_newer(remote, current)
 
 
@@ -144,8 +139,7 @@ def can_self_apply(kind: str | None = None) -> bool:
 
 
 def _describe_label(base: str, out: str) -> str | None:
-    """Read a rolling version from git describe when it shares the current base version.
-    """
+    """Use git describe only when it shares the current base version."""
     m = re.fullmatch(r"v?(\d+(?:\.\d+)*)(?:-(\d+)-g[0-9a-f]+)?", out.strip())
     if m and (m.group(1) == base or m.group(1).startswith(base + ".")):
         return m.group(1)
@@ -180,7 +174,6 @@ def install_dir() -> Path:
 
 
 def is_rejected_update(version: str, dest_dir: Path | None = None) -> bool:
-    """Whether this release previously failed to boot and was rolled back."""
     if not version:
         return False
     try:
@@ -195,7 +188,6 @@ def is_rejected_update(version: str, dest_dir: Path | None = None) -> bool:
 
 
 def mark_boot_ok() -> None:
-    """Confirm Qt startup to the staged Windows updater."""
     if not is_frozen():
         return
     try:
@@ -230,8 +222,7 @@ def _parse_release(data: dict) -> Release:
 
 
 def fetch_latest_release(timeout: int = 8, channel: str = "stable") -> Release:
-    """Cache stable releases. Raise on lookup failure, including RateLimited.
-    channel is retained for compatibility and ignored."""
+    """Cache stable releases, raising on lookup failure. channel is ignored for compatibility."""
     req = urllib.request.Request(API_LATEST_URL, headers={"User-Agent": _USER_AGENT})
     deadline = time.monotonic() + _RELEASE_DEADLINE_S
     try:
@@ -262,8 +253,6 @@ def fetch_latest_release(timeout: int = 8, channel: str = "stable") -> Release:
             last_seen = progress[0]
             while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
                 if progress[0] == last_seen or time.monotonic() > deadline:
-                    # Shut down the socket to wake the reader without waiting for its
-                    # read lock.
                     _unblock_reader(resp)
                     raise OSError("Release info timed out after 30 seconds.")
                 last_seen = progress[0]
@@ -271,8 +260,7 @@ def fetch_latest_release(timeout: int = 8, channel: str = "stable") -> Release:
                 raise reader_error[0]
             body = b"".join(chunks)
         if len(body) > _MAX_RELEASE_BYTES:
-            # Report an oversized body directly instead of passing truncated JSON to the
-            # parser.
+            # Report oversized bodies before JSON parsing.
             raise OSError(
                 f"Release info exceeded the {_MAX_RELEASE_BYTES >> 20} MB safety cap")
         data = json.loads(body)
@@ -355,10 +343,8 @@ def asset_for_platform(release: Release) -> str | None:
 def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | None = None,
              timeout: int = 60, max_bytes: int | None = None,
              validate_cb: Callable[[Path], None] | None = None) -> None:
-    """progress_cb receives downloaded and total bytes, with zero for an unknown total.
-    Remove partial files on failure."""
+    """progress_cb receives bytes and total, zero if unknown. Remove partial files on failure."""
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    # Use a unique temporary file so concurrent downloads cannot truncate each other.
     part = dest.with_suffix(dest.suffix + f".{os.getpid()}.{threading.get_ident()}.part")
     dest.parent.mkdir(parents=True, exist_ok=True)
     limit = _MAX_DOWNLOAD_BYTES if max_bytes is None else max_bytes
@@ -374,7 +360,7 @@ def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | Non
                 raise OSError(f"Download exceeds the {limit} byte safety cap")
             if total:
                 free = shutil.disk_usage(dest.parent).free
-                if free < total + (32 << 20):   # keep ~32 MB headroom
+                if free < total + (32 << 20):
                     raise OSError(
                         f"Not enough free space to download the update: need "
                         f"~{total >> 20} MB, have {free >> 20} MB free.")
@@ -416,10 +402,7 @@ def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | Non
             while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
                 now = time.monotonic()
                 if progress[0] == last_seen or now > deadline:
-                    # Shut down the socket to wake the reader without waiting for its
-                    # read lock.
                     _unblock_reader(resp)
-                    # Report a stall only after the full quiet window has elapsed.
                     if now - last_change >= _READ_STALL_S:
                         raise OSError(
                             f"Download stalled, no new bytes for {_READ_STALL_S} seconds.")
@@ -445,7 +428,6 @@ def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | Non
 
 def verify_release_asset(release: Release, asset_name: str, archive: Path,
                          timeout: int = 15) -> tuple[bool, str]:
-    """Fail verification for missing, unreadable or mismatched release checksums."""
     url = release.assets.get(asset_name + ".sha256")
     if not url:
         return False, "no checksum published for this release"
@@ -532,7 +514,6 @@ def _externally_managed_python() -> bool:
 
 
 def _system_requirement_issue(req: Path) -> str | None:
-    """Check the required source packages supplied by the system Python."""
     try:
         from packaging.version import InvalidVersion, Version
     except ImportError:
@@ -561,8 +542,7 @@ def _system_requirement_issue(req: Path) -> str | None:
 
 
 def _install_requirements(repo_dir: Path) -> tuple[bool, str] | None:
-    """Retry dependency setup even after an earlier successful pull.
-    Return None without requirements, otherwise success and detail."""
+    """Retry dependency setup after prior pulls. Return success and detail, or None without requirements."""
     req = repo_dir / "requirements.txt"
     if not req.is_file():
         return None
@@ -601,9 +581,7 @@ def _git_pull(repo_dir: Path) -> subprocess.CompletedProcess:
 
 
 def _stale_cactbot_conflicts(detail: str) -> list[str]:
-    """Identify untracked cactbot downloads blocking a pull. Return no paths if any
-    conflict is unrelated.
-    """
+    """Find untracked cactbot downloads blocking a pull, excluding unrelated conflicts."""
     lines = detail.splitlines()
     start = next((i for i, ln in enumerate(lines)
                   if "untracked working tree files would be overwritten by merge"
@@ -635,7 +613,6 @@ def _preserve_untracked(repo_dir: Path, rel_paths: list[str]) -> Path:
 
 
 def apply_git(repo_dir: Path | None = None) -> tuple[bool, str]:
-    """Serialize source updates and dependency installs for this checkout."""
     repo_dir = repo_dir or source_dir()
     try:
         with _update_lock(repo_dir):
@@ -788,7 +765,6 @@ def _safe_extract_tar(tar_path: Path, dest: Path) -> None:
 
     with tarfile.open(tar_path, "r:gz") as tf:
         for member in tf.getmembers():
-            # Before extraction, resolve checks only the path layout.
             target = (dest / member.name).resolve()
             if not _inside(target):
                 raise RuntimeError(f"unsafe path in archive: {member.name}")
@@ -804,8 +780,7 @@ def _safe_extract_tar(tar_path: Path, dest: Path) -> None:
                 if not _inside(link_target):
                     raise RuntimeError(
                         f"unsafe hardlink target in archive: {member.name} -> {member.linkname}")
-        # The data filter checks paths again during extraction to catch escapes through
-        # earlier symlink members. Relative links within the build remain valid.
+        # The data filter rechecks escapes through earlier symlink members.
         tf.extractall(dest, filter="data")
 
 
@@ -878,16 +853,14 @@ def _apply_frozen_linux(tar_path: Path, dest_dir: Path,
                 record.flush()
                 os.fsync(record.fileno())
             os.replace(pending_tmp, pending)
-            # Swap the runtime with adjacent renames. Open files remain usable by the
-            # running process.
+            # Adjacent renames preserve runtime files still open in this process.
             if internal_dst.exists():
                 os.replace(internal_dst, internal_backup)
                 internal_swapped = True
             # Cross-filesystem copies could leave a partial runtime.
             os.replace(str(new_internal), str(internal_dst))
 
-            # Back up the executable before replacing it atomically so it is never
-            # absent.
+            # Atomic replacement keeps the executable present throughout the swap.
             os.replace(str(new_exe), str(exe_dst))
             exe_swapped = True
             pending.unlink()
@@ -938,9 +911,7 @@ def _safe_extract_zip(zip_path: Path, dest: Path) -> None:
 
 
 def _dir_writable(d: Path) -> bool:
-    """Test directory access by creating a file because Windows os.access does not check
-    ACLs.
-    """
+    """Test access with a file because Windows os.access does not check ACLs."""
     try:
         with tempfile.NamedTemporaryFile(dir=str(d), prefix=".nyaa-wtest-"):
             pass
@@ -951,10 +922,7 @@ def _dir_writable(d: Path) -> bool:
 
 def apply_frozen_windows(zip_path: Path, dest_dir: Path | None = None,
                          exe_name: str | None = None, version: str = "") -> tuple[bool, str]:
-    """Stage the Windows update and launch its updater. A successful handoff returns
-    __windows_handoff__ and requires the caller to quit promptly. Failures leave the
-    installed build unchanged.
-    """
+    """Stage a Windows update. __windows_handoff__ requires the caller to quit promptly."""
     dest_dir = (dest_dir or install_dir()).resolve()
     exe_name = exe_name or Path(sys.executable).name
     if not _valid_windows_exe_name(exe_name):
@@ -967,7 +935,6 @@ def apply_frozen_windows(zip_path: Path, dest_dir: Path | None = None,
         with zipfile.ZipFile(zip_path) as zf:
             unpacked = sum(i.file_size for i in zf.infolist())
         need = unpacked * 3 + (64 << 20)
-        # Check both volumes because the install directory may be a separate mount.
         for volume in (dest_dir, dest_dir.parent):
             free = shutil.disk_usage(volume).free
             if free < need:
@@ -988,8 +955,7 @@ def apply_frozen_windows(zip_path: Path, dest_dir: Path | None = None,
             renamed = new_root / exe_name
             os.replace(new_exe, renamed)
             new_exe = renamed
-        # Detach the staged updater so it outlives this process. Windows rejects
-        # combining DETACHED_PROCESS with CREATE_NO_WINDOW.
+        # DETACHED_PROCESS cannot be combined with CREATE_NO_WINDOW.
         cmd = [str(new_exe), "--apply-update",
                "--dest", str(dest_dir),
                "--staging", str(new_root),
@@ -999,15 +965,13 @@ def apply_frozen_windows(zip_path: Path, dest_dir: Path | None = None,
             cmd, cwd=str(new_root), close_fds=True,
             creationflags=_DETACHED_PROCESS,
         )
-        # Confirm the staged updater survives launch before closing this process.
         for _ in range(20):
             time.sleep(0.2)
             rc = proc.poll()
             if rc is not None:
                 shutil.rmtree(staging, ignore_errors=True)
                 if rc == 0:
-                    # The staged updater exited normally and logged why it refused the
-                    # handoff.
+                    # A normal updater exit means it logged why it refused handoff.
                     return False, (f"Update refused. See {_UPDATE_LOG_NAME} in the "
                                    "program folder. Download the update manually.")
                 return False, ("The staged updater was blocked from starting "
@@ -1048,7 +1012,7 @@ def _wait_for_pid_exit(pid: int, timeout: float = 90.0) -> bool:
             if res == _WAIT_OBJECT_0:
                 time.sleep(1.5)   # grace for handle and lock release
                 return True
-            return False          # WAIT_TIMEOUT or error, exit not confirmed
+            return False
         # An OpenProcess failure does not prove exit. Confirm through tasklist.
     except Exception:  # noqa: BLE001
         pass
@@ -1063,8 +1027,7 @@ def _wait_for_pid_exit(pid: int, timeout: float = 90.0) -> bool:
             time.sleep(3.0)
             continue
         out = (r.stdout or "").lstrip()
-        # Require a successful probe with no process row. Localized INFO permits a space
-        # before the colon.
+        # Localized tasklist INFO permits a space before the colon.
         if r.returncode == 0 and (not out or out.startswith(("INFO:", "INFO :"))):
             time.sleep(1.5)
             return True
@@ -1106,7 +1069,6 @@ def _relaunch_and_verify(exe_dst: Path, dest_dir: Path, grace: float = 25.0) -> 
     """Accept a fresh boot marker or a process still alive at the deadline.
     Never kill a process still starting."""
     marker = Path(dest_dir) / _BOOT_OK_MARKER
-    # A stale marker would falsely confirm startup.
     try:
         _retry_locked(lambda: marker.unlink(missing_ok=True), attempts=3, delay=0.2)
     except OSError:
@@ -1298,7 +1260,6 @@ def _finish_windows_update(dest_dir: Path, staging_root: Path, old_pid: int,
             internal_swapped = True
         _retry_locked(lambda: os.replace(internal_new, internal_dst))
 
-        # Back up and atomically replace the executable so it is never absent.
         if exe_dst.exists():
             _force_remove(exe_bak)
             _retry_locked(lambda: shutil.copy2(exe_dst, exe_bak))
@@ -1340,7 +1301,6 @@ def _force_remove(path: Path) -> None:
         try:
             path.unlink()
         except OSError:
-            # Leave locked files for the next launch. Cleanup must not raise.
             pass
 
 
@@ -1370,15 +1330,13 @@ def _cleanup_old_backups(dest_dir: Path) -> None:
             internal_ok = live_internal.is_dir() and any(live_internal.iterdir())
         except OSError:
             internal_ok = False
-        # Preserve backups while RECOVER.txt still names files needed for manual
-        # recovery.
+        # RECOVER.txt names backups still needed for manual recovery.
         recover_pending = ((dest_dir / "RECOVER.txt").exists()
                            or (dest_dir / _LINUX_PENDING).exists() or not internal_ok)
         for entry in dest_dir.glob(f"*{_BACKUP_SUFFIX}"):
             if recover_pending:
                 continue
-            # Keep runtime backups when the live runtime is missing or empty. The shell
-            # launcher restores them before Python can start.
+            # The shell launcher restores runtime backups before Python starts.
             if entry.name.startswith("_internal") and not internal_ok:
                 continue
             _force_remove(entry)
@@ -1418,8 +1376,7 @@ def relaunch() -> None:
     if sys.stderr is not None:
         sys.stderr.flush()
     if os.name == "nt":
-        # Spawn a detached child on Windows because exec does not quote arguments
-        # containing spaces.
+        # Windows exec does not quote arguments containing spaces.
         subprocess.Popen(args, executable=exe, close_fds=True,
                          creationflags=_DETACHED_PROCESS)
         os._exit(0)

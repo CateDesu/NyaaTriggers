@@ -1,5 +1,3 @@
-"""Engine trigger rows and sidecar controls for MainWindow."""
-
 from pathlib import Path
 import html
 import json
@@ -76,7 +74,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         self._init_custom_triggevent()
 
     def _build_cactbot_settings(self, layout) -> None:
-        """The Cactbot switch gates its callouts and timelines together."""
         self._settings_header(layout, _("Cactbot"))
 
         desc = QLabel(
@@ -115,7 +112,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         self._cactbot_trig_search.setPlaceholderText(_("Search cactbot triggers..."))
         self._cactbot_trig_search.setClearButtonEnabled(True)
         self._cactbot_trig_search.setVisible(False)
-        # Debounce filtering to avoid rebuilding hundreds of rows per keystroke.
         self._cactbot_trig_filter_timer = QTimer(self)
         self._cactbot_trig_filter_timer.setSingleShot(True)
         self._cactbot_trig_filter_timer.setInterval(150)
@@ -153,7 +149,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             return
 
         self._cactbot_btn.toggled.connect(self._on_cactbot_toggled)
-        # Reader startup is deferred until after UI construction.
         self._set_cactbot_button(self._cactbot_mode)
 
     def _ensure_cactbot_reader(self) -> CactbotReader:
@@ -167,9 +162,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         return self._cactbot_reader
 
     def _stop_cactbot_reader(self) -> None:
-        """Mark requested stops so their synchronous status signal is not treated as a load
-        failure.
-        """
+        """Distinguish requested stops from synchronous load failure signals."""
         if self._cactbot_reader is None:
             return
         if self._cactbot_reader.is_active():
@@ -181,7 +174,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             self._cactbot_teardown = False
 
     def _set_cactbot_enabled(self, enabled: bool, *, save: bool = True) -> None:
-        """Start or stop cactbot and reload timelines when its mode changes."""
         prev_mode = self._cactbot_mode
         if enabled:
             try:
@@ -204,7 +196,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
                 if hasattr(self, "_cactbot_status_lbl"):
                     self._cactbot_status_lbl.setText(_("● Error: {error}").format(error=exc))
                 print(f"[cactbot] failed to enable: {exc!r}", file=sys.stderr)
-                # Stop cactbot timelines if the reader fails.
                 if prev_mode:
                     self._load_timeline_for_zone(self._match_zone)
                 return
@@ -216,7 +207,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         if save:
             self._save_settings()
         self._set_cactbot_button(self._cactbot_mode)
-        # The Cactbot switch also selects timelines.
         if self._cactbot_mode != prev_mode:
             self._load_timeline_for_zone(self._match_zone)
 
@@ -248,7 +238,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         return TriggeventBridge.is_available()
 
     def _reconcile_triggevent_engine(self) -> None:
-        """Run the sidecar independently of callout mode. Startup failure must not block the UI."""
+        """Run the engine independently of callout mode, tolerating startup failure."""
         if not TriggeventBridge.is_available():
             return
         running = self._triggevent is not None and self._triggevent.is_active()
@@ -279,7 +269,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
     def _on_engine_sidecar_status(self, src: str, active: bool, msg: str,
                                   gen: "int | None" = None) -> None:
         """Off means a requested stop."""
-        # Reject queued status from an earlier engine generation.
         bridge = (getattr(self, "_triggevent", None) if src == "triggevent"
                   else getattr(self, "_triggernometry", None))
         if _stale_gen(bridge, gen):
@@ -294,7 +283,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         self._update_engine_status_label()
 
     def _on_engine_chain_failure(self, line: str, gen: "int | None" = None) -> None:
-        # Ignore buffered errors from a sidecar generation that has already stopped.
         if _stale_gen(getattr(self, "_triggevent", None), gen):
             return
         failures = getattr(self, "_engine_chain_failures", None)
@@ -348,7 +336,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
     def _on_triggevent_callout(self, text: str, severity: str,
                                gen: "int | None" = None) -> None:
         from nyaatriggers.diagnostics import record
-        # Speech arrives separately. Reject stale generations and disabled callouts.
         if _stale_gen(getattr(self, "_triggevent", None), gen):
             record("ui_callout", gen=gen, channel="display", result="stale")
             return
@@ -407,7 +394,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             self._set_triggernometry_enabled(True)
 
     def _set_triggernometry_enabled(self, enabled: bool) -> None:
-        """Start or stop the engine for imported Triggernometry packs."""
         if enabled:
             if (TriggernometryBridge is None or not TriggernometryBridge.is_available()
                     or not self._has_triggernometry_packs()):
@@ -450,7 +436,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
 
     def _on_triggernometry_callout(self, text: str, severity: str,
                                    gen: "int | None" = None) -> None:
-        # Ignore callouts after disabling the engine or starting a newer generation.
         if _stale_gen(getattr(self, "_triggernometry", None), gen):
             return
         if not self._triggernometry_mode or not self._connected:
@@ -654,8 +639,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
 
     def _on_cactbot_toggled(self, checked: bool) -> None:
         self._set_cactbot_enabled(checked, save=False)
-        # Mute local callouts only after cactbot actually starts. Restore them after
-        # stop or failure.
+        # Mute local callouts only after cactbot starts, restoring them on stop or failure.
         self._set_triggers_enabled(not self._cactbot_mode)
 
     def _on_cactbot_url_changed(self) -> None:
@@ -702,7 +686,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         self._update_banner.setVisible(True)
 
     def _on_cactbot_triggers_enumerated(self, payload: str) -> None:
-        """Saved suppression works even before the checklist is available."""
         try:
             meta = json.loads(payload)
         except Exception as exc:  # noqa: BLE001
@@ -764,14 +747,12 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         else:
             self._cactbot_disabled.discard(tid)
         self._settings["cactbot_disabled_triggers"] = sorted(self._cactbot_disabled)
-        # Cactbot rereads disabled IDs on each trigger.
         if self._cactbot_reader is not None:
             self._cactbot_reader.set_disabled_triggers(self._cactbot_disabled)
         self._save_settings()
         self._refresh_table()
 
     def _engine_fight_tag(self, e: dict) -> str:
-        """Group engine rows using repository or zone names."""
         if e.get("source") == "triggernometry" and e.get("fight") == "Unsorted":
             return ""
         if e.get("source") == "triggevent":
@@ -794,7 +775,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
                      if e.get("source") == src and e.get("id") == tid), None)
 
     def _append_engine_row(self, e: dict) -> None:
-        """Key engine rows by source and ID so local handlers skip them."""
         src = e.get("source", "")
         tid = e.get("id", "")
         if not tid:
@@ -858,7 +838,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         self._update_fight_controls()
 
     def _edit_engine_row(self, key: str) -> None:
-        """Cactbot has no editable output text."""
         custom = self._custom_triggevent_for_key(key)
         if custom is not None:
             self._edit_custom_triggevent(custom)
@@ -943,7 +922,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
     def _speak_engine_preview(self, text: str) -> None:
         preview = _engine_preview_text(text)
         if preview:
-            # Use the same localization and kana reading as live callouts.
             localized = self._localize_text(preview)
             speak(localized, reading=self._reading_for(localized))
 
@@ -976,7 +954,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         return text, accepted
 
     def _sync_cactbot_list_checkstate(self, tid: str) -> None:
-        """Keep the engine table and cactbot checklist on the same disabled IDs."""
         lst = getattr(self, "_cactbot_trig_list", None)
         if lst is None:
             return
@@ -1006,7 +983,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             self._triggernometry.set_disabled(self._engine_disabled["triggernometry"])
 
     def _record_engine_seen(self, src: str) -> None:
-        """Newly discovered triggers stay enabled unless explicitly disabled."""
         if getattr(self, "_engine_seen", None) is None:
             return
         seen = self._engine_seen.setdefault(src, set())
@@ -1055,7 +1031,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         self._refresh_table()
 
     def _replay_triggevent_callout_edits(self) -> None:
-        """Replay saved Triggevent text edits after startup."""
         bridge = getattr(self, "_triggevent", None)
         if bridge is None:
             return
@@ -1063,7 +1038,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             bridge.set_callout(tid, tts=text, text=text)
 
     def _apply_engine_overrides(self, src: str) -> None:
-        """Combine row overrides with manual replacement rules."""
         # Only cactbot and Triggevent support manual replacement tables.
         manual_key = {"cactbot": "cactbot_replacements",
                       "triggevent": "triggevent_replacements"}.get(src)
@@ -1083,7 +1057,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             self._triggernometry.set_replacements(combined)
 
     def _import_triggernometry(self) -> None:
-        """Run imported packs in the sidecar, or fall back to disabled simple Local rows."""
         if _tn_convert_xml is None or _tn_zone_map is None:
             ac.QMessageBox.critical(
                 self, _("Import Triggernometry"),
@@ -1232,7 +1205,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         ac.QMessageBox.information(self, _("Import Triggernometry"), "\n\n".join(parts))
 
     def _cactbot_zone_entry(self) -> "tuple[str, str]":
-        """Cactbot timelines require Cactbot mode."""
         if not self._cactbot_mode:
             return ()
         return cactbot_timeline_for_zone(self._current_zone_id)
@@ -1247,7 +1219,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             client.stop()
 
     def _request_sidecar_stop(self, attr: str) -> None:
-        """Request all stops before joining so shutdown waits overlap."""
         client = getattr(self, attr, None)
         if client is not None:
             client.request_stop()

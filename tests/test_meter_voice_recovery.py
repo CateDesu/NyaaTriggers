@@ -1,5 +1,3 @@
-"""Meter attribution, saved wording and cancellation across voice backends."""
-
 from copy import deepcopy
 import json
 import os

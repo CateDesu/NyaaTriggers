@@ -1,5 +1,3 @@
-"""Support exports must exclude private data even when local records are malformed."""
-
 from contextlib import ExitStack
 import json
 import os

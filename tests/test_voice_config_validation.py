@@ -1,5 +1,3 @@
-"""Repair configs that parse successfully but cannot synthesize Piper speech."""
-
 from contextlib import ExitStack, redirect_stdout
 import io
 import json

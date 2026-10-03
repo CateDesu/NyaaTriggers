@@ -1,4 +1,3 @@
-"""Shipped zone patterns and local trigger matching in other client languages."""
 import json
 import os
 import re
@@ -23,7 +22,6 @@ TRIGGERS = json.loads((HERE / "assets" / "triggers.json").read_text(encoding="ut
 
 check("zone_names.json carries a full zone table", len(ZONES) > 500)
 
-# every shipped zone pattern hits at least one real zone
 names = list(ZONES.values())
 dead, uncompilable = [], []
 patterns = sorted({t["zone_regex"] for t in TRIGGERS if t.get("zone_regex")})
@@ -46,7 +44,6 @@ check("every shipped zone_regex matches a real zone", not dead)
 for d in dead:
     print("        DEAD: " + d)
 
-# one pattern per fight. A stray variant is how dead ones creep in
 by_fight = {}
 for t in TRIGGERS:
     if t.get("fight") and t.get("zone_regex"):
@@ -56,7 +53,6 @@ check("each fight tag uses a single zone pattern", not split)
 for f, p in split.items():
     print(f"        {f}: {p}")
 
-# a localized client still fires Local triggers
 from nyaatriggers import main_window as mw
 
 check("canonical_zone_name resolves a known id",
@@ -67,7 +63,6 @@ check("canonical_zone_name survives junk", mw.canonical_zone_name("nope") == "")
 
 
 class _Zoned:
-    """Just the zone-alias half of MainWindow."""
     _set_zone_aliases = mw.MainWindow._set_zone_aliases
     _zone_matches = mw.MainWindow._zone_matches
 
@@ -114,7 +109,6 @@ meter.set_zone_metadata("Next instance")
 check("the next zone transition clears the old roster",
       meter._me_id is None)
 
-# the six fights that were dead now point at their real zones
 EXPECTED = {
     "Queen EX":                "The Minstrel's Ballad: Sphene's Burden",
     "Enuo EX":                 "The Unmaking (Extreme)",

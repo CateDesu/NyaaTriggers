@@ -1,1 +1,0 @@
-"""NyaaTriggers program modules."""

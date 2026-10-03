@@ -1,5 +1,3 @@
-"""Japanese display text keeps protocol values and saved definitions intact."""
-
 from collections import Counter
 import json
 import os

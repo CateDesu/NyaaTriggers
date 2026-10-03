@@ -1,5 +1,3 @@
-"""Run release policy steps against a local GitHub CLI fixture."""
-
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os

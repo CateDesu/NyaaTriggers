@@ -1,4 +1,3 @@
-"""Replay timing tests with real pipes and a small stand-in engine."""
 import contextlib
 import io
 import json

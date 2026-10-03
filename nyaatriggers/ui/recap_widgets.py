@@ -1,5 +1,3 @@
-"""Icons and compact combat rows for death recaps."""
-
 from collections import OrderedDict
 import json
 import math

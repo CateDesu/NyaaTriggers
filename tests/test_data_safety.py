@@ -1,5 +1,3 @@
-"""Regression tests for persisted data and encounter lifecycle boundaries."""
-
 import contextlib
 import io
 import json

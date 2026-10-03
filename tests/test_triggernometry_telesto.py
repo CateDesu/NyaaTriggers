@@ -1,5 +1,3 @@
-"""Exercise Triggernometry's Telesto relay with a local protocol peer."""
-
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import queue

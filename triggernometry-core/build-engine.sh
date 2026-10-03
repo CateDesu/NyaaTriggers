@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Build the prepared Triggernometry checkout under Mono. ENGINE_SRC must already have
-# the Linux build fixes described in SPIKE-LOG.md. Output goes to the engine's Release
-# directory.
+# ENGINE_SRC must include the Linux fixes in SPIKE-LOG.md.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ENGINE_SRC="${ENGINE_SRC:-$HERE/.engine}"
@@ -13,7 +11,6 @@ command -v mcs   >/dev/null || { echo "ERROR: mcs (mono) not found; pacman -S mo
 command -v xbuild >/dev/null || { echo "ERROR: xbuild not found" >&2; exit 1; }
 [ -d "$SRC/Triggernometry" ] || { echo "ERROR: engine source not at $SRC" >&2; exit 1; }
 
-# Compile the audio stubs required by Mono.
 mkdir -p "$SHIMS/src"
 if [ ! -f "$SHIMS/System.Speech.dll" ] || [ ! -f "$SHIMS/Interop.WMPLib.dll" ]; then
   echo "ERROR: stub sources/dlls missing in $SHIMS (see SPIKE-LOG.md Phase 0)." >&2
@@ -21,8 +18,7 @@ if [ ! -f "$SHIMS/System.Speech.dll" ] || [ ! -f "$SHIMS/Interop.WMPLib.dll" ]; 
   exit 1
 fi
 
-# Restore packages with nuget.exe. Download it from
-# https://dist.nuget.org/win-x86-commandline/latest/nuget.exe if needed.
+# Provide NUGET if packages are missing.
 if [ ! -d "$SRC/packages" ]; then
   [ -f "$NUGET" ] || { echo "ERROR: $SRC/packages missing and nuget.exe not at \$NUGET" >&2; exit 1; }
   mono "$NUGET" restore "$SRC/Triggernometry.sln" -PackagesDirectory "$SRC/packages" -NonInteractive
