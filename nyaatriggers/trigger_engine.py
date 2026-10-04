@@ -200,6 +200,28 @@ def _safe_sub(rx, repl, text):
         return text
 
 
+def apply_replacements(s: str, rules: list) -> str:
+    if not rules or not s:
+        return s.strip()
+    out = s
+    for rule in rules:
+        if not rule.get("enabled", True):
+            continue
+        find = rule.get("find") or ""
+        if not isinstance(find, str):
+            find = str(find)
+        if not find:
+            continue
+        repl = rule.get("replace", "") or ""
+        if not isinstance(repl, str):
+            repl = str(repl)
+        pat = find if rule.get("regex") else re.escape(find)
+        rx = compile_user_regex(pat, re.IGNORECASE)
+        if rx is not None:
+            out = _safe_sub(rx, repl, out)
+    return out.strip()
+
+
 @functools.lru_cache(maxsize=2048)
 def _id_set(ability_id: str) -> frozenset:
     return frozenset(p.strip().upper() for p in ability_id.split("|") if p.strip())

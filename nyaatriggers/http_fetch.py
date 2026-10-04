@@ -17,6 +17,74 @@ _LINUX_CA_BUNDLES = (
 )
 
 
+class ResponseTooLarge(ValueError):
+    pass
+
+
+class ReadTimeout(TimeoutError):
+    def __init__(self, stalled: bool):
+        self.stalled = stalled
+        super().__init__("download stalled" if stalled else "download timed out")
+
+
+def _unblock_reader(response) -> None:
+    """Wake a reader without waiting for its buffer lock."""
+    try:
+        response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
+    except Exception:
+        pass
+
+
+def copy_response(response, output, max_bytes: int, *, stall: float, deadline: float,
+                  progress_cb=None, total: int = 0, progress_step: int = 262144,
+                  chunk_cb=None) -> int:
+    """Copy a bounded response before the absolute deadline. The caller owns the files."""
+    done = threading.Event()
+    progress = [0]
+    errors = []
+
+    def read():
+        try:
+            read_chunk = getattr(response, "read1", response.read)
+            notified = 0
+            last_notice = time.monotonic()
+            while True:
+                chunk = read_chunk(65536)
+                if not chunk:
+                    break
+                progress[0] += len(chunk)
+                if progress[0] > max_bytes:
+                    raise OSError(f"Download exceeded the {max_bytes} byte safety cap")
+                if chunk_cb is not None:
+                    chunk_cb(chunk)
+                output.write(chunk)
+                now = time.monotonic()
+                if progress_cb and (progress[0] - notified >= progress_step or now - last_notice >= .2):
+                    progress_cb(progress[0], total)
+                    notified = progress[0]
+                    last_notice = now
+            if progress_cb and progress[0] != notified:
+                progress_cb(progress[0], total)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    threading.Thread(target=read, daemon=True, name="http-file-reader").start()
+    last_seen = progress[0]
+    last_change = time.monotonic()
+    while not done.wait(timeout=min(stall, max(0.0, deadline - time.monotonic()))):
+        now = time.monotonic()
+        if progress[0] == last_seen or now > deadline:
+            _unblock_reader(response)
+            raise ReadTimeout(stalled=now - last_change >= stall)
+        last_seen = progress[0]
+        last_change = now
+    if errors:
+        raise errors[0]
+    return progress[0]
+
+
 @contextmanager
 def open_response(request, timeout: float, deadline: float):
     """Acquire a response before the monotonic deadline. The caller owns body read deadlines."""
@@ -159,7 +227,7 @@ def fetch_bytes(request, max_bytes: int, timeout: float = 15,
                     body.extend(chunk)
                     state["progress"] = time.monotonic()
                     if len(body) > max_bytes:
-                        raise ValueError(f"response exceeds {max_bytes} bytes")
+                        raise ResponseTooLarge(f"response exceeds {max_bytes} bytes")
         except Exception as exc:
             errors.append(exc)
         finally:
@@ -172,11 +240,8 @@ def fetch_bytes(request, max_bytes: int, timeout: float = 15,
         if now < end and now < state["progress"] + stall:
             continue
         cancelled.set()
-        try:
-            state["response"].fp.raw._sock.shutdown(socket.SHUT_RDWR)
-        except (AttributeError, OSError):
-            pass
-        raise TimeoutError("download timed out" if now >= end else "download stalled")
+        _unblock_reader(state["response"])
+        raise ReadTimeout(stalled=now < end)
     if errors:
         raise errors[0]
     return result[0]

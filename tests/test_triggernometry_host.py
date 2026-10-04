@@ -12,6 +12,8 @@ import time
 import unittest
 import xml.etree.ElementTree as ET
 
+from nyaatriggers.triggernometry_bridge import _read_lines_bounded
+
 
 CORE = Path(__file__).resolve().parents[1] / "triggernometry-core"
 PACKS = CORE / "test" / "packs"
@@ -29,7 +31,7 @@ class HostReplay:
         self.reader.start()
 
     def _read(self):
-        for line in self.proc.stdout:
+        for line in _read_lines_bounded(self.proc.stdout):
             if line.startswith("{"):
                 self.frames.put(json.loads(line))
             else:
@@ -86,7 +88,7 @@ def replay(pack, relay=None, extra_packs=()):
         if relay:
             relay.callback = lambda body: host.send(t="endpoint", body=body)
         try:
-            host.until(lambda f: f.get("t") == "inventory")
+            host.inventory = host.until(lambda f: f.get("t") == "inventory")["triggers"]
             yield host
         except AssertionError as exc:
             raise AssertionError(f"{exc}\n{host.errors()}") from exc
@@ -109,6 +111,20 @@ class TriggernometryHostTests(unittest.TestCase):
             if os.environ.get("GITHUB_ACTIONS") == "true":
                 raise RuntimeError(message)
             raise unittest.SkipTest(message)
+
+    def test_large_unicode_inventory_stays_within_the_bridge_line_limit(self):
+        text = "あ" * 200000 + '猫 "quoted"\\\t\n'
+        name = '日本語 "quoted"\\\t\n'
+        tree = ET.parse(PACKS / "log-sources.xml")
+        trigger = tree.find(".//Trigger")
+        trigger.set("Name", name)
+        trigger.find(".//Action").set("UseTTSTextExpression", text)
+        with tempfile.TemporaryDirectory() as folder:
+            pack = Path(folder) / "unicode.xml"
+            tree.write(pack, encoding="utf-8")
+            with replay(pack) as host:
+                row = next(row for row in host.inventory if row["name"] == name)
+                self.assertEqual(row["text"], text)
 
     def combat_probe(self, host, label):
         start = len(host.calls)

@@ -12,6 +12,7 @@ from unittest.mock import patch
 import urllib.request
 
 from nyaatriggers.http_fetch import fetch_bytes
+from nyaatriggers import updater
 from nyaatriggers.ui import timeline_tab
 from tests.test_transport_deadlines import HttpPeer, wait_for
 
@@ -51,6 +52,15 @@ class DownloadCompletionTests(unittest.TestCase):
         url = self.serve(body, len(body) + 100)
         with self.assertRaises(IncompleteRead):
             fetch_bytes(url, 1000)
+
+    def test_release_lookup_preserves_size_and_json_errors(self):
+        for limit, error in ((3, OSError), (100, ValueError)):
+            with self.subTest(limit=limit):
+                body = b"not JSON"
+                with patch.object(updater, "API_LATEST_URL", self.serve(body, len(body))), \
+                        patch.object(updater, "_MAX_RELEASE_BYTES", limit):
+                    with self.assertRaises(error):
+                        updater.fetch_latest_release()
 
     def test_complete_responses_with_and_without_a_declared_length_work(self):
         body = b'10 "First mechanic"\n'

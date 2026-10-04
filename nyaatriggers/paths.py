@@ -13,6 +13,29 @@ def bundle_root() -> Path:
     return Path(getattr(sys, "_MEIPASS", source_root()))
 
 
+def bundle_bases() -> list[Path]:
+    bases: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bases.append(Path(meipass))
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        bases += [exe_dir, exe_dir / "_internal", exe_dir.parent,
+                  exe_dir.parent / "Resources", exe_dir.parent / "Frameworks"]
+    bases.append(source_root())
+    seen: set = set()
+    out: list[Path] = []
+    for base in bases:
+        try:
+            key = base.resolve()
+        except OSError:
+            key = base
+        if key not in seen:
+            seen.add(key)
+            out.append(base)
+    return out
+
+
 def data_root() -> Path:
     """Keep user files beside the executable or source entry points."""
     if getattr(sys, "frozen", False):

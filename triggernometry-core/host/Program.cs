@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading;
 using System.Windows.Forms;
@@ -12,6 +13,10 @@ using Triggernometry;
 
 static class Program
 {
+    // Keep Unicode compact for the bridge's line limit.
+    static readonly JsonSerializerOptions jsonOptions = new JsonSerializerOptions {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
     static volatile bool crashed = false;
     static volatile string crashMsg = null;
     static volatile int calloutCount = 0;
@@ -271,9 +276,7 @@ static class Program
 
     static void BuildAndEmitInventory()
     {
-        var sb = new System.Text.StringBuilder();
-        sb.Append("{\"t\":\"inventory\",\"triggers\":[");
-        bool first = true;
+        var entries = new List<object>();
         try
         {
             var fi = typeof(RealPlugin).GetField("Triggers", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -293,17 +296,13 @@ static class Program
                         if (string.IsNullOrEmpty(text)) continue;
                         string id = t.Id.ToString() + "#" + idx;
                         lock (_coLock) { _calloutActions[id] = a; if (!_calloutOriginal.ContainsKey(id)) _calloutOriginal[id] = text; }
-                        if (!first) sb.Append(',');
-                        first = false;
-                        sb.Append("{\"id\":").Append(J(id)).Append(",\"name\":").Append(J(t.Name ?? ""))
-                          .Append(",\"fight\":").Append(J(fight)).Append(",\"text\":").Append(J(text)).Append('}');
+                        entries.Add(new {id = id, name = t.Name ?? "", fight = fight, text = text});
                         idx++;
                     }
                 }
         }
         catch (Exception ex) { Err("[host] inventory build error: " + ex.Message); }
-        sb.Append("]}");
-        Out(sb.ToString());
+        Out(JsonSerializer.Serialize(new {t = "inventory", triggers = entries}, jsonOptions));
     }
 
     static void ApplyCallout(string id)
@@ -466,27 +465,5 @@ static class Program
     static void Err(string s) { lock (_ol) { Console.Error.WriteLine(s); Console.Error.Flush(); } }
     static void EmitStatus(bool active, string msg) { Out("{\"t\":\"status\",\"active\":" + (active ? "true" : "false") + ",\"msg\":" + J(msg) + "}"); }
     static string Truncate(string s, int n) { return s.Length <= n ? s : s.Substring(0, n); }
-    static string J(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return "\"\"";
-        var sb = new System.Text.StringBuilder(s.Length + 2);
-        sb.Append('"');
-        foreach (char c in s)
-        {
-            switch (c)
-            {
-                case '\\': sb.Append("\\\\"); break;
-                case '"': sb.Append("\\\""); break;
-                case '\n': sb.Append("\\n"); break;
-                case '\r': sb.Append("\\r"); break;
-                case '\t': sb.Append("\\t"); break;
-                default:
-                    if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("x4"));
-                    else sb.Append(c);
-                    break;
-            }
-        }
-        sb.Append('"');
-        return sb.ToString();
-    }
+    static string J(string s) { return JsonSerializer.Serialize(s ?? "", jsonOptions); }
 }

@@ -7,7 +7,6 @@ import json
 import os
 import re
 import shutil
-import socket
 import subprocess
 import sys
 import sysconfig
@@ -25,7 +24,9 @@ from importlib import metadata
 from pathlib import Path, PureWindowsPath
 
 from nyaatriggers.paths import source_root
-from nyaatriggers.http_fetch import open_response
+from nyaatriggers.http_fetch import (
+    ReadTimeout, ResponseTooLarge, _unblock_reader, copy_response, fetch_bytes, open_response,
+)
 
 REPO            = "CateDesu/NyaaTriggers"
 API_LATEST_URL  = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -49,14 +50,6 @@ _READ_STALL_S = 60
 _RELEASE_DEADLINE_S = 30
 _DOWNLOAD_DEADLINE_S = 3600
 _RELEASE_CACHE_NAME = "latest_release.json"
-
-
-def _unblock_reader(resp) -> None:
-    """Wake the reader without waiting for its buffer lock."""
-    try:
-        resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
-    except Exception:  # noqa: BLE001
-        pass
 
 
 class RateLimited(Exception):
@@ -224,45 +217,15 @@ def _parse_release(data: dict) -> Release:
 def fetch_latest_release(timeout: int = 8, channel: str = "stable") -> Release:
     """Cache stable releases, raising on lookup failure. channel is ignored for compatibility."""
     req = urllib.request.Request(API_LATEST_URL, headers={"User-Agent": _USER_AGENT})
-    deadline = time.monotonic() + _RELEASE_DEADLINE_S
     try:
-        with open_response(req, timeout, min(deadline, time.monotonic() + _READ_STALL_S)) as resp:
-            done = threading.Event()
-            progress = [0]
-            reader_error = [None]
-            chunks: list[bytes] = []
-
-            def _reader() -> None:
-                try:
-                    read_chunk = getattr(resp, "read1", resp.read)
-                    while True:
-                        chunk = read_chunk(65536)
-                        if not chunk:
-                            break
-                        chunks.append(chunk)
-                        progress[0] += len(chunk)
-                        if progress[0] > _MAX_RELEASE_BYTES:
-                            raise OSError(
-                                f"Release info exceeded the {_MAX_RELEASE_BYTES >> 20} MB safety cap")
-                except BaseException as exc:
-                    reader_error[0] = exc
-                finally:
-                    done.set()
-
-            threading.Thread(target=_reader, daemon=True).start()
-            last_seen = progress[0]
-            while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
-                if progress[0] == last_seen or time.monotonic() > deadline:
-                    _unblock_reader(resp)
-                    raise OSError("Release info timed out after 30 seconds.")
-                last_seen = progress[0]
-            if reader_error[0]:
-                raise reader_error[0]
-            body = b"".join(chunks)
-        if len(body) > _MAX_RELEASE_BYTES:
-            # Report oversized bodies before JSON parsing.
+        try:
+            body = fetch_bytes(req, _MAX_RELEASE_BYTES, timeout=timeout,
+                               stall=_READ_STALL_S, deadline=_RELEASE_DEADLINE_S)
+        except ResponseTooLarge as exc:
             raise OSError(
-                f"Release info exceeded the {_MAX_RELEASE_BYTES >> 20} MB safety cap")
+                f"Release info exceeded the {_MAX_RELEASE_BYTES >> 20} MB safety cap") from exc
+        except ReadTimeout as exc:
+            raise OSError("Release info timed out after 30 seconds.") from exc
         data = json.loads(body)
     except urllib.error.HTTPError as exc:
         # Cache both primary and secondary rate limits. HTTPError also needs closing.
@@ -364,57 +327,19 @@ def download(url: str, dest: Path, progress_cb: Callable[[int, int], None] | Non
                     raise OSError(
                         f"Not enough free space to download the update: need "
                         f"~{total >> 20} MB, have {free >> 20} MB free.")
-            done = threading.Event()
-            progress = [0]
-            reader_error = [None]
-
-            def _reader() -> None:
+            with part.open("wb") as f:
                 try:
-                    with part.open("wb") as f:
-                        read_chunk = getattr(resp, "read1", resp.read)
-                        notified = 0
-                        last_notice = time.monotonic()
-                        while True:
-                            chunk = read_chunk(262144)
-                            if not chunk:
-                                break
-                            f.write(chunk)
-                            progress[0] += len(chunk)
-                            if progress[0] > limit:
-                                raise OSError(
-                                    f"Download exceeded the {limit} byte "
-                                    "safety cap (missing or lying Content-Length)")
-                            now = time.monotonic()
-                            if progress_cb and (progress[0] - notified >= 262144 or now - last_notice >= .2):
-                                progress_cb(progress[0], total)
-                                notified = progress[0]
-                                last_notice = now
-                        if progress_cb and progress[0] != notified:
-                            progress_cb(progress[0], total)
-                except BaseException as exc:
-                    reader_error[0] = exc
-                finally:
-                    done.set()
-
-            threading.Thread(target=_reader, daemon=True).start()
-            last_seen = progress[0]
-            last_change = time.monotonic()
-            while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
-                now = time.monotonic()
-                if progress[0] == last_seen or now > deadline:
-                    _unblock_reader(resp)
-                    if now - last_change >= _READ_STALL_S:
+                    got = copy_response(resp, f, limit, stall=_READ_STALL_S,
+                                        deadline=deadline, progress_cb=progress_cb, total=total)
+                except ReadTimeout as exc:
+                    if exc.stalled:
                         raise OSError(
-                            f"Download stalled, no new bytes for {_READ_STALL_S} seconds.")
-                    raise OSError("Download timed out after 60 minutes.")
-                last_seen = progress[0]
-                last_change = now
-            if reader_error[0]:
-                raise reader_error[0]
+                            f"Download stalled, no new bytes for {_READ_STALL_S} seconds.") from exc
+                    raise OSError("Download timed out after 60 minutes.") from exc
         # A connection can close early without raising.
-        if total and progress[0] < total:
+        if total and got < total:
             raise OSError(
-                f"Download incomplete: received {progress[0]} of {total} bytes")
+                f"Download incomplete: received {got} of {total} bytes")
         if validate_cb is not None:
             validate_cb(part)
         os.replace(part, dest)

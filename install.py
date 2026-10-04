@@ -8,16 +8,14 @@ import os
 import platform
 import re
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import urllib.request
 from pathlib import Path
 from uuid import uuid4
-from nyaatriggers.http_fetch import open_response
+from nyaatriggers.http_fetch import ReadTimeout, copy_response, open_response
 from nyaatriggers.paths import voice_venv_version
 from nyaatriggers.voice_config import (
     MAX_VOICE_CONFIG_BYTES as _MAX_VOICE_CONFIG_BYTES, validate_voice_config, voice_config_ok,
@@ -43,14 +41,6 @@ _MAX_DOWNLOAD_BYTES = 1 << 30
 # Socket timeouts reset on every byte, so enforce total and stall deadlines separately.
 _READ_STALL_S = 60
 _DOWNLOAD_DEADLINE_S = 3600
-
-
-def _unblock_reader(resp) -> None:
-    """Wake the reader without waiting for its buffer lock."""
-    try:
-        resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _sha256(path: Path) -> str:
@@ -177,10 +167,10 @@ def download_voice() -> None:
 
     last_pct = [-1]
 
-    def _progress(count: int, block_size: int, total_size: int) -> None:
+    def _progress(received: int, total_size: int) -> None:
         if total_size <= 0:
             return
-        pct = min(count * block_size * 100 // total_size, 100)
+        pct = min(received * 100 // total_size, 100)
         if pct != last_pct[0]:
             print(f"\r  {pct}% ", end="", flush=True)
             last_pct[0] = pct
@@ -211,45 +201,14 @@ def download_voice() -> None:
                     total = int(resp.headers.get("Content-Length", 0) or 0)
                 except ValueError:
                     total = 0
-                done = threading.Event()
-                progress = [0]
-                reader_error = [None]
-
-                def _reader() -> None:
-                    try:
-                        read_chunk = getattr(resp, "read1", resp.read)
-                        while True:
-                            chunk = read_chunk(1 << 16)
-                            if not chunk:
-                                break
-                            progress[0] += len(chunk)
-                            if progress[0] > limit:
-                                raise OSError(
-                                    f"download over {limit} bytes: {url}")
-                            f.write(chunk)
-                            _progress(progress[0], 1, total)
-                    except BaseException as exc:
-                        reader_error[0] = exc
-                    finally:
-                        done.set()
-
-                threading.Thread(target=_reader, daemon=True).start()
-                last_seen = progress[0]
-                last_change = time.monotonic()
-                while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
-                    now = time.monotonic()
-                    if progress[0] == last_seen or now > deadline:
-                        _unblock_reader(resp)
-                        if now - last_change >= _READ_STALL_S:
-                            raise OSError(
-                                f"download stalled, no new bytes for {_READ_STALL_S} seconds: {url}")
+                try:
+                    got = copy_response(resp, f, limit, stall=_READ_STALL_S, deadline=deadline,
+                                        progress_cb=_progress, total=total, progress_step=0)
+                except ReadTimeout as exc:
+                    if exc.stalled:
                         raise OSError(
-                            f"download timed out after 60 minutes: {url}")
-                    last_seen = progress[0]
-                    last_change = now
-                if reader_error[0]:
-                    raise reader_error[0]
-                got = progress[0]
+                            f"download stalled, no new bytes for {_READ_STALL_S} seconds: {url}") from exc
+                    raise OSError(f"download timed out after 60 minutes: {url}") from exc
             # Early connection closure may not raise an error.
             if total and got < total:
                 raise OSError(

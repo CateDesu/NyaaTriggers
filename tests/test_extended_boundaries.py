@@ -225,6 +225,15 @@ with patch.object(ac.QFileDialog, "getOpenFileName", return_value=(str(source), 
         self.assertEqual(destination.read_bytes(), b"Replacement sound")
         self.assertEqual(list(self.root.iterdir()), [destination])
 
+    def test_json_write_preserves_the_original_error_when_cleanup_fails(self):
+        destination = self.root / "settings.json"
+        destination.write_bytes(b"Previous settings")
+        with patch.object(ac.os, "replace", side_effect=OSError("Replacement failed")), \
+                patch.object(Path, "unlink", side_effect=OSError("Cleanup failed")):
+            with self.assertRaisesRegex(OSError, "Replacement failed"):
+                ac._atomic_write_json(destination, {"text": "猫"})
+        self.assertEqual(destination.read_bytes(), b"Previous settings")
+
     def test_imported_pack_without_xml_suffix_is_discovered_by_the_engine(self):
         source = self.root / "downloaded-pack"
         source.write_text('<TriggernometryExport><ExportedFolder Name="Pack"/></TriggernometryExport>')

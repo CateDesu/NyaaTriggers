@@ -4,14 +4,13 @@
 from __future__ import annotations
 
 import json
-import re
 import sys
 import urllib.parse
 
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
 from nyaatriggers.drop_log import log_drop
-from nyaatriggers.trigger_engine import compile_user_regex, _safe_sub
+from nyaatriggers.trigger_engine import apply_replacements
 
 DEFAULT_CACTBOT_URL = "https://overlayplugin.github.io/cactbot/ui/raidboss/raidboss.html"
 
@@ -419,30 +418,6 @@ class CactbotReader(QObject):
     def seen_phrases(self) -> list:
         return list(self._seen.keys())
 
-    def _apply_replacements(self, s: str) -> str:
-        rules = self._replacements
-        if not rules or not s:
-            return s.strip()
-        out = s
-        for r in rules:
-            if not r.get("enabled", True):
-                continue
-            # Coerce saved values so a malformed rule cannot interrupt callouts.
-            find = r.get("find") or ""
-            if not isinstance(find, str):
-                find = str(find)
-            if not find:
-                continue
-            repl = r.get("replace", "") or ""
-            if not isinstance(repl, str):
-                repl = str(repl)
-            pat = find if r.get("regex") else re.escape(find)
-            rx = compile_user_regex(pat, re.IGNORECASE)
-            if rx is None:
-                continue
-            # Leave text unchanged when a regex times out or has invalid backreferences.
-            out = _safe_sub(rx, repl, out)
-        return out.strip()
 
     def _record_seen(self, phrase: str) -> None:
         if phrase and phrase not in self._seen:
@@ -486,7 +461,7 @@ class CactbotReader(QObject):
             raw = text.strip() if isinstance(text, str) else ""
             if raw:
                 self._record_seen(raw)
-                text = self._apply_replacements(raw)
+                text = apply_replacements(raw, self._replacements)
                 if text:
                     tier = data.get("tier", "info")
                     self.callout.emit(text, tier if tier in ("info", "alert", "alarm") else "info")
@@ -495,7 +470,7 @@ class CactbotReader(QObject):
             raw = text.strip() if isinstance(text, str) else ""
             if raw:
                 self._record_seen(raw)
-                text = self._apply_replacements(raw)
+                text = apply_replacements(raw, self._replacements)
                 if text:
                     self.tts.emit(text)
         elif kind == "status":

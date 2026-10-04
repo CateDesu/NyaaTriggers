@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import os
 import queue
-import re
 import shutil
 import subprocess
 import sys
@@ -16,7 +15,7 @@ import threading
 import time
 from pathlib import Path
 
-from nyaatriggers.paths import bundle_root, source_root
+from nyaatriggers.paths import bundle_bases as _bundle_bases, bundle_root
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -24,7 +23,7 @@ from nyaatriggers import proc_env
 from nyaatriggers.diagnostics import record, record_engine
 from nyaatriggers.drop_log import log_drop, open_private_log, rotate_one_generation
 from nyaatriggers.engine_build_info import engine_commit as _launch_build_commit
-from nyaatriggers.trigger_engine import _safe_sub, compile_user_regex
+from nyaatriggers.trigger_engine import apply_replacements
 
 # Jars and JRE data may be packaged in separate directories.
 _BASE = bundle_root()
@@ -74,29 +73,6 @@ class _ByteQueue(queue.Queue):
         if isinstance(item, str):
             self._nbytes -= sys.getsizeof(item)
         return item
-
-
-def _bundle_bases() -> "list[Path]":
-    bases: list[Path] = []
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        bases.append(Path(meipass))
-    if getattr(sys, "frozen", False):
-        exe_dir = Path(sys.executable).resolve().parent
-        bases += [exe_dir, exe_dir / "_internal", exe_dir.parent,
-                  exe_dir.parent / "Resources", exe_dir.parent / "Frameworks"]
-    bases.append(source_root())
-    seen: set = set()
-    out: list[Path] = []
-    for b in bases:
-        try:
-            key = b.resolve()
-        except OSError:
-            key = b
-        if key not in seen:
-            seen.add(key)
-            out.append(b)
-    return out
 
 
 def _bundled_jre_dir() -> "Path | None":
@@ -659,29 +635,6 @@ class TriggeventBridge(QObject):
         with self._seen_lock:
             return list(self._seen.keys())
 
-    def _apply_replacements(self, s: str) -> str:
-        rules = self._replacements
-        if not rules or not s:
-            return s.strip()
-        out = s
-        for r in rules:
-            if not r.get("enabled", True):
-                continue
-            find = r.get("find") or ""
-            if not isinstance(find, str):
-                find = str(find)
-            if not find:
-                continue
-            repl = r.get("replace", "") or ""
-            if not isinstance(repl, str):
-                repl = str(repl)
-            pat = find if r.get("regex") else re.escape(find)
-            rx = compile_user_regex(pat, re.IGNORECASE)
-            if rx is None:
-                continue
-            # Preserve callouts when bounded regex substitution fails.
-            out = _safe_sub(rx, repl, out)
-        return out.strip()
 
     def _record_seen(self, phrase: str) -> None:
         if not phrase:
@@ -816,57 +769,9 @@ class TriggeventBridge(QObject):
                                  name="triggevent-reap").start()
         self.status.emit(False, "Off", gen)
 
-    @staticmethod
-    def _signal_group(proc: subprocess.Popen, graceful: bool) -> None:
-        """Signal the group on POSIX or the child on Windows, falling back if needed."""
-        try:
-            if os.name == "posix":
-                import signal
-                # The process group may survive its wrapper.
-                os.killpg(proc.pid,
-                          signal.SIGTERM if graceful else signal.SIGKILL)
-            else:
-                proc.terminate() if graceful else proc.kill()
-        except (OSError, ProcessLookupError):
-            try:
-                proc.terminate() if graceful else proc.kill()
-            except OSError:
-                pass
+    _signal_group = staticmethod(proc_env.signal_group)
 
-    @classmethod
-    def _reap(cls, proc: subprocess.Popen) -> None:
-        """Allow the sidecar to exit, then kill any surviving group members."""
-        lock = proc.__dict__.setdefault("_nyaa_reap_lock", threading.Lock())
-        with lock:
-            if getattr(proc, "_nyaa_reaped", False):
-                return
-            try:
-                deadline = time.monotonic() + 4
-                try:
-                    proc.wait(timeout=4)
-                except subprocess.TimeoutExpired:
-                    pass
-                else:
-                    if os.name != "posix":
-                        return
-                    while time.monotonic() < deadline:
-                        try:
-                            os.killpg(proc.pid, 0)
-                        except ProcessLookupError:
-                            return
-                        except OSError:
-                            break
-                        time.sleep(0.05)
-                cls._signal_group(proc, graceful=False)
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    pass
-            finally:
-                proc._nyaa_reaped = True
-                runtime_dir = proc.__dict__.pop("_nyaa_runtime_dir", None)
-                if runtime_dir is not None:
-                    runtime_dir.cleanup()
+    _reap = staticmethod(proc_env.reap)
 
 
     def feed(self, raw_msg: str) -> None:
@@ -1139,8 +1044,6 @@ class TriggeventBridge(QObject):
             line = lines[offset] if offset >= 0 else "Error in sequential trigger before readiness"
             self.chain_failure.emit(line, gen)
 
-    def _delivery_live(self, cid, gen: int, tts_only: bool) -> bool:
-        return self._delivery_block(cid, gen, tts_only) is None
 
     def _delivery_block(self, cid, gen: int, tts_only: bool):
         with self._state_lock:
@@ -1228,8 +1131,8 @@ class TriggeventBridge(QObject):
                 self._record_seen(phrase)
             had_engine_text = bool(text)
             had_engine_tts = bool(tts)
-            text = self._apply_replacements(text)
-            tts = self._apply_replacements(tts)
+            text = apply_replacements(text, self._replacements)
+            tts = apply_replacements(tts, self._replacements)
             if not text and tts and not had_engine_text and not tts_only:
                 # Preserve intentional suppression by replacement rules.
                 text = tts

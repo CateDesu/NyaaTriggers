@@ -50,6 +50,25 @@ from nyaatriggers.app_common import (
 )
 
 
+def _inventory_rows(items: list, source: str) -> list[dict]:
+    rows = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        tid = _as_str(item.get("id"))
+        if not tid:
+            continue
+        entry = {
+            "source": source, "id": tid,
+            "fight": _as_str(item.get("fight")), "group": _as_str(item.get("group")),
+            "name": _as_str(item.get("name")) or tid, "text": _as_str(item.get("text")),
+        }
+        if source == "triggevent" and "tts" in item:
+            entry["tts"] = _as_str(item["tts"])
+        rows.append(entry)
+    return rows
+
+
 class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
     def _init_engines(self) -> None:
         self._engine_inventory: list[dict] = []
@@ -468,17 +487,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         if not isinstance(items, list):
             return
         self._engine_inventory = [e for e in self._engine_inventory if e.get("source") != "triggernometry"]
-        for e in items:
-            if not isinstance(e, dict):
-                continue
-            tid = _as_str(e.get("id"))
-            if not tid:
-                continue
-            self._engine_inventory.append({
-                "source": "triggernometry", "id": tid,
-                "fight": _as_str(e.get("fight")), "group": _as_str(e.get("group")),
-                "name": _as_str(e.get("name")) or tid, "text": _as_str(e.get("text")),
-            })
+        self._engine_inventory.extend(_inventory_rows(items, "triggernometry"))
         self._save_triggernometry_inventory_cache()
         self._record_engine_seen("triggernometry")
         self._apply_engine_disabled("triggernometry")
@@ -507,17 +516,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         if not isinstance(parsed, list) or not parsed:
             return
         self._engine_inventory = [e for e in self._engine_inventory if e.get("source") != "triggernometry"]
-        for e in parsed:
-            if not isinstance(e, dict):
-                continue
-            tid = _as_str(e.get("id"))
-            if not tid:
-                continue
-            self._engine_inventory.append({
-                "source": "triggernometry", "id": tid,
-                "fight": _as_str(e.get("fight")), "group": _as_str(e.get("group")),
-                "name": _as_str(e.get("name")) or tid, "text": _as_str(e.get("text")),
-            })
+        self._engine_inventory.extend(_inventory_rows(parsed, "triggernometry"))
         self._record_engine_seen("triggernometry")
 
     def _replay_triggernometry_callout_edits(self) -> None:
@@ -559,20 +558,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         if not isinstance(items, list):
             return
         self._engine_inventory = [e for e in self._engine_inventory if e.get("source") != "triggevent"]
-        for e in items:
-            if not isinstance(e, dict):
-                continue
-            tid = _as_str(e.get("id"))
-            if not tid:
-                continue
-            entry = {
-                "source": "triggevent", "id": tid,
-                "fight": _as_str(e.get("fight")), "group": _as_str(e.get("group")),
-                "name": _as_str(e.get("name")) or tid, "text": _as_str(e.get("text")),
-            }
-            if "tts" in e:
-                entry["tts"] = _as_str(e["tts"])
-            self._engine_inventory.append(entry)
+        self._engine_inventory.extend(_inventory_rows(items, "triggevent"))
         self._save_triggevent_inventory_cache()
         self._record_engine_seen("triggevent")
         self._refresh_table()
@@ -603,7 +589,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             # A cache without usable rows must not mask the bundled seed.
             if not isinstance(parsed, list):
                 continue
-            valid = [e for e in parsed if isinstance(e, dict) and _as_str(e.get("id"))]
+            valid = _inventory_rows(parsed, "triggevent")
             if valid:
                 tv = valid
                 break
@@ -611,20 +597,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             return
         self._engine_inventory = [e for e in self._engine_inventory
                                   if e.get("source") != "triggevent"]
-        for e in tv:
-            if not isinstance(e, dict):
-                continue
-            tid = _as_str(e.get("id"))
-            if not tid:
-                continue
-            entry = {
-                "source": "triggevent", "id": tid,
-                "fight": _as_str(e.get("fight")), "group": _as_str(e.get("group")),
-                "name": _as_str(e.get("name")) or tid, "text": _as_str(e.get("text")),
-            }
-            if "tts" in e:
-                entry["tts"] = _as_str(e["tts"])
-            self._engine_inventory.append(entry)
+        self._engine_inventory.extend(tv)
         self._record_engine_seen("triggevent")
 
     def _set_cactbot_button(self, on: bool) -> None:

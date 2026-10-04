@@ -55,6 +55,7 @@ ENGINE_BIN="$SRC/Triggernometry/bin/Release"
 ( cd "$ENGINE_BIN" && mcs -target:exe -out:triggernometry-core.exe \
     -r:TriggernometryPlugin.dll -r:System.Windows.Forms.dll -r:System.Drawing.dll \
     -r:System.Xml.dll -r:System.dll -r:System.Core.dll -r:System.Text.Json.dll -r:System.Memory.dll \
+    -r:System.Text.Encodings.Web.dll -r:Microsoft.Bcl.AsyncInterfaces.dll \
     "$HERE/host/Program.cs" "$HERE/host/CombatantBridge.cs" "$HERE/host/ActLogLine.cs" )
 
 ENGINE_BIN="$ENGINE_BIN" bash "$HERE/package.sh"

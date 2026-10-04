@@ -340,28 +340,28 @@ public final class TriggeventCore {
     private static void emitCallout(CalloutEvent ev, String tts, String text,
                                     boolean ttsOnly, Instant at) {
         try {
-            final StringBuilder sb = new StringBuilder(128);
-            sb.append("{\"t\":\"callout\"");
+            Map<String, Object> message = new LinkedHashMap<>();
+            message.put("t", "callout");
             long seq = CALLOUT_SEQ.incrementAndGet();
-            sb.append(",\"seq\":").append(seq);
+            message.put("seq", seq);
             Field sourceField = calloutField(ev);
-            field(sb, "id", ev instanceof CustomTriggers.Callout custom ? custom.id : idForField(sourceField));
-            field(sb, "tts", tts);
-            field(sb, "text", text);
+            message.put("id", ev instanceof CustomTriggers.Callout custom ? custom.id : idForField(sourceField));
+            message.put("tts", tts);
+            message.put("text", text);
             if (ttsOnly) {
-                sb.append(",\"tts_only\":true");
+                message.put("tts_only", true);
             }
-            sb.append(",\"at\":").append(at.toEpochMilli());
-            sb.append(",\"severity\":\"").append(severity(ev.getColorOverride())).append('"');
+            message.put("at", at.toEpochMilli());
+            message.put("severity", severity(ev.getColorOverride()));
             if (!ttsOnly) {
-                field(sb, "sound", ev.getSound());
+                message.put("sound", ev.getSound());
             }
             boolean expired = ev.isExpired();
-            sb.append(",\"expired\":").append(expired);
-            sb.append('}');
+            message.put("expired", expired);
+            message.values().removeIf(Objects::isNull);
             diagnostics.callout(sourceField, seq, ttsOnly, text != null && !text.isBlank(),
                     tts != null && !tts.isBlank(), expired);
-            println(sb.toString());
+            println(MAPPER.writeValueAsString(message));
             // Report PrintStream write failures once per failure streak.
             if (OUT.checkError()) {
                 diag("stdout write failed while emitting a callout");
@@ -604,9 +604,7 @@ public final class TriggeventCore {
             diag("no ModifiedCalloutRepository - inventory skipped");
             return;
         }
-        final StringBuilder sb = new StringBuilder(4096);
-        sb.append("{\"t\":\"inventory\",\"triggers\":[");
-        boolean first = true;
+        List<Map<String, String>> entries = new ArrayList<>();
         final List<CalloutGroup> groups = repo.getAllCallouts();
         diagnostics.registerSequences(repo);
         for (CalloutGroup g : groups) {
@@ -622,21 +620,18 @@ public final class TriggeventCore {
                 if (text == null || text.isEmpty()) {
                     text = h.getOriginal().getOriginalTts();
                 }
-                if (!first) {
-                    sb.append(',');
-                }
-                first = false;
-                sb.append("{\"id\":\"").append(esc(id)).append('"');
-                field(sb, "name", h.getDescription());
-                field(sb, "fight", fight);
-                field(sb, "group", groupName);
-                field(sb, "text", text);
-                field(sb, "tts", Objects.requireNonNullElse(h.getOriginal().getOriginalTts(), ""));
-                sb.append('}');
+                Map<String, String> entry = new LinkedHashMap<>();
+                entry.put("id", id);
+                entry.put("name", h.getDescription());
+                entry.put("fight", fight);
+                entry.put("group", groupName);
+                entry.put("text", text);
+                entry.put("tts", Objects.requireNonNullElse(h.getOriginal().getOriginalTts(), ""));
+                entry.values().removeIf(Objects::isNull);
+                entries.add(entry);
             }
         }
-        sb.append("]}");
-        println(sb.toString());
+        println(MAPPER.writeValueAsString(Map.of("t", "inventory", "triggers", entries)));
         diag("inventory emitted: " + groups.size() + " groups");
     }
 
@@ -650,37 +645,8 @@ public final class TriggeventCore {
         return "alert";
     }
 
-    // Write JSON without depending on the engine's Jackson version.
-    private static void field(StringBuilder sb, String key, String val) {
-        if (val == null) {
-            return;
-        }
-        sb.append(",\"").append(key).append("\":\"").append(esc(val)).append('"');
-    }
-
-    private static String esc(String s) {
-        final StringBuilder b = new StringBuilder(s.length() + 8);
-        for (int i = 0; i < s.length(); i++) {
-            final char ch = s.charAt(i);
-            switch (ch) {
-                case '"':  b.append("\\\""); break;
-                case '\\': b.append("\\\\"); break;
-                case '\n': b.append("\\n");  break;
-                case '\r': b.append("\\r");  break;
-                case '\t': b.append("\\t");  break;
-                default:
-                    if (ch < 0x20) {
-                        b.append(String.format("\\u%04x", (int) ch));
-                    } else {
-                        b.append(ch);
-                    }
-            }
-        }
-        return b.toString();
-    }
-
     private static void emitStatus(boolean active, String msg) {
-        println("{\"t\":\"status\",\"active\":" + active + ",\"message\":\"" + esc(msg) + "\"}");
+        println(MAPPER.writeValueAsString(Map.of("t", "status", "active", active, "message", msg)));
     }
 
     private static void println(String s) {

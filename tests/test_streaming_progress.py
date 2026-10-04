@@ -54,6 +54,7 @@ class StreamingProgressTests(unittest.TestCase):
             with patch.object(tts, "_MODEL_DIR", root), \
                     patch.object(tts, "_KOKORO_URLS", {dest: url}), \
                     patch.object(tts, "_KOKORO_SHA256", {dest: hashlib.sha256(body).hexdigest()}), \
+                    patch("shutil.disk_usage", side_effect=AssertionError("Model downloads have no update reserve")), \
                     patch.object(tts, "_KOKORO_DL_STALL_S", .15), \
                     patch.object(tts, "_KOKORO_DL_DEADLINE_S", 3):
                 self.assertTrue(tts.download_kokoro_model())

@@ -4,7 +4,6 @@ import os
 import re
 import sys
 import tempfile
-import threading
 import time
 from pathlib import Path
 
@@ -125,23 +124,7 @@ def defer_persistence_warnings(window):
 
 
 def _atomic_write_json(path: "Path", data, *, indent: "int | None" = None) -> None:
-    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.{threading.get_ident()}.tmp")
-    payload = json.dumps(data, indent=indent, ensure_ascii=False)
-    try:
-        # Settings may contain OAuth secrets.
-        def _owner_only(p, flags):
-            return os.open(p, flags, 0o600)
-        with open(tmp, "w", encoding="utf-8", opener=_owner_only) as f:
-            f.write(payload)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except (OSError, ValueError):
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
+    _atomic_write_bytes(path, json.dumps(data, indent=indent, ensure_ascii=False).encode("utf-8"))
 
 
 def _atomic_write_bytes(path: "Path", payload: bytes) -> None:
@@ -154,7 +137,10 @@ def _atomic_write_bytes(path: "Path", payload: bytes) -> None:
             os.fsync(f.fileno())
         os.replace(tmp, path)
     finally:
-        tmp.unlink(missing_ok=True)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _fsync_file(path: "Path") -> None:
@@ -334,10 +320,6 @@ class _PhrasePattern:
                     translated_value = "、".join(phrases[item] for item in items)
             out.extend((translated_value or value, tail))
         return "".join(out)
-
-
-def _split_phrase_tokens(text: str) -> list[str]:
-    return _phrase_template(text)[0]
 
 
 def _phrase_template(text: str):

@@ -3,7 +3,6 @@ import hashlib
 import io
 import os
 import re
-import socket
 import urllib.request
 import platform
 import subprocess
@@ -22,7 +21,7 @@ from nyaatriggers import proc_env
 from nyaatriggers.locale_util import has_japanese
 from nyaatriggers.drop_log import log_drop
 from nyaatriggers.diagnostics import record, record_exception
-from nyaatriggers.http_fetch import open_response
+from nyaatriggers.http_fetch import ReadTimeout, copy_response, open_response
 
 try:
     import numpy as _np
@@ -134,14 +133,6 @@ _KOKORO_DL_DEADLINE_S = 30 * 60
 _KOKORO_DL_STALL_S = 60
 
 
-def _unblock_reader(resp) -> None:
-    """Shut down the socket to unblock a reader without waiting on its buffer lock."""
-    try:
-        resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _venv_python() -> str:
     """Reject incomplete voice environments to avoid installing into the wrong interpreter."""
     venv = globals().get("_FFXIV_VENV")
@@ -225,47 +216,17 @@ def download_kokoro_model() -> bool:
                     total = int(r.headers.get("Content-Length", 0) or 0)
                 except ValueError:
                     total = 0
-                done = threading.Event()
-                progress = [0]
-                reader_error = [None]
-
-                def _reader() -> None:
-                    try:
-                        read_chunk = getattr(r, "read1", r.read)
-                        while True:
-                            chunk = read_chunk(1 << 16)
-                            if not chunk:
-                                break
-                            progress[0] += len(chunk)
-                            if progress[0] > _KOKORO_MAX_BYTES:
-                                raise OSError(
-                                    f"download over {_KOKORO_MAX_BYTES} bytes for {dest.name}")
-                            digest.update(chunk)
-                            f.write(chunk)
-                    except BaseException as exc:
-                        reader_error[0] = exc
-                    finally:
-                        done.set()
-
-                threading.Thread(target=_reader, daemon=True).start()
-                last_seen = progress[0]
-                last_change = time.monotonic()
-                while not done.wait(timeout=min(_KOKORO_DL_STALL_S, max(0.0, deadline - time.monotonic()))):
-                    now = time.monotonic()
-                    if progress[0] == last_seen or now > deadline:
-                        _unblock_reader(r)
-                        if now - last_change >= _KOKORO_DL_STALL_S:
-                            raise OSError(
-                                f"download of {dest.name} stalled, no new bytes "
-                                f"for {_KOKORO_DL_STALL_S} seconds")
+                try:
+                    got = copy_response(r, f, _KOKORO_MAX_BYTES, stall=_KOKORO_DL_STALL_S,
+                                        deadline=deadline, chunk_cb=digest.update)
+                except ReadTimeout as exc:
+                    if exc.stalled:
                         raise OSError(
-                            f"download of {dest.name} still running past "
-                            f"{_KOKORO_DL_DEADLINE_S // 60} min; giving up")
-                    last_seen = progress[0]
-                    last_change = now
-                if reader_error[0]:
-                    raise reader_error[0]
-                got = progress[0]
+                            f"download of {dest.name} stalled, no new bytes "
+                            f"for {_KOKORO_DL_STALL_S} seconds") from exc
+                    raise OSError(
+                        f"download of {dest.name} still running past "
+                        f"{_KOKORO_DL_DEADLINE_S // 60} min; giving up") from exc
             # Early EOF may not raise.
             if total and got < total:
                 raise OSError(f"short read: {got}/{total} bytes for {dest.name}")

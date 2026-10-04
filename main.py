@@ -173,22 +173,11 @@ def _set_setup_locale() -> None:
 _MAX_DOWNLOAD_BYTES = 1 << 30
 
 
-def _download(url: str, dest: Path, timeout: int = 30,
-              progress: "list[int] | None" = None) -> None:
-    """Download atomically with deadlines and byte progress."""
+def _download(url: str, dest: Path, timeout: int = 30) -> None:
     from nyaatriggers import updater
 
-    last = 0
-
-    def advanced(received: int, total: int) -> None:
-        nonlocal last
-        if progress is not None:
-            progress[0] += received - last
-        last = received
-
     limit = min(MAX_VOICE_CONFIG_BYTES, _MAX_DOWNLOAD_BYTES) if dest == _VOICE_CONFIG else _MAX_DOWNLOAD_BYTES
-    updater.download(url, dest, progress_cb=advanced, timeout=timeout,
-                     max_bytes=limit,
+    updater.download(url, dest, timeout=timeout, max_bytes=limit,
                      validate_cb=validate_voice_config if dest == _VOICE_CONFIG else None)
 
 
@@ -213,7 +202,6 @@ class _SetupWorker(QThread):
 
             dl_event = threading.Event()
             dl_error: list[Exception | None] = [None]
-            dl_progress: list[int] = [0]
 
             def _do_download() -> None:
                 try:
@@ -227,10 +215,10 @@ class _SetupWorker(QThread):
                             pass
                     if not _VOICE_FILE.exists():
                         _download(f"{_VOICE_BASE}/{_VOICE_STEM}.onnx",
-                                  _VOICE_FILE, progress=dl_progress)
+                                  _VOICE_FILE)
                     if not voice_config_ok(_VOICE_CONFIG):
                         _download(f"{_VOICE_BASE}/{_VOICE_STEM}.onnx.json",
-                                  _VOICE_CONFIG, progress=dl_progress)
+                                  _VOICE_CONFIG)
                 except Exception as exc:
                     dl_error[0] = exc
                 finally:

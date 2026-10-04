@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import socket
 import threading
 import time
 import urllib.request
@@ -19,7 +18,7 @@ from PyQt6.QtWidgets import (
 )
 
 from nyaatriggers.drop_log import log_drop
-from nyaatriggers.http_fetch import open_response
+from nyaatriggers.http_fetch import ReadTimeout, ResponseTooLarge, fetch_bytes
 from nyaatriggers.locale_util import _, N_
 from nyaatriggers.game_locale import fight_label
 
@@ -173,14 +172,6 @@ _TREE_STALL_S = 15
 _TREE_DEADLINE_S = 60
 
 
-def _unblock_reader(resp) -> None:
-    """Wake the reader without waiting for its buffer lock."""
-    try:
-        resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def refresh_from_cactbot_async(cache_path: Path) -> None:
     """Refresh the cached catalog in the background and log failures."""
     if _REFRESH_RUNNING.is_set():
@@ -196,44 +187,16 @@ def refresh_from_cactbot_async(cache_path: Path) -> None:
         try:
             req = urllib.request.Request(
                 _CACTBOT_TREE_API, headers={"User-Agent": "NyaaTriggers"})
-            deadline = time.monotonic() + _TREE_DEADLINE_S
-            with open_response(req, 20, min(deadline, time.monotonic() + _TREE_STALL_S)) as resp:
-                done = threading.Event()
-                progress = [0]
-                reader_error = [None]
-                raw = bytearray()
-
-                def _reader() -> None:
-                    try:
-                        read_chunk = getattr(resp, "read1", resp.read)
-                        while True:
-                            chunk = read_chunk(1 << 16)
-                            if not chunk:
-                                break
-                            raw.extend(chunk)
-                            progress[0] = len(raw)
-                            if len(raw) > _TREE_MAX_BYTES:
-                                raise ValueError("tree response too large")
-                    except BaseException as exc:
-                        reader_error[0] = exc
-                    finally:
-                        done.set()
-
-                threading.Thread(target=_reader, daemon=True).start()
-                last_seen = progress[0]
-                last_change = time.monotonic()
-                while not done.wait(timeout=min(_TREE_STALL_S, max(0.0, deadline - time.monotonic()))):
-                    now = time.monotonic()
-                    if progress[0] == last_seen or now > deadline:
-                        _unblock_reader(resp)
-                        if now - last_change >= _TREE_STALL_S:
-                            raise TimeoutError(
-                                f"cactbot tree fetch stalled, no new bytes for {_TREE_STALL_S} seconds")
-                        raise TimeoutError("cactbot tree fetch timed out after 60 s")
-                    last_seen = progress[0]
-                    last_change = now
-                if reader_error[0]:
-                    raise reader_error[0]
+            try:
+                raw = fetch_bytes(req, _TREE_MAX_BYTES, timeout=20,
+                                  stall=_TREE_STALL_S, deadline=_TREE_DEADLINE_S)
+            except ResponseTooLarge as exc:
+                raise ValueError("tree response too large") from exc
+            except ReadTimeout as exc:
+                if exc.stalled:
+                    raise TimeoutError(
+                        f"cactbot tree fetch stalled, no new bytes for {_TREE_STALL_S} seconds") from exc
+                raise TimeoutError("cactbot tree fetch timed out after 60 s") from exc
             body = json.loads(raw)
             tree = body.get("tree") if isinstance(body, dict) else None
             if tree is None:
