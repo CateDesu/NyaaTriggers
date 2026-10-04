@@ -74,6 +74,13 @@ def replace_child(parent, tag, child):
         parent.append(deepcopy(child))
 
 
+def _action_order(action):
+    try:
+        return int(action.get("OrderNumber", "0"))
+    except ValueError:
+        return 0
+
+
 class XmlDialog(QDialog):
     def __init__(self, element, parent=None):
         super().__init__(parent)
@@ -473,12 +480,7 @@ class TriggernometryDialog(QDialog):
         self.actions.clear()
         container = self.current.find("Actions")
         self.action_elements = [] if container is None else [a for a in container if a.tag == "Action"]
-        def order(action):
-            try:
-                return int(action.get("OrderNumber", "0"))
-            except ValueError:
-                return 0
-        self.action_elements.sort(key=order)
+        self.action_elements.sort(key=_action_order)
         for action in self.action_elements:
             kind = action.get("ActionType", "")
             label = dict((key, _(text)) for key, text in ACTION_TYPES).get(kind, kind)
@@ -510,7 +512,7 @@ class TriggernometryDialog(QDialog):
         container = self.current.find("Actions")
         if container is None:
             container = ET.SubElement(self.current, "Actions")
-        updated.set("OrderNumber", str(max((int(a.get("OrderNumber", "0")) for a in self.action_elements), default=0) + 1))
+        updated.set("OrderNumber", str(max((_action_order(a) for a in self.action_elements), default=0) + 1))
         container.append(updated)
         self.refresh_actions()
         self.actions.setCurrentRow(len(self.action_elements) - 1)

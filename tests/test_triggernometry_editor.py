@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import xml.etree.ElementTree as ET
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QDialog
 
@@ -338,6 +338,41 @@ class EditorTests(unittest.TestCase):
                          ["Variable", "UseTTS", "Placeholder", "Trigger"])
         self.assertEqual(ET.tostring(speech.find("Condition")), condition)
         validate_native(xml_bytes(document.root))
+
+    def test_adding_an_action_to_a_pack_with_invalid_order_can_be_repaired(self):
+        for order in ("", "invalid", "1.5"):
+            with self.subTest(order=order):
+                document = example(self.path)
+                actions = trigger_entries(document.root)[0][1].findall("Actions/Action")
+                actions[0].set("OrderNumber", order)
+                actions[-1].set("OrderNumber", "12")
+                original = xml_bytes(document.root)
+                self.path.write_bytes(original)
+                loaded = PackDocument.load(self.path)
+                dialog = TriggernometryDialog(loaded)
+                self.addCleanup(dialog.deleteLater)
+                previous = [ET.tostring(action) for action in dialog.action_elements]
+
+                def accept_action():
+                    editor = APP.activeModalWidget()
+                    editor.fields["UseTTSTextExpression"].setPlainText("Added callout")
+                    editor.accept()
+
+                QTimer.singleShot(0, accept_action)
+                dialog.add_action()
+                self.assertEqual([ET.tostring(action) for action in dialog.action_elements[:-1]], previous)
+                self.assertEqual(dialog.action_elements[-1].get("OrderNumber"), "13")
+                self.assertEqual(dialog.action_elements[-1].get("UseTTSTextExpression"), "Added callout")
+                with self.assertRaises(ValueError):
+                    loaded.save()
+                self.assertEqual(self.path.read_bytes(), original)
+                dialog.actions.setCurrentRow(0)
+                dialog.move_action(1)
+                loaded.save()
+                self.assertEqual(self.path.with_suffix(".xml.bak").read_bytes(), original)
+                repaired = PackDocument.load(self.path)
+                self.assertEqual([action.get("OrderNumber") for action in trigger_entries(repaired.root)[0][1].findall("Actions/Action")],
+                                 ["1", "2", "3", "4", "5"])
 
     def test_window_save_shows_unsorted_and_defers_reload_without_losing_muting(self):
         from tests.test_session_ui import SessionUiTests

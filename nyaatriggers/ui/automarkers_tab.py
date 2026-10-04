@@ -451,7 +451,7 @@ class AutomarkersTabMixin:
         for key, default in (("dps", "attack1"), ("support", "attack2"),
                              ("accretion", "attack3")):
             tok = self._settings.get(f"umad_chain_marker_{key}", default)
-            markers[key] = tok if tok in TELESTO_MARKER_TOKENS else default
+            markers[key] = tok if isinstance(tok, str) and tok in TELESTO_MARKER_TOKENS else default
         return markers
 
     def _umad_chain_line(self, fields: list[str]) -> None:
@@ -522,7 +522,7 @@ class AutomarkersTabMixin:
         for key, default in (("away1", "ignore1"), ("away2", "ignore2"),
                              ("look1", "bind1"), ("look2", "bind2")):
             tok = self._settings.get(f"umad_gaze_marker_{key}", default)
-            markers[key] = tok if tok in TELESTO_MARKER_TOKENS else default
+            markers[key] = tok if isinstance(tok, str) and tok in TELESTO_MARKER_TOKENS else default
         return markers
 
     def _umad_gaze_line(self, fields: list[str]) -> None:
