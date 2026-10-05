@@ -78,8 +78,10 @@ def validate_recap(data):
 
 
 class RecapStore:
-    def __init__(self, directory):
+    def __init__(self, directory, writer=None):
         self.directory = Path(directory)
+        self.writer = writer
+        self._saving = {}
         self.unsaved = {}
         self.errors = {}
         self.dropped = 0
@@ -102,14 +104,32 @@ class RecapStore:
 
     def save(self, data):
         ident = data["id"]
+        token = self._saving[ident] = object()
         try:
             validate_recap(data)
-            write_record(self._directory(data["session_id"], data["pull_id"]), data)
+            directory = self._directory(data["session_id"], data["pull_id"])
+            if self.writer is not None:
+                self.writer.submit(directory, data, write_record,
+                                   lambda error: self._saved(data, error, token))
+                self.unsaved[ident] = data
+                return True
+            write_record(directory, data)
         except (OSError, ValueError) as exc:
+            return self._saved(data, exc, token)
+        return self._saved(data, None, token)
+
+    def _saved(self, data, error, token):
+        ident = data["id"]
+        if self._saving.get(ident) is not token:
+            return False
+        del self._saving[ident]
+        if error is not None:
             self.unsaved[ident] = data
-            self.errors[ident] = str(exc)
+            self.errors[ident] = str(error)
             while len(self.unsaved) > MAX_PENDING_RECAPS:
-                oldest = next(iter(self.unsaved))
+                oldest = next((key for key in self.unsaved if key not in self._saving), None)
+                if oldest is None:
+                    break
                 del self.unsaved[oldest]
                 self.errors.pop(oldest, None)
                 self.dropped += 1
@@ -120,7 +140,8 @@ class RecapStore:
 
     def flush_pending(self):
         for data in list(self.unsaved.values()):
-            self.save(data)
+            if data["id"] not in self._saving:
+                self.save(data)
 
     def load(self, session_id, pull_id):
         directory = self._directory(session_id, pull_id)

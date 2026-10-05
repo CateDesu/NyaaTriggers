@@ -10,9 +10,13 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
-from nyaatriggers.triggernometry_bridge import _read_lines_bounded
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication
+
+from nyaatriggers.triggernometry_bridge import TriggernometryBridge, _read_lines_bounded
 
 
 CORE = Path(__file__).resolve().parents[1] / "triggernometry-core"
@@ -111,6 +115,70 @@ class TriggernometryHostTests(unittest.TestCase):
             if os.environ.get("GITHUB_ACTIONS") == "true":
                 raise RuntimeError(message)
             raise unittest.SkipTest(message)
+
+    def test_bridge_speech_controls_preserve_scripts_templates_and_defaults(self):
+        app = QApplication.instance() or QApplication([])
+        tree = ET.parse(CORE / "test" / "spike-script-pack.xml")
+        trigger = tree.find(".//Trigger")
+        actions = trigger.find("Actions")
+        actions[0].set("ExecScriptExpression",
+                       'int count; int.TryParse(Triggernometry.Interpreter.StaticHelpers.GetScalarVariable(false, '
+                       '"spikevar"), out count); Triggernometry.Interpreter.StaticHelpers.SetScalarVariable(false, '
+                       '"spikevar", (count + 1).ToString());')
+        ET.SubElement(actions, "Action", OrderNumber="3", ActionType="UseTTS",
+                      UseTTSTextExpression="finished ${var:spikevar}")
+        ident = trigger.get("Id") + "#0"
+        override = '猫 "quoted" \\ ${var:spikevar}\n次'
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.dict(os.environ, {"XDG_CONFIG_HOME": temp, "NYAA_TRIGGERNOMETRY_PACKS": temp,
+                                        "NYAA_TRIGGERNOMETRY_EXE": str(CORE / "bin" / "triggernometry-core.exe")}):
+            pack = Path(temp) / "controls.xml"
+            tree.write(pack, encoding="utf-8")
+            original = pack.read_bytes()
+            bridge = TriggernometryBridge()
+            spoken, inventories = [], []
+            bridge.tts.connect(lambda text, gen: spoken.append((text, gen)))
+            bridge.inventory.connect(lambda payload, gen: inventories.append(json.loads(payload)))
+
+            def wait_for(predicate):
+                deadline = time.monotonic() + 20
+                while not predicate() and time.monotonic() < deadline:
+                    QTest.qWait(10)
+                self.assertTrue(predicate(), spoken)
+
+            def fire(number, expected):
+                start = len(spoken)
+                bridge.feed_log("00|2026-10-04T12:00:00Z|0038|Player|SPIKESCRIPT|test")
+                wait_for(lambda: (f"finished {number}", generation) in spoken[start:])
+                self.assertEqual(spoken[start:], [(text, generation) for text in expected])
+
+            try:
+                bridge.start()
+                generation = bridge.generation()
+                wait_for(lambda: bool(inventories))
+                self.assertEqual({row["id"] for row in inventories[-1]},
+                                 {ident, trigger.get("Id") + "#1"})
+                fire(1, ["script computed 1", "finished 1"])
+                bridge.set_callout(ident, tts=override)
+                bridge.set_callout(ident, enable=False)
+                fire(2, ["finished 2"])
+                bridge.set_callout(ident, enable=True)
+                fire(3, [override.replace("${var:spikevar}", "3"), "finished 3"])
+                bridge.set_callout(ident, enable=False)
+                bridge.reset_callout(ident)
+                fire(4, ["finished 4"])
+                bridge.set_callout(ident, enable=True)
+                fire(5, ["script computed 5", "finished 5"])
+                self.assertEqual(bridge.generation(), generation)
+                self.assertTrue(bridge.is_active())
+                self.assertEqual(pack.read_bytes(), original)
+            finally:
+                bridge.stop(wait=True)
+                for worker in (bridge._reader, bridge._errpump, bridge._writer):
+                    if worker is not None:
+                        worker.join(timeout=8)
+                        self.assertFalse(worker.is_alive())
+                app.processEvents()
 
     def test_large_unicode_inventory_stays_within_the_bridge_line_limit(self):
         text = "あ" * 200000 + '猫 "quoted"\\\t\n'

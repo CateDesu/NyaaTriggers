@@ -397,25 +397,26 @@ class Trigger:
     def cooldown_key(self, source_id: str) -> str:
         return "*" if self.cooldown_scope == "trigger" else source_id.upper()
 
-    def matches(self, fields: list[str], me: str = "", me_id: str = "") -> dict | None:
+    def accepts_event(self, fields: list[str]) -> bool:
         if not self.enabled or not fields:
-            return None
-        # Use the incoming type's field layout when the trigger has alternatives.
+            return False
         lt = self.log_type
         if "|" in lt:
             if fields[0] not in (p.strip() for p in lt.split("|")):
-                return None
+                return False
             lt = fields[0]
         elif fields[0] != lt:
-            return None
-
+            return False
         if self.ability_id:
             id_idx = _ID_IDX.get(lt, 4)
-            if len(fields) <= id_idx:
-                return None
-            if fields[id_idx].upper() not in _id_set(self.ability_id):
-                return None
-        elif self.ability_regex:
+            return len(fields) > id_idx and fields[id_idx].upper() in _id_set(self.ability_id)
+        return True
+
+    def matches(self, fields: list[str], me: str = "", me_id: str = "") -> dict | None:
+        if not self.accepts_event(fields):
+            return None
+        lt = fields[0]
+        if not self.ability_id and self.ability_regex:
             idx = _ABILITY_IDX.get(lt)
             search_text = (
                 fields[idx] if idx is not None and idx < len(fields)

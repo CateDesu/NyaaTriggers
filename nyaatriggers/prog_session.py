@@ -147,9 +147,11 @@ def compare_sessions(selected, compared, definitions=DEFINITIONS):
 
 
 class ProgSessions:
-    def __init__(self, directory, clock=None, wall=None, definitions=None):
+    def __init__(self, directory, clock=None, wall=None, definitions=None, writer=None):
         self.directory = directory
-        self.recaps = RecapStore(Path(directory) / "recaps")
+        self.writer = writer
+        self._saving = {}
+        self.recaps = RecapStore(Path(directory) / "recaps", writer)
         self.clock = clock or time.monotonic
         self.wall = wall or time.time
         self.definitions = DEFINITIONS if definitions is None else tuple(definitions)
@@ -202,7 +204,10 @@ class ProgSessions:
                    "zone_id": zone_id, "zone": zone, "started": self.wall(),
                    "elapsed": 0.0, "state": "active", "pulls": []}
         validate_session(session)
-        write_record(self.directory, session)
+        if self.writer is None:
+            write_record(self.directory, session)
+        else:
+            self.save(session)
         self.sessions.insert(0, session)
         self.current = session
         self.started_at = self.clock()
@@ -224,6 +229,7 @@ class ProgSessions:
         return max(0, self.clock() - self.started_at) if session is self.current else session["elapsed"]
 
     def save(self, session):
+        token = self._saving[session["id"]] = object()
         record = session
         if session is self.current:
             session["elapsed"] = self.elapsed(session)
@@ -233,10 +239,23 @@ class ProgSessions:
                 record = {**session, "pulls": [*session["pulls"], self._empty_pull]}
         try:
             validate_session(record)
+            if self.writer is not None:
+                self.writer.submit(self.directory, record, write_record,
+                                   lambda error: self._saved(session, error, token))
+                self.unsaved[session["id"]] = session
+                return True
             write_record(self.directory, record)
         except (OSError, ValueError) as exc:
+            return self._saved(session, exc, token)
+        return self._saved(session, None, token)
+
+    def _saved(self, session, error, token):
+        if self._saving.get(session["id"]) is not token:
+            return False
+        del self._saving[session["id"]]
+        if error is not None:
             self.unsaved[session["id"]] = session
-            self.save_errors[session["id"]] = str(exc)
+            self.save_errors[session["id"]] = str(error)
             self.save_error = "\n".join(self.save_errors.values())
             return False
         self.unsaved.pop(session["id"], None)
@@ -256,7 +275,10 @@ class ProgSessions:
         previous = session.get("archived")
         had_flag = "archived" in session
         session["archived"] = archived
-        if self.save(session):
+        saved = self.save(session)
+        # Archive visibility depends on a confirmed save.
+        self.poll_saves(wait=True)
+        if saved and session["id"] not in self.save_errors:
             return True
         if had_flag:
             session["archived"] = previous
@@ -264,10 +286,22 @@ class ProgSessions:
             session.pop("archived")
         return False
 
-    def flush_pending(self):
+    def poll_saves(self, *, wait=False):
+        if self.writer is not None:
+            self.writer.poll(wait=wait)
+
+    def flush_pending(self, *, wait=False):
+        self.poll_saves(wait=wait)
         for session in list(self.unsaved.values()):
-            self.save(session)
+            if session["id"] not in self._saving:
+                self.save(session)
         self.recaps.flush_pending()
+        self.poll_saves(wait=wait)
+
+    def close(self):
+        self.flush_pending(wait=True)
+        if self.writer is not None:
+            self.writer.close()
 
     def combat(self, in_game):
         if not in_game and (self.definition is None or self.definition.continuous_combat):

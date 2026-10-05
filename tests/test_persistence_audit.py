@@ -129,6 +129,7 @@ class SessionFinalSaveTests(unittest.TestCase):
         self.addCleanup(case.doCleanups)
         case.connect()
         case.window._prog_tab.start_button.click()
+        case.window._prog_sessions.poll_saves(wait=True)
         case.clock.value += 12
         return case
 

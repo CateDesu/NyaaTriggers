@@ -77,6 +77,23 @@ class CalloutReviewFixTests(unittest.TestCase):
         self.host = Host(self.now, [tea])
         self.addCleanup(self.host._clear_seq_runners)
 
+    def test_disabled_rows_cannot_spend_an_active_callouts_dispatch_budget(self):
+        disabled = [Trigger(enabled=False, zone_regex="Alexander") for _ in range(4)]
+        active = Trigger(ability_id="CAFE", zone_regex="Alexander", tts_text="In safe")
+        self.host._triggers = [*disabled, active]
+        zone_matches = self.host._trigger_zone_matches
+
+        def check_zone(trigger):
+            result = zone_matches(trigger)
+            if not trigger.enabled:
+                self.now[0] += 0.4
+            return result
+
+        with patch.object(self.host, "_trigger_zone_matches", side_effect=check_zone):
+            self.host.dispatch("CAFE", "20")
+        self.speech.assert_called_once_with("In safe", speed=1.0, reading="In safe")
+        self.assertEqual(self.now[0], 1000.0)
+
     def test_tea_waits_six_seconds_and_duplicate_packets_do_not_postpone_it(self):
         self.host.dispatch("4879")
         runner, = self.host._seq_runners

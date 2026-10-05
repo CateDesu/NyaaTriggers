@@ -1,6 +1,7 @@
 import math
 import re
 import time
+from functools import lru_cache
 
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtGui import QBrush, QColor, QTextCharFormat, QTextCursor
@@ -23,6 +24,12 @@ from nyaatriggers.app_common import (
 
 # These Dancing Mad basic attacks have no name in the game data.
 _ABILITY_NAME_FALLBACKS = {0xC250: "Attack", 0xC252: "Attack"}
+
+
+@lru_cache(maxsize=4096)
+def _zone_pattern_matches(pattern: str, aliases: tuple[str, ...]) -> bool:
+    rx = compile_user_regex(pattern, re.IGNORECASE)
+    return rx is not None and any(_safe_search(rx, zone) for zone in aliases if zone)
 
 
 class InstanceTabMixin:
@@ -142,8 +149,7 @@ class InstanceTabMixin:
         if (not trigger.zone_regex or not self._zone_aliases
                 or getattr(self, "_awaiting_zone_metadata", False)):
             return True
-        rx = compile_user_regex(trigger.zone_regex, re.IGNORECASE)
-        return rx is not None and self._zone_matches(rx)
+        return _zone_pattern_matches(trigger.zone_regex, tuple(self._zone_aliases))
 
     def _apply_zone(self, zone: str, zone_id: int = 0, *, raw_zone: bool = False) -> None:
         """Reset on raw zone boundaries while preserving repeated zone metadata.
@@ -390,6 +396,8 @@ class InstanceTabMixin:
 
             deadline = time.monotonic() + _DISPATCH_BUDGET_S
             for t in self._triggers:
+                if not t.enabled or not t.accepts_event(fields):
+                    continue
                 if time.monotonic() > deadline:
                     ac.log_drop("dispatch-budget",
                              f"trigger loop exceeded {_DISPATCH_BUDGET_S:g}s; "

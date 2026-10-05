@@ -470,6 +470,7 @@ class ProgTab(QWidget):
         self.refresh()
 
     def tick(self):
+        self.sessions.poll_saves()
         active = self.sessions.current
         self.sessions.update_active(self.window._dps_meter.full_snapshot())
         self.sessions.check_phase_timeout()

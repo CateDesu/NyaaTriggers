@@ -79,7 +79,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         self._triggevent_disabled: set[str] = _as_strset(self._settings.get("triggevent_disabled_triggers", []))
         self._triggernometry: "TriggernometryBridge | None" = None
         self._triggernometry_mode: bool = False
-        self._triggernometry_last_spoken: dict[str, float] = {}
         self._triggernometry_callout_edits: dict = _as_strdict(self._settings.get("triggernometry_callout_edits", {}))
         self._triggernometry_disabled: set[str] = _as_strset(self._settings.get("triggernometry_disabled_triggers", []))
         self._engine_disabled: dict = {"cactbot": self._cactbot_disabled, "triggevent": self._triggevent_disabled,
@@ -370,9 +369,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         if not text:
             record("ui_callout", channel="speech", result="empty")
             return
-        if not self._dedup_speak_gate(self._triggevent_last_spoken, text, 0.3, 2.0):
-            record("ui_callout", channel="speech", result="duplicate")
-            return
         record("ui_callout", channel="speech", result="queued")
         speak(self._localize_text(text), reading=self._reading_for(self._localize_text(text)))
 
@@ -463,8 +459,6 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
 
     def _triggernometry_speak(self, text: str) -> None:
         if not text:
-            return
-        if not self._dedup_speak_gate(self._triggernometry_last_spoken, text, 0.3, 2.0):
             return
         speak(self._localize_text(text), reading=self._reading_for(self._localize_text(text)))
 

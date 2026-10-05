@@ -252,7 +252,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
 
         self._triggevent: "TriggeventBridge | None" = None
         self._triggevent_mode: bool = False
-        self._triggevent_last_spoken: dict[str, float] = {}
         self._engine_sidecar_state: dict = {}
         self._engine_chain_failures: list = []
         self._telesto_status: str = "unknown"   # Telesto reachability, good, bad or unknown
@@ -344,7 +343,8 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._death_recap = DeathRecap()
         # Recap death history follows the full attempt across meter segments.
         self._dps_meter.is_duplicate_death = self._death_recap.is_duplicate_death
-        self._prog_sessions = ProgSessions(ac._DATA_DIR / "prog_sessions")
+        from nyaatriggers.record_store import RecordWriter
+        self._prog_sessions = ProgSessions(ac._DATA_DIR / "prog_sessions", writer=RecordWriter())
         self._dps_meter.on_pull_start = self._prog_pull_started
         self._dps_meter.on_pull_finish = self._prog_pull_finished
 
@@ -1170,19 +1170,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
                 break
         self._save_triggers()
         self._update_fight_controls()
-
-    def _dedup_speak_gate(self, last_spoken: dict, text: str,
-                          window_s: float, prune_s: float) -> bool:
-        """Claim engine text unless it was just spoken."""
-        now = time.monotonic()
-        key = text.casefold()
-        if now - last_spoken.get(key, 0.0) < window_s:
-            return False
-        if len(last_spoken) > 64:
-            for k in [k for k, v in last_spoken.items() if now - v >= prune_s]:
-                del last_spoken[k]
-        last_spoken[key] = now
-        return True
 
     # Give local triggers time to claim guest text when enabled.
 

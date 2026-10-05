@@ -12,6 +12,27 @@ suites. The release workflow uses the same runner.
 Replay tests keep automatic support logging disabled. Diagnostic suites write to
 temporary files and check both useful evidence and excluded personal information.
 
+Engine contract checks protect recovery ordering, engine lifecycle, the Cactbot
+timeline gate and native Triggernometry speech controls:
+
+```bash
+python3 -m tests test_engine_contracts test_triggernometry_host
+```
+
+`test_engine_contracts` uses real Qt signals, queues and timeline parsing with a
+controlled clock and simulated Triggevent capabilities. It does not launch Java
+or test a live IINACT feed. `test_triggernometry_host` runs the committed native
+host under Mono and Xvfb. Its speech control check uses the production bridge,
+executes C# scripts and waits for real delayed actions. These checks protect
+behavior rather than a particular implementation.
+
+`test_callout_hot_paths` checks cheap trigger rejection, zone-cache freshness,
+repeated native speech through queued Qt delivery, and background session writes.
+Storage checks block a real writer while combat dispatch continues, then verify
+shutdown persistence, retries, bounded queues and superseded writes. They also
+keep saved recaps reachable when a queued summary fails. UI tests wait explicitly
+for background saves before reading their files.
+
 Run selected suites with:
 
 ```bash

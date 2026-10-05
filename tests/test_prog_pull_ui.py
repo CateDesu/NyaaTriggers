@@ -425,6 +425,7 @@ class PullUiTests(unittest.TestCase):
         self.assertFalse(errors)
         self.assertEqual(len(saved), 1)
         tab.archive_button.click()
+        self.window._prog_sessions.close()
         self.window._prog_sessions = ProgSessions(self.temp / "prog_sessions", clock=self.clock)
         tab.sessions = self.window._prog_sessions
         tab.refresh()

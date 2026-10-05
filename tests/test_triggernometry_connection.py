@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import QApplication
 from nyaatriggers import app_common as ac
 from nyaatriggers import triggernometry_bridge as bridge
 from nyaatriggers.dps_meter import DpsMeter
-from nyaatriggers.main_window import MainWindow
 from nyaatriggers.triggernometry_editor import PackDocument
 from nyaatriggers.ui.connection import ConnectionMixin
 from nyaatriggers.ui.engines import EnginesMixin
@@ -31,8 +30,6 @@ APP = QApplication.instance() or QApplication([])
 
 
 class Host(QObject, EnginesMixin, InstanceTabMixin, VoiceTabMixin, ConnectionMixin):
-    _dedup_speak_gate = MainWindow._dedup_speak_gate
-
     def __init__(self):
         super().__init__()
         self._ws = WSClient(self)
@@ -40,7 +37,6 @@ class Host(QObject, EnginesMixin, InstanceTabMixin, VoiceTabMixin, ConnectionMix
         self._triggernometry = None
         self._triggernometry_mode = False
         self._triggernometry_disabled = set()
-        self._triggernometry_last_spoken = {}
         self._settings = {}
         self._current_zone = ""
         self._current_zone_id = 0

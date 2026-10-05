@@ -57,6 +57,7 @@ class SessionUiTests(unittest.TestCase):
             self.stack.enter_context(patch.object(*target))
         self.stack.enter_context(patch("nyaatriggers.ui.recap_widgets.RecapIcons._pump"))
         self.window = mw.MainWindow()
+        self.addCleanup(self.window._prog_sessions.close)
         self.addCleanup(self.window.close)
         self.clock = Clock()
         self.window._dps_meter._clock = self.clock
@@ -1421,6 +1422,7 @@ class SessionUiTests(unittest.TestCase):
         self.assertEqual(window._recap_list.count(), 1)
         self.assertGreater(window._recap_table.rowCount(), 0)
         tab.end_button.click()
+        self.window._prog_sessions.poll_saves(wait=True)
         saved = ProgSessions(self.temp / "prog_sessions").sessions[0]
         self.assertEqual(saved["pulls"][0]["note"], "First clean towers")
         window._nav_buttons[4].click()
@@ -1869,6 +1871,7 @@ class SessionUiTests(unittest.TestCase):
         self.assertEqual(window._recap_list.count(), 2)
         tab.end_button.click()
         window._death_recap.deaths.clear()
+        self.window._prog_sessions.poll_saves(wait=True)
         restarted = ProgSessions(self.temp / "prog_sessions")
         window._prog_sessions = tab.sessions = restarted
         tab.refresh()
@@ -1995,11 +1998,13 @@ class SessionUiTests(unittest.TestCase):
         with patch("nyaatriggers.recap_store.write_record", side_effect=OSError("Disk failed")):
             self.line(["25", "ts", PLAYER, "Player"])
             tab.recap_button.click()
+            window._prog_sessions.poll_saves(wait=True)
             tab.tick()
             self.assertIn("Disk failed", tab.status.text())
             self.assertIn("Disk failed", window._recap_notice.text())
             self.assertEqual(window._recap_list.count(), 1)
         tab.flush()
+        window._prog_sessions.poll_saves(wait=True)
         tab.tick()
         self.assertNotIn("Disk failed", window._recap_notice.text())
         path = next((self.temp / "prog_sessions").glob("recaps/*/*/*.json"))
@@ -2027,6 +2032,7 @@ class SessionUiTests(unittest.TestCase):
         self.line(ability())
         self.clock.value += 12
         self.line(["25", "ts", PLAYER, "Player"])
+        self.window._prog_sessions.poll_saves(wait=True)
         saved = ProgSessions(self.temp / "prog_sessions").sessions[0]["pulls"][0]
         self.assertEqual(saved["deaths"], 1)
         self.assertEqual(saved["duration"], 12)
@@ -2066,7 +2072,9 @@ class SessionUiTests(unittest.TestCase):
             for _ in range(60):
                 self.clock.value += 1
                 tab.tick()
+                window._prog_sessions.poll_saves(wait=True)
         self.assertEqual(save.call_count, 60 // CHECKPOINT_SECONDS)
+        self.window._prog_sessions.poll_saves(wait=True)
         saved = ProgSessions(self.temp / "prog_sessions").sessions[0]
         self.assertEqual(saved["pulls"][0]["duration"], 60)
         self.assertEqual(saved["pulls"][0]["ending"], "program-closed")
@@ -2075,6 +2083,7 @@ class SessionUiTests(unittest.TestCase):
         window._on_in_combat(False, False)
         self.clock.value += CHECKPOINT_SECONDS
         tab.tick()
+        self.window._prog_sessions.poll_saves(wait=True)
         saved = ProgSessions(self.temp / "prog_sessions").sessions[0]
         self.assertEqual(saved["elapsed"], 60 + CHECKPOINT_SECONDS)
         self.assertEqual(saved["pulls"][0]["duration"], 60)
@@ -2096,6 +2105,7 @@ class SessionUiTests(unittest.TestCase):
         self.assertTrue(tab.recap_button.isEnabled())
         tab.recap_button.click()
         self.assertEqual(window._recap_records[0]["events"][0]["kind"], "instant-death")
+        self.window._prog_sessions.poll_saves(wait=True)
         loaded = ProgSessions(self.temp / "prog_sessions")
         pull = loaded.sessions[0]["pulls"][0]
         self.assertFalse(pull["complete"])
@@ -2150,6 +2160,7 @@ class SessionUiTests(unittest.TestCase):
         self.line(["25", "later", PLAYER, "Player"])
         window._on_in_combat(False, False)
         self.assertEqual(pull["deaths"], 2)
+        self.window._prog_sessions.poll_saves(wait=True)
         loaded = ProgSessions(self.temp / "prog_sessions", definitions=window._prog_sessions.definitions)
         restored = loaded.sessions[0]["pulls"][0]
         self.assertEqual(restored["deaths"], 2)
@@ -2185,6 +2196,7 @@ class SessionUiTests(unittest.TestCase):
                 self.assertEqual(window._dps_meter.full_snapshot()["Encounter"]["deaths"], expected)
                 self.assertEqual(pull["deaths"], expected)
                 self.assertEqual(pull["recap_count"], expected)
+                self.window._prog_sessions.poll_saves(wait=True)
                 loaded = ProgSessions(self.temp / "prog_sessions")
                 recaps, errors = loaded.recaps.load(tab.session["id"], pull["id"])
                 self.assertEqual(errors, [])
@@ -2245,6 +2257,7 @@ class SessionUiTests(unittest.TestCase):
                 tab.tick()
                 self.assertEqual(window._dps_meter.full_snapshot()["Encounter"]["deaths"], 1)
                 window._on_in_combat(False, False)
+                self.window._prog_sessions.poll_saves(wait=True)
                 loaded = ProgSessions(self.temp / "prog_sessions")
                 for pull, amount in ((first, 1000), (second, 2000)):
                     self.assertEqual(pull["deaths"], 1)
@@ -2346,11 +2359,13 @@ class SessionUiTests(unittest.TestCase):
         tab.note.setPlainText("First pull note")
         self.assertTrue(tab.save_timer.isActive())
         tab.table.selectRow(0)
+        self.window._prog_sessions.poll_saves(wait=True)
         loaded = ProgSessions(self.temp / "prog_sessions").sessions[0]
         self.assertEqual([p["note"] for p in loaded["pulls"]], ["First pull note", ""])
         self.assertEqual(tab.note.toPlainText(), "")
         tab.note.setPlainText("Second pull note")
         tab.open_recaps()
+        self.window._prog_sessions.poll_saves(wait=True)
         loaded = ProgSessions(self.temp / "prog_sessions").sessions[0]
         self.assertEqual([p["note"] for p in loaded["pulls"]], ["First pull note", "Second pull note"])
 
@@ -2372,6 +2387,7 @@ class SessionUiTests(unittest.TestCase):
         self.assertEqual(tab.note.toPlainText(), "Historical note")
         tab.note.setPlainText("Final historical note")
         tab.picker.setCurrentIndex(tab.picker.findData(second["id"]))
+        self.window._prog_sessions.poll_saves(wait=True)
         loaded = {s["id"]: s for s in ProgSessions(self.temp / "prog_sessions").sessions}
         self.assertEqual(loaded[first["id"]]["pulls"][0]["note"], "Final historical note")
         self.assertEqual([p["note"] for p in loaded[second["id"]]["pulls"]], ["", ""])
@@ -2391,6 +2407,7 @@ class SessionUiTests(unittest.TestCase):
         tab.note.setPlainText("Save on close")
         self.assertTrue(tab.save_timer.isActive())
         self.window.close()
+        self.window._prog_sessions.poll_saves(wait=True)
         loaded = {s["id"]: s for s in ProgSessions(self.temp / "prog_sessions").sessions}
         self.assertEqual(loaded[first["id"]]["pulls"][0]["note"], "Save on close")
         self.assertEqual(loaded[second["id"]]["pulls"][0]["note"], "")
@@ -2429,6 +2446,7 @@ class SessionUiTests(unittest.TestCase):
         self.line(["25", "ts", PLAYER, "Another death"])
         self.assertEqual(window._recap_list.currentItem().data(Qt.ItemDataRole.UserRole), oldest)
         self.assertEqual(window._recap_table.item(0, 1).text(), "-1")
+        self.window._prog_sessions.poll_saves(wait=True)
         loaded = ProgSessions(self.temp / "prog_sessions")
         saved, errors = loaded.recaps.load(tab.session["id"], tab.pull["id"])
         self.assertEqual(errors, [])
@@ -2449,6 +2467,7 @@ class SessionUiTests(unittest.TestCase):
                 with patch(target, side_effect=OSError("Storage unavailable")):
                     self.line(["25", "ts", PLAYER, "Player"])
                     tab.open_recaps()
+                    window._prog_sessions.poll_saves(wait=True)
                     tab.tick()
                     self.assertIn("Storage unavailable", tab.status.text())
                     self.assertEqual(tab.table.rowCount(), 1)
@@ -2456,11 +2475,13 @@ class SessionUiTests(unittest.TestCase):
                     ident = window._recap_records[0]["id"]
                 tab.flush()
                 tab.flush()
+                window._prog_sessions.flush_pending(wait=True)
                 tab.tick()
                 self.assertNotIn("Storage unavailable", tab.status.text())
                 self.assertNotIn("Storage unavailable", window._recap_notice.text())
                 self.assertEqual(tab.pull["deaths"], 1)
                 self.assertEqual(tab.pull["recap_count"], 1)
+                self.window._prog_sessions.poll_saves(wait=True)
                 loaded = ProgSessions(self.temp / "prog_sessions")
                 saved, errors = loaded.recaps.load(tab.session["id"], tab.pull["id"])
                 self.assertEqual(errors, [])

@@ -1,10 +1,83 @@
 import json
 import os
 import tempfile
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from pathlib import Path
+from queue import SimpleQueue, Empty
+import threading
 from uuid import UUID
 
 MAX_BYTES = 8 << 20
+
+
+class RecordWriter:
+    """Write snapshots in order and deliver completion on the polling thread."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._pending = deque()
+        self._latest = {}
+        self._completed = SimpleQueue()
+        self._executor = None
+        self._future = None
+        self._running = False
+
+    def submit(self, directory, data, write, completed):
+        key = Path(directory), record_id(data.get("id"))
+        token = object()
+        job = (deepcopy(data), write, completed, token)
+        with self._lock:
+            replace = bool(self._pending and self._pending[-1][0] == key)
+            if ((key not in self._latest and len(self._latest) >= 256)
+                    or (not replace and len(self._pending) >= 256)):
+                raise OSError("Session writer queue is full")
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="session-writer")
+            self._latest[key] = token
+            # Only adjacent snapshots can be replaced without reordering records.
+            if replace:
+                self._pending.pop()
+            self._pending.append((key, job))
+            if not self._running:
+                self._future = self._executor.submit(self._run)
+                self._running = True
+
+    def _run(self):
+        while True:
+            with self._lock:
+                if not self._pending:
+                    self._running = False
+                    return
+                key, job = self._pending.popleft()
+            data, write, completed, token = job
+            error = None
+            try:
+                write(key[0], data)
+            except Exception as exc:
+                error = str(exc)
+            self._completed.put((key, completed, token, error))
+
+    def poll(self, *, wait=False):
+        if wait and self._future is not None:
+            self._future.result()
+        while True:
+            try:
+                key, completed, token, error = self._completed.get_nowait()
+            except Empty:
+                return
+            with self._lock:
+                if self._latest.get(key) is not token:
+                    continue
+                del self._latest[key]
+            completed(error)
+
+    def close(self):
+        self.poll(wait=True)
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
 
 
 def record_id(value):

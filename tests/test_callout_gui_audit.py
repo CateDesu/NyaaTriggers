@@ -102,6 +102,36 @@ class QueuedCalloutTests(unittest.TestCase):
         self.assertEqual(self.delivery_threads, [self.gui_thread, self.gui_thread])
         self.assertEqual(self.bridge.thread(), self.window.thread())
 
+    def test_disabled_local_rows_leave_repeated_engine_input_and_speech_intact(self):
+        window = self.window
+        window._local_enabled = True
+        window._awaiting_zone_metadata = False
+        window._zone_aliases = ("Arena",)
+        window._triggers = [Trigger(enabled=False, zone_regex="Arena", ability_id="CAFE",
+                                    tts_text="Local safe") for _ in range(32)]
+        window._ws.engine_message.connect(self.bridge.feed)
+        raw = "261|2026-10-04T12:00:00Z|Change|40000001|PosX|100|PosY|100"
+        message = json.dumps({"type": "LogLine", "rawLine": raw})
+        self.read(self.frame("Look away"), self.frame("In safe", cid="safe"))
+
+        with patch.object(window, "_trigger_zone_matches",
+                          wraps=window._trigger_zone_matches) as matching:
+            for _ in range(64):
+                window._ws._on_message(message)
+            matching.assert_not_called()
+        self.app.processEvents()
+        self.assertEqual(list(self.bridge._wq.queue), [message] * 64)
+        self.assertEqual(list(window._raw_capture), [raw] * 64)
+        self.assertEqual(self.speech, ["Look away", "In safe"])
+        self.assertTrue(self.bridge.is_active())
+
+        window._set_trigger_enabled(window._triggers[0], True)
+        fields = ["20", "2026-10-04T12:00:01Z", "40000001", "Boss", "CAFE", "Cast",
+                  "10000001", "Player", "3.0"]
+        with patch("nyaatriggers.main_window.speak") as local_speech:
+            window._ws._on_message(json.dumps({"type": "LogLine", "line": fields}))
+        local_speech.assert_called_once_with("Local safe", speed=1.0, reading="Local safe")
+
     def failed_save(self, action):
         settings = ac._SETTINGS_FILE
         settings.unlink(missing_ok=True)
