@@ -72,6 +72,10 @@ def main():
         cases.append((args.recording.name, args.recording.resolve(), args.cut))
     else:
         cases.extend((name, resource / name, 10000) for name in ("m1s_anon.log", "m2s_anon.log"))
+        for name in ("dmu-arrows.log", "dmu-graven.log", "dmu-kefka.log"):
+            recording = resource / name
+            lines = recording.read_text(encoding="utf-8").splitlines()
+            cases.append((name, recording, len(lines) // 2))
     with tempfile.TemporaryDirectory(prefix="nyaa-recovery-tests-") as temp:
         subprocess.run(["javac", "-cp", str(jar), "-d", temp,
                         str(core / "src/test/java/gg/xp/nyaa/RecoveryVerification.java")], check=True)
@@ -79,7 +83,8 @@ def main():
         if args.variant:
             paths.insert(0, str(args.variant.resolve()))
         for name, recording, cut in cases:
-            command = ["java", "-cp", os.pathsep.join(paths), "gg.xp.nyaa.RecoveryVerification"]
+            command = ["java", f"-Duser.home={temp}", "-cp", os.pathsep.join(paths),
+                       "gg.xp.nyaa.RecoveryVerification"]
             if os.name != "nt":
                 command = ["xvfb-run", "-a", "-s", "-screen 0 1024x768x24", *command]
             if recording:

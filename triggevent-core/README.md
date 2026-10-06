@@ -120,6 +120,12 @@ Feed queue overflow restarts recovery in a fresh engine. It cannot evict a queue
 recovery command and leave the engine silently waiting. A missing acknowledgement
 also triggers a fresh recovery after 60 seconds without progress.
 
+An unexpected engine exit restarts the engine even while IINACT remains connected.
+Retries begin after one second and back off to 30 seconds until recovery succeeds.
+Starting an engine also has a 60-second readiness deadline. Both paths preserve
+the state seed and undelivered buffered events in order. Disconnecting or stopping
+the engine cancels the pending retry.
+
 Malformed history timestamps and rejected parser fields are skipped and counted,
 including failures in buffered input during recovery. The final acknowledgement
 reports complete, degraded, unavailable or failed history restoration. Current
@@ -144,10 +150,18 @@ Verify the shared engine behavior after building:
 ```bash
 python3 test_recovery.py --compare
 python3 test_recovery_protocol.py
+python3 test_pipeline.py
 ```
 
 These compare call IDs, text, order, and timing against uninterrupted replay, and
 check buffered input, malformed history, queue overflow, and delayed automark cleanup.
+The default comparisons include UMAD Arrows, Graven Image and Kefka Says alongside
+M1S and M2S. The Linux pipeline check feeds recorded logs through the real Java process,
+the Python WebSocket parser, queued Qt delivery and the speech worker. A test voice
+encodes speech into PCM and a test audio process captures it, so this verifies
+delivery and order without playing sound. Missing arrow and cones marker inputs
+must withhold only calls requiring that input and preserve later recorded speech.
+It does not verify a physical audio device or voice quality.
 To test automatic history reconstruction, also supply `--recording`, `--cut`,
 `--history-folder`, `--zone` and `--player`. The recording must retain the original
 log lines so the selected cut can be matched exactly in the network log. It must

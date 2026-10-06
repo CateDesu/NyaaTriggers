@@ -40,6 +40,7 @@ class RecoveryDisconnectTests(unittest.TestCase):
         self.recovery = TriggeventRecovery(self.bridge, self.ws, lambda: None)
         self.recovery._on_status(True, "Starting", 1)
         self.addCleanup(self.recovery._progress_timer.stop)
+        self.addCleanup(self.recovery._retry_timer.stop)
         self.addCleanup(self.ws.disconnect_from)
         quiet = patch("nyaatriggers.triggevent_recovery._log")
         quiet.start()
@@ -208,6 +209,7 @@ class RecoveryConnectionLifecycleTests(unittest.TestCase):
         self.recovery = TriggeventRecovery(self.bridge, self.ws, lambda: "/logs")
         self.recovery._on_status(True, "Starting", 1)
         self.addCleanup(self.recovery._progress_timer.stop)
+        self.addCleanup(self.recovery._retry_timer.stop)
         self.starts = []
 
         def start():
@@ -311,7 +313,7 @@ class RecoveryConnectionLifecycleTests(unittest.TestCase):
         self.assertEqual(self.starts, [generation])
         self.assertEqual(self.bridge.generation(), generation)
 
-    def test_failed_start_waits_for_another_successful_connection_before_retrying(self):
+    def test_failed_start_does_not_retry_on_duplicate_connection_notices(self):
         self.bridge._active = False
         self.bridge.status.emit(False, "Could not start", self.bridge.generation())
 
@@ -370,6 +372,14 @@ class NativeRecoveryExitTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix" and shutil.which("java") and shutil.which("xvfb-run")
                          and TriggeventBridge.is_available(), "Requires the Triggevent jar, Java and Xvfb")
     def test_feed_reconnect_restores_an_exited_native_engine_once(self):
+        self.check_native_exit_recovery(reconnect=True)
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("java") and shutil.which("xvfb-run")
+                         and TriggeventBridge.is_available(), "Requires the Triggevent jar, Java and Xvfb")
+    def test_healthy_feed_restores_an_exited_native_engine_and_repeated_speech(self):
+        self.check_native_exit_recovery(reconnect=False)
+
+    def check_native_exit_recovery(self, *, reconnect):
         from PyQt6.QtNetwork import QHostAddress
         from PyQt6.QtWebSockets import QWebSocketServer
 
@@ -377,18 +387,21 @@ class NativeRecoveryExitTests(unittest.TestCase):
             home = stack.enter_context(tempfile.TemporaryDirectory())
             stack.enter_context(patch.dict(os.environ, {
                 "JAVA_TOOL_OPTIONS": f"-Duser.home={home}", "NYAA_AUTOMARK": "0"}))
+            stack.enter_context(patch("nyaatriggers.diagnostics._LOG_FILE", Path(home) / "diagnostics.log"))
             stack.enter_context(patch("nyaatriggers.triggevent_bridge._log"))
             stack.enter_context(patch("nyaatriggers.triggevent_recovery._log"))
             bridge, ws = TriggeventBridge(), WSClient()
             recovery = TriggeventRecovery(bridge, ws, lambda: None)
             stack.callback(recovery._progress_timer.stop)
+            stack.callback(recovery._retry_timer.stop)
             stack.callback(lambda: bridge.stop(wait=True))
             stack.callback(ws.disconnect_from)
             server = QWebSocketServer("recovery", QWebSocketServer.SslMode.NonSecureMode)
             self.assertTrue(server.listen(QHostAddress("127.0.0.1"), 0))
             stack.callback(server.close)
-            peers, callouts = [], []
+            peers, callouts, speech = [], [], []
             bridge.callout.connect(lambda *args: callouts.append(args))
+            bridge.tts.connect(lambda *args: speech.append(args))
 
             def accept():
                 peer = server.nextPendingConnection()
@@ -421,18 +434,24 @@ class NativeRecoveryExitTests(unittest.TestCase):
             wait(lambda: not bridge.is_active() and not recovery._ready)
             QTest.qWait(100)
             self.assertEqual(bridge.generation(), generation)
-            ws.disconnect_from()
-            ws.connect_to(url)
+            if reconnect:
+                ws.disconnect_from()
+                ws.connect_to(url)
             wait(lambda: bridge.is_active() and recovery._live)
             self.assertEqual(bridge.generation(), generation + 1)
+            self.assertEqual(len(peers), 2 if reconnect else 1)
             ws.status_changed.emit(True, "Connected")
             self.assertEqual(bridge.generation(), generation + 1)
-            line = ("20|" + datetime.now().astimezone().isoformat()
-                    + "|40000001|Boss|C622|Light of Judgment|10000001|Player|5|100|100|0|0|0")
-            peers[-1].sendTextMessage(json.dumps({"type": "LogLine", "rawLine": line}))
-            wait(lambda: len(callouts) == 1)
+            count = 1 if reconnect else 2
+            for _ in range(count):
+                line = ("20|" + datetime.now().astimezone().isoformat()
+                        + "|40000001|Boss|C622|Light of Judgment|10000001|Player|5|100|100|0|0|0")
+                peers[-1].sendTextMessage(json.dumps({"type": "LogLine", "rawLine": line}))
+            wait(lambda: len(callouts) == count and len(speech) == count)
             QTest.qWait(100)
-            self.assertEqual(len(callouts), 1)
+            self.assertEqual(len(callouts), count)
+            self.assertEqual(len(speech), count)
+            self.assertTrue(all(row[0] == speech[0][0] and row[1] == generation + 1 for row in speech))
             for peer in peers:
                 peer.abort()
 

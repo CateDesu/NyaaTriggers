@@ -736,6 +736,12 @@ class TriggeventBridge(QObject):
 
     def stop(self, wait: bool = False) -> None:
         if not self._active and self._proc is None:
+            with self._state_lock:
+                self._gen += 1
+                self._speech_cancel_pending.clear()
+                self._speech_cancel_all_pending = None
+                gen = self._gen
+            self.status.emit(False, "Off", gen)
             return
         with self._state_lock:
             previous_gen = self._gen

@@ -119,7 +119,7 @@ _SCHEMAS.update({
                   "kind": _enum("tts", "wav")},
     "tts_backend": {"backend": _enum("piper", "system", "kokoro", "aplay", "winsound"),
                     "result": _enum("attempt", "unavailable", "superseded", "timed_out",
-                                    "interrupted", "failed", "finished", "early_exit", "muted", "stale"),
+                                    "interrupted", "failed", "finished", "early_exit", "muted", "stale", "busy"),
                     "gen": "int", "returncode": "signed", "duration_ms": "number", "elapsed_ms": "number"},
     "python_exception": {"site": _enum("uncaught", "tts", "thread", "dispatch"),
                          "error_type": "error", "frames": "python_frames"},

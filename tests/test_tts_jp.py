@@ -181,7 +181,7 @@ _calls = []
 try:
     tts.set_engine("system")
     tts._system_speak = lambda *a, **k: True
-    tts._load_piper = lambda: _calls.append("piper")
+    tts._load_piper = lambda gen=None: _calls.append("piper")
     tts._pipeline("hello", 1.0, 1.0)
     check("_pipeline skips Piper when the system voice handled it", "piper" not in _calls)
 
@@ -193,7 +193,7 @@ try:
             wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(22050)
             wf.writeframes(b"\x00\x00")
 
-    tts._load_piper = lambda: _FakeVoice()
+    tts._load_piper = lambda gen=None: _FakeVoice()
     tts._play_wav = lambda p, gen=None: _calls.append("played")
     tts._pipeline("hello", 1.0, 1.0)
     check("_pipeline falls back to Piper when the system voice failed", "played" in _calls)
@@ -220,7 +220,7 @@ try:
           len(_routed) == 1 and tts.has_japanese(_routed[0]))
 
     _routed.clear()
-    tts._load_piper = lambda: _FakeVoice2()
+    tts._load_piper = lambda gen=None: _FakeVoice2()
     tts._play_wav = lambda p, gen=None: None
     tts._pipeline("stack", 1.0, 1.0)
     check("_pipeline: English under Piper does not force the system voice", not _routed)
@@ -278,7 +278,7 @@ class _FakeVoice3:
 
 try:
     tts.set_engine("piper")
-    tts._load_piper = lambda: _FakeVoice3()
+    tts._load_piper = lambda gen=None: _FakeVoice3()
     tts._play_wav = lambda p, gen=None: None
     _cfg = types.ModuleType("piper.config")
     _cfg.SynthesisConfig = _FakeSynCfg
@@ -356,9 +356,14 @@ finally:
     tts._purge_stale_venv_modules = _o_purge
     _restore_kokoro()
 
+_kokoro_build_release = threading.Event()
+_kokoro_build_threads = []
+
+
 class _WedgedKokoro:
     def __init__(self, model, voices):
-        time.sleep(30)
+        _kokoro_build_threads.append(threading.current_thread())
+        _kokoro_build_release.wait(30)
 
 
 _kokoro_stub2 = types.ModuleType("kokoro_onnx")
@@ -376,6 +381,9 @@ try:
     check("wedged kokoro load keeps the model files",
           os.path.exists(_kmodel) and os.path.exists(_kvoices))
 finally:
+    _kokoro_build_release.set()
+    for _thread in _kokoro_build_threads:
+        _thread.join(2)
     tts._SYNTH_TIMEOUT_S = _o_timeout
     _restore_kokoro()
 
@@ -457,6 +465,15 @@ _mod_names = ("onnxruntime", "piper", "piper.config", "piper.voice")
 _prior_mods = {k: sys.modules.get(k) for k in _mod_names}
 _o_pmodel = tts._PIPER_MODEL
 _o_pv, _o_pf = tts._piper_voice, tts._piper_failed
+_piper_build_release = threading.Event()
+_piper_build_threads = []
+
+
+def _wedged_piper_build(*args, **kwargs):
+    _piper_build_threads.append(threading.current_thread())
+    _piper_build_release.wait(30)
+
+
 try:
     sys.modules["onnxruntime"] = _ort_stub
     sys.modules["piper"] = types.ModuleType("piper")
@@ -465,7 +482,7 @@ try:
     tts._PIPER_MODEL = Path(_pmodel)
     tts._piper_voice, tts._piper_failed = None, False
 
-    _ort_stub.InferenceSession = lambda *a, **k: time.sleep(30)
+    _ort_stub.InferenceSession = _wedged_piper_build
     tts._SYNTH_TIMEOUT_S = 0.2
     _t0 = time.monotonic()
     with contextlib.redirect_stderr(io.StringIO()):
@@ -475,6 +492,9 @@ try:
           _v is None and _dt < 5)
     check("wedged piper session build sticks the failed marker",
           tts._piper_failed is True)
+    _piper_build_release.set()
+    for _thread in _piper_build_threads:
+        _thread.join(2)
 
     _ort_stub.InferenceSession = lambda *a, **k: "session-marker"
     tts._piper_voice, tts._piper_failed = None, False
@@ -482,6 +502,9 @@ try:
     check("piper session build hands the session to the voice",
           isinstance(_v, _FakePiperVoice) and _v.session == "session-marker")
 finally:
+    _piper_build_release.set()
+    for _thread in _piper_build_threads:
+        _thread.join(2)
     tts._SYNTH_TIMEOUT_S = _o_timeout
     tts._PIPER_MODEL = _o_pmodel
     tts._piper_voice, tts._piper_failed = _o_pv, _o_pf
@@ -709,7 +732,7 @@ _played4: list = []
 try:
     tts.set_engine("piper")
     tts._jp_neural = False
-    tts._load_piper = lambda: _InterruptingVoice()
+    tts._load_piper = lambda gen=None: _InterruptingVoice()
     tts._play_wav = lambda p, gen=None: _played4.append(p)
     _g0 = tts._generation
     tts._pipeline("hello", 1.0, 1.0, gen=_g0)
@@ -746,7 +769,7 @@ _o_mv2 = tts._master_volume
 _fired: list = []
 try:
     tts._master_volume = 0.0
-    tts._load_piper = lambda: _fired.append("load")
+    tts._load_piper = lambda gen=None: _fired.append("load")
     tts._pipeline("hello", 1.0, 1.0)
     check("muted master volume skips synthesis entirely", _fired == [])
 finally:

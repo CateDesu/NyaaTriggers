@@ -54,10 +54,11 @@ QT_QPA_PLATFORM=offscreen python3 -m tests.test_prog_phases -v
 Use the program's Python dependencies. The plugin link, download deadline, and
 Telesto resilience suites also need permission to open local sockets.
 
-The Triggernometry host suite needs Mono and Xvfb on Linux. The NumPy checks
-in the TTS suite need NumPy. CI installs these dependencies and fails if they
-are missing. Local runs report skips when they are unavailable. The runner's
-completion count includes suites with skips, so check their output for coverage.
+The Triggernometry host suite needs Mono and Xvfb on Linux. The TTS recovery
+suite requires NumPy. CI installs these dependencies and fails if they are
+missing. Some other suites skip unavailable native dependencies locally.
+The runner's completion count includes suites with skips, so check their output
+for coverage.
 
 Pytest collects only the suites listed in `conftest.py`. Use `python3 -m tests`
 for a complete run because many scripts perform their checks during import.
@@ -71,3 +72,20 @@ python3 triggevent-core/test_diagnostics.py
 The engine fork's `CrossFightFaultInjectionTest` replays UMAD, M1S, M2S and FRU
 with missing or delayed mechanic inputs. It compares callout text, timing and
 counts against recorded expectations, including local deaths and raises.
+The release build runs those tests and the sequential lifecycle and UMAD suites
+against the pinned fork source before publishing the engine.
+It also requires the listener registration race tests, which verify that a reload
+retains both manual callbacks and newly loaded component handlers.
+
+`test_triggevent_recovery` checks unexpected engine exits on a healthy feed,
+retry backoff, startup and recovery deadlines, ordered buffered input and stale
+acknowledgements. `test_connection_audit` repeats the healthy feed exit with a
+real JVM and loopback WebSocket. Native checks run separately after building
+the jar so the clean Python release test does not depend on local Java artifacts.
+
+`test_tts_recovery` checks cancellation during neural synthesis and model loading,
+fresh speech after interruption and a bound on abandoned work. The separate
+Linux `triggevent-core/test_pipeline.py` check carries recorded UMAD callouts through
+the Java process, Qt, synthesis and a captured audio subprocess. It compares
+complete speech lists and fault cases with saved expectations. Its voice and
+audio sink are test doubles, so it does not test physical audibility.

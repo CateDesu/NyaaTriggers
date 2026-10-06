@@ -622,7 +622,7 @@ class SpeechCancellationTests(unittest.TestCase):
 
         voice = Mock()
 
-        def load():
+        def load(gen=None):
             tts._generation += 1
             return voice
 
@@ -712,7 +712,7 @@ class SpeechCancellationTests(unittest.TestCase):
                 wav.setframerate(22050)
                 wav.writeframes(b"\0\0")
 
-        def loaded_after_interrupt():
+        def loaded_after_interrupt(gen=None):
             tts.interrupt()
             return Voice()
 

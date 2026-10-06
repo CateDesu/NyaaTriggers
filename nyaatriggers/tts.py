@@ -277,9 +277,13 @@ def kokoro_ready() -> bool:
         return False
 
 
-def _load_kokoro():
+def _load_kokoro(gen: "int | None" = None):
     """Build outside the GUI lock and publish for unchanged settings. Retain model files on failure."""
     global _kokoro, _kokoro_failed
+    if gen is None:
+        gen = _generation
+    if gen != _generation:
+        return None
     if _kokoro is not None:
         return _kokoro
     with _kokoro_build_lock:
@@ -302,16 +306,20 @@ def _load_kokoro():
                 from kokoro_onnx import Kokoro
             except Exception as exc:  # noqa: BLE001
                 with _kokoro_lock:
-                    if _kokoro_epoch == epoch:
+                    if _kokoro_epoch == epoch and gen == _generation:
                         _kokoro_failed = True
                 _log_once("kokoro-load", f"[tts] kokoro-onnx import failed: {exc!r}")
                 return None
         try:
             ok, kokoro = _synth_call(
-                lambda: Kokoro(str(_KOKORO_MODEL), str(_KOKORO_VOICES)))
+                lambda: Kokoro(str(_KOKORO_MODEL), str(_KOKORO_VOICES)), gen)
+        except _SynthesisBusy:
+            record("tts_backend", gen=gen, backend="kokoro", result="busy")
+            log_drop("tts-kokoro", "voice build waiting for previous synthesis calls")
+            return None
         except Exception as exc:  # noqa: BLE001
             with _kokoro_lock:
-                if _kokoro_epoch == epoch:
+                if _kokoro_epoch == epoch and gen == _generation:
                     _kokoro_failed = True
                     _kokoro = None
             _log_once("kokoro-load", f"[tts] kokoro voice load failed: {exc!r}")
@@ -322,8 +330,11 @@ def _load_kokoro():
                      "the model files and Download fetches fresh copies")
             return None
         if not ok:
+            if gen != _generation:
+                record("tts_backend", gen=gen, backend="kokoro", result="interrupted")
+                return None
             with _kokoro_lock:
-                if _kokoro_epoch == epoch:
+                if _kokoro_epoch == epoch and gen == _generation:
                     _kokoro_failed = True
                     _kokoro = None
             log_drop("tts-kokoro",
@@ -342,7 +353,7 @@ def _kokoro_synth(text: str, speed: float = 1.0, gen: "int | None" = None) -> "b
     if gen is not None and gen != _generation:
         record("tts_backend", gen=gen, backend="kokoro", result="stale")
         return None
-    k = _load_kokoro()
+    k = _load_kokoro(gen)
     if k is None or (gen is not None and gen != _generation):
         record("tts_backend", gen=gen, backend="kokoro",
                result="unavailable" if k is None else "superseded")
@@ -350,7 +361,14 @@ def _kokoro_synth(text: str, speed: float = 1.0, gen: "int | None" = None) -> "b
     try:
         import numpy as np
         ok, out = _synth_call(lambda: k.create(text, voice=_jp_neural_voice,
-                                               speed=min(2.0, max(0.5, speed)), lang="ja"))
+                                               speed=min(2.0, max(0.5, speed)), lang="ja"), gen)
+        if gen is not None and gen != _generation:
+            if not ok:
+                with _kokoro_lock:
+                    if _kokoro is k:
+                        _kokoro = None
+            record("tts_backend", gen=gen, backend="kokoro", result="interrupted")
+            return None
         if not ok:
             record("tts_backend", gen=gen, backend="kokoro", result="timed_out")
             # Retire only the timed-out session to avoid repeating stalled synthesis.
@@ -370,6 +388,10 @@ def _kokoro_synth(text: str, speed: float = 1.0, gen: "int | None" = None) -> "b
             wf.setframerate(int(sr))
             wf.writeframes(pcm)
         return buf.getvalue()
+    except _SynthesisBusy:
+        record("tts_backend", gen=gen, backend="kokoro", result="busy")
+        log_drop("tts-kokoro", "previous synthesis calls still running; callout used system voice")
+        return None
     except Exception as exc:  # noqa: BLE001
         _log_once("kokoro-synth", f"[tts] kokoro synthesis failed: {exc!r}")
         return None
@@ -593,10 +615,20 @@ def _aplay_missing() -> None:
 
 # Bound ONNX calls so stalled synthesis cannot block the speech queue.
 _SYNTH_TIMEOUT_S = 60
+_synthesis_slots = threading.BoundedSemaphore(2)
 
 
-def _synth_call(fn):
-    """Return False and None on timeout. Propagate completed call errors."""
+class _SynthesisBusy(RuntimeError):
+    pass
+
+
+def _synth_call(fn, gen: "int | None" = None):
+    """Bound abandoned synthesis while letting a fresh pull continue."""
+    slots = _synthesis_slots if gen is not None else None
+    if gen is not None and gen != _generation:
+        return False, None
+    if slots is not None and not slots.acquire(blocking=False):
+        raise _SynthesisBusy("previous synthesis calls are still running")
     box: dict = {}
 
     def _run() -> None:
@@ -604,11 +636,28 @@ def _synth_call(fn):
             box["out"] = fn()
         except Exception as exc:   # noqa: BLE001
             box["err"] = exc
+        finally:
+            if slots is not None:
+                slots.release()
 
     t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    t.join(_SYNTH_TIMEOUT_S)
+    try:
+        t.start()
+    except Exception:
+        if slots is not None:
+            slots.release()
+        raise
+    deadline = time.monotonic() + _SYNTH_TIMEOUT_S
+    while t.is_alive():
+        if gen is not None and gen != _generation:
+            return False, None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        t.join(min(0.05, remaining) if gen is not None else remaining)
     if t.is_alive():
+        return False, None
+    if gen is not None and gen != _generation:
         return False, None
     if "err" in box:
         raise box["err"]
@@ -802,9 +851,13 @@ def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool
     return proc.returncode == 0
 
 
-def _load_piper():
+def _load_piper(gen: "int | None" = None):
     """Build outside the GUI lock. Return the instance so callers retain it across settings changes."""
     global _piper_voice, _piper_failed
+    if gen is None:
+        gen = _generation
+    if gen != _generation:
+        return None
     v = _piper_voice
     if v is not None:
         return v
@@ -833,14 +886,21 @@ def _load_piper():
                 str(model),
                 sess_options=sess_options,
                 providers=["CPUExecutionProvider"],
-            ))
+            ), gen)
             if not ok:
+                if gen != _generation:
+                    record("tts_backend", gen=gen, backend="piper", result="interrupted")
+                    return None
                 raise TimeoutError(
                     f"piper session build hung past {_SYNTH_TIMEOUT_S}s")
             voice = PiperVoice(config=config, session=session)
+        except _SynthesisBusy:
+            record("tts_backend", gen=gen, backend="piper", result="busy")
+            log_drop("tts-piper", "voice build waiting for previous synthesis calls")
+            return None
         except Exception as exc:  # noqa: BLE001
             with _piper_lock:
-                if _piper_epoch == epoch:
+                if _piper_epoch == epoch and gen == _generation:
                     _piper_failed = True
                     print(f"[tts] piper voice load failed: {exc!r}", file=sys.stderr)
             return None
@@ -1244,7 +1304,7 @@ def _pipeline(text: str, volume: float = 1.0, speed: float = 1.0,
     wav_path = None
     try:
         record("tts_backend", gen=gen, backend="piper", result="attempt")
-        voice = _load_piper()
+        voice = _load_piper(gen)
         if gen != _generation:
             record("tts_backend", gen=gen, backend="piper", result="superseded")
             return
@@ -1274,7 +1334,19 @@ def _pipeline(text: str, volume: float = 1.0, speed: float = 1.0,
                 voice.synthesize_wav(text, wf, syn_config=syn_config)
             return buf.getvalue()
 
-        ok, wav = _synth_call(_synth)
+        try:
+            ok, wav = _synth_call(_synth, gen)
+        except _SynthesisBusy:
+            record("tts_backend", gen=gen, backend="piper", result="busy")
+            log_drop("tts-piper", "previous synthesis calls still running; callout dropped")
+            return
+        if gen != _generation:
+            if not ok:
+                with _piper_lock:
+                    if _piper_voice is voice:
+                        _piper_voice = None
+            record("tts_backend", gen=gen, backend="piper", result="interrupted")
+            return
         if not ok:
             record("tts_backend", gen=gen, backend="piper", result="timed_out")
             # Retire only the timed-out voice to avoid repeating stalled synthesis.

@@ -10,6 +10,8 @@ from nyaatriggers.ws_client import _extract_raw
 
 _MAX_PENDING_BYTES = 16 << 20
 _PROGRESS_TIMEOUT_MS = 60_000
+_RESTART_DELAY_MS = 1000
+_MAX_RESTART_DELAY_MS = 30_000
 _FALLBACK_REASONS = {
     "This engine build does not support pull recovery": "recovery_unsupported",
     "No local log available for recovery": "no_local_log",
@@ -36,8 +38,14 @@ class TriggeventRecovery(QObject):
         self._lost_connection = False
         self._connected = False
         self._restart_on_connect = False
+        self._retry_delay_ms = _RESTART_DELAY_MS
+        self._retry_generation = -1
+        self._preserve_pending = False
         self._last_diagnostic = None
         self._initial_state = ws.state_snapshot()
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.timeout.connect(self._retry_engine)
         self._progress_timer = QTimer(self)
         self._progress_timer.setSingleShot(True)
         self._progress_timer.setInterval(_PROGRESS_TIMEOUT_MS)
@@ -65,25 +73,50 @@ class TriggeventRecovery(QObject):
         if active and not self.bridge.is_active():
             return
         if not active:
+            if self._live and _message != "Off":
+                self._initial_state = self.ws.state_snapshot()
             self._diagnostic("stopped", "disconnect" if self._lost_connection else
                              "requested" if _message == "Off" else "engine_exit", generation)
             self._progress_timer.stop()
             self._ready = self._loading = self._live = self._ending = False
             if _message != "Off":
                 self._restart_on_connect = True
+                self._schedule_retry()
             elif not self._lost_connection:
                 self._restart_on_connect = False
+                self._retry_timer.stop()
         if active and generation != self._generation:
+            self._retry_timer.stop()
             self._progress_timer.stop()
             self._restart_on_connect = False
             self._generation = generation
-            self._pending = []
-            self._bytes = 0
+            if not self._preserve_pending:
+                self._pending = []
+                self._bytes = 0
+                self._initial_state = self.ws.state_snapshot()
             self._ready = self._loading = self._live = False
             self._ending = False
             self._checkpoint = 0
-            self._initial_state = self.ws.state_snapshot()
             self._diagnostic("starting", "engine_start")
+            self._progress_timer.start()
+
+    def _schedule_retry(self):
+        if (self._connected and not self._lost_connection and self._restart_on_connect
+                and not self.bridge.is_active() and not self._retry_timer.isActive()):
+            self._retry_generation = self.bridge.generation()
+            self._retry_timer.start(self._retry_delay_ms)
+            self._retry_delay_ms = min(self._retry_delay_ms * 2, _MAX_RESTART_DELAY_MS)
+
+    def _retry_engine(self):
+        if (not self._connected or self._lost_connection or not self._restart_on_connect
+                or self._retry_generation != self.bridge.generation() or self.bridge.is_active()):
+            return
+        self._diagnostic("restart", "engine_exit")
+        self._preserve_pending = True
+        try:
+            self.bridge.start()
+        finally:
+            self._preserve_pending = False
 
     def _restart(self, generation, reason="feed_overflow"):
         if generation != self._generation or generation != self.bridge.generation():
@@ -91,12 +124,17 @@ class TriggeventRecovery(QObject):
         self._progress_timer.stop()
         if self.bridge.is_active():
             self._diagnostic("restart", reason)
-            self.bridge.stop()
-            self.bridge.start()
+            self._preserve_pending = reason == "progress_timeout"
+            try:
+                self.bridge.stop()
+                self.bridge.start()
+            finally:
+                self._preserve_pending = False
 
     def _recovery_timed_out(self):
-        if self._loading and not self._live and not self._lost_connection:
-            _log("recovery: engine acknowledgement timed out")
+        if (not self._ready or self._loading) and not self._live and not self._lost_connection:
+            _log("recovery: engine readiness timed out" if not self._ready else
+                 "recovery: engine acknowledgement timed out")
             self._restart(self._generation, "progress_timeout")
 
     def _connection(self, connected, _message):
@@ -105,12 +143,14 @@ class TriggeventRecovery(QObject):
         self._diagnostic("connected" if connected else "disconnected", "connection")
         if not connected:
             self._lost_connection = True
+            self._retry_timer.stop()
             self._progress_timer.stop()
             if self.bridge.is_active():
                 self._restart_on_connect = True
                 self.bridge.stop()
         elif not was_connected and (self._lost_connection or self._loading or self._live
                                     or self._restart_on_connect):
+            self._retry_timer.stop()
             self._lost_connection = False
             restart = self._restart_on_connect
             self._restart_on_connect = False
@@ -126,6 +166,8 @@ class TriggeventRecovery(QObject):
         if (generation != self._generation or generation != self.bridge.generation()
                 or not self.bridge.is_active()):
             return
+        if not self._ready:
+            self._progress_timer.stop()
         self._ready = True
         self._diagnostic("ready", "ready")
         self._try_start()
@@ -241,6 +283,7 @@ class TriggeventRecovery(QObject):
         self._live = not self.bridge.supports_catchup()
         if self._live:
             self._progress_timer.stop()
+            self._retry_delay_ms = _RESTART_DELAY_MS
             self._diagnostic("live", "catchup_unsupported")
         _log("recovery: requested engine history restore" if history else f"recovery: current state only, {reason}")
         self.ws.request_combatants_once()
@@ -253,6 +296,7 @@ class TriggeventRecovery(QObject):
             return
         if message.get("t") == "recovered" and self._ending:
             self._progress_timer.stop()
+            self._retry_delay_ms = _RESTART_DELAY_MS
             self._live = True
             self._ending = self._loading = False
             self._diagnostic("live", "acknowledged")

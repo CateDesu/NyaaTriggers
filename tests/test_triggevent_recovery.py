@@ -319,6 +319,258 @@ class RecoveryTests(unittest.TestCase):
             stop.assert_called_once()
 
 
+class RecoveryRetryTests(unittest.TestCase):
+    def setUp(self):
+        self.bridge, self.ws = TriggeventBridge(), WSClient()
+        self.seed = [
+            {"type": "ChangePrimaryPlayer", "charID": 0x10000001},
+            {"type": "ChangeZone", "zoneID": 0x553},
+            {"type": "InCombat", "inACTCombat": False, "inGameCombat": False},
+        ]
+        for message in self.seed:
+            self.ws._on_message(json.dumps(message))
+        self.recovery = TriggeventRecovery(self.bridge, self.ws, lambda: None)
+        self.addCleanup(self.recovery._progress_timer.stop)
+        self.addCleanup(self.recovery._retry_timer.stop)
+        self.addCleanup(self.ws.disconnect_from)
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch("nyaatriggers.triggevent_recovery._log"))
+        self.starts = []
+        self.stack.enter_context(patch.object(self.bridge, "start", side_effect=self.boot))
+        self.boot()
+        self.ws.status_changed.emit(True, "Connected")
+        self.finish_restore()
+
+    def boot(self):
+        # Negotiate simulated capabilities without a local Java or jar requirement.
+        self.bridge._active = True
+        self.bridge._gen += 1
+        generation = self.bridge._gen
+        self.bridge._recovery_gen = self.bridge._catchup_gen = generation
+        self.bridge._wq = _ByteQueue(100)
+        self.starts.append(generation)
+        self.bridge.status.emit(True, "Starting", generation)
+
+    def queued(self):
+        rows = []
+        while not self.bridge._wq.empty():
+            rows.extend(json.loads(raw) for raw in self.bridge._wq.get_nowait().splitlines())
+        return rows
+
+    def finish_restore(self):
+        self.ws._on_message(frame(log(0, "0038|Player|Anchor")))
+        self.bridge.ready.emit(self.bridge.generation())
+        self.queued()
+        self.bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 1}, gen=self.bridge.generation())
+        self.queued()
+        self.bridge._dispatch({"t": "recovered", "checkpoint": 2}, gen=self.bridge.generation())
+        self.assertTrue(self.recovery._live)
+
+    def exit(self, message="Sidecar exited"):
+        self.bridge._active = False
+        self.bridge.status.emit(False, message, self.bridge.generation())
+
+    def retry(self):
+        self.recovery._retry_timer.stop()
+        self.recovery._retry_engine()
+
+    def test_healthy_feed_retry_preserves_state_and_repeated_buffered_transitions(self):
+        self.exit()
+        self.assertTrue(self.recovery._retry_timer.isActive())
+        self.assertEqual(self.recovery._retry_timer.interval(), 1000)
+        line = json.loads(frame(log(0, "0038|Player|Repeated")))
+        transitions = [{**self.seed[-1], "inGameCombat": True}, line, line, self.seed[-1]]
+        for message in transitions:
+            self.ws._on_message(json.dumps(message))
+        self.retry()
+        self.assertEqual(self.starts, [1, 2])
+        self.assertEqual([json.loads(raw) for raw in self.recovery._pending], transitions)
+        self.bridge.ready.emit(2)
+        rows = self.queued()
+        self.assertEqual(rows[0]["nyaa_cmd"], "recover_begin")
+        self.assertEqual(rows[1:-1], [*self.seed, *transitions])
+        self.assertEqual(rows[-1], {"nyaa_cmd": "recover_checkpoint", "checkpoint": 1})
+        self.bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 1}, gen=2)
+        self.assertEqual(self.queued(), [{"nyaa_cmd": "recover_end", "checkpoint": 2}])
+        self.assertFalse(self.recovery._live)
+        self.bridge._dispatch({"t": "recovered", "checkpoint": 2}, gen=1)
+        self.assertFalse(self.recovery._live)
+        self.bridge._dispatch({"t": "recovered", "checkpoint": 2}, gen=2)
+        self.assertTrue(self.recovery._live)
+        self.assertEqual(self.recovery._retry_delay_ms, 1000)
+        self.ws._on_message(json.dumps(line))
+        self.assertEqual(self.queued(), [line])
+
+    def test_startup_failures_back_off_without_feed_driven_or_duplicate_retries(self):
+        self.exit("Failed to launch sidecar")
+        delays = [self.recovery._retry_timer.interval()]
+
+        def fail():
+            self.bridge.status.emit(False, "Failed to launch sidecar", self.bridge.generation())
+
+        with patch.object(self.bridge, "start", side_effect=fail) as start:
+            for _ in range(7):
+                self.ws._on_message(frame(log(0, "0038|Player|Still connected")))
+                self.bridge.status.emit(False, "Failed to launch sidecar", self.bridge.generation())
+                self.assertEqual(self.recovery._retry_timer.interval(), delays[-1])
+                self.retry()
+                self.assertTrue(self.recovery._retry_timer.isActive())
+                delays.append(self.recovery._retry_timer.interval())
+            self.assertEqual(start.call_count, 7)
+        self.assertEqual(delays, [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000])
+        self.retry()
+        self.assertTrue(self.bridge.is_active())
+        self.finish_restore()
+        self.exit()
+        self.assertEqual(self.recovery._retry_timer.interval(), 1000)
+
+    def test_manual_stop_retires_a_failed_generation_and_cancels_retry(self):
+        self.exit()
+        failed_generation = self.bridge.generation()
+        self.bridge._speech_cancel_pending = {"call": 1}
+        self.bridge._speech_cancel_all_pending = 2
+        self.bridge.stop()
+        self.assertEqual(self.bridge.generation(), failed_generation + 1)
+        self.assertFalse(self.recovery._retry_timer.isActive())
+        self.assertFalse(self.recovery._restart_on_connect)
+        self.assertEqual(self.bridge._speech_cancel_pending, {})
+        self.assertIsNone(self.bridge._speech_cancel_all_pending)
+        self.bridge.status.emit(False, "Sidecar exited", failed_generation)
+        self.bridge.ready.emit(failed_generation)
+        self.retry()
+        self.assertEqual(self.starts, [1])
+        self.assertFalse(self.bridge.is_active())
+
+    def test_feed_loss_cancels_retry_and_reconnect_starts_only_one_replacement(self):
+        self.exit()
+        self.ws.status_changed.emit(False, "Disconnected")
+        self.assertFalse(self.recovery._retry_timer.isActive())
+        self.retry()
+        self.assertEqual(self.starts, [1])
+        self.ws.status_changed.emit(True, "Connected")
+        self.ws.status_changed.emit(True, "Connected")
+        self.retry()
+        self.assertEqual(self.starts, [1, 2])
+        self.assertTrue(self.bridge.is_active())
+
+    def test_manual_start_cancels_retry_and_old_status_cannot_retire_replacement(self):
+        self.exit()
+        old_generation = self.bridge.generation()
+        self.bridge.start()
+        self.bridge.status.emit(False, "Sidecar exited", old_generation)
+        self.retry()
+        self.assertEqual(self.starts, [1, 2])
+        self.assertFalse(self.recovery._retry_timer.isActive())
+        self.assertTrue(self.bridge.is_active())
+
+    def test_stop_before_first_start_leaves_no_retry_or_process_work(self):
+        bridge = TriggeventBridge()
+        ws = WSClient()
+        manager = TriggeventRecovery(bridge, ws, lambda: None)
+        with patch.object(bridge, "_reap") as reap, patch.object(bridge, "_signal_group") as signal:
+            bridge.stop()
+            ws.status_changed.emit(True, "Connected")
+            manager._retry_engine()
+            reap.assert_not_called()
+            signal.assert_not_called()
+        self.assertFalse(bridge.is_active())
+        self.assertFalse(manager._retry_timer.isActive())
+
+    def test_boot_stall_uses_progress_timeout_and_readiness_cancels_it(self):
+        self.exit()
+        self.retry()
+        stalled_generation = self.bridge.generation()
+        self.assertFalse(self.recovery._ready)
+        self.assertTrue(self.recovery._progress_timer.isActive())
+        self.recovery._recovery_timed_out()
+        self.assertEqual(self.starts, [1, 2, 4])
+        self.assertTrue(self.recovery._progress_timer.isActive())
+        self.bridge.ready.emit(stalled_generation)
+        self.assertFalse(self.recovery._ready)
+        self.bridge.ready.emit(self.bridge.generation())
+        self.assertTrue(self.recovery._ready)
+        self.assertFalse(self.recovery._loading)
+        self.assertFalse(self.recovery._progress_timer.isActive())
+        self.recovery._recovery_timed_out()
+        self.assertEqual(self.starts, [1, 2, 4])
+
+    def test_duplicate_readiness_cannot_cancel_an_inflight_history_timeout(self):
+        self.exit()
+        self.ws._on_message(frame(log(0, "0038|Player|Buffered")))
+        self.retry()
+        self.bridge.ready.emit(2)
+        self.assertTrue(self.recovery._loading)
+        self.assertTrue(self.recovery._progress_timer.isActive())
+        self.bridge.ready.emit(2)
+        self.assertTrue(self.recovery._progress_timer.isActive())
+
+    def test_boot_and_recovery_timeouts_preserve_undelivered_frames_in_order(self):
+        for phase in ("boot", "recovery"):
+            with self.subTest(phase=phase):
+                self.exit()
+                self.retry()
+                if phase == "recovery":
+                    self.ws._on_message(frame(log(0, "0038|Player|Submitted")))
+                    self.bridge.ready.emit(self.bridge.generation())
+                    self.queued()
+                line = json.loads(frame(log(0, "0038|Player|Repeated")))
+                transitions = [{**self.seed[-1], "inGameCombat": True}, line, line, self.seed[-1]]
+                for message in transitions:
+                    self.ws._on_message(json.dumps(message))
+                old_generation = self.bridge.generation()
+                self.recovery._recovery_timed_out()
+                generation = self.bridge.generation()
+                self.assertEqual(generation, old_generation + 2)
+                self.assertEqual([json.loads(raw) for raw in self.recovery._pending], transitions)
+                self.bridge.ready.emit(generation)
+                self.assertEqual(self.queued()[1:-1], [*self.seed, *transitions])
+                self.bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 1}, gen=generation)
+                self.queued()
+                self.bridge._dispatch({"t": "recovered", "checkpoint": 2}, gen=generation)
+                self.assertTrue(self.recovery._live)
+
+    def test_crash_during_history_retries_only_undelivered_buffered_frames(self):
+        self.exit()
+        submitted = frame(log(0, "0038|Player|Submitted"))
+        undelivered = frame(log(0, "0038|Player|Undelivered", 1))
+        self.ws._on_message(submitted)
+        self.retry()
+        self.recovery.log_folder = lambda: "/logs"
+        self.bridge._history_gen = 2
+        self.bridge.ready.emit(2)
+        first = self.queued()
+        self.assertEqual(first[0]["nyaa_cmd"], "recover_log")
+        self.assertEqual(first[1:-1], [json.loads(submitted)])
+        self.ws._on_message(undelivered)
+        self.ws._on_message(undelivered)
+        self.exit()
+        self.retry()
+        self.bridge._history_gen = 3
+        self.bridge.ready.emit(3)
+        second = self.queued()
+        self.assertEqual(second[0]["nyaa_cmd"], "recover_log")
+        self.assertEqual(second[0]["history"]["anchor"], json.loads(undelivered)["rawLine"])
+        self.assertEqual(second[1:-1], [json.loads(undelivered), json.loads(undelivered)])
+        self.assertEqual(self.recovery._pending, [])
+        self.bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 1}, gen=2)
+        self.assertEqual(self.queued(), [])
+        self.assertFalse(self.recovery._live)
+        self.bridge._dispatch({"t": "recovery_checkpoint", "checkpoint": 1}, gen=3)
+        self.assertEqual(self.queued(), [{"nyaa_cmd": "recover_end", "checkpoint": 2}])
+        self.bridge._dispatch({"t": "recovered", "checkpoint": 2}, gen=3)
+        self.assertTrue(self.recovery._live)
+
+    def test_inactive_retry_waits_for_reader_after_native_status_reports_failure(self):
+        self.bridge.status.emit(False, "stdin closed", self.bridge.generation())
+        self.assertTrue(self.bridge.is_active())
+        self.assertFalse(self.recovery._retry_timer.isActive())
+        self.exit()
+        self.assertTrue(self.recovery._retry_timer.isActive())
+        self.retry()
+        self.assertEqual(self.starts, [1, 2])
+
+
 class RecoveryDiagnosticsTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
@@ -341,6 +593,7 @@ class RecoveryDiagnosticsTests(unittest.TestCase):
         manager = TriggeventRecovery(bridge, ws, lambda: folder)
         self.addCleanup(lambda: manager._progress_timer.stop())
         manager._on_status(True, self.private, generation)
+        manager._progress_timer.stop()
         return bridge, ws, manager
 
     def rows(self):

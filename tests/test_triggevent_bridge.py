@@ -138,7 +138,7 @@ with mock.patch.object(tb, "_find_java", return_value="/usr/bin/java"), \
         time.sleep(0.01)
     check("the reader reaches its EOF exit on a real boot shape", not tv2.is_active())
     tv2.stop()
-check("stop after a spontaneous exit is a clean no-op", tv2._proc is None)
+check("stop after a spontaneous exit retires its generation", tv2._proc is None and tv2._gen == 2)
 
 
 drops = []
