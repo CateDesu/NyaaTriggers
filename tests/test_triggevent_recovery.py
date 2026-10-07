@@ -402,6 +402,36 @@ class RecoveryRetryTests(unittest.TestCase):
         self.ws._on_message(json.dumps(line))
         self.assertEqual(self.queued(), [line])
 
+    def test_reader_exit_before_status_delivery_preserves_ordered_transitions(self):
+        self.assert_reader_exit_preserves_transitions()
+
+    def test_reader_exit_during_handoff_preserves_ordered_transitions(self):
+        self.recovery._live = False
+        self.recovery._ending = self.recovery._loading = True
+        self.assert_reader_exit_preserves_transitions()
+
+    def test_rejected_protocol_frames_do_not_interrupt_live_delivery(self):
+        for raw in ("", "invalid", "[]", '{"nyaa_cmd":"set_automark","enable":true}'):
+            self.recovery.feed(raw)
+        self.assertTrue(self.recovery._live)
+        self.assertEqual(self.recovery._pending, [])
+        self.assertEqual(self.queued(), [])
+        raw = frame(log(0, "0038|Player|Next callout"))
+        self.recovery.feed(raw)
+        self.assertEqual(self.queued(), [json.loads(raw)])
+
+    def assert_reader_exit_preserves_transitions(self):
+        self.bridge._active = False
+        line = json.loads(frame(log(0, "0038|Player|Repeated")))
+        transitions = [{**self.seed[-1], "inGameCombat": True}, line, line, self.seed[-1]]
+        for message in transitions:
+            self.ws._on_message(json.dumps(message))
+        self.bridge.status.emit(False, "Sidecar exited", self.bridge.generation())
+        self.assertEqual([json.loads(raw) for raw in self.recovery._pending], transitions)
+        self.retry()
+        self.bridge.ready.emit(2)
+        self.assertEqual(self.queued()[1:-1], [*self.seed, *transitions])
+
     def test_startup_failures_back_off_without_feed_driven_or_duplicate_retries(self):
         self.exit("Failed to launch sidecar")
         delays = [self.recovery._retry_timer.interval()]

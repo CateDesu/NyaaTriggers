@@ -146,41 +146,67 @@ jobs:
           java-version: '17'
           cache: maven
 
-      - name: Build triggevent-core.jar
-        run: bash triggevent-core/build.sh
-
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
+      - name: Build triggevent-core.jar
+        run: bash triggevent-core/build.sh
+
       - name: Verify engine recovery
         run: |
           sudo apt-get update && sudo apt-get install -y xvfb libegl1 libxkbcommon0 libgl1 mono-devel
-          pip install PyQt6==6.11.0 regex==2026.7.19 packaging==26.3
-          xvfb-run -a mvn -q -f triggevent-core/event-trigger/pom.xml \
-            -pl :trigger-support,:triggers-dt -am \
-            '-Dtest=MonitoringEventDistributorTest,Sequential*Test,Dmu*Test,CrossFightFaultInjectionTest,M1sTest,M2sTest,FRUTest' \
-            -Dsurefire.failIfNoSpecifiedTests=false test
+          pip install PyQt6==6.11.0 websockets==16.1.1 regex==2026.7.19 packaging==26.3
           python3 - <<'PY'
+          import importlib.util
           from pathlib import Path
+          import subprocess
           import xml.etree.ElementTree as ET
-          root = Path('triggevent-core/event-trigger')
-          reports = [report for folder in ("xivsupport", "trigger-support", "triggers/triggers-dt")
-                     for report in (root / folder / "target/surefire-reports").glob("TEST-*.xml")]
-          ran = {case.get("classname") for report in reports for case in ET.parse(report).iter("testcase")
-                 if case.find("skipped") is None}
-          required = {"gg.xp.reevent.events.MonitoringEventDistributorTest",
-                      "gg.xp.xivsupport.events.triggers.seq.SequentialTriggerLifecycleTest",
-                      "gg.xp.xivsupport.events.triggers.util.CrossFightFaultInjectionTest"}
-          if required - ran:
-              raise SystemExit(f"Missing native regressions: {sorted(required - ran)}")
-          print("Required native regression classes ran")
+          core = Path('triggevent-core').resolve()
+          spec = importlib.util.spec_from_file_location('engine_build', core / 'build_engine.py')
+          engine_build = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(engine_build)
+          with engine_build.prepared_source(core / 'event-trigger', core / 'patches/same-zone-history.patch') as root:
+              subprocess.run(['xvfb-run', '-a', 'mvn', '-q', '-f', str(root / 'pom.xml'),
+                              '-pl', ':trigger-support,:triggers-dt,:triggers-ew,:titan-jails,:telesto-core', '-am',
+                              '-Dtest=MonitoringEventDistributorTest,PullRecoveryTest,PullHistoryReaderTest,PlayerMarkerRepositoryRegressionTest,MultiSlotAutoMarkHandlerRegressionTest,Sequential*Test,Dmu*Test,CrossFightFaultInjectionTest,M1sTest,M2sTest,FRUTest,JailAutomarkRegressionTest,JailExampleTest,OmegaAutomarkRegressionTest,DragonsongAutomarkRegressionTest,TopTest,DsrTest,TelestoAutomarkRegressionTest',
+                              '-Dsurefire.failIfNoSpecifiedTests=false', 'test'], check=True)
+              reports = [report for folder in ("xivsupport", "trigger-support", "triggers/triggers-dt",
+                                              "triggers/triggers-ew", "triggers/titan-jails", "telesto-support/telesto-core")
+                         for report in (root / folder / "target/surefire-reports").glob("TEST-*.xml")]
+              ran = {case.get("classname") for report in reports for case in ET.parse(report).iter("testcase")
+                     if case.find("skipped") is None}
+              required = {"gg.xp.reevent.events.MonitoringEventDistributorTest",
+                          "gg.xp.xivsupport.replay.PullRecoveryTest",
+                          "gg.xp.xivsupport.replay.PullHistoryReaderTest",
+                          "gg.xp.xivsupport.events.state.playermarkers.PlayerMarkerRepositoryRegressionTest",
+                          "gg.xp.xivsupport.events.triggers.marks.MultiSlotAutoMarkHandlerRegressionTest",
+                          "gg.xp.xivsupport.events.triggers.seq.SequentialTriggerLifecycleTest",
+                          "gg.xp.xivsupport.events.triggers.util.CrossFightFaultInjectionTest",
+                          "gg.xp.xivsupport.events.JailAutomarkRegressionTest",
+                          "gg.xp.xivsupport.events.JailExampleTest",
+                          "gg.xp.xivsupport.triggers.ultimate.DmuRegressionTest",
+                          "gg.xp.xivsupport.events.triggers.endwalker.ultimate.TopTest",
+                          "gg.xp.xivsupport.events.triggers.endwalker.ultimate.DsrTest",
+                          "gg.xp.xivsupport.events.triggers.endwalker.ultimate.OmegaAutomarkRegressionTest",
+                          "gg.xp.xivsupport.events.triggers.endwalker.ultimate.DragonsongAutomarkRegressionTest",
+                          "gg.xp.telestosupport.TelestoAutomarkRegressionTest"}
+              if required - ran:
+                  raise SystemExit(f"Missing native regressions: {sorted(required - ran)}")
+              skipped = [case.get("classname") for report in reports for case in ET.parse(report).iter("testcase")
+                         if case.get("classname") in required and case.find("skipped") is not None]
+              if skipped:
+                  raise SystemExit(f"Skipped required native regressions: {sorted(set(skipped))}")
+              print("Required native regression classes ran")
           PY
           python3 triggevent-core/test_recovery.py --compare
           python3 triggevent-core/test_recovery_protocol.py
           python3 triggevent-core/test_custom_triggers.py
           python3 triggevent-core/test_delayed_speech.py
           python3 triggevent-core/test_diagnostics.py
+          python3 triggevent-core/test_automarkers.py
+          python3 triggevent-core/test_native_automarkers.py
+          python3 triggevent-core/test_automarker_bridge.py
           python3 triggevent-core/test_pipeline.py
           python3 -m tests test_connection_audit
 

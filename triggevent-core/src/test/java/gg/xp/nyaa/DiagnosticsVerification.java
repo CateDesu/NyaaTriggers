@@ -13,6 +13,10 @@ import gg.xp.xivsupport.replay.PullRecovery;
 import gg.xp.xivsupport.speech.BasicCalloutEvent;
 import gg.xp.xivsupport.speech.CalloutEvent;
 import gg.xp.xivsupport.speech.CalloutTraceInfo;
+import gg.xp.xivsupport.events.triggers.marks.adv.MarkerSign;
+import gg.xp.xivsupport.events.triggers.marks.adv.SpecificAutoMarkSlotRequest;
+import gg.xp.telestosupport.TelestoOutgoingMessage;
+import gg.xp.telestosupport.TelestoResponse;
 import org.picocontainer.MutablePicoContainer;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -63,12 +67,32 @@ public final class DiagnosticsVerification {
             master.pushEventAndWait(new SequentialTriggerFailedEvent("DMU.ttSq", "BuffApplied in quick succession", cast,
                     new IllegalStateException(SECRET)));
             master.pushEventAndWait(new BasicCalloutEvent(SECRET, SECRET));
+            SpecificAutoMarkSlotRequest mark = new SpecificAutoMarkSlotRequest(3, MarkerSign.BIND2);
+            master.pushEventAndWait(mark);
+            TelestoOutgoingMessage outgoing = new TelestoOutgoingMessage(MAPPER.readTree("{}"), true);
+            outgoing.setParent(mark);
+            TelestoResponse accepted = new TelestoResponse(null);
+            accepted.setResponseTo(outgoing);
+            master.pushEventAndWait(accepted);
             var diagnosticField = TriggeventCore.class.getDeclaredField("diagnostics");
             diagnosticField.setAccessible(true);
             ((EngineDiagnostics) diagnosticField.get(null)).pipeline();
 
             List<JsonNode> records = records();
             check(records.stream().anyMatch(record -> kind(record, "engine_runtime")), "Missing runtime metadata");
+            JsonNode requestedMark = records.stream().filter(record -> kind(record, "engine_automark")
+                    && record.path("stage").asText().equals("requested")).findFirst().orElseThrow();
+            JsonNode acceptedMark = records.stream().filter(record -> kind(record, "engine_automark")
+                    && record.path("stage").asText().equals("accepted")).findFirst().orElseThrow();
+            check(requestedMark.path("reason").asText().equals("disabled")
+                    && requestedMark.path("marker").asText().equals("BIND2")
+                    && requestedMark.path("slot").asInt() == 3, "Disabled marker request context missing");
+            check(acceptedMark.path("seq").asLong() == requestedMark.path("seq").asLong()
+                    && acceptedMark.path("http_status").asInt() == 200, "Marker request and HTTP acceptance not correlated");
+            check(records.stream().anyMatch(record -> kind(record, "engine_automark_config")
+                    && !record.path("enabled").asBoolean() && record.path("available").asBoolean()
+                    && record.path("native_umad").asBoolean()
+                    && record.path("transport").asText().equals("none")), "Disabled native marker configuration missing");
             List<JsonNode> failures = records.stream().filter(record -> kind(record, "sequence_failed")).toList();
             check(failures.size() == 3, "Failures missing or duplicated");
             JsonNode failure = failures.get(0);
@@ -116,6 +140,7 @@ public final class DiagnosticsVerification {
             console.println("VERIFIED diagnostic privacy and failed sink isolation");
             console.println("VERIFIED diagnostics do not reevaluate callout predicates");
             console.println("VERIFIED bounded replay diagnostics and live handoff");
+            console.println("VERIFIED requested markers and HTTP acceptance remain distinct and correlated");
             console.println("RESULT PASS");
             System.exit(0);
         }

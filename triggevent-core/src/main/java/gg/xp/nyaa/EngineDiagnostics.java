@@ -1,6 +1,7 @@
 package gg.xp.nyaa;
 
 import gg.xp.reevent.events.BaseEvent;
+import gg.xp.reevent.events.Event;
 import gg.xp.reevent.events.EventDistributor;
 import gg.xp.xivsupport.callouts.ModifiedCalloutRepository;
 import gg.xp.xivsupport.events.ACTLogLineEvent;
@@ -13,6 +14,10 @@ import gg.xp.xivsupport.models.XivCombatant;
 import gg.xp.xivsupport.replay.PullRecovery;
 import gg.xp.xivsupport.speech.CalloutEvent;
 import gg.xp.xivsupport.speech.TtsRequest;
+import gg.xp.xivsupport.events.state.XivState;
+import gg.xp.xivsupport.events.triggers.marks.*;
+import gg.xp.xivsupport.events.triggers.marks.adv.*;
+import gg.xp.telestosupport.*;
 
 import java.lang.reflect.Field;
 import java.time.Duration;
@@ -33,6 +38,11 @@ final class EngineDiagnostics {
     private final Map<Long, Long> actors = new LinkedHashMap<>();
     private long nextActor;
     private Instant firstEvent;
+    private final Map<Event, Long> marks = Collections.synchronizedMap(new WeakHashMap<>());
+    private final AtomicLong markSequence = new AtomicLong();
+    private AutoMarkServiceSelector markerService;
+    private XivState state;
+    private TelestoPartyListHandler party;
 
     EngineDiagnostics(PullRecovery recovery, Consumer<Map<String, Object>> sink) {
         this.recovery = recovery;
@@ -51,6 +61,8 @@ final class EngineDiagnostics {
         dist.registerHandler(TtsRequest.class, (c, e) -> count("tts"));
         dist.registerHandler(SequentialTriggerFailedEvent.class, (c, e) -> safely(() -> failure(e)));
         dist.registerHandler(BaseEvent.class, (c, e) -> safely(() -> mechanic(e)));
+        dist.registerHandler(BaseEvent.class, (c, e) -> safely(() -> markRequest(e)));
+        dist.registerHandler(BaseTelestoResponse.class, (c, e) -> safely(() -> markResponse(e)));
         emit("engine_runtime", Map.of("java_version", System.getProperty("java.version", ""),
                 "heap_max", Runtime.getRuntime().maxMemory()));
         var timer = Executors.newSingleThreadScheduledExecutor(task -> {
@@ -59,6 +71,83 @@ final class EngineDiagnostics {
             return thread;
         });
         timer.scheduleAtFixedRate(this::pipeline, 10, 10, TimeUnit.SECONDS);
+    }
+
+    void configureAutomark(AutoMarkServiceSelector selector, XivState state, TelestoPartyListHandler party) {
+        markerService = selector;
+        this.state = state;
+        this.party = party;
+    }
+
+    void automarkConfig(boolean enabled, boolean available, boolean nativeUmad) {
+        emit("engine_automark_config", Map.of("enabled", enabled, "available", available,
+                "transport", enabled && available ? "telesto" : "none", "native_umad", nativeUmad));
+    }
+
+    private static Event markRoot(Event event) {
+        Event result = null;
+        for (int depth = 0; event != null && depth < 16; depth++, event = event.getParent()) {
+            if (event instanceof AutoMarkRequest || event instanceof SpecificAutoMarkRequest) return event;
+            if (event instanceof ClearAutoMarkRequest || event instanceof AutoMarkSlotRequest
+                    || event instanceof SpecificAutoMarkSlotRequest) result = event;
+        }
+        return result;
+    }
+
+    private Map<String, Object> markData(Event root, Event event) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("seq", marks.computeIfAbsent(root, ignored -> markSequence.incrementAndGet()));
+        MarkerSign marker = root instanceof SpecificAutoMarkRequest request ? request.getMarker()
+                : root instanceof SpecificAutoMarkSlotRequest request ? request.getMarker()
+                : root instanceof ClearAutoMarkRequest ? MarkerSign.CLEAR : MarkerSign.ATTACK_NEXT;
+        data.put("marker", marker.name());
+        if (root instanceof HasTargetEntity target) data.put("target_actor", actor(target.getTarget()));
+        for (int depth = 0; event != null && depth < 16; depth++, event = event.getParent()) {
+            if (event instanceof AutoMarkSlotRequest request) data.put("slot", request.getSlotToMark());
+            if (event instanceof SpecificAutoMarkSlotRequest request) data.put("slot", request.getSlotToMark());
+        }
+        return data;
+    }
+
+    private void markRequest(BaseEvent event) {
+        if (recovery != null && recovery.clock.replaying()) return;
+        if (markRoot(event) != event) return;
+        Map<String, Object> data = markData(event, event);
+        data.put("stage", "requested");
+        if (recovery != null && !recovery.outputAllowed()) data.put("reason", "stale");
+        else if (markerService == null || markerService.getOptions().stream()
+                .noneMatch(handle -> handle.descriptor().id().equals("telesto-am"))) data.put("reason", "unavailable");
+        else if (markerService.getEffectiveOption().descriptor().id().equals("none")) data.put("reason", "disabled");
+        else if (event instanceof HasTargetEntity target && state != null) {
+            int slot = state.getPartySlotOf(target.getTarget()) + 1;
+            if (slot <= 0 || party == null || !party.matchesSlot(target.getTarget().getId(), slot)) {
+                data.put("reason", "unresolved");
+            }
+        }
+        emit("engine_automark", data);
+    }
+
+    private void markResponse(BaseTelestoResponse event) {
+        TelestoOutgoingMessage outgoing = event.getResponseTo();
+        Event root = outgoing == null ? null : markRoot(outgoing);
+        if (root == null) return;
+        Map<String, Object> data = markData(root, outgoing);
+        if (event instanceof TelestoHttpError error) {
+            data.put("stage", "rejected");
+            data.put("reason", "http_error");
+            data.put("http_status", error.getResponse().statusCode());
+        }
+        else if (event instanceof TelestoConnectionError error) {
+            data.put("stage", "failed");
+            data.put("reason", error.getError() instanceof java.util.concurrent.TimeoutException ? "stale"
+                    : error.getError() instanceof IllegalArgumentException
+                    || error.getError() instanceof tools.jackson.core.JacksonException ? "invalid_response" : "connection_error");
+        }
+        else {
+            data.put("stage", "accepted");
+            data.put("http_status", 200);
+        }
+        emit("engine_automark", data);
     }
 
     void registerSequences(ModifiedCalloutRepository repo) {

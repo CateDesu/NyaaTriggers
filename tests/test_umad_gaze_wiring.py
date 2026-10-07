@@ -159,7 +159,8 @@ w.gaze([(A, "60.00"), (B, "60.00")])
 check("marks that can't send yet are held pending", w.marks == []
       and len(w._umad_gaze_pending) == 2)
 w._mark_ok = True
-w._retry_umad_gaze_pending()
+with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=w.now):
+    w._retry_umad_gaze_pending()
 check("the party-refresh retry sends the held gaze marks", len(w.marks) == 2)
 
 w = FakeWindow()

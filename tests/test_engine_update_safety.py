@@ -171,7 +171,10 @@ class EngineUpdateTests(unittest.TestCase):
         self.assertTrue(bridge.update_engine()[0])
         resource = self.root / "src/main/resources/new.xml"
         resource.parent.mkdir()
-        for path in (self.root / "pom.xml", self.root / "build.bat", resource):
+        patch_file = self.root / "patches" / "same-zone-history.patch"
+        patch_file.parent.mkdir()
+        for path in (self.root / "pom.xml", self.root / "build.bat",
+                     self.root / "build_engine.py", patch_file, resource):
             with self.subTest(path=path.name):
                 path.write_text("changed input\n")
                 self.assertTrue(bridge.update_engine()[0])

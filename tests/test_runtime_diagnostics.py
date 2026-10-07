@@ -124,7 +124,9 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
                 patch("nyaatriggers.telesto_client.log_drop"):
             client._post(game_command_message("/mk bind2 <8>"))
         self.assertEqual(self.rows("marker_transport"), [
+            {"kind": "mark", "marker": "bind1", "slot": 4, "result": "attempt"},
             {"kind": "mark", "marker": "bind1", "slot": 4, "result": "accepted"},
+            {"kind": "mark", "marker": "bind2", "slot": 8, "result": "attempt"},
             {"kind": "mark", "marker": "bind2", "slot": 8, "result": "failed"},
         ])
 

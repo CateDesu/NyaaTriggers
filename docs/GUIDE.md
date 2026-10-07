@@ -198,7 +198,9 @@ Choose a player and death to review up to 60 seconds of observed damage, incomin
 
 Deaths and their events appear newest first. Times such as `-2.6s` are relative to death. Damage is blue, healing is green, and `!` marks a critical hit or heal. HP bars show health before the event, with confirmed healing in light green and shields in yellow. Standalone HP and shield updates show their current values. Hover a bar for its values or a status icon for its name, source, remaining duration, and stacks.
 
-Damage events also include Addle, Feint, Reprisal, Dismantled, Malodorous, Conked, and Candy Cane observed on the attacker, following [Death Recap's capture behavior](https://github.com/Kouzukii/ffxiv-deathrecap/blob/658ec3a19614f225e354b207ebba87aaf64943c7/Events/CombatEventCapture.cs). Their tooltips identify the attacker and the player who applied the effect. These remain separate from your own buffs and debuffs. Status tooltips include the game's description. Hover an amount to see damage type, critical hits, direct hits, blocks, or parries when recorded. `!!` marks a critical direct hit.
+**Targeted mitigation** shows single-target player defenses such as Intervention, Oblation, Blackest Night, Nascent Glint, Heart of Corundum, Aquaveil, Taurochole, and Exaltation, including their shields and follow-up effects. It also shows Addle, Feint, Reprisal, Dismantled, Malodorous, Conked, and Candy Cane observed on the attacker, following [Death Recap's capture behavior](https://github.com/Kouzukii/ffxiv-deathrecap/blob/658ec3a19614f225e354b207ebba87aaf64943c7/Events/CombatEventCapture.cs). Other buffs and debuffs remain in **Status effects**. Tooltips distinguish effects on the player from effects on the attacker and identify who applied them. These are the statuses observed at each event, not estimates of prevented damage. Saved recaps and imported logs use the same columns and filters.
+
+Status tooltips include the game's description. Hover an amount to see damage type, critical hits, direct hits, blocks, or parries when recorded. `!!` marks a critical direct hit.
 
 **Filter buffs** uses checked boxes to hide individual statuses throughout the recap without deleting recorded data. Offensive buffs such as two-minute raid buffs and damage procs are hidden by default. Mitigation, shields, healing effects, Weakness, Damage Down, and other debuffs stay visible. Mixed offensive and defensive statuses and unknown encounter effects also stay visible. Search for a status, check it to hide it, or uncheck it to show it. **Show all statuses** clears the selections; **Restore defaults** selects the offensive buff filter. Both buttons affect the full list while searching. The count shows how many statuses are selected to hide. Click **Apply** to save and refresh the recap while keeping the dialog open, or **OK** to save and close. **Cancel** discards changes made since the last Apply. Existing saved choices are preserved.
 
@@ -267,6 +269,46 @@ The active profile and separate Default setup survive restarts. Applying preserv
 ## Automarkers tab
 
 Place party signs through [Telesto](https://github.com/paissaheavyindustries/Telesto). Each rule maps a fight and debuff to a marker for **me** or **whoever gets the debuff**. Marking another player requires a known party slot.
+
+**Enable automarkers** and **Telesto URL** also configure Triggevent's native
+markers after an engine restart. **Triggevent encounter automarkers** exposes all
+13 bundled output sets across UWU, DSR, TOP and UMAD, using their native encounter
+logic. Turning off Triggevent callouts leaves markers running. Nyaa supports
+Telesto for marking.
+
+The native controls include independent mechanic switches, shared and overridden
+job priorities, eight marker maps with per-slot enable and presets, and encounter
+and command delays. Job priority chooses mechanic assignments; it does not change
+the game's party slots. A disabled priority override retains its own order and
+shows the effective shared order. UWU's clear delay uses milliseconds; Sigma and
+Omega delays use seconds. Native Next and Clear signs retain Triggevent's behavior.
+
+Rendering controls leaves your existing Triggevent settings intact. Explicit edits
+are saved in Nyaa and applied before native marking is enabled after restart or
+recovery. UWU and native UMAD keep their enabled defaults under the disabled
+master switch; DSR and TOP keep their disabled defaults. Invalid settings show a
+native settings error and leave the last valid configuration intact. Disabling
+the master and claiming local P4 ownership still takes effect if a saved native
+setting is rejected.
+
+Use a control's **Reset** button to replace an invalid saved preference with its
+native default. This also repairs values whose displayed fallback already looks
+correct, allowing later edits to other controls.
+
+Local UMAD gaze pairing or an assigned local P4 debuff rule scoped to UMAD or any
+fight keeps P4 marker ownership in Nyaa. Native UMAD P4 marks are then suppressed,
+even when **Enable native P4 debuff markers** is selected.
+P1 and P3 rules leave native P4 marking available.
+Other native encounters keep their existing settings.
+
+Native P4 pairs players by debuff resolution across two waves. Nyaa's local gaze
+pairing uses wave and party order and distinguishes real and fake gaze signs.
+Choose the producer that matches your strategy; the controls preserve one owner.
+
+The connection indicator confirms that Telesto responds. Diagnostics distinguish
+queued actions, attempted requests, failures and endpoint acceptance. Telesto
+does not confirm that a marker appeared in the game. A timed-out command may
+already have been submitted, so it is not retried automatically.
 
 - **Connection:** set **Telesto URL**, default `http://localhost:45678/`, use **Test mark (on me)**, then select **Enable automarkers**.
 - **Rules:** unassigned rules do not fire. Select a rule and choose its **Marker**, or choose *(unassigned)* to disable it. **Load UMAD preset** adds the selected Dancing Mad Ultimate rules. **Remove the mark when the debuff falls off** is on by default. **Clear all party marks** clears every sign.

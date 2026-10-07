@@ -43,6 +43,11 @@ import gg.xp.xivsupport.events.triggers.marks.adv.AutoMarkServiceSelector;
 import gg.xp.services.ServiceHandle;
 import gg.xp.telestosupport.TelestoMain;
 import gg.xp.telestosupport.TelestoStatusUpdatedEvent;
+import gg.xp.telestosupport.TelestoPartyListHandler;
+import gg.xp.telestosupport.TelestoHttpError;
+import gg.xp.telestosupport.TelestoConnectionError;
+import gg.xp.telestosupport.BaseTelestoResponse;
+import gg.xp.xivsupport.triggers.ultimate.DMU;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import org.picocontainer.MutablePicoContainer;
@@ -86,6 +91,9 @@ public final class TriggeventCore {
 
     private static volatile TelestoMain TELESTO;
     private static volatile AutoMarkServiceSelector AM_SELECTOR;
+    private static DMU DMU_TRIGGERS;
+    private static NativeAutomarkers NATIVE_AUTOMARKERS;
+    private static boolean nativeUmadEnabled = true;
     private static PullRecovery RECOVERY;
     private static EventMaster MASTER;
     private static EngineDiagnostics diagnostics;
@@ -212,6 +220,8 @@ public final class TriggeventCore {
         dist.registerHandler(CalloutEvent.class, TriggeventCore::onCallout);
         dist.registerHandler(TtsRequest.class, TriggeventCore::onTtsRequest);
         dist.registerHandler(TelestoStatusUpdatedEvent.class, TriggeventCore::onTelestoStatus);
+        dist.registerHandler(TelestoHttpError.class, (c, e) -> onAutomarkFailure(e));
+        dist.registerHandler(TelestoConnectionError.class, (c, e) -> onAutomarkFailure(e));
         dist.registerHandler(RefreshCombatantsRequest.class, (c, e) -> requestCombatants(List.of()));
         dist.registerHandler(RefreshSpecificCombatantsRequest.class, (c, e) -> requestCombatants(e.getCombatants()));
 
@@ -233,11 +243,14 @@ public final class TriggeventCore {
         try {
             TELESTO = pico.getComponent(TelestoMain.class);
             if (TELESTO != null) {
-                TELESTO.setOutgoingGate(message -> RECOVERY.outputAllowed()
-                        && !message.getEffectiveHappenedAt().isBefore(Instant.now().minusSeconds(3)));
+                TELESTO.setOutgoingGate(message -> RECOVERY.outputAllowed());
                 TELESTO.setDeliveryPermit(RECOVERY::outputPermit);
+                TELESTO.setDeliveryFailure(RECOVERY::cancelPendingOutput);
             }
             AM_SELECTOR = pico.getComponent(AutoMarkServiceSelector.class);
+            DMU_TRIGGERS = pico.getComponent(DMU.class);
+            diagnostics.configureAutomark(AM_SELECTOR, pico.getComponent(XivState.class),
+                    pico.getComponent(TelestoPartyListHandler.class));
             final String envUri = System.getenv("NYAA_TELESTO_URI");
             if (envUri != null && !envUri.isBlank() && TELESTO != null) {
                 trySet(() -> TELESTO.getUriSetting().set(URI.create(envUri.trim())));
@@ -245,6 +258,7 @@ public final class TriggeventCore {
             // Default to no marker service. Keyboard handlers could send keys to the focused window.
             requestedAutomark = "1".equals(System.getenv("NYAA_AUTOMARK"));
             applyAutomark(requestedAutomark);
+            NATIVE_AUTOMARKERS = new NativeAutomarkers(pico);
             if (AM_SELECTOR != null) {
                 final boolean hasTelesto = AM_SELECTOR.getOptions().stream()
                         .anyMatch(hh -> "telesto-am".equals(hh.descriptor().id()));
@@ -484,10 +498,13 @@ public final class TriggeventCore {
                 return;
             }
             if ("set_automark".equals(cmd)) {
-                automarkCommand = n;
-                requestedAutomark = n.path("enable").asBoolean(false);
+                JsonNode merged = mergeAutomark(n);
+                AutomarkControl control = prepareAutomark(merged);
+                automarkCommand = merged;
+                requestedAutomark = control.enable();
                 if (!RECOVERY.clock.replaying()) {
-                    handleAutomark(n);
+                    handleAutomark(control);
+                    if (n.has("settings")) emitAutomarkInventory(null);
                 }
                 return;
             }
@@ -528,6 +545,9 @@ public final class TriggeventCore {
             }
             diag("command error: " + t);
             diagnosticError("command", t);
+            if ("set_automark".equals(n.path("nyaa_cmd").asText())) {
+                emitAutomarkInventory(t.getMessage());
+            }
         }
     }
 
@@ -554,34 +574,120 @@ public final class TriggeventCore {
         }
     }
 
+    private record AutomarkControl(URI uri, boolean enable, boolean nativeUmad,
+                                   NativeAutomarkers.Plan settings) {}
+
+    private static JsonNode mergeAutomark(JsonNode command) {
+        var merged = MAPPER.createObjectNode();
+        if (automarkCommand != null) automarkCommand.properties().forEach(e -> merged.set(e.getKey(), e.getValue()));
+        command.properties().forEach(e -> merged.set(e.getKey(), e.getValue()));
+        if (command.path("settings").isObject() && automarkCommand != null
+                && automarkCommand.path("settings").isObject()) {
+            var settings = MAPPER.createObjectNode();
+            automarkCommand.path("settings").properties().forEach(e -> settings.set(e.getKey(), e.getValue()));
+            command.path("settings").properties().forEach(e -> settings.set(e.getKey(), e.getValue()));
+            merged.set("settings", settings);
+        }
+        return merged;
+    }
+
+    private static AutomarkControl prepareAutomark(JsonNode n) {
+        for (String key : List.of("enable", "native_umad")) {
+            if (n.has(key) && !n.get(key).isBoolean()) {
+                throw new IllegalArgumentException(key + " must be a boolean");
+            }
+        }
+        URI uri = null;
+        if (n.has("uri")) {
+            if (!n.get("uri").isTextual()) throw new IllegalArgumentException("uri must be a URL");
+            uri = URI.create(n.get("uri").asText().trim());
+            if (!("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))
+                    || uri.getHost() == null || uri.getPort() < -1 || uri.getPort() == 0 || uri.getPort() > 65535) {
+                throw new IllegalArgumentException("uri must be an HTTP or HTTPS URL with a valid host and port");
+            }
+        }
+        if (NATIVE_AUTOMARKERS == null && n.has("settings")) {
+            throw new IllegalStateException("Native automarker settings are unavailable");
+        }
+        return new AutomarkControl(uri, n.path("enable").asBoolean(requestedAutomark),
+                n.path("native_umad").asBoolean(nativeUmadEnabled),
+                NATIVE_AUTOMARKERS == null ? null : NATIVE_AUTOMARKERS.plan(n.path("settings")));
+    }
+
     private static void handleAutomark(JsonNode n) {
-        RECOVERY.cancelPendingOutput();
-        if (n.hasNonNull("uri") && TELESTO != null) {
-            trySet(() -> TELESTO.getUriSetting().set(URI.create(n.get("uri").asText().trim())));
+        handleAutomark(prepareAutomark(n));
+        if (n.has("settings")) emitAutomarkInventory(null);
+    }
+
+    private static void handleAutomark(AutomarkControl control) {
+        URI uri = control.uri();
+        boolean uriChanged = uri != null && TELESTO != null && !uri.equals(TELESTO.getUriSetting().get());
+        boolean enable = control.enable();
+        boolean nativeUmad = control.nativeUmad();
+        boolean settingsChanged = control.settings() != null && control.settings().changed();
+        boolean enabled = AM_SELECTOR != null && "telesto-am".equals(AM_SELECTOR.getEffectiveOption().descriptor().id());
+        boolean effective = enable && automarkAvailable();
+        if (uriChanged || effective != enabled || nativeUmad != nativeUmadEnabled || settingsChanged) {
+            RECOVERY.cancelPendingOutput();
         }
-        if (n.has("enable")) {
-            applyAutomark(n.get("enable").asBoolean(true));
+        if (uriChanged || settingsChanged) {
+            selectAutomarkService("none", settingsChanged);
         }
+        if (control.settings() != null) control.settings().apply(TriggeventCore::trySet);
+        if (uriChanged) {
+            URI newUri = uri;
+            trySet(() -> TELESTO.getUriSetting().set(newUri));
+        }
+        if (nativeUmad != nativeUmadEnabled) {
+            nativeUmadEnabled = nativeUmad;
+            if (DMU_TRIGGERS != null) {
+                DMU_TRIGGERS.setKefkaAutoMarksEnabled(nativeUmad);
+            }
+        }
+        applyAutomark(enable);
         diag("set_automark applied");
+    }
+
+    private static void onAutomarkFailure(BaseTelestoResponse event) {
+        if (event.isCurrent() && AM_SELECTOR != null
+                && "telesto-am".equals(AM_SELECTOR.getEffectiveOption().descriptor().id())) {
+            selectAutomarkService("none");
+            selectAutomarkService("telesto-am");
+        }
     }
 
     // Refresh party order on enable. Slots remain unknown until the reply arrives.
     private static void applyAutomark(boolean enable) {
-        if (!enable) {
-            RECOVERY.cancelPendingOutput();
+        boolean available = automarkAvailable();
+        boolean effective = enable && available;
+        boolean changed = AM_SELECTOR != null && !Objects.equals(AM_SELECTOR.getEffectiveOption().descriptor().id(),
+                effective ? "telesto-am" : "none");
+        if (changed) RECOVERY.cancelPendingOutput();
+        if (TELESTO != null && TELESTO.getEnablePartyList().get() != effective) {
+            trySet(() -> TELESTO.getEnablePartyList().set(effective));
         }
-        if (TELESTO != null) {
-            trySet(() -> TELESTO.getEnablePartyList().set(enable));
-        }
-        selectAutomarkService(enable ? "telesto-am" : "none");
-        if (enable && TELESTO != null) {
+        selectAutomarkService(effective ? "telesto-am" : "none");
+        diagnostics.automarkConfig(enable, available, nativeUmadEnabled);
+        if (effective && changed) {
             trySet(TELESTO::refreshPartyIfEnabled);
         }
     }
 
     // Select by ID so upstream priorities cannot choose another marker handler.
     private static void selectAutomarkService(String id) {
+        selectAutomarkService(id, false);
+    }
+
+    private static boolean automarkAvailable() {
+        return TELESTO != null && AM_SELECTOR != null && AM_SELECTOR.getOptions().stream()
+                .anyMatch(handle -> "telesto-am".equals(handle.descriptor().id()));
+    }
+
+    private static void selectAutomarkService(String id, boolean notify) {
         if (AM_SELECTOR == null) {
+            return;
+        }
+        if (!notify && id.equals(AM_SELECTOR.getEffectiveOption().descriptor().id())) {
             return;
         }
         trySet(() -> AM_SELECTOR.getOptions().stream()
@@ -632,7 +738,15 @@ public final class TriggeventCore {
             }
         }
         println(MAPPER.writeValueAsString(Map.of("t", "inventory", "triggers", entries)));
+        emitAutomarkInventory(null);
         diag("inventory emitted: " + groups.size() + " groups");
+    }
+
+    private static void emitAutomarkInventory(String error) {
+        if (NATIVE_AUTOMARKERS == null) return;
+        Map<String, Object> inventory = new LinkedHashMap<>(NATIVE_AUTOMARKERS.inventory());
+        if (error != null) inventory.put("error", error);
+        println(MAPPER.writeValueAsString(inventory));
     }
 
     private static String severity(Color c) {

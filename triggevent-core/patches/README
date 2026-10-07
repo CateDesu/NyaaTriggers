@@ -1,2 +1,5 @@
-Retired 2026-09-05. These guards now live in CateDesu/event-trigger on main.
-The build no longer applies these patches. They remain as a rollback reference.
+same-zone-history.patch preserves pull history across repeated zone announcements.
+The build applies it in a private source worktree until the engine fork includes it.
+
+The older crash and arrow guards were retired 2026-09-05 and live in
+CateDesu/event-trigger on main. They remain as rollback references.

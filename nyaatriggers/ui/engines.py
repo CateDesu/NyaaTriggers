@@ -234,6 +234,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             self._triggevent.callout.connect(self._on_triggevent_callout)
             self._triggevent.tts.connect(self._on_triggevent_tts)
             self._triggevent.inventory.connect(self._on_triggevent_inventory)
+            self._triggevent.automark_inventory.connect(self._on_native_automark_inventory)
             self._triggevent.telesto.connect(self._on_telesto_status)
             self._triggevent.status.connect(
                 lambda active, msg, gen: self._on_engine_sidecar_status("triggevent", active, msg, gen))

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Requires JDK 17 and Maven. The linked engine and resulting jar are GPL-3.0.
+# Requires JDK 17, Maven and Python 3. The engine and jar are GPL-3.0.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ET_DIR="${EVENT_TRIGGER_DIR:-$HERE/event-trigger}"
 ET_REPO="${EVENT_TRIGGER_REPO:-https://github.com/CateDesu/event-trigger.git}"
 # Keep the engine commit pin in sync with build.bat.
-ET_REF="${EVENT_TRIGGER_REF:-a0473d10dd10ec165b72abe18d964918976fe683}"
+ET_REF="${EVENT_TRIGGER_REF:-28069f332b762edc2c3ea326f2056dcc5050ddda}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -16,6 +16,10 @@ if ! have java; then
 fi
 if ! have mvn; then
   echo "ERROR: Maven not found.   Arch/CachyOS:  sudo pacman -S maven" >&2
+  exit 1
+fi
+if ! have python3; then
+  echo "ERROR: Python 3 is required to prepare the engine source." >&2
   exit 1
 fi
 
@@ -39,12 +43,8 @@ else
   fi
 fi
 
-# Clean builds prevent incremental packaging from retaining old triggers.
 echo ">> installing Triggevent Engine modules to local Maven repo"
-# List trigger submodules explicitly because triggers is only an aggregator.
-( cd "$ET_DIR" && mvn -q -Dmaven.test.skip=true \
-    -pl :actimport,:xivsupport,:trigger-support,:triggers-general,:triggers-ew,:triggers-sb,:triggers-dt,:titan-jails,:easytriggers,:timelines,:telesto-core -am \
-    clean install )
+python3 "$HERE/build_engine.py" "$ET_DIR" "$HERE/patches/same-zone-history.patch"
 
 echo ">> building triggevent-core.jar"
 ET_COMMIT="$(git -C "$ET_DIR" rev-parse HEAD)"

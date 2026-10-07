@@ -5,11 +5,12 @@ set "HERE=%~dp0"
 if not defined EVENT_TRIGGER_DIR set "EVENT_TRIGGER_DIR=%HERE%event-trigger"
 if not defined EVENT_TRIGGER_REPO set "EVENT_TRIGGER_REPO=https://github.com/CateDesu/event-trigger.git"
 REM Keep the engine commit pin in sync with build.sh.
-if not defined EVENT_TRIGGER_REF set "EVENT_TRIGGER_REF=a0473d10dd10ec165b72abe18d964918976fe683"
+if not defined EVENT_TRIGGER_REF set "EVENT_TRIGGER_REF=28069f332b762edc2c3ea326f2056dcc5050ddda"
 
 where java >nul 2>nul || (echo ERROR: JDK 17 not found - run: winget install EclipseAdoptium.Temurin.17.JDK & exit /b 1)
 where mvn  >nul 2>nul || (echo ERROR: Maven not found - run: winget install Apache.Maven & exit /b 1)
 where git  >nul 2>nul || (echo ERROR: git not found. & exit /b 1)
+where python >nul 2>nul || (echo ERROR: Python 3 is required to prepare the engine source. & exit /b 1)
 
 if not exist "%EVENT_TRIGGER_DIR%\.git" (
   echo ^>^> cloning event-trigger into %EVENT_TRIGGER_DIR%
@@ -35,9 +36,7 @@ if not exist "%EVENT_TRIGGER_DIR%\.git" (
 )
 
 echo ^>^> installing Triggevent Engine modules to local Maven repo
-pushd "%EVENT_TRIGGER_DIR%"
-call mvn -q -Dmaven.test.skip=true -pl :actimport,:xivsupport,:trigger-support,:triggers-general,:triggers-ew,:triggers-sb,:triggers-dt,:titan-jails,:easytriggers,:timelines,:telesto-core -am clean install || (popd & exit /b 1)
-popd
+python "%HERE%build_engine.py" "%EVENT_TRIGGER_DIR%" "%HERE%patches\same-zone-history.patch" || exit /b 1
 
 echo ^>^> building triggevent-core.jar
 set "ET_COMMIT="

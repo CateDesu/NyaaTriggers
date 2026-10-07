@@ -82,7 +82,7 @@ Plain order rules would move a sign between players sharing the status. **UMAD b
 Each sign marks the earliest player in its queue who still has Crust. It advances on Crust loss and clears after the last cleanse.
 
 - Enabling chains suspends overlapping `644`, `154E`, and `BBC/BBD/BBE` rules in UMAD.
-- Roles come from AddedCombatant job data, PartyChanged, and combatant snapshots. Unknown jobs, missing membership, or incomplete order data leave the affected queue unmarked.
+- Roles come from AddedCombatant job data, PartyChanged, and combatant snapshots. Every queue needs all its members, including both Accretion carriers. Unknown jobs, missing membership, or incomplete order data leave the affected queue unmarked after debounce too.
 - Late Accretion data moves its sign to the correct queue head.
 - Unknown party slots delay marking until a roster refresh. If the queue advances first, the newer mark replaces the pending request.
 
@@ -101,12 +101,18 @@ Chaos's Inferno and Tsunami casts do not identify gaze direction. The old elemen
 
 The pair is numbered by party slot, with actor ID as fallback. Marking begins when both gains arrive within 12 seconds of the identifying VFX.
 
-- Missing VFX evidence leaves the set unmarked.
+- Missing VFX evidence leaves the set unmarked. A complete pair can wait for a delayed VFX for the five-second burst window.
 - An incomplete pair expires after the five-second burst gap.
 - If both waves need the same signs, the earlier pair keeps them until its gaze ends. The later pair then receives those signs.
 - The plain `15A7` preset rule is suspended while pairing is enabled.
 - Status loss or expiry clears that player's sign. A wipe, a new Kefka Says, or disabling the toggle clears all remaining signs and waiting assignments.
 - Unknown party slots delay marks until a roster refresh.
+
+Local rules, chain queues and gaze pairs retain ownership of their signs. An older mechanic's loss or expiry cannot clear a newer local mark on the same actor. Pending marks expire with their gaze before any roster retry. Wipes clear owned local signs and cancel queued marks. Zone changes and feed loss discard actors and pending actions because party slots may have changed.
+
+Local gaze pairing or an enabled assigned local rule for a P4 preset debuff suppresses native Triggevent Kefka marking. This applies to UMAD and any-fight rules, matching the P4 IDs above, their exact status names, or compound rules containing those IDs. Other UMAD rules, including the P3 Accretion queues, leave native P4 marking available.
+
+Telesto commands are queued with a thirty-second age limit. Cleanup follows the existing encounter and party boundaries. Diagnostics distinguish queueing, a POST attempt and an accepted HTTP response. Telesto returns no confirmation that the game applied the command, so an accepted response cannot prove marker delivery. Requests with ambiguous timeout outcomes are not retried.
 
 ## IDs shared by name
 

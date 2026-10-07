@@ -61,14 +61,14 @@ class InstanceTabMixin:
                 zone_item.setForeground(QBrush(QColor(color)))
         self._table.blockSignals(prev)
 
-    def _clear_player(self, actor_id: str, name: str = "", force: bool = False) -> bool:
-        """force allows marker cleanup while automarkers are disabled."""
+    def _clear_player(self, actor_id: str, name: str = "", force: bool = False, *, delivery=None) -> bool:
         tc = self._telesto_client
         if tc is None:
             return False
-        if self._is_me_actor(actor_id, name):
-            return tc.clear_self(force=force)
-        return tc.clear_actor(actor_id, force=force)
+        options = {"delivery": delivery} if delivery is not None else {}
+        if (delivery is not None and delivery.target == "<me>") or self._is_me_actor(actor_id, name):
+            return tc.clear_self(force=force, **options)
+        return tc.clear_actor(actor_id, force=force, **options)
 
     def _note_actor_job(self, aid: int, job: int) -> None:
         if len(self._actor_jobs) > 1024:
@@ -220,7 +220,7 @@ class InstanceTabMixin:
             self._mute_btn.setChecked(False)
 
     def _clear_actor_state(self) -> None:
-        """Discard actors and pending marks whose loss events can no longer arrive."""
+        """Loss events cannot arrive for actors from the previous zone."""
         client = getattr(self, "_telesto_client", None)
         if client is not None:
             client.cancel_pending(clear_party=True)
@@ -231,6 +231,9 @@ class InstanceTabMixin:
         self._automark_pairs.reset()
         self._automark_pending.clear()
         self._automark_active.clear()
+        getattr(self, "_automark_owners", {}).clear()
+        getattr(self, "_automark_deliveries", {}).clear()
+        getattr(self, "_automark_cleanup", set()).clear()
         self._automark_cooldowns = {}
 
     @pyqtSlot(bool, bool)
@@ -345,11 +348,30 @@ class InstanceTabMixin:
                 client.cancel_pending()
             self._umad_chain_reset(clear_marks=True)
             self._umad_gaze_reset(clear_marks=True)
+            tracked = set()
+            for actor, claims in getattr(self, "_automark_deliveries", {}).items():
+                for claim in claims:
+                    delivery = claim.delivery
+                    tracked.add("me" if delivery.target == "<me>" else actor)
+                    if delivery.pending or delivery.current:
+                        claim.clear_requested = True
+                        self._clear_player(actor, delivery=delivery)
+            for key in dict.fromkeys([*self._automark_active,
+                                      *sorted(getattr(self, "_automark_cleanup", ()))]):
+                if key in tracked:
+                    continue
+                if key == "me":
+                    client.clear_self()
+                else:
+                    self._clear_player(key)
             self._automark_pairs.reset()
             self._automark_pending.clear()
             self._automark_active.clear()
+            getattr(self, "_automark_owners", {}).clear()
+            getattr(self, "_automark_cleanup", set()).clear()
+            getattr(self, "_automark_cooldowns", {}).clear()
 
-        # Track status changes while disabled so enabling midfight works.
+        # Keep status state for enabling midfight.
         if fields[0] in ("26", "30") and len(fields) > 8 and fields[7].startswith("10"):
             _eff_n = self._norm_hex(fields[2])
             if _eff_n in self._automark_pairs.tracked:
@@ -358,7 +380,7 @@ class InstanceTabMixin:
                 else:
                     self._automark_pairs.on_loss(_eff_n, fields[7])
 
-        # Marker losses must cancel pending retries regardless of callout mode.
+        # Callout mode must not gate marker cleanup.
         if (self._automark_rules and fields[0] in ("26", "30")
                 and self._settings.get("telesto_enabled")):
             if fields[0] == "26":
@@ -366,7 +388,7 @@ class InstanceTabMixin:
             else:
                 self._match_automark_unmark(fields)
 
-        # One automarker failure must not skip local triggers on the same line.
+        # Automarker failures must not skip local triggers.
         if fields[0] in ("26", "30"):
             try:
                 self._umad_chain_line(fields)

@@ -1,4 +1,4 @@
-"""Send marker commands serially through Telesto, resolving actor IDs to GetPartyMembers slots."""
+"""Serial Telesto commands with actor IDs resolved to party slots."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 
 from nyaatriggers.drop_log import log_drop
 from nyaatriggers.diagnostics import record
@@ -24,7 +25,7 @@ try:
 except Exception:  # pragma: no cover
     _HAVE_QT = False
 
-    class QObject:  # Allow tests to import without Qt.
+    class QObject:
         def __init__(self, *a, **k):
             pass
 
@@ -40,7 +41,7 @@ except Exception:  # pragma: no cover
                 for fn in list(self._slots):
                     try:
                         fn(*args)
-                    except Exception:  # Continue emitting after a failing slot.
+                    except Exception:
                         import traceback
                         traceback.print_exc()
 
@@ -164,6 +165,18 @@ def read_telesto_response(request, timeout: float, stopping: threading.Event,
 
 
 _STOP = object()
+MAX_COMMAND_AGE_S = 30.0
+
+
+@dataclass(eq=False)
+class MarkerDelivery:
+    actor: int
+    marker: str
+    pending: bool = True
+    current: bool = False
+    clearing: bool = False
+    target: str = ""
+
 
 # Ignore marker tokens vary by client language. Other markers use English tokens.
 MARKERS: list[tuple[str, str]] = [
@@ -192,7 +205,6 @@ def game_command_message(command: str) -> dict:
 
 
 def party_members_message() -> dict:
-    """Request party members and probe reachability without changing game state."""
     return make_message(PARTY_UPDATE_ID, "GetPartyMembers", None)
 
 
@@ -221,7 +233,7 @@ def _actor_int(actor_id) -> "int | None":
     """Normalize actor IDs, rejecting invalid IDs and no-target sentinels."""
     if actor_id is None:
         return None
-    if isinstance(actor_id, bool):          # bool is an int subclass
+    if isinstance(actor_id, bool):
         return None
     if isinstance(actor_id, int):
         v = actor_id
@@ -244,7 +256,7 @@ def _actor_int(actor_id) -> "int | None":
 
 
 def mark_command(marker, target) -> str:
-    """Empty or unknown tokens use the next attack marker. Log unknown tokens."""
+    """Empty or unknown tokens use the next attack marker."""
     m = (str(marker).strip() if marker is not None else "")
     if m not in MARKER_TOKENS:
         if m:
@@ -279,9 +291,10 @@ class TelestoClient(QObject):
         self._stopping = threading.Event()
         self._lock = threading.RLock()
         self._reachable: "tuple[bool, bool] | None" = None
-        self._warned_sends: set = set()        # unexpected send failures already logged
+        self._warned_sends: set = set()
         self._slot_by_actor: "dict[int, int]" = {}
         self._request_context = threading.local()
+        self._delivered_marks: set[MarkerDelivery] = set()
 
     def configure(self, uri: "str | None" = None, enabled: "bool | None" = None,
                   delay_base_ms: "int | None" = None,
@@ -295,6 +308,7 @@ class TelestoClient(QObject):
                     self._endpoint_epoch += 1
                     self._slot_by_actor = {}
                     self._reachable = None
+                    self._forget_markers()
                     invalidated = True
             if enabled is not None:
                 if self._enabled and not enabled:
@@ -318,6 +332,7 @@ class TelestoClient(QObject):
             if clear_party:
                 self._cleanup_epoch += 1
                 self._slot_by_actor.clear()
+                self._forget_markers()
             self._discard_cancelled_commands()
 
     def is_enabled(self) -> bool:
@@ -338,7 +353,7 @@ class TelestoClient(QObject):
             t = self._thread
             if t and t.is_alive() and not self._stopping.is_set():
                 return
-            # Replacement workers need separate queues without old commands.
+            # Old workers must not consume the new queue.
             if self._stopping.is_set():
                 self._queue = queue.Queue(maxsize=self._max_queue)
             self._stopping = threading.Event()
@@ -352,14 +367,14 @@ class TelestoClient(QObject):
         with self._lock:
             self._stopping.set()
             q = self._queue
-        try:
+            while True:
+                try:
+                    item = q.get_nowait()
+                except queue.Empty:
+                    break
+                if item is not _STOP:
+                    self._finish_delivery(item)
             q.put_nowait(_STOP)
-        except queue.Full:
-            try:
-                q.get_nowait()
-                q.put_nowait(_STOP)
-            except (queue.Empty, queue.Full):
-                pass
 
     def join_stopped(self, timeout: float = 2.0) -> None:
         with self._lock:
@@ -378,7 +393,7 @@ class TelestoClient(QObject):
         self.join_stopped(join_timeout)
 
     def send_game_command(self, command: str, force: bool = False) -> bool:
-        """Queue a delayed command. force bypasses the enabled setting for testing."""
+        """force bypasses the enabled setting."""
         if not command:
             return False
         return self._enqueue(game_command_message(command), delay=True, force=force)
@@ -386,20 +401,23 @@ class TelestoClient(QObject):
     def mark(self, marker, target, force: bool = False) -> bool:
         return self.send_game_command(mark_command(marker, target), force=force)
 
-    def mark_self(self, marker, force: bool = False) -> bool:
-        return self.mark(marker, "me", force=force)
+    def mark_self(self, marker, force: bool = False, *, actor_id=None,
+                  delivery: MarkerDelivery | None = None) -> bool:
+        return self._enqueue(game_command_message(mark_command(marker, "me")),
+                             delay=True, force=force, actor=_actor_int(actor_id), delivery=delivery)
 
     def mark_slot(self, marker, slot, force: bool = False) -> bool:
         return self.mark(marker, int(slot), force=force)
 
-    def mark_actor(self, actor_id, marker, force: bool = False) -> bool:
-        """Mark the current party slot. Return false for unknown slots or queue failure."""
+    def mark_actor(self, actor_id, marker, force: bool = False, *,
+                   delivery: MarkerDelivery | None = None) -> bool:
+        """Resolve the party slot again at dispatch."""
         with self._lock:
             slot = self.slot_of_actor(actor_id)
             if not slot:
                 return False
             return self._enqueue(game_command_message(mark_command(marker, slot)),
-                                 delay=True, force=force, actor=_actor_int(actor_id))
+                                 delay=True, force=force, actor=_actor_int(actor_id), delivery=delivery)
 
     def slot_of_actor(self, actor_id) -> "int | None":
         aid = _actor_int(actor_id)
@@ -412,17 +430,19 @@ class TelestoClient(QObject):
         with self._lock:
             return len(self._slot_by_actor)
 
-    def clear_self(self, force: bool = False) -> bool:
+    def clear_self(self, force: bool = False, *, actor_id=None,
+                   delivery: MarkerDelivery | None = None) -> bool:
         return self._enqueue(game_command_message("/mk clear <me>"),
-                             delay=True, force=force, cleanup=True)
+                             delay=True, force=force, cleanup=True, actor=_actor_int(actor_id), delivery=delivery)
 
-    def clear_actor(self, actor_id, force: bool = False) -> bool:
+    def clear_actor(self, actor_id, force: bool = False, *,
+                    delivery: MarkerDelivery | None = None) -> bool:
         with self._lock:
             slot = self.slot_of_actor(actor_id)
             if not slot:
                 return False
             return self._enqueue(game_command_message(f"/mk clear <{int(slot)}>"),
-                                 delay=True, force=force, cleanup=True, actor=_actor_int(actor_id))
+                                 delay=True, force=force, cleanup=True, actor=_actor_int(actor_id), delivery=delivery)
 
     def clear_all(self, force: bool = False) -> None:
         with self._lock:
@@ -437,16 +457,24 @@ class TelestoClient(QObject):
         self.request_party_members(force=True)
 
     def _enqueue(self, msg: dict, delay: bool, force: bool = False, cleanup: bool = False,
-                 actor: int | None = None) -> bool:
-        """Return false if disabled or full."""
+                 actor: int | None = None, delivery: MarkerDelivery | None = None) -> bool:
         try:
             with self._lock:
                 if not force and not self._enabled:
+                    _record_marker_transport(msg, "disabled")
                     return False
+                if cleanup and delivery is not None and delivery.clearing:
+                    return True
                 self._queue.put_nowait((msg, delay, force, self._command_epoch,
                                        self._endpoint_epoch, self._encounter_epoch,
-                                       self._cleanup_epoch if cleanup else None, actor))
+                                       self._cleanup_epoch if cleanup else None, actor,
+                                       time.monotonic() + MAX_COMMAND_AGE_S if delay and not cleanup else None,
+                                       delivery))
+                if cleanup and delivery is not None:
+                    delivery.clearing = True
+                _record_marker_transport(msg, "queued")
         except queue.Full:
+            _record_marker_transport(msg, "queue_full")
             log_drop("telesto-queue", "command queue full, dropping message")
             self.error.emit("Telesto command queue full; command dropped")
             return False
@@ -457,13 +485,19 @@ class TelestoClient(QObject):
         with self._lock:
             return (endpoint == self._endpoint_epoch
                     and (encounter == self._encounter_epoch or cleanup == self._cleanup_epoch)
-                    and (force or self._enabled and epoch == self._command_epoch))
+                    and (force or cleanup == self._cleanup_epoch
+                         or self._enabled and epoch == self._command_epoch))
 
     def _discard_cancelled_commands(self) -> None:
         q = self._queue
         with q.mutex:
-            keep = [item for item in q.queue
-                    if item is _STOP or self._can_send(*item[2:7])]
+            keep = []
+            for item in q.queue:
+                if item is _STOP or self._can_send(*item[2:7]):
+                    keep.append(item)
+                else:
+                    _record_marker_transport(item[0], "cancelled")
+                    self._finish_delivery(item)
             removed = len(q.queue) - len(keep)
             if not removed:
                 return
@@ -487,34 +521,59 @@ class TelestoClient(QObject):
             if item is _STOP:
                 if stopping.is_set():
                     break
-                continue                       # stale sentinel from a previous generation
-            msg, delay, force, epoch, endpoint, encounter, cleanup, actor = item
-            if not self._can_send(force, epoch, endpoint, encounter, cleanup):
-                _record_marker_transport(msg, "cancelled")
                 continue
-            if delay:
-                self._sleep_command_delay(stopping)
-            if stopping.is_set():
-                break
-            if not self._can_send(force, epoch, endpoint, encounter, cleanup):
-                _record_marker_transport(msg, "cancelled")
-                continue
-            if actor is not None:
-                slot = self.slot_of_actor(actor)
-                if slot is None:
-                    _record_marker_transport(msg, "unknown_slot")
-                    continue
-                command = msg["payload"]["command"].rsplit(" ", 1)[0]
-                msg = game_command_message(f"{command} <{slot}>")
             try:
-                self._request_context.command = (force, epoch, endpoint, encounter, cleanup)
-                self._request_context.endpoint = endpoint
-                self._post(msg)
-            except Exception as exc:
-                key = f"{type(exc).__name__}: {exc}"[:200]
-                if key not in self._warned_sends and len(self._warned_sends) < 32:
-                    self._warned_sends.add(key)
-                    log_drop("telesto-send", f"send failed: {exc}", 0)
+                self._send_queued(item, stopping)
+            finally:
+                self._finish_delivery(item)
+
+    @staticmethod
+    def _finish_delivery(item):
+        delivery = item[-1]
+        if delivery is not None:
+            if item[6] is None:
+                delivery.pending = False
+            else:
+                delivery.clearing = False
+
+    def _send_queued(self, item, stopping):
+        msg, delay, force, epoch, endpoint, encounter, cleanup, actor, expires, delivery = item
+        if not self._can_send(force, epoch, endpoint, encounter, cleanup):
+            _record_marker_transport(msg, "cancelled")
+            return
+        if expires is not None and time.monotonic() >= expires:
+            _record_marker_transport(msg, "stale")
+            return
+        if delay:
+            self._sleep_command_delay(stopping)
+        if stopping.is_set():
+            return
+        if not self._can_send(force, epoch, endpoint, encounter, cleanup):
+            _record_marker_transport(msg, "cancelled")
+            return
+        if expires is not None and time.monotonic() >= expires:
+            _record_marker_transport(msg, "stale")
+            return
+        if cleanup is not None and delivery is not None and not delivery.current:
+            return
+        if actor is not None and not msg["payload"]["command"].endswith(" <me>"):
+            slot = self.slot_of_actor(actor)
+            if slot is None:
+                _record_marker_transport(msg, "unknown_slot")
+                return
+            command = msg["payload"]["command"].rsplit(" ", 1)[0]
+            msg = game_command_message(f"{command} <{slot}>")
+        try:
+            self._request_context.command = (force, epoch, endpoint, encounter, cleanup)
+            self._request_context.endpoint = endpoint
+            self._request_context.expires = expires
+            self._request_context.marker = (actor, delivery)
+            self._post(msg)
+        except Exception as exc:
+            key = f"{type(exc).__name__}: {exc}"[:200]
+            if key not in self._warned_sends and len(self._warned_sends) < 32:
+                self._warned_sends.add(key)
+                log_drop("telesto-send", f"send failed: {exc}", 0)
 
     def _sleep_command_delay(self, stopping: "threading.Event") -> None:
         with self._lock:
@@ -529,14 +588,24 @@ class TelestoClient(QObject):
             if not self._response_current(endpoint):
                 return
             uri, timeout = self._uri, self._timeout
+            _actor, delivery = getattr(self._request_context, "marker", (None, None))
+            clearing = msg.get("payload", {}).get("command", "").startswith("/mk clear ")
+            if delivery is not None and not clearing:
+                # A missing reply does not prove the mark failed.
+                delivery.current = True
+                delivery.target = msg["payload"]["command"].split()[-1]
+                self._delivered_marks.add(delivery)
         body = json.dumps(msg).encode("utf-8")
         try:
             req = urllib.request.Request(
                 uri, data=body, method="POST",
                 headers={"Content-Type": "application/json",
                          "User-Agent": "NyaaTriggers"})
+            _record_marker_transport(msg, "attempt")
             code, body = self._read_response(req, timeout)
             with self._lock:
+                if self._marker_response_current(endpoint, delivery):
+                    self._accept_marker(msg)
                 if not self._response_current(endpoint):
                     return
                 self._report_reachable(True, f"Connected (HTTP {code})")
@@ -544,9 +613,11 @@ class TelestoClient(QObject):
                 if msg.get("id") == PARTY_UPDATE_ID:
                     self._update_party_slots(body)
         except urllib.error.HTTPError as exc:
-            # HTTP errors mean the endpoint is reachable but degraded.
             exc.close()
             with self._lock:
+                if delivery is not None and not clearing:
+                    delivery.current = False
+                    self._delivered_marks.discard(delivery)
                 if not self._response_current(endpoint):
                     return
                 self._report_reachable(True, f"Telesto error: HTTP {exc.code}", degraded=True)
@@ -555,22 +626,68 @@ class TelestoClient(QObject):
         except (urllib.error.URLError, OSError, ValueError,
                 http.client.HTTPException) as exc:
             with self._lock:
+                if self._marker_response_current(endpoint, delivery):
+                    self._accept_marker(msg, confirmed=False)
                 if not self._response_current(endpoint):
                     return
                 self._report_reachable(False, f"Telesto unreachable: {exc}")
                 _record_marker_transport(msg, "failed")
             log_drop("telesto-http", f"unreachable: {exc}")
 
+    def _forget_markers(self):
+        for delivery in self._delivered_marks:
+            delivery.current = False
+        self._delivered_marks.clear()
+
+    def _marker_response_current(self, endpoint, delivery):
+        # Disable cancels replies, but attempted marks still need cleanup.
+        return (endpoint == self._endpoint_epoch
+                and not getattr(self._request_context, "stopping", self._stopping).is_set()
+                and (delivery.current if delivery is not None else self._response_current(endpoint)))
+
+    def _accept_marker(self, msg, *, confirmed=True):
+        parts = str(msg.get("payload", {}).get("command", "")).split()
+        if len(parts) != 3 or parts[0] != "/mk":
+            return
+        actor, delivery = getattr(self._request_context, "marker", (None, None))
+        if delivery is not None:
+            actor = delivery.actor
+        marker, target = parts[1:]
+        if marker == "clear" and not confirmed:
+            return
+        if actor is None and target in {f"<{slot}>" for slot in range(1, 9)}:
+            actor = next((ident for ident, slot in self._slot_by_actor.items()
+                          if target == f"<{slot}>"), None)
+        # Uncertain transfers may leave the sign on the previous actor.
+        for previous in list(self._delivered_marks):
+            same_target = previous.actor == actor if actor is not None else previous.target == target
+            if same_target or confirmed and marker in MARKER_TOKENS and previous.marker == marker:
+                previous.current = False
+                self._delivered_marks.discard(previous)
+        if marker != "clear" and delivery is not None:
+            delivery.target = target
+            delivery.current = True
+            self._delivered_marks.add(delivery)
+
     def _response_current(self, endpoint: int) -> bool:
         command = getattr(self._request_context, "command", None)
+        expires = getattr(self._request_context, "expires", None)
         return (endpoint == self._endpoint_epoch
                 and (command is None or self._can_send(*command))
+                and (expires is None or time.monotonic() < expires)
                 and not getattr(self._request_context, "stopping", self._stopping).is_set())
 
     def _read_response(self, request, timeout: float) -> tuple[int, bytes]:
         stopping = getattr(self._request_context, "stopping", self._stopping)
         command = getattr(self._request_context, "command", None)
-        is_current = (lambda: self._can_send(*command)) if command is not None else None
+        endpoint = getattr(self._request_context, "endpoint", self._endpoint_epoch)
+        expires = getattr(self._request_context, "expires", None)
+
+        def is_current():
+            return (endpoint == self._endpoint_epoch
+                    and (command is None or self._can_send(*command))
+                    and (expires is None or time.monotonic() < expires))
+
         return read_telesto_response(request, timeout, stopping, is_current=is_current)
 
     def _update_party_slots(self, body: bytes) -> None:

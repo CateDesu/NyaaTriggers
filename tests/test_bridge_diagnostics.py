@@ -212,6 +212,31 @@ class BridgeDiagnosticTests(unittest.TestCase):
         self.bridge._dispatch({"t": "diagnostic", "event": "sequence_failed"}, {}, 6)
         self.assertEqual(len(failures), 1)
 
+    def test_automark_evidence_preserves_attempt_and_endpoint_result_without_payload(self):
+        for stage, fields in (("requested", {}), ("failed", {"reason": "http_error", "http_status": 503}),
+                              ("accepted", {"http_status": 200})):
+            self.bridge._dispatch({"t": "diagnostic", "event": "engine_automark",
+                                   "stage": stage, "seq": 12, "slot": 3, "marker": "BIND1",
+                                   "target_actor": 2, "command": PRIVATE, "uri": PRIVATE,
+                                   **fields}, {}, 7)
+        rows = self.rows("engine_automark")
+        self.assertEqual([row["stage"] for row in rows], ["requested", "failed", "accepted"])
+        self.assertTrue(all((row["seq"], row["gen"], row["target_actor"]) == (12, 7, 2)
+                            for row in rows))
+        self.assertEqual((rows[1]["reason"], rows[1]["http_status"]), ("http_error", 503))
+        self.assertTrue(all("command" not in row and "uri" not in row for row in rows))
+
+    def test_native_marker_config_records_effective_transport_and_availability(self):
+        for enabled, available, transport in ((False, True, "none"), (True, False, "none"),
+                                               (True, True, "telesto")):
+            self.bridge._dispatch({"t": "diagnostic", "event": "engine_automark_config",
+                                   "enabled": enabled, "available": available,
+                                   "transport": transport, "uri": PRIVATE}, {}, 7)
+        self.assertEqual(self.rows("engine_automark_config"), [
+            {"gen": 7, "enabled": False, "available": True, "transport": "none"},
+            {"gen": 7, "enabled": True, "available": False, "transport": "none"},
+            {"gen": 7, "enabled": True, "available": True, "transport": "telesto"},
+        ])
     def test_startup_stderr_cannot_double_count_a_structured_failure(self):
         failures = []
         self.bridge.chain_failure.connect(lambda text, gen: failures.append((text, gen)))

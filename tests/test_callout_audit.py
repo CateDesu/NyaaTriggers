@@ -149,19 +149,30 @@ class MechanicTranslationTests(unittest.TestCase):
 
 
 class ChainRefreshTests(unittest.TestCase):
+    @staticmethod
+    def complete_chain(now):
+        from nyaatriggers.umad_chains import BlackHoleChains, DPS, SUPPORT
+
+        roles = {"10000004": DPS, "10000005": DPS,
+                 "10000006": SUPPORT, "10000007": SUPPORT, "10000008": SUPPORT}
+        engine = BlackHoleChains(roles.get)
+        for actor, order in (("10000001", "BBC"), ("10000002", "BBD"),
+                             ("10000003", "BBC"), ("10000004", "BBD"),
+                             ("10000005", "BBE"), ("10000006", "BBC"),
+                             ("10000007", "BBD"), ("10000008", "BBE")):
+            if actor in ("10000001", "10000002"):
+                engine.on_gain("644", actor, now)
+            engine.on_gain(order, actor, now)
+            engine.on_gain("154E", actor, now)
+        return roles, engine
+
     def test_continuous_combatant_polling_does_not_starve_role_backfill(self):
         from nyaatriggers.ui.automarkers_tab import AutomarkersTabMixin
         from nyaatriggers.ui.connection import ConnectionMixin
-        from nyaatriggers.umad_chains import BlackHoleChains, role_for_job
+        from nyaatriggers.umad_chains import role_for_job
 
-        roles, actions, snapshots, flushes = {}, [], [], []
-        engine = BlackHoleChains(roles.get)
-        now = time.monotonic()
-        for actor in ("10000001", "10000002", "10000003"):
-            if actor != "10000003":
-                engine.on_gain("644", actor, now)
-            engine.on_gain("BBC", actor, now)
-            engine.on_gain("154E", actor, now)
+        roles, engine = self.complete_chain(time.monotonic())
+        actions, snapshots, flushes = [], [], []
         timer = QTimer()
         timer.setSingleShot(True)
         timer.setInterval(1200)
@@ -224,15 +235,9 @@ class ChainRefreshTests(unittest.TestCase):
         self.assertFalse(engine.has_open_queues())
 
     def test_actual_status_updates_keep_a_late_role_assignment_live(self):
-        from nyaatriggers.umad_chains import BlackHoleChains, DPS
+        from nyaatriggers.umad_chains import DPS
 
-        roles = {}
-        engine = BlackHoleChains(roles.get)
-        for actor in ("10000001", "10000002", "10000003"):
-            if actor != "10000003":
-                engine.on_gain("644", actor, 10)
-            engine.on_gain("BBC", actor, 10)
-            engine.on_gain("154E", actor, 10)
+        roles, engine = self.complete_chain(10)
         engine.flush(60)
         engine.on_gain("154E", "10000003", 85)
         roles["10000003"] = DPS

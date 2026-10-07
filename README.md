@@ -125,7 +125,7 @@ Packs can use Telesto memory notifications and drawings through the **Telesto UR
 | Tab | What it records |
 |---|---|
 | **DPS** | Live DPS, damage share, HPS, crit and direct hit rates, max hit, and deaths. Pets merge into their owners. **Recent pulls** reviews attempts from the current run. |
-| **Death Recap** | A minute of damage, incoming healing, HP and shield bars, ability icons, and filterable buff icons at each event. The latest 80 deaths remain available until the program closes. |
+| **Death Recap** | A minute of damage, incoming healing, HP and shield bars, ability icons, and filterable statuses. Targeted mitigation separates player defenses and attacker damage-down effects from other statuses. The latest 80 deaths remain available until the program closes. |
 | **Prog** | Saved duty sessions with pull durations, endings, deaths, phase progress, session comparisons, a chart, bookmarks, notes, and death recaps. |
 
 The meter runs whenever the combat feed is connected. **Record encounters**, off by default, saves full pull summaries to `dps_logs/`, retaining five completed logs plus the active log. **Reset display after** affects only the live display.
@@ -161,6 +161,8 @@ The sidebar slider controls audio from 0% to 200%. Click its speaker to mute, or
 The optional [NyaaTriggers Overlay](https://github.com/CateDesu/NyaaTriggers-Overlay) Dalamud plugin draws timeline bars, callouts, and DPS inside the game. Follow its README to install, then use `/nyaa` to position and lock the windows. **Settings - In-Game Overlay** shows connection status. The link connects automatically when ports match. Speech works without it.
 
 Automarkers use [Telesto](https://github.com/paissaheavyindustries/Telesto). Set **Telesto URL**, use **Test mark (on me)**, then enable marking. Rules mark you or the party member with a debuff. Unassigned rules place no mark.
+
+**Triggevent encounter automarkers** includes UWU Titan Gaols, DSR Thunderstruck and Wroth Flames, TOP's eight marker mechanics with separate Omega sets, and UMAD P4 debuffs. Configure their native switches, job priorities, marker maps, presets and delays in the same tab. Changes are saved and replayed after engine restarts. The master switch still gates marking.
 
 **Load UMAD preset** adds Dancing Mad Ultimate debuff rules. Assign signs for your strategy. The tab also provides P3 black-hole cleanse queues, P4 Cursed Shriek gaze pairs, automatic removal on debuff loss, and **Clear all party marks**. See the [automarker guide](docs/GUIDE.md#automarkers-tab).
 

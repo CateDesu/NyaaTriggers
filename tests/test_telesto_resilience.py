@@ -264,6 +264,7 @@ check("the rule clears land before configure takes the client down",
 class ResetWin:
     _umad_chain_reset = mw.MainWindow._umad_chain_reset
     _umad_name_of = mw.MainWindow._umad_name_of
+    _dispatch_mark_actions = mw.MainWindow._dispatch_mark_actions
 
     class _Chains:
         def outstanding(self):
@@ -276,6 +277,7 @@ class ResetWin:
         self._umad_chains = self._Chains()
         self._umad_chain_pending = []
         self._umad_actor_names = {}
+        self._automark_owners = {"10FF0001": ("chains", "attack1")}
         self.clears = []
 
     def _clear_player(self, actor, name="", force=False):

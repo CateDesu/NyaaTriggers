@@ -141,8 +141,8 @@ for actor, line in ORDERS:
     acts += eng.on_gain(line, actor, 10.0)
     acts += eng.on_gain(CRUST, actor, 10.0)
 flush_acts = eng.flush(11.2)
-check("flush starts the 1-member Accretion queue on its lone member",
-      (H2, "attack3") in marks(flush_acts))
+check("flush cannot put the first Accretion sign on its only known second member",
+      marks(flush_acts) == [])
 check("flush withholds role queues until both 644s are known (audit C7)",
       all(m[1] == "attack3" for m in marks(acts + flush_acts)))
 late = eng.on_gain(ACCRETION, D4, 12.0)
@@ -155,8 +155,8 @@ check("late 644 also unblocks the role queues",
 eng = engine()
 acts = feed_assignment(eng, skip=(D4,))
 acts += eng.flush(11.2)
-check("missing second 644: only the lone Accretion player is ever marked",
-      marks(acts) == [(H2, "attack3")])
+check("missing second 644 leaves all uncertain queues unmarked",
+      marks(acts) == [])
 
 eng = engine(jobs={})
 acts = feed_assignment(eng)
@@ -178,10 +178,18 @@ acts = feed_assignment(eng, skip=(D3,))
 check("2-of-3 DPS queue is not fast-path marked",
       (D1, "attack1") not in marks(acts) and (D2, "attack1") not in marks(acts))
 acts = eng.flush(12.0)
-check("flush marks the incomplete DPS queue's head", marks(acts) == [(D1, "attack1")])
+check("flush keeps the incomplete DPS queue unmarked", marks(acts) == [])
 acts = eng.on_loss(CRUST, D1, 30.0) + eng.on_loss(CRUST, D2, 31.0)
-check("incomplete queue still walks and clears",
-      marks(acts) == [(D2, "attack1")] and clears(acts) == [D2])
+check("losses from an incomplete queue send no guessed marks or clears",
+      marks(acts) == [] and clears(acts) == [])
+
+eng = engine()
+acts = feed_assignment(eng, skip=(D1,)) + eng.flush(11.2)
+check("missing first DPS cannot place attack1 on the second DPS",
+      all(marker != "attack1" for _actor, marker in marks(acts)))
+acts = eng.on_gain(LINE1, D1, 12.0) + eng.on_gain(CRUST, D1, 12.1)
+check("late first DPS completes membership and receives attack1",
+      marks(acts) == [(D1, "attack1")])
 
 eng = engine()
 acts = feed_assignment(eng, skip_order=(D1,))

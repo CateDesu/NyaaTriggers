@@ -77,6 +77,22 @@ against the pinned fork source before publishing the engine.
 It also requires the listener registration race tests, which verify that a reload
 retains both manual callbacks and newly loaded component handlers.
 
+Automarker checks use recorded encounter inputs and loopback Telesto endpoints:
+
+```bash
+python3 -m tests test_automarker_pipeline test_gaze_replay
+python3 triggevent-core/test_automarkers.py
+python3 triggevent-core/test_automarker_bridge.py
+```
+
+The two native checks require a built engine jar. They verify HTTP ordering,
+rejection, timeouts, lifecycle cancellation, native settings replay and exact
+party targets through the production bridge. The fork also checks UWU, DSR,
+TOP, UMAD and marker state with duplicate, missing and reordered inputs. Required
+native classes must run without skips before release. These endpoints never
+submit game commands to a live plugin. HTTP acceptance cannot confirm a visible
+in-game marker.
+
 `test_triggevent_recovery` checks unexpected engine exits on a healthy feed,
 retry backoff, startup and recovery deadlines, ordered buffered input and stale
 acknowledgements. `test_connection_audit` repeats the healthy feed exit with a

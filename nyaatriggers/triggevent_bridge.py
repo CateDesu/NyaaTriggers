@@ -192,6 +192,8 @@ def _wrapper_build_inputs() -> dict:
         raise error
 
     paths = [_CORE_DIR / name for name in ("pom.xml", "build.sh", "build.bat")]
+    paths.extend(path for path in (_CORE_DIR / "build_engine.py",
+                                   _CORE_DIR / "patches" / "same-zone-history.patch") if path.is_file())
     for directory, _dirs, files in os.walk(_CORE_DIR / "src" / "main", onerror=unreadable):
         paths.extend(Path(directory) / name for name in files)
     inputs = {}
@@ -227,6 +229,8 @@ Run in the background and return whether it changed."""
         return _download_engine("stable")
     # Source builds require a toolchain and, on POSIX, bash.
     tools = ("git", "java", "mvn") if os.name == "nt" else ("git", "java", "mvn", "bash")
+    if (_CORE_DIR / "build_engine.py").is_file():
+        tools += ("python" if os.name == "nt" else "python3",)
     missing = next((t for t in tools if not shutil.which(t)), "")
     buildable = (_ET_DIR / ".git").is_dir() and _BUILD_SCRIPT.is_file()
     if missing or not buildable:
@@ -435,7 +439,8 @@ class TriggeventBridge(QObject):
     tts         = pyqtSignal(str, int)        # spoken text, generation
     status      = pyqtSignal(bool, str, int)
     phrase_seen = pyqtSignal(str)        # a callout phrase observed, for the override UI
-    inventory   = pyqtSignal(str, int)   # Telesto status: good, bad or unknown, plus generation
+    inventory   = pyqtSignal(str, int)
+    automark_inventory = pyqtSignal(str, int)
     telesto     = pyqtSignal(str, int)   # Telesto automark connection status, "good"|"bad"|"unknown", generation
     ready       = pyqtSignal(int)
     chain_failure = pyqtSignal(str, int)
@@ -596,11 +601,18 @@ class TriggeventBridge(QObject):
         if cid:
             self._send_command({"nyaa_cmd": "reset_callout", "id": cid})
 
-    def set_automark(self, enable: bool, uri: str | None = None) -> None:
+    def set_automark(self, enable: bool | None, uri: str | None = None, *,
+                    native_umad: bool | None = None, settings: dict | None = None) -> None:
         """Native automarking starts disabled. Replay its settings after restart."""
-        cmd: dict = {"nyaa_cmd": "set_automark", "enable": bool(enable)}
+        cmd: dict = {"nyaa_cmd": "set_automark"}
+        if enable is not None:
+            cmd["enable"] = bool(enable)
         if uri:
             cmd["uri"] = str(uri)
+        if native_umad is not None:
+            cmd["native_umad"] = bool(native_umad)
+        if settings is not None:
+            cmd["settings"] = settings
         self._send_command(cmd)
 
     def _send_command(self, cmd: dict) -> None:
@@ -780,24 +792,29 @@ class TriggeventBridge(QObject):
     _reap = staticmethod(proc_env.reap)
 
 
-    def feed(self, raw_msg: str) -> None:
-        """Queue feed messages without blocking the GUI. Overflow requests recovery."""
-        if not self._active or not raw_msg:
-            return
+    def feed(self, raw_msg: str) -> bool:
+        """Return false when ordered input could not enter the current engine queue."""
+        if not self._active:
+            return False
+        if not raw_msg:
+            return True
         try:
             data = json.loads(raw_msg)
         except (ValueError, TypeError, RecursionError):
             self._diagnostic("engine_protocol", channel="feed", reason="invalid_json", throttle_s=5)
             log_drop("engine-feed", "discarded invalid feed JSON")
-            return
+            return True
         if not isinstance(data, dict) or "nyaa_cmd" in data:
             self._diagnostic("engine_protocol", channel="feed", reason="feed_protocol", throttle_s=5)
             log_drop("engine-feed", "discarded feed frame outside the event protocol")
-            return
+            return True
         # Keep each JSON message on one protocol line.
         line = raw_msg.replace("\r", " ").replace("\n", " ")
         try:
-            self._wq.put_nowait(line)
+            with self._state_lock:
+                if not self._active:
+                    return False
+                self._wq.put_nowait(line)
             self._feed_frames += 1
             self._feed_chars += len(line)
             now = time.monotonic()
@@ -808,6 +825,8 @@ class TriggeventBridge(QObject):
                 self._feed_report_at = now
         except queue.Full:
             self._queue_overflow()
+            return False
+        return True
 
     def recover(self, frames, timestamp: str, *, history=None, state=(), checkpoint=None) -> bool:
         """Queue a silent replay as one bounded item before accepting live events."""
@@ -1199,6 +1218,13 @@ class TriggeventBridge(QObject):
             if self._gen_live(gen) and isinstance(triggers, list):
                 self._diagnostic("engine_protocol", gen, state="inventory", result="received", count=len(triggers))
                 self.inventory.emit(json.dumps(triggers), gen)
+        elif kind == "automark_inventory":
+            if (self._gen_live(gen) and msg.get("version") == 1
+                    and all(isinstance(msg.get(key), list)
+                            for key in ("mechanics", "settings", "jobs", "markers"))):
+                self._diagnostic("engine_protocol", gen, state="automark_inventory", result="received",
+                                 count=len(msg["mechanics"]))
+                self.automark_inventory.emit(json.dumps(msg), gen)
         elif kind == "telesto":
             if not self._gen_live(gen):
                 return

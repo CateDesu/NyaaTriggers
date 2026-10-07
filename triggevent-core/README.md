@@ -8,6 +8,20 @@ The host advertises `custom=1` in its ready message and acknowledges each defini
 
 Python integration lives in `../nyaatriggers/triggevent_bridge.py`.
 
+Nyaa's **Enable automarkers** switch and **Telesto URL** also configure native
+engine output after each engine start. Native encounter switches and priorities
+remain in the existing Triggevent settings. Callout mode does not disable markers.
+The host supports Telesto and selects no marker service when disabled. Standalone
+Triggevent's PostNamazu and keyboard providers are not transports in Nyaa.
+Local UMAD gaze pairing or an assigned P4 debuff rule scoped to UMAD or any fight
+suppresses native UMAD P4 marks, preserving the local signs and cleanup owner.
+P1 and P3 rules leave native P4 marking available.
+
+Support records distinguish marker requests, rejected requests, transport failures
+and endpoint acceptance. Telesto accepts a submitted game command with an HTTP
+response. It supplies no confirmation that the game displayed the marker.
+Timeouts are reported without retrying an ambiguous marker command.
+
 ---
 
 ## Design
@@ -45,7 +59,7 @@ is treated as diagnostics.
 
 Releases bundle the engine jar and Temurin JRE 17. Source users can install Java 17 and download the jar through **Settings - Program - Update Triggevent Engine**.
 
-To rebuild, install JDK 17 and Maven:
+To rebuild, install JDK 17, Maven and Python 3:
 
 ```bash
 cd triggevent-core
@@ -53,6 +67,8 @@ cd triggevent-core
 ```
 
 The script clones the engine, installs its modules into the local Maven repository, and builds `target/triggevent-core.jar`. Windows uses `build.bat`. Both scripts embed the engine revision in the jar so support logs retain it in packaged builds and after engine updates.
+
+The same-zone history fix in `patches/same-zone-history.patch` builds in a private source worktree. The primary clone stays clean for engine updates, and the worktree is removed after success or failure. A source revision that already contains the fix builds directly. The native regression gate uses the same source preparation. The program tracks the patch and build helper alongside wrapper sources when deciding whether to rebuild.
 
 For a standalone debug run on Linux:
 

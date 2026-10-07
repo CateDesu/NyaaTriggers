@@ -18,11 +18,13 @@ from nyaatriggers import app_common as ac, theme
 from nyaatriggers.death_recap import DeathRecap
 from nyaatriggers.game_locale import localized_metadata
 from nyaatriggers.locale_util import set_locale
-from nyaatriggers.recap_filters import DEFAULT_HIDDEN_STATUSES, hidden_statuses
+from nyaatriggers.recap_filters import DEFAULT_HIDDEN_STATUSES, TARGETED_MITIGATION_STATUSES, hidden_statuses
+from nyaatriggers.recap_store import RecapStore
 from nyaatriggers.ui.death_recap_tab import DeathRecapTabMixin
 from nyaatriggers.ui.recap_widgets import RecapIcons
 from nyaatriggers.ui.recap_browser import LogImportDialog, SavedRecapDialog
-from tests.test_death_recap_details import corrupt_zip_member
+from tests.test_death_recap_details import corrupt_zip_member, hit
+from tests.test_session_features import BOSS, PLAYER, Clock
 
 
 class RecapHost(DeathRecapTabMixin, QWidget):
@@ -258,10 +260,12 @@ class WidgetTests(unittest.TestCase):
         self.host.resize(1500, 800)
         self.host.show()
         self.app.processEvents()
-        index = table.model().index(1, 5)
+        index = table.model().index(1, 6)
+        table.scrollTo(index)
+        self.app.processEvents()
         option = QStyleOptionViewItem()
         option.rect = table.visualRect(index)
-        point = delegate._status_rect(option.rect, 1).center()
+        point = delegate._status_rect(option.rect, 0).center()
         event = QHelpEvent(QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point))
         with patch("nyaatriggers.ui.recap_widgets.QToolTip.showText") as tooltip:
             self.assertTrue(delegate.helpEvent(event, table, option, index))
@@ -281,6 +285,99 @@ class WidgetTests(unittest.TestCase):
         self.assertEqual([s["id"] for s in delegate.statuses(death["events"][0])], [202])
         self.assertNotIn("Reprisal", self.host._recap_statuses.text())
         self.assertEqual(death["events"][0]["source_statuses"], [status])
+
+    def test_targeted_mitigation_survives_recording_saving_and_separate_display(self):
+        clock = Clock()
+        recap = DeathRecap(clock)
+        effects = [(2682, "Oblation", PLAYER), (2708, "Aquaveil", PLAYER),
+                   (1193, "Reprisal", BOSS), (1195, "Feint", BOSS), (1203, "Addle", BOSS)]
+        for ident, name, target in effects + [(202, "Vulnerability Up", PLAYER)]:
+            recap.process(["26", "ts", f"{ident:X}", name, "15", "10000002", "Support",
+                           target, "Target", "0"])
+        recap.process(hit())
+        clock.value += 1
+        for ident, name, target in effects:
+            recap.process(["30", "ts", f"{ident:X}", name, "0", "10000002", "Support",
+                           target, "Target", "0"])
+        recap.process(hit())
+        recap.process(["25", "ts", PLAYER, "Player"])
+        session, pull = str(uuid4()), str(uuid4())
+        RecapStore(self.directory / "recaps").record(session, pull, recap.deaths[0])
+        loaded, errors = RecapStore(self.directory / "recaps").load(session, pull)
+        self.assertEqual(errors, [])
+        before = json.dumps(loaded)
+        self.host._recap_records = loaded
+        self.host._refresh_recap_list()
+        self.host.resize(1600, 700)
+        self.host.show()
+        self.app.processEvents()
+        table = self.host._recap_table
+        delegate = self.host._recap_delegate
+        self.assertEqual(table.horizontalHeaderItem(6).text(), "Targeted mitigation")
+        earlier = table.item(1, 0).data(Qt.ItemDataRole.UserRole)
+        later = table.item(0, 0).data(Qt.ItemDataRole.UserRole)
+        self.assertEqual([s["id"] for s in delegate.column_statuses(earlier, 5)], [202])
+        self.assertEqual([s["id"] for s in delegate.column_statuses(earlier, 6)],
+                         [2682, 2708, 1193, 1195, 1203])
+        self.assertEqual(delegate.column_statuses(later, 6), [])
+        index = table.model().index(1, 6)
+        table.scrollTo(index)
+        self.app.processEvents()
+        option = QStyleOptionViewItem()
+        option.rect = table.visualRect(index)
+        point = delegate._status_rect(option.rect, 0).center()
+        event = QHelpEvent(QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point))
+        with patch("nyaatriggers.ui.recap_widgets.QToolTip.showText") as tooltip:
+            self.assertTrue(delegate.helpEvent(event, table, option, index))
+        self.assertIn("Oblation", tooltip.call_args.args[1])
+        self.assertIn("On player", tooltip.call_args.args[1])
+        self.assertIn("Applied by: Support", tooltip.call_args.args[1])
+        self.assertIn("15.0s remaining", tooltip.call_args.args[1])
+        table.horizontalHeader().setStretchLastSection(False)
+        table.setColumnWidth(6, 80)
+        self.app.processEvents()
+        self.assertGreaterEqual(table.rowHeight(1), 62)
+        self.assertFalse(table.grab().isNull())
+        self.host._recap_hidden.update({"2708", "1193"})
+        self.host._select_recap(0)
+        self.assertEqual([s["id"] for s in delegate.column_statuses(earlier, 6)], [2682, 1195, 1203])
+        self.assertEqual(json.dumps(loaded), before)
+
+    def test_single_target_barriers_and_reapplications_remain_targeted_when_saved(self):
+        clock = Clock()
+        recap = DeathRecap(clock)
+        effects = [(2612, "Haima", 0), (2642, "Haimatinon", 5),
+                   (1889, "Intersection", 0)]
+        for ident, name, stacks in effects:
+            recap.process(["26", "ts", f"{ident:X}", name, "15", "10000002", "Healer",
+                           PLAYER, "Player", f"{stacks:X}"])
+        recap.process(["26", "ts", "35C", "Dismantled", "10", "10000003", "Machinist",
+                       BOSS, "Boss", "0"])
+        recap.process(hit())
+        recap.process(["30", "ts", "A34", "Haima", "0", "10000002", "Healer",
+                       PLAYER, "Player", "0"])
+        recap.process(["26", "ts", "A34", "Haima", "15", "10000002", "Healer",
+                       PLAYER, "Player", "0"])
+        clock.value += 1
+        recap.process(hit())
+        recap.process(["25", "ts", PLAYER, "Player"])
+        session, pull = str(uuid4()), str(uuid4())
+        RecapStore(self.directory / "recaps").record(session, pull, recap.deaths[0])
+        loaded, errors = RecapStore(self.directory / "recaps").load(session, pull)
+        self.assertEqual(errors, [])
+        self.host._recap_records = loaded
+        self.host._refresh_recap_list()
+        hits = [event for event in loaded[0]["events"] if event["kind"] == "damage"]
+        delegate = self.host._recap_delegate
+        for event in hits:
+            self.assertEqual(delegate.column_statuses(event, 5), [])
+            self.assertCountEqual([s["id"] for s in delegate.column_statuses(event, 6)],
+                                  [2612, 2642, 1889, 860])
+        self.assertEqual(next(s for s in hits[0]["statuses"] if s["id"] == 2642)["stacks"], 5)
+        self.host._recap_hidden.add("2612")
+        for event in hits:
+            self.assertNotIn(2612, [s["id"] for s in delegate.column_statuses(event, 6)])
+        self.assertIn(2612, [s["id"] for s in hits[0]["statuses"]])
 
     def test_gained_status_uses_stacked_icon_and_description(self):
         death = record()
@@ -312,6 +409,10 @@ class WidgetTests(unittest.TestCase):
         for ident in (1203, 1195, 1193, 860, 1715, 2115, 3642, 43, 44, 62):
             self.assertEqual(catalog[str(ident)]["category"], 2)
             self.assertNotIn(str(ident), DEFAULT_HIDDEN_STATUSES)
+        for ident in TARGETED_MITIGATION_STATUSES:
+            with self.subTest(defense=ident):
+                self.assertEqual(catalog[ident]["category"], 1)
+                self.assertNotIn(ident, DEFAULT_HIDDEN_STATUSES)
 
     def test_default_filter_keeps_defenses_debuffs_and_mixed_buff_variants(self):
         hidden = [1878, 786, 1239, 2599, 2703, 3685]
@@ -469,6 +570,23 @@ class WidgetTests(unittest.TestCase):
         self.assertIsNone(dialog.job.result)
         dialog.deleteLater()
 
+    def test_failed_import_worker_uses_the_existing_error_path(self):
+        before = json.dumps(self.host._recap_records)
+        path = self.directory / "Network.log"
+        with patch("nyaatriggers.ui.recap_browser.LogImportJob.start",
+                   side_effect=RuntimeError("cannot start a new thread")) as start, \
+                patch("nyaatriggers.ui.death_recap_tab.QFileDialog.getOpenFileName",
+                      return_value=(str(path), "")), \
+                patch("nyaatriggers.ui.death_recap_tab.QMessageBox.warning") as warning:
+            self.host._open_recap_log()
+        start.assert_called_once()
+        warning.assert_called_once()
+        self.assertIn("cannot start a new thread", warning.call_args.args[2])
+        self.assertIsNone(self.host._recap_import_dialog)
+        self.assertIsNone(self.host._recap_import)
+        self.assertEqual(json.dumps(self.host._recap_records), before)
+        self.assertEqual(self.host.saves, 0)
+
     def test_empty_saved_browser_cannot_open_a_missing_pull(self):
         dialog = SavedRecapDialog([], self.host)
         self.assertIsNone(dialog.selection)
@@ -484,6 +602,7 @@ class WidgetTests(unittest.TestCase):
         self.host._refresh_recap_list()
         self.assertEqual(self.host._recap_table.item(0, 4).text(), "Not recorded")
         self.assertEqual(self.host._recap_table.item(0, 5).text(), "Not recorded")
+        self.assertEqual(self.host._recap_table.item(0, 6).text(), "Not recorded")
 
     def test_bundled_statuses_and_stacks_have_real_icons_offline(self):
         cache = self.host._recap_icons

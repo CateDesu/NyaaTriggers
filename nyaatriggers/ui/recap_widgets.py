@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem, Q
 from nyaatriggers import app_common as ac
 from nyaatriggers.locale_util import _, active_locale, has_japanese
 from nyaatriggers.game_locale import localized_metadata
+from nyaatriggers.recap_filters import TARGETED_MITIGATION_STATUSES
 
 
 class RecapIcons(QObject):
@@ -225,6 +226,11 @@ class RecapDelegate(QStyledItemDelegate):
         return [s for s in statuses if status_key(s) not in self.hidden
                 and self.icons.metadata("Status", s.get("id")).get("icon", 1)]
 
+    def column_statuses(self, event, column):
+        return [status for status in self.statuses(event)
+                if (bool(status.get("on_source")) or status_key(status) in TARGETED_MITIGATION_STATUSES)
+                == (column == 6)]
+
     def _event(self, index):
         return index.siblingAtColumn(0).data(Qt.ItemDataRole.UserRole) or {}
 
@@ -235,8 +241,8 @@ class RecapDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option, index):
         size = super().sizeHint(option, index)
-        if index.column() == 5:
-            count = len(self.statuses(self._event(index)))
+        if index.column() in (5, 6):
+            count = len(self.column_statuses(self._event(index), index.column()))
             columns = max(1, (option.rect.width() - 8) // 24)
             size.setHeight(max(34, math.ceil(count / columns) * 28 + 6))
         return size
@@ -279,10 +285,10 @@ class RecapDelegate(QStyledItemDelegate):
             painter.setPen(QColor("white"))
             painter.drawText(rect.adjusted(6, 0, -6, -2), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{hp:,}")
             painter.restore()
-        elif column == 5:
+        elif column in (5, 6):
             painter.save()
             painter.setClipRect(option.rect)
-            for pos, status in enumerate(self.statuses(event)):
+            for pos, status in enumerate(self.column_statuses(event, column)):
                 _metadata, pixmap = self.icons.get("Status", status.get("id"), status.get("stacks"))
                 painter.drawPixmap(self._status_rect(option.rect, pos), pixmap)
             painter.restore()
@@ -310,14 +316,16 @@ class RecapDelegate(QStyledItemDelegate):
                 text += "\n" + _("Shields after resolution: approximately {percent}%").format(percent=row["shield_after"])
             QToolTip.showText(event.globalPos(), text, view)
             return True
-        if index.column() == 5:
-            for pos, status in enumerate(self.statuses(row)):
+        if index.column() in (5, 6):
+            for pos, status in enumerate(self.column_statuses(row, index.column())):
                 if self._status_rect(option.rect, pos).contains(event.pos()):
                     metadata, _pixmap = self.icons.get("Status", status.get("id"), status.get("stacks"))
                     name = status_name(status, metadata)
                     text = name
                     if status.get("on_source"):
                         text += "\n" + _("On attacker: {name}").format(name=row["source"])
+                    elif index.column() == 6:
+                        text += "\n" + _("On player")
                     if metadata.get("description"):
                         text += "\n" + metadata["description"]
                     if status["source"]:

@@ -1,5 +1,8 @@
 import time
 import urllib.parse
+import json
+from copy import deepcopy
+from dataclasses import dataclass
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (
@@ -9,7 +12,7 @@ from PyQt6.QtWidgets import (
 from nyaatriggers.locale_util import _
 from nyaatriggers.diagnostics import record
 from nyaatriggers.telesto_client import (
-    TelestoClient, MARKERS as TELESTO_MARKERS, MARKER_TOKENS as TELESTO_MARKER_TOKENS, _actor_int,
+    TelestoClient, MarkerDelivery, MARKERS as TELESTO_MARKERS, MARKER_TOKENS as TELESTO_MARKER_TOKENS, _actor_int,
 )
 from nyaatriggers.umad_chains import (
     BlackHoleChains, RELEVANT_IDS as _UMAD_CHAIN_IDS, role_for_job, StatusPairs,
@@ -20,11 +23,29 @@ from nyaatriggers.umad_chains import (
 from nyaatriggers import app_common as ac
 from nyaatriggers.app_common import (
     DEFAULT_TELESTO_URI, _UMAD_AUTOMARK_PRESET, _UMAD_FIGHT_TAG, _UMAD_FIGHT_TAG_CF, _UMAD_STATUS_LABELS,
+    _stale_gen,
 )
+from nyaatriggers.ui.native_automarkers import NativeAutomarkersPanel
+
+_UMAD_P4_MARK_IDS = frozenset(status for status, _label in _UMAD_AUTOMARK_PRESET
+                             if _parse_compound(status) is None)
+_UMAD_P4_MARK_NAMES = frozenset(label.split(" - ", 1)[0].casefold()
+                               for status, label in _UMAD_AUTOMARK_PRESET
+                               if status in _UMAD_P4_MARK_IDS)
+
+
+@dataclass
+class _AutomarkClaim:
+    owner: str
+    status: str | None
+    delivery: MarkerDelivery
+    clear_requested: bool = False
 
 
 class AutomarkersTabMixin:
     def _init_automarkers(self) -> None:
+        self._native_automark_inventory = None
+        self._native_automark_inventory_generation = None
         self._telesto_client = TelestoClient(
             uri=self._settings.get("telesto_uri", DEFAULT_TELESTO_URI),
             enabled=bool(self._settings.get("telesto_enabled", False)))
@@ -44,13 +65,13 @@ class AutomarkersTabMixin:
              "scope": str(r.get("scope") or "self")}
             for r in raw_rules if isinstance(r, dict)] \
             if isinstance(raw_rules, list) else []
-        self._automark_cooldowns: dict = {}   # statusKey, target, marker to last fired monotonic time
-        # Retry unknown slots while retaining the original age and status key.
+        self._automark_cooldowns: dict = {}   # (status, target, marker) to monotonic time
         self._automark_pending: list = []
-        # Track which status placed each sign so only its own loss can clear it.
         self._automark_clear_on_loss = bool(self._settings.get("automark_clear_on_loss", True))
         self._automark_active: dict = {}
-        # Track statuses while disabled so enabling midfight has current state.
+        self._automark_owners: dict = {}
+        self._automark_deliveries: dict = {}
+        self._automark_cleanup: set[str] = set()
         self._automark_pairs = StatusPairs(
             p
             for token in ([h for h, _unused in _UMAD_AUTOMARK_PRESET]
@@ -197,6 +218,13 @@ class AutomarkersTabMixin:
         gaze_row.addStretch()
         layout.addLayout(gaze_row)
 
+        native_title = QLabel(_("Triggevent encounter automarkers"))
+        native_title.setStyleSheet("font-weight:bold;")
+        layout.addWidget(native_title)
+        self._native_automarkers_panel = NativeAutomarkersPanel(self)
+        self._native_automarkers_panel.changed.connect(self._on_native_automark_setting_changed)
+        layout.addWidget(self._native_automarkers_panel)
+
         self._refresh_automark_rules_list()
 
         self._update_automark_status_label()
@@ -239,6 +267,7 @@ class AutomarkersTabMixin:
         self._save_settings()
         if not checked:
             self._umad_gaze_reset(clear_marks=True)
+        AutomarkersTabMixin._apply_native_automark_state(self)
 
     def _on_umad_gaze_marker_changed(self, _index: int = 0) -> None:
         defaults = {"away1": "ignore1", "away2": "ignore2",
@@ -254,10 +283,10 @@ class AutomarkersTabMixin:
         tok = (self._automark_test_combo.currentData()
                if hasattr(self, "_automark_test_combo") else None) or "attack1"
         self._telesto_client.configure(uri=self._settings.get("telesto_uri", DEFAULT_TELESTO_URI))
-        self._telesto_client.mark_self(tok, force=True)
+        self._telesto_client.mark_self(tok, force=True, actor_id=getattr(self, "_me_id", None))
 
     def _on_automark_clear(self) -> None:
-        self._telesto_client.clear_self(force=True)
+        self._telesto_client.clear_self(force=True, actor_id=getattr(self, "_me_id", None))
 
     def _on_automark_clear_all(self) -> None:
         self._telesto_client.configure(uri=self._settings.get("telesto_uri", DEFAULT_TELESTO_URI))
@@ -319,6 +348,15 @@ class AutomarkersTabMixin:
             s = s[2:]
         return s.lstrip("0") or "0"
 
+    def _automark_status_suspended(self, status_key: str) -> bool:
+        fight = (getattr(self, "_current_fight_tag", "") or "").casefold()
+        if fight and fight != _UMAD_FIGHT_TAG_CF:
+            return False
+        ids = set(status_key.split("+"))
+        return ((getattr(self, "_umad_chain_enabled", False) and not ids.isdisjoint(_UMAD_CHAIN_IDS))
+                or (getattr(self, "_umad_gaze_enabled", False)
+                    and not ids.isdisjoint(self._umad_gaze.ids)))
+
     def _match_automark_rules(self, fields: list[str]) -> None:
         """Compound rules share a cooldown key. Unknown slots retry without consuming it."""
         if len(fields) < 9:
@@ -333,29 +371,20 @@ class AutomarkersTabMixin:
         eff_id_n = self._norm_hex(fields[2])
         eff_name = fields[3]
         fight = (self._current_fight_tag or "").casefold()
-        # Chain mechanics own their statuses. Plain rules must not overwrite their signs.
-        if (self._umad_chain_enabled and eff_id_n in _UMAD_CHAIN_IDS
-                and (not fight or fight == _UMAD_FIGHT_TAG_CF)):
-            return
-        if (self._umad_gaze_enabled and eff_id_n in self._umad_gaze.ids
-                and (not fight or fight == _UMAD_FIGHT_TAG_CF)):
-            return
-        # Prefer actor ID because players on different worlds can share a name.
         is_me = self._is_me_actor(tgt_id, tgt_name)
         now = time.monotonic()
         for rule in self._automark_rules:
             if not rule.get("enabled", True):
                 continue
             rfight = (rule.get("fight") or "").strip().casefold()
+            # The fight can be unknown just after connecting.
             if rfight and fight and rfight != fight:
-                # Allow fight rules before the current zone is known after connecting.
                 continue
             status = (rule.get("status") or "").strip()
             if not status:
                 continue
             pair = _parse_compound(status)
             if pair is not None:
-                # Compound gains must not consume two cooldowns.
                 if eff_id_n not in pair or not self._automark_pairs.holds_all(tgt_id, pair, now):
                     continue
                 status_key = "+".join(sorted(pair))
@@ -364,20 +393,24 @@ class AutomarkersTabMixin:
                 continue
             else:
                 status_key = eff_id_n
+            if AutomarkersTabMixin._automark_status_suspended(self, status_key):
+                continue
             self_only = (rule.get("scope") or "self").strip().casefold() in ("self", "me")
             if self_only and not is_me:
                 continue
             marker = (rule.get("marker") or "").strip()
-            if not marker:
+            if marker not in TELESTO_MARKER_TOKENS:
                 continue
             key = (status_key, ("me" if is_me else tgt_id), marker)
             if now - self._automark_cooldowns.get(key, 0.0) < 3.0:
                 continue
-            if self._mark_player(tgt_id, marker, tgt_name, is_me=is_me):
+            delivery = self._mark_player(tgt_id, marker, tgt_name, is_me=is_me)
+            if delivery:
+                AutomarkersTabMixin._claim_automark(self, tgt_id, marker, "rule", delivery, status_key)
                 self._automark_cooldowns[key] = now
                 self._automark_active["me" if is_me else tgt_id] = status_key
             elif len(self._automark_pending) < 16:
-                # Retry after party refresh because the triggering gain will not repeat.
+                # Status gains will not repeat after the roster arrives.
                 if not any(p[0] == tgt_id and p[1] == marker
                            and p[4] == status_key and p[6] == rule
                            for p in self._automark_pending):
@@ -395,7 +428,7 @@ class AutomarkersTabMixin:
         if not tgt_id.startswith("10"):
             return
         key = "me" if self._is_me_actor(tgt_id, fields[8]) else tgt_id
-        # Cancel lost statuses before retries can overwrite newer marks.
+        # Cancel retries even when clearing on loss is disabled.
         pending = getattr(self, "_automark_pending", None)
         if pending:
             eff_n = self._norm_hex(fields[2])
@@ -403,13 +436,27 @@ class AutomarkersTabMixin:
                           if not (p[0] == tgt_id and eff_n in p[4].split("+"))]
         if not self._automark_clear_on_loss:
             return
+        if tgt_id in getattr(self, "_automark_deliveries", {}):
+            AutomarkersTabMixin._clear_automark_deliveries(
+                self, tgt_id, fields[8], owner="rule", status=self._norm_hex(fields[2]))
+            status_key = self._automark_active.get(key)
+            if status_key and self._norm_hex(fields[2]) in status_key.split("+"):
+                self._automark_active.pop(key, None)
+                if getattr(self, "_automark_owners", {}).get(tgt_id, (None,))[0] == "rule":
+                    self._automark_owners.pop(tgt_id, None)
+                getattr(self, "_automark_cleanup", set()).discard(key)
+            return
         status_key = self._automark_active.get(key)
         if status_key is None:
             return
         if self._norm_hex(fields[2]) not in status_key.split("+"):
             return
+        if getattr(self, "_automark_owners", {}).get(tgt_id, ("rule",))[0] != "rule":
+            return
         if self._clear_player(tgt_id, fields[8]):
             del self._automark_active[key]
+            getattr(self, "_automark_owners", {}).pop(tgt_id, None)
+            getattr(self, "_automark_cleanup", set()).discard(key)
 
     @staticmethod
     def _make_marker_combo(current: "str | None" = None, width: int = 110) -> QComboBox:
@@ -428,7 +475,7 @@ class AutomarkersTabMixin:
         return "" if aid is None else self._umad_actor_names.get(aid, "")
 
     def _is_me_actor(self, actor_id: str, name: str = "") -> bool:
-        """Prefer actor ID, falling back to name until it arrives."""
+        """Prefer actor IDs since names can match across worlds."""
         if self._me_id:
             a, m = _actor_int(actor_id), _actor_int(self._me_id)
             return a is not None and a == m
@@ -436,15 +483,16 @@ class AutomarkersTabMixin:
             and name.casefold() == self._me_name.casefold()
 
     def _mark_player(self, actor_id: str, marker: str, name: str = "",
-                     is_me: "bool | None" = None) -> bool:
+                     is_me: "bool | None" = None) -> MarkerDelivery | bool:
         tc = self._telesto_client
         if tc is None:
             return False
         if is_me is None:
             is_me = self._is_me_actor(actor_id, name)
-        if is_me:
-            return tc.mark_self(marker)
-        return tc.mark_actor(actor_id, marker)
+        delivery = MarkerDelivery(_actor_int(actor_id), marker, target="<me>" if is_me else "")
+        sent = (tc.mark_self(marker, delivery=delivery) if is_me
+                else tc.mark_actor(actor_id, marker, delivery=delivery))
+        return delivery if sent else False
 
     def _umad_chain_markers_from_settings(self) -> dict:
         markers = {}
@@ -482,8 +530,11 @@ class AutomarkersTabMixin:
     def _umad_chain_reset(self, clear_marks: bool = False, force: bool = False) -> None:
         """Force clears when disabling. Skip zone-change clears because party slots may differ."""
         if clear_marks:
-            for actor in self._umad_chains.outstanding():
-                self._clear_player(actor, self._umad_name_of(actor), force=force)
+            self._dispatch_mark_actions(
+                [("clear", actor) for actor in dict.fromkeys([
+                    *self._umad_chains.outstanding(),
+                    *AutomarkersTabMixin._automark_delivery_actors(self, "chains")])],
+                [], owner="chains", force=force)
         self._umad_chains.reset()
         self._umad_chain_pending.clear()
         since = getattr(self, "_umad_chain_pending_since", None)
@@ -493,8 +544,8 @@ class AutomarkersTabMixin:
     def _on_umad_chain_flush(self) -> None:
         if not (self._umad_chain_enabled and self._settings.get("telesto_enabled")):
             return
-        self._retry_umad_chain_pending()
         self._dispatch_umad_chain_actions(self._umad_chains.flush(time.monotonic()))
+        self._retry_umad_chain_pending()
 
     def _retry_umad_chain_pending(self) -> None:
         if not self._umad_chain_pending:
@@ -579,8 +630,11 @@ class AutomarkersTabMixin:
                assigned=len(self._umad_gaze._assigned),
                marked=len(self._umad_gaze._marked))
         if clear_marks:
-            for actor in self._umad_gaze.outstanding():
-                self._clear_player(actor, self._umad_name_of(actor), force=force)
+            self._dispatch_mark_actions(
+                [("clear", actor) for actor in dict.fromkeys([
+                    *self._umad_gaze.outstanding(),
+                    *AutomarkersTabMixin._automark_delivery_actors(self, "gaze")])],
+                [], owner="gaze", force=force)
         self._umad_gaze.reset()
         self._umad_gaze_pending.clear()
         since = getattr(self, "_umad_gaze_pending_since", None)
@@ -598,6 +652,7 @@ class AutomarkersTabMixin:
     def _retry_umad_gaze_pending(self) -> None:
         if not self._umad_gaze_pending:
             return
+        self._dispatch_umad_gaze_actions(self._umad_gaze.flush(time.monotonic()))
         since = getattr(self, "_umad_gaze_pending_since", None)
         if since:
             now = time.monotonic()
@@ -612,8 +667,60 @@ class AutomarkersTabMixin:
         pending, self._umad_gaze_pending = self._umad_gaze_pending, []
         self._dispatch_umad_gaze_actions(pending)
 
+    def _automark_delivery_actors(self, owner=None):
+        return [actor for actor, claims in getattr(self, "_automark_deliveries", {}).items()
+                if any((owner is None or claim.owner == owner)
+                       and (claim.delivery.pending or claim.delivery.current) for claim in claims)]
+
+    def _clear_automark_deliveries(self, actor, name="", *, owner=None, status=None, force=False):
+        deliveries = getattr(self, "_automark_deliveries", {})
+        if actor not in deliveries:
+            return None
+        claims = [claim for claim in deliveries[actor]
+                  if claim.delivery.pending or claim.delivery.current]
+        selected = [claim for claim in claims if (owner is None or owner == claim.owner)
+                    and (status is None or status in (claim.status or "").split("+"))]
+        queued = True
+        for claim in selected:
+            claim.clear_requested = True
+            sent = self._clear_player(actor, name, force=force, delivery=claim.delivery)
+            queued = queued and sent
+        return queued
+
+    def _claim_automark(self, actor: str, marker: str, owner: str,
+                        delivery=None, status=None) -> None:
+        if isinstance(delivery, MarkerDelivery):
+            deliveries = getattr(self, "_automark_deliveries", None)
+            if deliveries is None:
+                self._automark_deliveries = deliveries = {}
+            claims = [claim for claim in deliveries.get(actor, [])
+                      if claim.delivery.pending or claim.delivery.current]
+            deliveries[actor] = [*claims, _AutomarkClaim(owner, status, delivery)]
+        owners = getattr(self, "_automark_owners", None)
+        if owners is None:
+            self._automark_owners = owners = {}
+        active = getattr(self, "_automark_active", {})
+        # Failed transfers leave the previous holder marked.
+        active.pop(actor, None)
+        if self._is_me_actor(actor, self._umad_name_of(actor)):
+            active.pop("me", None)
+        owners[actor] = (owner, marker)
+        cleanup = getattr(self, "_automark_cleanup", None)
+        if cleanup is None:
+            self._automark_cleanup = cleanup = set()
+        cleanup.add("me" if self._is_me_actor(actor, self._umad_name_of(actor)) else actor)
+        for attr in ("_umad_chain_pending", "_umad_gaze_pending"):
+            held = getattr(self, attr, None)
+            if held is not None:
+                held[:] = [p for p in held if p[1] != actor
+                           and not (p[0] == "mark" and p[2] == marker)]
+        held = getattr(self, "_automark_pending", None)
+        if held is not None:
+            held[:] = [p for p in held if p[0] != actor and p[1] != marker]
+
     def _dispatch_mark_actions(self, actions, pending: list,
-                               since: "dict | None" = None) -> list:
+                               since: "dict | None" = None, *,
+                               owner: str = "mechanic", force: bool = False) -> list:
         """Replace pending actions for the same actor or sign, preserving first enqueue times."""
         if not actions:
             return pending
@@ -622,28 +729,52 @@ class AutomarkersTabMixin:
             if kind not in ("mark", "clear"):
                 continue
             name = self._umad_name_of(actor)
-            # Rule loss must not clear a newer engine mark.
-            active = getattr(self, "_automark_active", None)
-            if active:
-                active.pop(actor, None)
-                if self._is_me_actor(actor, name):
-                    active.pop("me", None)
-            rule_pending = getattr(self, "_automark_pending", None)
-            if rule_pending:
-                rule_pending[:] = [p for p in rule_pending
-                                   if p[0] != actor and not (kind == "mark" and p[1] == action[2])]
+            if kind == "clear":
+                pending = [p for p in pending if p[1] != actor]
+                owned = getattr(self, "_automark_owners", {}).get(actor)
+                tracked = actor in getattr(self, "_automark_deliveries", {})
+                if not tracked and (owned is None or owned[0] != owner):
+                    if owner == "gaze":
+                        record("gaze_action", kind=kind, slot=self._umad_gaze._slot_of(actor),
+                               marker="clear", result="ignored")
+                    continue
             if kind == "mark":
                 marker = action[2]
                 pending = [p for p in pending
                            if p[1] != actor and not (p[0] == "mark" and p[2] == marker)]
                 sent = self._mark_player(actor, marker, name)
+                if sent:
+                    AutomarkersTabMixin._claim_automark(self, actor, marker, owner, sent)
             elif kind == "clear":
-                pending = [p for p in pending if p[1] != actor]
-                sent = self._clear_player(actor, name)
+                if tracked:
+                    sent = AutomarkersTabMixin._clear_automark_deliveries(
+                        self, actor, name, owner=owner, force=force)
+                else:
+                    sent = (self._clear_player(actor, name, force=True) if force
+                            else self._clear_player(actor, name))
+                if sent and owned is not None and owned[0] == owner:
+                    self._automark_owners.pop(actor, None)
+                    cleanup = getattr(self, "_automark_cleanup", None)
+                    if cleanup:
+                        cleanup.discard("me" if self._is_me_actor(actor, name) else actor)
+            if sent and (kind == "mark" or owned is not None and owned[0] == owner):
+                active = getattr(self, "_automark_active", None)
+                if active:
+                    active.pop(actor, None)
+                    if self._is_me_actor(actor, name):
+                        active.pop("me", None)
+                rule_pending = getattr(self, "_automark_pending", None)
+                if rule_pending:
+                    rule_pending[:] = [p for p in rule_pending
+                                       if p[0] != actor and not (kind == "mark" and p[1] == action[2])]
             if not sent and len(pending) < 16:
                 pending.append(action)
                 if since is not None:
                     since.setdefault(action, time.monotonic())
+            if owner == "gaze":
+                record("gaze_action", kind=kind, slot=self._umad_gaze._slot_of(actor),
+                       marker=action[2] if kind == "mark" else "clear",
+                       result="queued" if sent else ("pending" if action in pending else "ignored"))
         if since is not None:
             live = set(pending)
             for a in list(since):
@@ -658,7 +789,7 @@ class AutomarkersTabMixin:
             return
         self._umad_chain_pending = self._dispatch_mark_actions(
             actions, self._umad_chain_pending,
-            getattr(self, "_umad_chain_pending_since", None))
+            getattr(self, "_umad_chain_pending_since", None), owner="chains")
 
     def _dispatch_umad_gaze_actions(self, actions) -> None:
         fight = (getattr(self, "_current_fight_tag", "") or "").casefold()
@@ -667,11 +798,7 @@ class AutomarkersTabMixin:
             return
         self._umad_gaze_pending = self._dispatch_mark_actions(
             actions, self._umad_gaze_pending,
-            getattr(self, "_umad_gaze_pending_since", None))
-        for action in actions:
-            record("gaze_action", kind=action[0], slot=self._umad_gaze._slot_of(action[1]),
-                   marker=action[2] if action[0] == "mark" else "clear",
-                   result="pending" if action in self._umad_gaze_pending else "queued")
+            getattr(self, "_umad_gaze_pending_since", None), owner="gaze")
 
     def _rearm_umad_chain_flush(self) -> None:
         chains = getattr(self, "_umad_chains", None)
@@ -743,6 +870,7 @@ class AutomarkersTabMixin:
     def _cancel_changed_rule_marks(self) -> None:
         self._automark_pending = [p for p in self._automark_pending
                                   if p[6] in self._automark_rules]
+        AutomarkersTabMixin._apply_native_automark_state(self)
 
     def _on_automark_uri_changed(self) -> None:
         uri = (self._automark_uri_edit.text() or "").strip() or DEFAULT_TELESTO_URI
@@ -769,9 +897,21 @@ class AutomarkersTabMixin:
 
     def _refresh_telesto_party(self) -> None:
         tc = getattr(self, "_telesto_client", None)
-        if tc is not None and self._settings.get("telesto_enabled"):
+        if tc is None:
+            return
+        enabled = bool(self._settings.get("telesto_enabled"))
+        cleanup = [(actor, claim.delivery)
+                   for actor, claims in getattr(self, "_automark_deliveries", {}).items()
+                   for claim in claims
+                   if claim.clear_requested and (claim.delivery.pending or claim.delivery.current)]
+        if not enabled and not cleanup:
+            return
+        if enabled:
             tc.set_enabled(True)
-            tc.request_party_members(force=True)
+        tc.request_party_members(force=True)
+        for actor, delivery in cleanup:
+            self._clear_player(actor, force=not enabled, delivery=delivery)
+        if enabled:
             if self._umad_chain_enabled:
                 self._retry_umad_chain_pending()
             if self._umad_gaze_enabled:
@@ -787,10 +927,12 @@ class AutomarkersTabMixin:
         fight = (self._current_fight_tag or "").casefold()
         keep: list = []
         sent = set()
-        for pending in self._automark_pending:
+        for pending in list(self._automark_pending):
             actor, marker, name, queued_at, status_key, rule_fight, rule = pending
-            if (rule not in self._automark_rules or now - queued_at > 30.0
-                    or (rule_fight and fight and rule_fight != fight)):
+            if (rule not in self._automark_rules or marker not in TELESTO_MARKER_TOKENS
+                    or now - queued_at > 30.0
+                    or (rule_fight and fight and rule_fight != fight)
+                    or AutomarkersTabMixin._automark_status_suspended(self, status_key)):
                 continue
             if (actor, marker) in sent:
                 continue
@@ -798,12 +940,15 @@ class AutomarkersTabMixin:
             live = self._automark_active.get(player_key)
             if live is not None and live != status_key:
                 continue
-            if not self._mark_player(actor, marker, name):
+            delivery = self._mark_player(actor, marker, name)
+            if not delivery:
                 keep.append(pending)
             else:
                 sent.add((actor, marker))
+                AutomarkersTabMixin._claim_automark(self, actor, marker, "rule", delivery, status_key)
                 self._automark_active[player_key] = status_key
-        self._automark_pending = [entry for entry in keep if (entry[0], entry[1]) not in sent]
+        self._automark_pending = [entry for entry in keep if entry in self._automark_pending
+                                  and (entry[0], entry[1]) not in sent]
 
     def _apply_automark_state(self) -> None:
         tc = getattr(self, "_telesto_client", None)
@@ -813,14 +958,26 @@ class AutomarkersTabMixin:
         if not enabled:
             self._umad_chain_reset(clear_marks=True, force=True)
             self._umad_gaze_reset(clear_marks=True, force=True)
-            for key in list(self._automark_active):
+            deliveries = getattr(self, "_automark_deliveries", {})
+            for actor in deliveries:
+                AutomarkersTabMixin._clear_automark_deliveries(self, actor, force=True)
+            tracked = set(deliveries)
+            if any(claim.delivery.target == "<me>" for claims in deliveries.values() for claim in claims):
+                tracked.add("me")
+            for key in dict.fromkeys([*self._automark_active,
+                                      *sorted(getattr(self, "_automark_cleanup", ()))]):
+                if key in tracked:
+                    continue
                 if key == "me":
                     tc.clear_self(force=True)
                 else:
                     self._clear_player(key, force=True)
             self._automark_active.clear()
+            getattr(self, "_automark_owners", {}).clear()
+            getattr(self, "_automark_cleanup", set()).clear()
         tc.configure(uri=self._settings.get("telesto_uri", DEFAULT_TELESTO_URI),
                      enabled=enabled)
+        AutomarkersTabMixin._apply_native_automark_state(self)
         if tc.last_status() is None:
             self._telesto_status = "unknown"
         bridge = getattr(self, "_triggernometry", None)
@@ -835,6 +992,117 @@ class AutomarkersTabMixin:
             self._automark_pending.clear()
         self._update_automark_status_label()
 
+    def _apply_native_automark_state(self) -> None:
+        bridge = getattr(self, "_triggevent", None)
+        if bridge is None:
+            return
+        requested = AutomarkersTabMixin._native_umad_preference(self)
+        blocked = AutomarkersTabMixin._native_umad_owned_locally(self)
+        native_umad = requested and not blocked
+        settings = self._settings.get("triggevent_automark_settings")
+        settings = settings if isinstance(settings, dict) else {}
+        inventory = getattr(self, "_native_automark_inventory", None)
+        if (inventory is not None
+                and getattr(self, "_native_automark_inventory_generation", None) == bridge.generation()):
+            supported = AutomarkersTabMixin._native_automark_setting_ids(inventory)
+            if supported is not None:
+                settings = {ident: value for ident, value in settings.items() if ident in supported}
+        enabled = bool(self._settings.get("telesto_enabled", False))
+        panel = getattr(self, "_native_automarkers_panel", None)
+        if panel is not None:
+            panel.set_umad_state(requested, blocked)
+        # Rejected configuration must not block disable or local ownership.
+        if not enabled:
+            bridge.set_automark(False, native_umad=native_umad)
+        elif not native_umad:
+            bridge.set_automark(None, native_umad=False)
+        options = {"settings": deepcopy(settings)} if settings else {}
+        bridge.set_automark(enabled, self._settings.get("telesto_uri", DEFAULT_TELESTO_URI),
+                            native_umad=native_umad, **options)
+
+    def _native_umad_preference(self) -> bool:
+        value = self._settings.get("native_umad_enabled", True)
+        return value if type(value) is bool else True
+
+    @staticmethod
+    def _native_automark_setting_ids(inventory):
+        if not isinstance(inventory, dict) or not isinstance(inventory.get("settings"), list):
+            return None
+        return {setting["id"] for setting in inventory["settings"]
+                if isinstance(setting, dict) and isinstance(setting.get("id"), str)
+                and setting["id"] != "native_umad" and setting.get("managed") != "frontend"}
+
+    def _native_umad_owned_locally(self) -> bool:
+        if self._settings.get("umad_gaze_enabled", False):
+            return True
+        rules = getattr(self, "_automark_rules", self._settings.get("automark_rules", []))
+        for rule in rules:
+            status = str(rule.get("status") or "").strip()
+            ids = _parse_compound(status) or (AutomarkersTabMixin._norm_hex(status),)
+            if (rule.get("enabled", True)
+                    and str(rule.get("marker") or "").strip() in TELESTO_MARKER_TOKENS
+                    and (_UMAD_P4_MARK_IDS.intersection(ids)
+                         or status.casefold() in _UMAD_P4_MARK_NAMES)
+                    and str(rule.get("fight") or "").strip().casefold() in ("", _UMAD_FIGHT_TAG_CF)):
+                return True
+        return False
+
+    def _on_native_automark_inventory(self, payload: str, generation=None) -> None:
+        if generation is not None and _stale_gen(getattr(self, "_triggevent", None), generation):
+            return
+        try:
+            inventory = json.loads(payload)
+        except (TypeError, ValueError):
+            return
+        if not isinstance(inventory, dict) or inventory.get("version") != 1:
+            return
+        previous_ids = AutomarkersTabMixin._native_automark_setting_ids(
+            getattr(self, "_native_automark_inventory", None))
+        previous_generation = getattr(self, "_native_automark_inventory_generation", None)
+        self._native_automark_inventory = inventory
+        self._native_automark_inventory_generation = generation
+        settings = self._settings.get("triggevent_automark_settings")
+        if isinstance(settings, dict) and isinstance(inventory.get("settings"), list) and "error" not in inventory:
+            controls = {row["id"]: row for row in inventory["settings"]
+                        if isinstance(row, dict) and isinstance(row.get("id"), str)}
+            jobs = {ident for ident, _label in NativeAutomarkersPanel._choices(inventory.get("jobs"))}
+            retained = {}
+            for ident, control in controls.items():
+                enabled = control.get("override_enabled")
+                order = control.get("value")
+                if (control.get("type") == "jobs" and ident not in settings
+                        and isinstance(enabled, str) and type(settings.get(enabled)) is bool
+                        and controls.get(enabled, {}).get("value") is True
+                        and isinstance(order, list) and all(isinstance(job, str) for job in order)
+                        and jobs and len(order) == len(jobs) and set(order) == jobs):
+                    # First enable can inherit the engine's shared order.
+                    retained[ident] = list(order)
+            if retained:
+                settings = settings | retained
+                self._settings["triggevent_automark_settings"] = settings
+                self._save_settings()
+        panel = getattr(self, "_native_automarkers_panel", None)
+        if panel is not None:
+            panel.set_inventory(inventory, self._settings.get("triggevent_automark_settings", {}),
+                                AutomarkersTabMixin._native_umad_preference(self),
+                                AutomarkersTabMixin._native_umad_owned_locally(self))
+        supported = AutomarkersTabMixin._native_automark_setting_ids(inventory)
+        if (supported is not None and isinstance(settings, dict) and settings
+                and (set(settings) - supported or previous_ids is not None and previous_ids != supported)
+                and (previous_generation != generation or previous_ids != supported)):
+            AutomarkersTabMixin._apply_native_automark_state(self)
+
+    def _on_native_automark_setting_changed(self, ident: str, value) -> None:
+        if ident == "native_umad":
+            self._settings["native_umad_enabled"] = bool(value)
+        else:
+            current = self._settings.get("triggevent_automark_settings")
+            settings = dict(current) if isinstance(current, dict) else {}
+            settings[ident] = deepcopy(value)
+            self._settings["triggevent_automark_settings"] = settings
+        AutomarkersTabMixin._apply_native_automark_state(self)
+        self._save_settings()
+
     def _on_telesto_client_status(self, reachable: bool, message: str, degraded: bool = False) -> None:
         """Amber means Telesto responds but commands fail."""
         # Queued signals may describe an endpoint that has since been replaced.
@@ -847,7 +1115,7 @@ class AutomarkersTabMixin:
         self._update_automark_status_label()
 
     def _on_telesto_status(self, _status: str, gen: "int | None" = None) -> None:
-        # The native Telesto client owns status. Ignore engine probes and stale generations.
+        # Only the Telesto client's probes own this status.
         if ac._stale_gen(getattr(self, "_triggevent", None), gen):
             return
         return

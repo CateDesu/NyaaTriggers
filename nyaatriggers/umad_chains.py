@@ -254,13 +254,13 @@ _holder tracks started queues, with None marking a finished queue."""
         for queue, members in queues.items():
             if queue in self._holder or not members:
                 continue
+            if len(members) != _EXPECTED[queue]:
+                continue
             if queue != ACC and not acc_settled:
                 continue
             if not self._order_known_for_crusted(members):
                 continue
             if require_complete:
-                if len(members) != _EXPECTED[queue]:
-                    continue
                 if any(self._players[a]["order"] is None or not self._players[a]["crust"]
                        for a in members):
                     continue
@@ -359,7 +359,9 @@ class CursedShriekPairs:
         self._last_event = now
         self._polarity = kind
         self._polarity_t = now
-        return actions
+        if self._set and now - self._set_t > BURST_GAP_S:
+            actions += self.flush(now)
+        return actions + self._assign_pair(now)
 
     def on_gain(self, effect_hex: str, actor_id: str, duration, now: float) -> "list[tuple]":
         """Handle a gaze gain. Duration bounds repeats but does not identify gaze type."""
@@ -372,7 +374,7 @@ class CursedShriekPairs:
         if self._sets_done >= GAZE_SETS or actor_id in self._assigned:
             return actions
         self._last_event = now
-        if actor_id in self._set:
+        if actor_id in self._set or len(self._set) >= GAZE_PER_SET:
             return actions
         if not self._set:
             self._set_t = now
@@ -386,21 +388,19 @@ class CursedShriekPairs:
             self._active_until[actor_id] = now + min(remaining, STALE_S)
         if len(self._set) < GAZE_PER_SET:
             return actions
-        # A complete pair without a known polarity remains unmarked.
+        return actions + self._assign_pair(now)
+
+    def _assign_pair(self, now: float) -> "list[tuple]":
+        if len(self._set) != GAZE_PER_SET or self._polarity is None:
+            return []
         polarity, self._polarity = self._polarity, None
-        if polarity is None:
-            for actor in self._set:
-                self._active_until.pop(actor, None)
-            self._set = []
-            return actions
         self._sets_done += 1
         keys = (LOOK1, LOOK2) if polarity == LOOK1 else (AWAY1, AWAY2)
         pair = self._ordered(self._set)
         self._set = []
         for actor, key in zip(pair, keys):
             self._assigned[actor] = key
-        actions += self._mark_available(now)
-        return actions
+        return self._mark_available(now)
 
     def _mark_available(self, now: float) -> "list[tuple]":
         actions = []

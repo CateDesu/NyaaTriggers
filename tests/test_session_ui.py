@@ -633,7 +633,7 @@ class SessionUiTests(unittest.TestCase):
             mark.assert_called_once_with(PLAYER, "attack1", "Player")
         self.assertFalse(window._automark_pending)
 
-    def test_engine_marker_actions_cancel_conflicting_rule_retries(self):
+    def test_admitted_engine_actions_cancel_conflicting_rule_retries(self):
         self.connect()
         window = self.window
         window._settings["telesto_enabled"] = True
@@ -644,6 +644,8 @@ class SessionUiTests(unittest.TestCase):
         for kind, engine, succeeds in product(("mark", "clear"), ("chain", "gaze"), (False, True)):
             with self.subTest(kind=kind, engine=engine, succeeds=succeeds):
                 window._clear_actor_state()
+                if kind == "clear":
+                    window._claim_automark(PLAYER, "circle", "chains" if engine == "chain" else "gaze")
                 with patch.object(window, "_mark_player", return_value=False):
                     for effect, actor in (("ABC", PLAYER), ("DEF", "10FF0002"), ("123", "10FF0003")):
                         self.line(["26", "ts", effect, "Status", "30", "40000001", "Boss", actor, "Player"])
@@ -657,6 +659,9 @@ class SessionUiTests(unittest.TestCase):
                     expected = [("10FF0003", "attack2")]
                     if kind == "clear":
                         expected.insert(0, ("10FF0002", "attack3"))
+                    if not succeeds:
+                        expected = [(PLAYER, "attack1"), ("10FF0002", "attack3"),
+                                    ("10FF0003", "attack2")]
                     self.assertEqual([(call.args[0], call.args[1]) for call in mark.call_args_list], expected)
                 self.assertFalse(window._automark_pending)
 
@@ -1069,8 +1074,9 @@ class SessionUiTests(unittest.TestCase):
         new_player = int(PLAYER, 16) + 1
         with patch.object(window._telesto_client, "mark_self", return_value=True) as mark_self, \
                 patch.object(window._telesto_client, "mark_actor", return_value=False) as mark_actor:
-            self.assertTrue(window._mark_player(f"{new_player:08X}", "attack1", "Player"))
-            mark_self.assert_called_once_with("attack1")
+            delivery = window._mark_player(f"{new_player:08X}", "attack1", "Player")
+            self.assertTrue(delivery)
+            mark_self.assert_called_once_with("attack1", delivery=delivery)
             mark_actor.assert_not_called()
             window._ws.primary_player.emit(new_player, "Player")
             self.assertFalse(window._is_me_actor(PLAYER, "Player"))

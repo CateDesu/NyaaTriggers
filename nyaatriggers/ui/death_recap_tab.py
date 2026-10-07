@@ -120,16 +120,17 @@ class DeathRecapTabMixin:
         statuses.setMinimumHeight(45)
         statuses.setWidget(self._recap_statuses)
         self._recap_detail.addWidget(statuses)
-        self._recap_table = QTableWidget(0, 6)
+        self._recap_table = QTableWidget(0, 7)
         self._recap_table.setHorizontalHeaderLabels(
-            [_("Time"), _("Amount"), _("Ability"), _("Source"), _("HP before"), _("Status effects")])
+            [_("Time"), _("Amount"), _("Ability"), _("Source"), _("HP before"), _("Status effects"),
+             _("Targeted mitigation")])
         self._recap_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._recap_table.verticalHeader().hide()
         header = self._recap_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setMinimumSectionSize(60)
         header.setStretchLastSection(True)
-        for column, width in enumerate((75, 110, 240, 165, 240, 340)):
+        for column, width in enumerate((75, 110, 220, 145, 220, 220, 240)):
             self._recap_table.setColumnWidth(column, width)
         self._recap_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._recap_table.setIconSize(QSize(22, 22))
@@ -542,7 +543,8 @@ class DeathRecapTabMixin:
                 name = localized_metadata("Action", event["action_id"], {"name": name})["name"]
             values = [f"{event['time']:.1f}s", amount, name, event["source"],
                       "" if event.get("hp") is not None and event.get("max_hp") else _("Not recorded"),
-                      "" if "statuses" in event else _("Not recorded")]
+                      "" if "statuses" in event else _("Not recorded"),
+                      "" if "statuses" in event or "source_statuses" in event else _("Not recorded")]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)

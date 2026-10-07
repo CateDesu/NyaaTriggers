@@ -176,9 +176,14 @@ class TriggeventRecovery(QObject):
     def feed(self, raw):
         if self._live or self._ending:
             generation = self._generation
-            self.bridge.feed(raw)
-            if generation == self._generation:
+            initial = self.ws.state_snapshot() if self._live else None
+            queued = self.bridge.feed(raw)
+            if queued is not False and generation == self._generation:
                 return
+            if generation == self._generation:
+                if initial is not None:
+                    self._initial_state = initial
+                self._live = self._ending = False
         size = sys.getsizeof(raw)
         if self._bytes + size > _MAX_PENDING_BYTES:
             _log("recovery: feed buffer exceeded its limit")

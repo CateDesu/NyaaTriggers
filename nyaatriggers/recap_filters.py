@@ -101,6 +101,29 @@ OFFENSIVE_STATUSES = {
 
 DEFAULT_HIDDEN_STATUSES = frozenset(str(ident) for ids in OFFENSIVE_STATUSES.values() for ident in ids)
 
+TARGETED_DEFENSES = {
+    'Intervention': (1174, 2020, 2675, 2676),
+    'Covered': (81, 1301, 2413, 4352),
+    'Blackest Night': (1178, 1308),
+    'Oblation': (2682,),
+    'Nascent Glint': (1858, 2062, 2679, 2680, 3031),
+    'Heart of Stone': (1840,),
+    'Heart of Corundum': (2683, 2684, 2685, 4295, 4296),
+    'Aquaveil': (2708, 3086),
+    'Divine Benison': (1218, 1404),
+    'Galvanize': (297, 1331, 1918, 3087, 3088),
+    'Eukrasian Diagnosis': (2607, 2608, 2865, 3109),
+    'Haima': (2612, 2642, 2869, 2870),
+    'Taurochole': (2619,),
+    'Intersection': (1889, 4040),
+    'Exaltation': (2717,),
+    'Protraction': (2710,),
+    'The Bole': (830, 1339, 3890),
+    'The Spire': (3892,),
+}
+
+TARGETED_MITIGATION_STATUSES = frozenset(str(ident) for ids in TARGETED_DEFENSES.values() for ident in ids)
+
 
 def hidden_statuses(settings):
     saved = settings.get("recap_hidden_statuses")

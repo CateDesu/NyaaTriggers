@@ -83,7 +83,11 @@ class LogImportDialog(QDialog):
         self.timer.timeout.connect(self._poll)
         self.timer.start()
         QApplication.instance().aboutToQuit.connect(self.job.cancel.set)
-        self.job.start()
+        try:
+            self.job.start()
+        except RuntimeError as exc:
+            self.job.error = str(exc)
+            self.job.done.set()
 
     def reject(self):
         self.job.cancel.set()

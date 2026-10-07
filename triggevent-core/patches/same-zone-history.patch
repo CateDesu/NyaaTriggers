@@ -1,0 +1,28 @@
+--- a/xivsupport/src/main/java/gg/xp/xivsupport/replay/PullHistoryReader.java
++++ b/xivsupport/src/main/java/gg/xp/xivsupport/replay/PullHistoryReader.java
+@@ -164,14 +164,17 @@
+                 ZonedDateTime.parse(parts[1]);
+                 switch (kind) {
+                     case 1 -> {
+-                        zone = Long.parseLong(parts[2], 16);
+-                        beforeZone = positions;
+-                        positions = new LinkedHashMap<>();
+-                        beforeZoneErrors = stateErrors;
+-                        stateErrors = new LinkedHashMap<>();
+-                        combatants.clear();
+-                        boundary();
+-                        collecting = true;
++                        long nextZone = Long.parseLong(parts[2], 16);
++                        if (nextZone != zone) {
++                            zone = nextZone;
++                            beforeZone = positions;
++                            positions = new LinkedHashMap<>();
++                            beforeZoneErrors = stateErrors;
++                            stateErrors = new LinkedHashMap<>();
++                            combatants.clear();
++                            boundary();
++                            collecting = true;
++                        }
+                     }
+                     case 3 -> {
+                         String id = actor(parts[2]);

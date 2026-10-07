@@ -74,10 +74,24 @@ check("the partner gain completes the assignment", marks(last) == {A: BND1, B: B
 e = eng()
 check("a pair whose wave's vfx never arrived marks nothing",
       wave(e, [A, B], SET1, 10.0) == [])
-check("the unarmed set is discarded, not held",
-      e._set == [] and e._sets_done == 0)
+check("the unarmed pair waits within the burst window without assigning signs",
+      e._set == [A, B] and e._sets_done == 0)
+check("a missing tell expires the unmarked pair",
+      e.flush(10.0 + BURST_GAP_S + 0.1) == [] and e._set == [])
 m = marks(wave(e, [C, D], SET2, 25.0, vfx=REAL, vfx_time=21.0))
 check("the next armed wave still marks", m == {C: IGN1, D: IGN2})
+
+e = eng()
+wave(e, [B, A], SET1, 10.0)
+check("a reordered tell completes the waiting pair with exact signs",
+      e.on_vfx(REAL, 10.1) == [("mark", A, IGN1), ("mark", B, IGN2)])
+check("duplicate gains after a reordered tell cannot repeat marks",
+      gain(e, A, SET1, 10.2) == [] and gain(e, B, SET1, 10.2) == [])
+
+e = eng()
+wave(e, [A, B], SET1, 10.0)
+check("a tell arriving after the burst cannot mark the old pair",
+      e.on_vfx(REAL, 10.0 + BURST_GAP_S + 0.1) == [] and e._assigned == {})
 
 for sweep in (False, True):
     e = eng()

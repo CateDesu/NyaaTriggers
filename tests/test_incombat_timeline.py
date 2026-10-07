@@ -2,6 +2,7 @@
 import os
 import sys
 import time
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -12,6 +13,7 @@ from nyaatriggers import timeline_parser
 from nyaatriggers.dps_meter import DpsMeter
 from nyaatriggers.main_window import MainWindow
 from nyaatriggers.timeline_engine import TimelineEngine
+from nyaatriggers.ui.automarkers_tab import AutomarkersTabMixin
 from nyaatriggers.umad_chains import BlackHoleChains, CursedShriekPairs, StatusPairs
 
 _app = QApplication.instance() or QApplication(sys.argv)
@@ -64,7 +66,7 @@ class FakeLink:
 
 
 def make_window():
-    class W:
+    class W(AutomarkersTabMixin):
         pass
 
     w = W()
@@ -215,7 +217,11 @@ w7._umad_gaze_pending = []
 w7._automark_pairs = StatusPairs([])
 w7._automark_pending = []
 w7._automark_active = {}
+w7._automark_owners = {}
+w7._automark_cooldowns = {}
 w7._automark_rules = []
+w7._me_id = ""
+w7._me_name = ""
 w7._local_enabled = True
 w7._triggers = []
 w7._clear_status_timers = lambda: MainWindow._clear_status_timers(w7)
@@ -225,9 +231,27 @@ w7._umad_chain_reset = lambda clear_marks=False: \
     MainWindow._umad_chain_reset(w7, clear_marks=clear_marks)
 w7._umad_gaze_reset = lambda clear_marks=False: \
     MainWindow._umad_gaze_reset(w7, clear_marks=clear_marks)
-w7._clear_player = lambda actor, name="": True
+marker_actions = []
+w7._mark_player = lambda actor, marker, name="": marker_actions.append(("mark", actor, marker)) or True
+w7._clear_player = lambda actor, name="", **kwargs: marker_actions.append(("clear", actor)) or True
+w7._telesto_client = SimpleNamespace(
+    cancel_pending=lambda: None,
+    clear_self=lambda: marker_actions.append(("clear", "me")) or True)
 w7._append_ability_line = lambda fields: None
+now = time.monotonic()
+w7._umad_gaze.on_vfx("462", now)
+w7._umad_gaze.on_gain("15A7", "10000001", "60", now)
+w7._dispatch_mark_actions(w7._umad_gaze.on_gain("15A7", "10000002", "60", now),
+                          [], owner="gaze")
+w7._claim_automark("10000003", "triangle", "rule")
+w7._automark_active["10000003"] = "15A8"
 MainWindow._dispatch_log_line(w7, ["33", "ts", "0", "4000000F"], "33|ts|0|4000000F")
+check("wipe clears owned gaze and rule markers once",
+      marker_actions == [("mark", "10000001", "ignore1"), ("mark", "10000002", "ignore2"),
+                         ("clear", "10000001"), ("clear", "10000002"), ("clear", "10000003")])
+check("wipe retires marker ownership and pending actions",
+      not w7._automark_owners and not w7._automark_active
+      and not w7._umad_gaze_pending and not w7._automark_pending)
 check("wipe clears the plugin once", w7._plugin_link.clears == 1)
 check("wipe re-pushes the schedule right after the clear",
       len(w7._plugin_link.schedules) == 1
@@ -238,6 +262,7 @@ check("wipe with no pull just ended sends no dps frame",
       w7._plugin_link.dps_frames == [])
 
 MainWindow._dispatch_log_line(w7, ["33", "ts", "0", "4000000F"], "33|ts|0|4000000F")
+check("repeated wipe sends no duplicate marker clears", len(marker_actions) == 5)
 check("repeated wipes preserve the meter", w7._plugin_link.clear_keeps_dps == [True, True])
 check("repeated wipes do not invent an encounter ending", w7._plugin_link.dps_frames == [])
 check("second wipe clears the plugin again", w7._plugin_link.clears == 2)

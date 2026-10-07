@@ -155,6 +155,29 @@ public final class RecoveryVerification {
             var restored = recovery.restore(folder, anchor, 0x553, 0x10000001, List.of("invalid JSON"), start);
             check(restored.skipped() == 3, "Malformed history fields and snapshot were not reported");
             check(seen.equals(List.of("Later valid event")), "Valid history after a malformed record was not processed");
+
+            String zone = "01|" + start + "|553|Raid|0";
+            String player = "03|" + start + "|10000001|Player|0";
+            String earlier = "00|" + start.plusSeconds(1) + "|0038|Player|Earlier mechanic|0";
+            String repeated = "01|" + start.plusSeconds(2) + "|553|Raid|0";
+            Files.write(file, List.of(zone, player, earlier, repeated, anchor));
+            var reader = new PullHistoryReader();
+            var sameZone = reader.read(folder, anchor, 0x553, 0x10000001);
+            check(sameZone.reason().isEmpty() && sameZone.lines().equals(List.of(zone, player, earlier, repeated)),
+                    "Repeated zone announcement discarded actors, mechanics or the repeated input");
+
+            String otherZone = "01|" + start.plusSeconds(2) + "|554|Other raid|0";
+            String currentPlayer = "03|" + start.plusSeconds(2) + "|10000001|Player|0";
+            Files.write(file, List.of(zone, player, earlier, otherZone, currentPlayer, anchor));
+            var changedZone = reader.read(folder, anchor, 0x554, 0x10000001);
+            check(changedZone.reason().isEmpty() && changedZone.lines().equals(List.of(otherZone, currentPlayer)),
+                    "Real zone change retained mechanics from the previous zone");
+
+            String wipe = "33|" + start.plusSeconds(2) + "|0|40000010|0|0|0|0|0";
+            Files.write(file, List.of(zone, player, earlier, repeated, wipe, anchor));
+            var wiped = reader.read(folder, anchor, 0x553, 0x10000001);
+            check(wiped.reason().isEmpty() && wiped.lines().equals(List.of(wipe, currentPlayer)),
+                    "Wipe did not preserve the actor seed while retiring earlier mechanics");
         }
         finally {
             Files.deleteIfExists(file);
