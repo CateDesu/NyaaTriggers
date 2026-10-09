@@ -59,7 +59,7 @@ class FakeWindow:
         self._automark_active = {}
         self._automark_pairs = StatusPairs([])
 
-    def _mark_player(self, actor, marker, name="", is_me=False):
+    def _mark_player(self, actor, marker, name="", is_me=False, *, expires_at=None):
         if not self._mark_ok:
             return False
         self.marks.append((actor, marker))

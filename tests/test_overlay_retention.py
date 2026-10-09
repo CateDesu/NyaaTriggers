@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from nyaatriggers.dps_meter import DpsMeter
 from nyaatriggers.plugin_link import _DpsProtocol, clear_frame, dps_frame, timeline_frame
@@ -17,6 +17,7 @@ class OverlayHost(DpsTabMixin, InstanceTabMixin, TimelineTabMixin):
         self._dps_meter.set_me('10000001')
         self._dps_meter.note_job(0x10000001, 31)
         self._dps_meter.on_encounter_end = self._on_meter_encounter_end
+        self._write_dps_snapshot = Mock()
         self._dps_overlay_live = False
         self._settings = {}
         self._triggers = []
@@ -163,6 +164,7 @@ class OverlayRetentionTests(unittest.TestCase):
         self.assertIs(final['show'], False)
         self.assertEqual(final['enc']['dps'], 5000)
         snapshot = self.host._dps_history[0]['snapshot']
+        self.host._write_dps_snapshot.assert_called_once_with(snapshot)
         self.host._dps_meter.set_me('10000002')
         self.assertEqual(self.host._dps_meter.overlay_rows(snapshot, detailed=True), final['rows'])
         self.assertTrue(final['rows'][0][5])

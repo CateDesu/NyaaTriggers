@@ -64,18 +64,27 @@ def canon_status_key(status: str) -> str:
     return "+".join(sorted(pair)) if pair else _norm_id(status)
 
 
+def status_expires_at(duration, now: float) -> float | None:
+    try:
+        remaining = float(duration)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return now + remaining if math.isfinite(remaining) and remaining > 0 else None
+
+
 class StatusPairs:
     """Track compound statuses, expiring missed losses. The host supplies time and resets."""
 
     def __init__(self, tracked, stale_s: float = STALE_S) -> None:
         self.tracked: frozenset = frozenset(_norm_id(t) for t in tracked)
         self._stale_s = float(stale_s)
-        self._held: "dict[str, dict[str, float]]" = {}   # actor -> id -> gained-at
+        self._held: "dict[str, dict[str, tuple[float, float | None]]]" = {}
 
-    def on_gain(self, effect_hex: str, actor_id: str, now: float) -> None:
+    def on_gain(self, effect_hex: str, actor_id: str, now: float, duration=None) -> None:
         eff = _norm_id(effect_hex)
         if eff in self.tracked:
-            self._held.setdefault(str(actor_id).strip().upper(), {})[eff] = now
+            self._held.setdefault(str(actor_id).strip().upper(), {})[eff] = (
+                now, status_expires_at(duration, now))
 
     def on_loss(self, effect_hex: str, actor_id: str) -> None:
         actor_id = str(actor_id).strip().upper()
@@ -90,7 +99,14 @@ class StatusPairs:
         held = self._held.get(str(actor_id).strip().upper())
         if held is None:
             return False
-        return all(i in held and now - held[i] <= self._stale_s for i in ids)
+        return all(i in held and now - held[i][0] <= self._stale_s
+                   and (held[i][1] is None or now < held[i][1]) for i in ids)
+
+    def expires_at(self, actor_id: str, ids) -> float | None:
+        held = self._held.get(str(actor_id).strip().upper(), {})
+        deadlines = [held[effect][1] for effect in ids
+                     if effect in held and held[effect][1] is not None]
+        return min(deadlines) if deadlines else None
 
     def reset(self) -> None:
         self._held.clear()
@@ -100,15 +116,17 @@ class BlackHoleChains:
     """Return mark or clear actions for uppercase actor IDs.
 _holder tracks started queues, with None marking a finished queue."""
 
-    def __init__(self, role_of, markers: "dict[str, str] | None" = None):
+    def __init__(self, role_of, markers: "dict[str, str] | None" = None,
+                 *, include_accretion: bool = True):
         self._role_of = role_of           # actor_id -> 'dps' | 'support' | None
+        self._output_queues = (DPS, SUPPORT, ACC) if include_accretion else (DPS, SUPPORT)
         self._markers = dict(DEFAULT_MARKERS)
         if markers:
             self.set_markers(markers)
         self.reset()
 
     def set_markers(self, markers: "dict[str, str]") -> None:
-        for queue in (DPS, SUPPORT, ACC):
+        for queue in self._output_queues:
             tok = markers.get(queue)
             if tok:
                 self._markers[queue] = tok
@@ -147,7 +165,8 @@ _holder tracks started queues, with None marking a finished queue."""
         if effect_hex == ACCRETION:
             p["accretion"] = True
             # Late Accretion gains can move a queue head and its sign.
-            actions += self._reseat_accretion_head()
+            if ACC in self._output_queues:
+                actions += self._reseat_accretion_head()
         elif effect_hex == CRUST:
             p["crust"] = True
         else:
@@ -194,7 +213,7 @@ _holder tracks started queues, with None marking a finished queue."""
 
     def outstanding(self) -> "list[str]":
         held: "list[str]" = []
-        for queue in (DPS, SUPPORT, ACC):
+        for queue in self._output_queues:
             actor = self._holder.get(queue)
             if actor and actor not in held:
                 held.append(actor)
@@ -202,7 +221,7 @@ _holder tracks started queues, with None marking a finished queue."""
 
     def has_open_queues(self) -> bool:
         """Report queues that may start after late role information arrives."""
-        return bool(self._players) and len(self._holder) < len(_EXPECTED)
+        return bool(self._players) and len(self._holder) < len(self._output_queues)
 
     def _queues(self) -> "dict[str, list[str]]":
         """Sort by order then actor ID, placing unknown orders last and omitting unknown roles."""
@@ -252,6 +271,8 @@ _holder tracks started queues, with None marking a finished queue."""
         # Wait for both Accretion players. Early order and Crust gains can misidentify role queues.
         acc_settled = len(queues[ACC]) >= 2
         for queue, members in queues.items():
+            if queue not in self._output_queues:
+                continue
             if queue in self._holder or not members:
                 continue
             if len(members) != _EXPECTED[queue]:
@@ -271,6 +292,117 @@ _holder tracks started queues, with None marking a finished queue."""
                 continue
             self._holder[queue] = first
             actions.append(("mark", first, self._markers[queue]))
+        return actions
+
+
+ACCRETION_IDS = frozenset({ACCRETION, CRUST, "BBC", "BBD"})
+DEFAULT_ACCRETION_MARKERS = {"first": "ignore1", "second": "ignore2"}
+
+
+class AccretionQueue:
+    """Keep each carrier marked until its third tether hit removes Crust."""
+
+    def __init__(self, markers: "dict[str, str] | None" = None):
+        self._markers = dict(DEFAULT_ACCRETION_MARKERS)
+        if markers is not None:
+            self.set_markers(markers)
+        self.reset()
+
+    @property
+    def ids(self) -> frozenset:
+        return ACCRETION_IDS
+
+    def set_markers(self, markers: "dict[str, str]") -> None:
+        for key in DEFAULT_ACCRETION_MARKERS:
+            marker = markers.get(key)
+            if isinstance(marker, str):
+                self._markers[key] = marker
+
+    def reset(self) -> None:
+        self._players: "dict[str, dict]" = {}
+        self._members: "tuple[str, ...]" = ()
+        self._holder: "str | None" = None
+        self._marked: "str | None" = None
+        self._invalid = False
+        self._last_event = 0.0
+
+    def on_gain(self, effect_hex: str, actor_id: str, now: float) -> "list[tuple]":
+        effect = _norm_id(effect_hex)
+        actor = str(actor_id).strip().upper()
+        if effect not in self.ids or not actor:
+            return []
+        actions = self._expire(now)
+        if self._members and self._holder is None and now - self._last_event > BURST_GAP_S:
+            self.reset()
+        self._last_event = now
+        player = self._players.setdefault(actor, {"order": None, "accretion": False,
+                                                   "completed": False})
+        if effect == ACCRETION:
+            player["accretion"] = True
+        elif effect in ORDER_IDS:
+            player["order"] = ORDER_IDS[effect]
+        return actions + self._advance()
+
+    def on_loss(self, effect_hex: str, actor_id: str, now: float) -> "list[tuple]":
+        effect = _norm_id(effect_hex)
+        actor = str(actor_id).strip().upper()
+        if effect not in self.ids or not actor:
+            return []
+        actions = self._expire(now)
+        player = self._players.get(actor)
+        if player is None:
+            return actions
+        self._last_event = now
+        if effect == CRUST:
+            player["completed"] = True
+            actions += self._advance()
+        return actions
+
+    def flush(self, now: float) -> "list[tuple]":
+        return self._expire(now) + self._advance()
+
+    def needs_flush(self) -> bool:
+        return bool(self._players) and (not self._members or self._holder is not None)
+
+    def outstanding(self) -> "list[str]":
+        return [self._marked] if self._marked is not None else []
+
+    def _expire(self, now: float) -> "list[tuple]":
+        if self._players and now - self._last_event > STALE_S:
+            actions = [("clear", actor) for actor in self.outstanding()]
+            self.reset()
+            return actions
+        return []
+
+    def _advance(self) -> "list[tuple]":
+        carriers = [actor for actor, player in self._players.items() if player["accretion"]]
+        ordered = tuple(sorted(carriers, key=lambda actor: (
+            self._players[actor]["order"] or 99, actor)))
+        valid = (len(carriers) == 2
+                 and [self._players[actor]["order"] for actor in ordered] == [1, 2])
+        if len(carriers) > 2 or (self._members and (not valid or ordered != self._members)):
+            self._invalid = True
+        if self._invalid:
+            actions = [("clear", actor) for actor in self.outstanding()]
+            self._holder = self._marked = None
+            return actions
+        if not self._members:
+            if not valid:
+                return []
+            self._members = ordered
+        holder = next((actor for actor in self._members
+                       if not self._players[actor]["completed"]), None)
+        if holder == self._holder:
+            return []
+        actions = [("clear", actor) for actor in self.outstanding()]
+        self._holder = holder
+        self._marked = None
+        if holder is not None:
+            key = "first" if self._players[holder]["order"] == 1 else "second"
+            marker = self._markers[key]
+            if marker:
+                self._marked = holder
+                actions.append(("mark", holder, marker))
         return actions
 
 
@@ -345,11 +477,7 @@ class CursedShriekPairs:
             kind = AWAY1
         else:
             return []
-        actions: "list[tuple]" = []
-        if self._live() and now - self._last_event > STALE_S:
-            # Clear stale signs and state before arming a new phase.
-            actions += [("clear", a) for a in self.outstanding()]
-            self.reset()
+        actions = self.flush(now)
         if self._sets_done >= GAZE_SETS:
             return actions
         event = (vfx, now if event_id is None else event_id)
@@ -359,8 +487,6 @@ class CursedShriekPairs:
         self._last_event = now
         self._polarity = kind
         self._polarity_t = now
-        if self._set and now - self._set_t > BURST_GAP_S:
-            actions += self.flush(now)
         return actions + self._assign_pair(now)
 
     def on_gain(self, effect_hex: str, actor_id: str, duration, now: float) -> "list[tuple]":
@@ -453,6 +579,10 @@ class CursedShriekPairs:
         for actor, expires in list(self._active_until.items()):
             if now >= expires:
                 self._active_until.pop(actor)
+                if actor in self._set:
+                    self._set.remove(actor)
+                    if not self._set and self._polarity_t <= self._set_t:
+                        self._polarity = None
                 self._assigned.pop(actor, None)
                 if self._marked.pop(actor, None):
                     actions.append(("clear", actor))
@@ -464,6 +594,9 @@ class CursedShriekPairs:
     def outstanding(self) -> "list[str]":
         return sorted(self._marked, key=_id_int)
 
+    def expires_at(self, actor_id: str) -> float | None:
+        return self._active_until.get(str(actor_id).strip().upper())
+
     def _live(self) -> bool:
         return bool(self._polarity is not None or self._set or self._assigned or self._sets_done)
 
@@ -472,3 +605,179 @@ class CursedShriekPairs:
             slot = self._slot_of(a)
             return (0, slot, "") if slot is not None else (1, _id_int(a), a)
         return sorted(actors, key=key)
+
+
+FORKED_LIGHTNING = "15A8"
+ACCELERATION_BOMB = "15AA"
+
+
+class GrandCrossPairs:
+    """Assign a complete Grand Cross wave from Neo Exdeath's real or fake tell."""
+
+    def __init__(self, status_id: str, carriers_per_wave: int = 2,
+                 markers: "dict[str, str] | None" = None, slot_of=None):
+        if carriers_per_wave not in (2, 4):
+            raise ValueError("Grand Cross waves have two or four carriers")
+        self._ids = frozenset({_norm_id(status_id)})
+        self._carriers_per_wave = carriers_per_wave
+        self._slot_of = slot_of or (lambda _actor: None)
+        self._keys = tuple(f"{kind}{index}"
+                           for kind in ("real", "fake")
+                           for index in range(1, carriers_per_wave + 1))
+        self._markers = {key: f"attack{index}"
+                         for index, key in enumerate(self._keys, 1)}
+        if markers is not None:
+            self.set_markers(markers)
+        self.reset()
+
+    @property
+    def ids(self) -> frozenset:
+        return self._ids
+
+    def set_markers(self, markers: "dict[str, str]") -> None:
+        for key in self._keys:
+            marker = markers.get(key)
+            if isinstance(marker, str):
+                self._markers[key] = marker
+
+    def reset(self) -> None:
+        self._polarity: "str | None" = None
+        self._polarity_t = 0.0
+        self._seen_vfx_events = set()
+        self._set: "dict[str, float]" = {}
+        self._set_t = 0.0
+        self._sets_done = 0
+        self._assigned: "dict[str, str]" = {}
+        self._marked: "dict[str, str]" = {}
+        self._active_until: "dict[str, float]" = {}
+        self._last_event = 0.0
+
+    def on_vfx(self, vfx_hex: str, now: float, event_id=None) -> "list[tuple]":
+        vfx = _norm_id(vfx_hex)
+        if vfx not in (FAKE_GAZE_VFX, REAL_GAZE_VFX):
+            return []
+        actions = self.flush(now)
+        event = (vfx, now if event_id is None else event_id)
+        if self._sets_done >= GAZE_SETS or event in self._seen_vfx_events:
+            return actions
+        self._seen_vfx_events.add(event)
+        self._last_event = now
+        self._polarity = "fake" if vfx == FAKE_GAZE_VFX else "real"
+        self._polarity_t = now
+        return actions + self._assign_wave(now)
+
+    def on_gain(self, effect_hex: str, actor_id: str, duration,
+                now: float) -> "list[tuple]":
+        if _norm_id(effect_hex) not in self._ids:
+            return []
+        actions = self.flush(now)
+        actor = str(actor_id).strip().upper()
+        if (not actor or self._sets_done >= GAZE_SETS or actor in self._assigned
+                or actor in self._set or len(self._set) >= self._carriers_per_wave):
+            return actions
+        try:
+            remaining = float(duration)
+        except (TypeError, ValueError, OverflowError):
+            return actions
+        if not math.isfinite(remaining) or remaining <= 0:
+            return actions
+        if not self._set:
+            self._set_t = now
+        self._last_event = now
+        self._set[actor] = remaining
+        self._active_until[actor] = now + min(remaining, STALE_S)
+        return actions + self._assign_wave(now)
+
+    def _assign_wave(self, now: float) -> "list[tuple]":
+        if len(self._set) != self._carriers_per_wave or self._polarity is None:
+            return []
+        polarity, self._polarity = self._polarity, None
+        if self._carriers_per_wave == 4:
+            by_duration = sorted(self._set, key=self._set.get)
+            actors = (sorted(by_duration[:2], key=self._carrier_key)
+                      + sorted(by_duration[2:], key=self._carrier_key))
+        else:
+            actors = sorted(self._set, key=self._carrier_key)
+        self._sets_done += 1
+        for index, actor in enumerate(actors, 1):
+            self._assigned[actor] = f"{polarity}{index}"
+        self._set.clear()
+        return self._mark_available(now)
+
+    def _carrier_key(self, actor: str) -> tuple:
+        slot = self._slot_of(actor)
+        party_key = (0, slot, _id_int(actor), actor) if slot is not None else (
+            1, 0, _id_int(actor), actor)
+        return party_key
+
+    def _mark_available(self, now: float) -> "list[tuple]":
+        actions = []
+        occupied = set(self._marked.values())
+        for actor, key in self._assigned.items():
+            marker = self._markers[key]
+            if (not marker or actor in self._marked or marker in occupied
+                    or now >= self._active_until[actor]):
+                continue
+            self._marked[actor] = marker
+            occupied.add(marker)
+            actions.append(("mark", actor, marker))
+        return actions
+
+    def on_loss(self, effect_hex: str, actor_id: str, now: float) -> "list[tuple]":
+        if _norm_id(effect_hex) not in self._ids:
+            return []
+        actor = str(actor_id).strip().upper()
+        if self._live() and now - self._last_event > STALE_S:
+            return self.flush(now)
+        if actor not in self._set and actor not in self._assigned:
+            return self.flush(now)
+        actions = []
+        self._last_event = now
+        if actor in self._set:
+            self._set.pop(actor)
+            if not self._set and self._polarity_t <= self._set_t:
+                self._polarity = None
+        self._assigned.pop(actor, None)
+        self._active_until.pop(actor, None)
+        if self._marked.pop(actor, None):
+            actions.append(("clear", actor))
+        return actions + self.flush(now)
+
+    def flush(self, now: float) -> "list[tuple]":
+        if self._live() and now - self._last_event > STALE_S:
+            actions = [("clear", actor) for actor in self.outstanding()]
+            self.reset()
+            return actions
+        if self._polarity is not None and now - self._polarity_t > GAZE_TELL_S:
+            self._polarity = None
+        if self._set and now - self._set_t > BURST_GAP_S:
+            for actor in self._set:
+                self._active_until.pop(actor, None)
+            self._set.clear()
+            if self._polarity_t <= self._set_t:
+                self._polarity = None
+        actions = []
+        for actor, expires in list(self._active_until.items()):
+            if now >= expires:
+                self._active_until.pop(actor)
+                if actor in self._set:
+                    self._set.pop(actor)
+                    if not self._set and self._polarity_t <= self._set_t:
+                        self._polarity = None
+                self._assigned.pop(actor, None)
+                if self._marked.pop(actor, None):
+                    actions.append(("clear", actor))
+        return actions + self._mark_available(now)
+
+    def needs_flush(self) -> bool:
+        return bool(self._assigned or self._set)
+
+    def outstanding(self) -> "list[str]":
+        return sorted(self._marked, key=_id_int)
+
+    def expires_at(self, actor_id: str) -> float | None:
+        return self._active_until.get(str(actor_id).strip().upper())
+
+    def _live(self) -> bool:
+        return bool(self._polarity is not None or self._set or self._assigned
+                    or self._sets_done)

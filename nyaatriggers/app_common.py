@@ -45,6 +45,8 @@ _BUNDLE_TIMELINES_DIR = _BUNDLE_DIR / "timelines"
 _SETTINGS_FILE              = _DATA_DIR   / "nyaatriggers_settings.json"
 _TRIGGEVENT_INVENTORY_CACHE = _DATA_DIR   / "triggevent_inventory.json"
 _TRIGGEVENT_INVENTORY_SEED  = _BUNDLE_DIR / "triggevent_inventory.seed.json"
+_TRIGGEVENT_AUTOMARK_INVENTORY_CACHE = _DATA_DIR / "triggevent_automarkers.json"
+_TRIGGEVENT_AUTOMARK_INVENTORY_SEED = _ASSETS_DIR / "triggevent_automarkers.seed.json"
 # Triggernometry inventory has no bundled seed because packs are imported by users.
 _TRIGGERNOMETRY_INVENTORY_CACHE = _DATA_DIR / "triggernometry_inventory.json"
 # Imported sounds live with user data so updates preserve them.
@@ -426,7 +428,7 @@ _UMAD_AUTOMARK_PRESET: "list[tuple[str, str]]" = [
     ("15A7", "Cursed Shriek - gaze (real: look away / fake: look at)"),
     ("15A8", "Forked Lightning - real: spread / fake: stack"),
     ("15A9", "Compressed Water - stack marker"),
-    ("15AA", "Acceleration Bomb - stop moving when it expires"),
+    ("15AA", "Acceleration Bomb - real: stay still / fake: keep moving"),
     ("15A5", "White Wound - real: lethal in White Antilight / fake: Black"),
     ("15A6", "Black Wound - real: lethal in Black Antilight / fake: White"),
     ("566",  "Beyond Death - real: must take lethal / fake: avoid lethal"),

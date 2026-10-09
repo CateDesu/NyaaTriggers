@@ -70,6 +70,7 @@ datas += [
     ('assets/zone_names.json', 'assets'),
     ('assets/cactbot_timelines.json', 'assets'),
     ('assets/callout_defaults.json', 'assets'),
+    ('assets/triggevent_automarkers.seed.json', 'assets'),
     ('timelines/UMAD.txt', 'timelines'),
     ('assets/icon_nyaa.png', 'assets'),
     ('assets/sakura_trees.png', 'assets'),

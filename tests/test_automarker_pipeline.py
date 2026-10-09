@@ -1,4 +1,5 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import tempfile
@@ -8,10 +9,13 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from nyaatriggers.telesto_client import MAX_COMMAND_AGE_S, TelestoClient, party_members_message
+from nyaatriggers.telesto_client import MAX_COMMAND_AGE_S, MarkerDelivery, TelestoClient, party_members_message
 from nyaatriggers.ui.automarkers_tab import AutomarkersTabMixin
 from nyaatriggers.ui.instance_tab import InstanceTabMixin
-from nyaatriggers.umad_chains import BlackHoleChains, CursedShriekPairs, StatusPairs
+from nyaatriggers.umad_chains import (
+    ACCELERATION_BOMB, FORKED_LIGHTNING, BlackHoleChains, CursedShriekPairs,
+    GrandCrossPairs, StatusPairs,
+)
 from tests.test_overlay_retention import OverlayHost
 from tests.test_transport_deadlines import wait_for
 
@@ -153,11 +157,32 @@ class AutomarkerPipelineTests(unittest.TestCase):
             host._match_automark_rules(["26", "ts", part, "status", "60",
                                         "E0000000", "", A, "player"])
 
+    def grand_cross_host(self, client, mechanic):
+        status, count = (ACCELERATION_BOMB, 4) if mechanic == "bomb" else (FORKED_LIGHTNING, 2)
+        host = Host(client)
+        host._settings[f"umad_{mechanic}_enabled"] = True
+        host._umad_grand_cross = {mechanic: GrandCrossPairs(status, count,
+            markers={f"{kind}{index}": f"attack{offset + index}"
+                     for kind, offset in (("real", 0), ("fake", count))
+                     for index in range(1, count + 1)})}
+        host._umad_grand_cross_pending = {mechanic: []}
+        host._umad_grand_cross_pending_since = {mechanic: {}}
+        host._umad_grand_cross_flush_timer = SimpleNamespace(start=lambda: None, stop=lambda: None)
+        return host, status, (A, B, C, D)[:count]
+
+    def grand_cross_wave(self, host, status, actors, duration=60):
+        host._umad_grand_cross_line(["26", "tell", "808", "VFX", "9999",
+                                    "E0000000", "", "40000001", "boss", "462"])
+        for actor in actors:
+            host._umad_grand_cross_line(["26", "gain", status, "status", str(duration),
+                                        "40000001", "boss", actor, "player"])
+
     def test_older_mechanic_loss_cannot_clear_newer_local_mark(self):
         with Endpoint() as endpoint:
             client = self.client(endpoint)
             host = Host(client)
             host._dispatch_umad_chain_actions([("mark", A, "attack1")])
+            self.drain(client, endpoint)
             host._dispatch_umad_gaze_actions([("mark", A, "ignore1")])
             host._dispatch_umad_chain_actions([("clear", A)])
             self.drain(client, endpoint)
@@ -170,7 +195,10 @@ class AutomarkerPipelineTests(unittest.TestCase):
         with Endpoint() as endpoint:
             client = self.client(endpoint)
             host = Host(client)
-            host._dispatch_umad_chain_actions([("mark", A, "attack1"), ("mark", B, "attack1")])
+            host._dispatch_umad_chain_actions([("mark", A, "attack1")])
+            self.drain(client, endpoint)
+            host._dispatch_umad_chain_actions([("mark", B, "attack1")])
+            self.drain(client, endpoint)
             host._dispatch_umad_gaze_actions([("mark", A, "ignore1")])
             host._dispatch_umad_chain_actions([("clear", A)])
             self.drain(client, endpoint)
@@ -182,6 +210,7 @@ class AutomarkerPipelineTests(unittest.TestCase):
             client = self.client(endpoint)
             host = Host(client)
             host._dispatch_umad_chain_actions([("mark", A, "attack1")])
+            self.drain(client, endpoint)
             client._update_party_slots(b'{"response":[]}')
             host._dispatch_umad_chain_actions([("clear", A)])
             self.assertEqual(host._umad_chain_pending, [("clear", A)])
@@ -595,6 +624,31 @@ class AutomarkerPipelineTests(unittest.TestCase):
             self.drain(client, endpoint)
             self.assertEqual(endpoint.commands, ["/mk ignore1 <1>", "/mk ignore2 <2>"])
 
+    def test_expired_incomplete_gaze_cannot_reach_telesto_or_consume_a_wave(self):
+        for tell_first in (True, False):
+            with self.subTest(tell_first=tell_first), Endpoint() as endpoint:
+                client = self.client(endpoint)
+                host = Host(client)
+                clock = [time.monotonic()]
+                with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", side_effect=lambda: clock[0]):
+                    if tell_first:
+                        host.tell("first")
+                    host.gain(A, "1")
+                    if not tell_first:
+                        host.gain(B, "10")
+                    clock[0] += 1.1
+                    if tell_first:
+                        host.gain(B, "10")
+                    else:
+                        host.tell("first")
+                    self.drain(client, endpoint)
+                    self.assertEqual(endpoint.commands, [])
+                    self.assertEqual(host._umad_gaze._sets_done, 0)
+                    host.tell("second", "461")
+                    host.gain(C, "10")
+                    self.drain(client, endpoint)
+                self.assertEqual(endpoint.commands, ["/mk bind1 <2>", "/mk bind2 <3>"])
+
     def test_recorded_same_polarity_gaze_waves_and_losses_reach_exact_slots(self):
         case = json.loads((Path(__file__).parent / "fixtures/umad_gazes.json").read_text())[0]
         with Endpoint() as endpoint:
@@ -609,6 +663,7 @@ class AutomarkerPipelineTests(unittest.TestCase):
                         host._umad_gaze_cast(fields)
                     else:
                         host._umad_gaze_line(fields)
+                self.drain(client, endpoint)
             self.drain(client, endpoint)
             self.assertEqual(endpoint.commands, ["/mk bind1 <2>", "/mk bind2 <4>",
                                                  "/mk clear <2>", "/mk bind1 <1>",
@@ -635,20 +690,111 @@ class AutomarkerPipelineTests(unittest.TestCase):
                 with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=now):
                     host._umad_chain_line(["26", "ts", status, "status", "60",
                                            "E0000000", "", actor, "player"])
+            self.drain(client, endpoint)
             with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=now + 1.2):
                 host._on_umad_chain_flush()
             for status in ("BBC", "154E", "154E"):
                 with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=now + 2):
                     host._umad_chain_line(["26", "ts", status, "status", "60",
                                            "E0000000", "", A, "player"])
+            self.drain(client, endpoint)
             for index, actor in enumerate((A, A, B, C)):
                 with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=now + 3 + index):
                     host._umad_chain_line(["30", "ts", "154E", "status", "0",
                                            "E0000000", "", actor, "player"])
+                self.drain(client, endpoint)
             self.drain(client, endpoint)
             self.assertEqual(endpoint.commands, ["/mk attack2 <5>", "/mk attack3 <4>",
                                                  "/mk attack1 <1>", "/mk attack1 <2>",
                                                  "/mk attack1 <3>", "/mk clear <3>"])
+
+    def test_chain_handoff_cancels_the_unattempted_finished_holder(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint)
+            host = Host(client)
+            host._umad_chain_enabled = True
+            host._umad_chains = BlackHoleChains({A: "dps", B: "dps", C: "dps"}.get,
+                                               include_accretion=False)
+            for actor, status in ((D, "644"), ("10000005", "644"),
+                                  (A, "BBC"), (A, "154E"), (B, "BBD"), (B, "154E"),
+                                  (C, "BBE"), (C, "154E")):
+                host._umad_chain_line(["26", "ts", status, "Status", "120",
+                                       "40000001", "Chaos", actor, "Player"])
+            first = host._automark_deliveries[A][0].delivery
+            host._umad_chain_line(["30", "ts", "154E", "Status", "0",
+                                   "40000001", "Chaos", A, "Player"])
+            self.assertTrue(first.cancelled)
+            self.assertFalse(first.pending or first.attempted)
+            self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands, ["/mk attack1 <2>"])
+
+    def test_new_actor_or_sign_claim_cancels_only_superseded_unattempted_marks(self):
+        for transfer in (False, True):
+            with self.subTest(transfer=transfer), Endpoint() as endpoint:
+                client = self.client(endpoint)
+                host = Host(client)
+                host._dispatch_mark_actions([("mark", A, "triangle"), ("mark", C, "square")],
+                                            [], owner="chains")
+                old = host._automark_deliveries[A][0].delivery
+                unrelated = host._automark_deliveries[C][0].delivery
+                replacement = ("mark", B, "triangle") if transfer else ("mark", A, "ignore1")
+                host._dispatch_mark_actions([replacement], [], owner="gaze")
+                self.assertTrue(old.cancelled)
+                self.assertFalse(unrelated.cancelled)
+                self.drain(client, endpoint)
+                expected = "/mk triangle <2>" if transfer else "/mk ignore1 <1>"
+                self.assertEqual(endpoint.commands, ["/mk square <3>", expected])
+
+    def test_rejected_replacement_enqueue_keeps_the_previous_queued_mark(self):
+        for transfer in (False, True):
+            with self.subTest(transfer=transfer), Endpoint() as endpoint:
+                client = self.client(endpoint, max_queue=1)
+                host = Host(client)
+                host._dispatch_mark_actions([("mark", A, "triangle")], [], owner="chains")
+                old = host._automark_deliveries[A][0].delivery
+                replacement = ("mark", B, "triangle") if transfer else ("mark", A, "ignore1")
+                pending = host._dispatch_mark_actions([replacement], [], owner="gaze")
+                self.assertEqual(pending, [replacement])
+                self.assertTrue(old.pending)
+                self.assertFalse(old.cancelled)
+                self.drain(client, endpoint)
+                self.assertEqual(endpoint.commands, ["/mk triangle <1>"])
+
+    def test_superseding_an_unattempted_rule_releases_its_unused_cooldown(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint)
+            host = self.rule_host(client, "ABC")
+            clock = [1000.0]
+            with patch("time.monotonic", side_effect=lambda: clock[0]):
+                self.rule_gain(host, "ABC")
+                old = host._automark_deliveries[A][0].delivery
+                clock[0] += .1
+                host._dispatch_mark_actions([("mark", A, "ignore1")], [], owner="gaze")
+                self.assertTrue(old.cancelled)
+                clock[0] += .1
+                self.rule_gain(host, "ABC")
+                self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands, ["/mk triangle <1>"])
+
+    def test_superseded_attempted_mark_keeps_cleanup_if_replacement_is_rejected(self):
+        for transfer in (False, True):
+            with self.subTest(transfer=transfer), Endpoint() as endpoint:
+                client = self.client(endpoint)
+                host = Host(client)
+                host._dispatch_mark_actions([("mark", A, "triangle")], [], owner="chains")
+                self.drain(client, endpoint)
+                old = host._automark_deliveries[A][0].delivery
+                self.assertTrue(old.attempted and old.current)
+                command = "/mk triangle <2>" if transfer else "/mk ignore1 <1>"
+                endpoint.command_codes[command] = 503
+                replacement = ("mark", B, "triangle") if transfer else ("mark", A, "ignore1")
+                host._dispatch_mark_actions([replacement], [], owner="gaze")
+                self.assertFalse(old.cancelled)
+                self.drain(client, endpoint)
+                self.assertTrue(old.current)
+                host._dispatch_mark_actions([("clear", A)], [], owner="chains")
+                self.drain(client, endpoint)
+                self.assertEqual(endpoint.commands, ["/mk triangle <1>", command, "/mk clear <1>"])
 
     def test_overdue_queued_mark_is_dropped_while_cleanup_still_runs(self):
         with Endpoint() as endpoint:
@@ -659,6 +805,821 @@ class AutomarkerPipelineTests(unittest.TestCase):
                 client.clear_actor(A)
             self.drain(client, endpoint)
             self.assertEqual(endpoint.commands, ["/mk clear <1>"])
+
+    def test_grand_cross_losses_cancel_marks_before_transport_attempts(self):
+        for mechanic in ("bomb", "lightning"):
+            with self.subTest(mechanic=mechanic), Endpoint() as endpoint:
+                client = self.client(endpoint)
+                host, status, actors = self.grand_cross_host(client, mechanic)
+                entered, release = threading.Event(), threading.Event()
+
+                def delay(_stopping):
+                    entered.set()
+                    release.wait(3)
+
+                try:
+                    with patch.object(client, "_sleep_command_delay", side_effect=delay):
+                        self.grand_cross_wave(host, status, actors)
+                        client.start()
+                        self.assertTrue(entered.wait(2))
+                        for actor in actors:
+                            host._umad_grand_cross_line(["30", "loss", status, "status", "0",
+                                                        "40000001", "boss", actor, "player"])
+                        self.assertEqual(endpoint.commands, [])
+                        self.assertTrue(all(not claim.delivery.pending
+                                            for claims in host._automark_deliveries.values()
+                                            for claim in claims))
+                        release.set()
+                        self.drain(client, endpoint)
+                    self.assertEqual(endpoint.commands, [])
+                    self.assertEqual(host._umad_grand_cross[mechanic].outstanding(), [])
+                finally:
+                    release.set()
+
+    def test_grand_cross_expiry_or_reset_cancels_queued_transport(self):
+        for mechanic in ("bomb", "lightning"):
+            for boundary in ("expiry", "reset", "clear reset", "other duty"):
+                with self.subTest(mechanic=mechanic, boundary=boundary), Endpoint() as endpoint:
+                    client = self.client(endpoint)
+                    host, status, actors = self.grand_cross_host(client, mechanic)
+                    now = time.monotonic()
+                    with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=now):
+                        self.grand_cross_wave(host, status, actors, duration=3)
+                    if boundary == "expiry":
+                        with patch("nyaatriggers.ui.automarkers_tab.time.monotonic", return_value=now + 3):
+                            host._retry_umad_grand_cross_pending()
+                    elif boundary == "other duty":
+                        host._current_fight_tag = "FRU"
+                        host._retry_umad_grand_cross_pending()
+                    else:
+                        host._umad_grand_cross_reset(clear_marks=boundary == "clear reset")
+                    self.drain(client, endpoint)
+                    self.assertEqual(endpoint.commands, [])
+                    self.assertEqual(host._umad_grand_cross[mechanic].outstanding(), [])
+
+    def test_grand_cross_delivery_deadline_survives_delayed_roster_and_timer_flush(self):
+        for mechanic in ("bomb", "lightning"):
+            for boundary in ("queued", "delay", "post"):
+                with self.subTest(mechanic=mechanic, boundary=boundary), Endpoint() as endpoint:
+                    client = self.client(endpoint, roster=False)
+                    host, status, actors = self.grand_cross_host(client, mechanic)
+                    now = time.monotonic()
+                    clock = [now]
+                    with patch("time.monotonic", side_effect=lambda: clock[0]):
+                        self.grand_cross_wave(host, status, actors, duration=51)
+                        self.assertEqual(len(host._umad_grand_cross_pending[mechanic]), len(actors))
+                        client._update_party_slots(json.dumps({"response": [
+                            {"actor": actor, "order": index}
+                            for index, actor in enumerate(actors, 1)]}).encode())
+                        clock[0] = now + 25
+                        host._retry_umad_grand_cross_pending()
+                        self.assertFalse(host._umad_grand_cross_pending[mechanic])
+                        self.assertEqual(len(host._automark_deliveries), len(actors))
+                        if boundary == "queued":
+                            clock[0] = now + 51.1
+
+                        def expire(_argument):
+                            clock[0] = now + 51.1
+
+                        post = client._post
+
+                        def expire_before_post(message):
+                            expire(message)
+                            post(message)
+
+                        with patch.object(client, "_sleep_command_delay",
+                                          side_effect=expire if boundary == "delay" else None), \
+                                patch.object(client, "_post",
+                                             side_effect=expire_before_post if boundary == "post" else post):
+                            while not client._queue.empty():
+                                item = client._queue.get_nowait()
+                                try:
+                                    client._send_queued(item, client._stopping)
+                                finally:
+                                    client._finish_delivery(item)
+                    self.assertEqual(endpoint.commands, [])
+                    self.assertTrue(all(not claim.delivery.pending and not claim.delivery.current
+                                        for claims in host._automark_deliveries.values() for claim in claims))
+
+    def test_raw_loss_cancels_unattempted_marks_with_auto_cleanse_disabled(self):
+        for status in ("15AA", "15AA+15A7"):
+            for self_target in (False, True):
+                with self.subTest(status=status, self_target=self_target), Endpoint() as endpoint:
+                    client = self.client(endpoint)
+                    host = self.rule_host(client, status)
+                    host._me_id = A if self_target else ""
+                    host._automark_clear_on_loss = False
+                    self.rule_gain(host, status)
+                    delivery = host._automark_deliveries[A][-1].delivery
+                    host._match_automark_unmark(["30", "loss", "FFFF", "status", "0",
+                                               "E0000000", "", A, "player"])
+                    self.assertFalse(delivery.cancelled)
+                    host._match_automark_unmark(["30", "loss", "15AA", "status", "0",
+                                               "E0000000", "", A, "player"])
+                    self.drain(client, endpoint)
+                    self.assertEqual(endpoint.commands, [])
+                    self.assertTrue(delivery.cancelled)
+                    self.assertFalse(host._automark_active)
+                    self.assertFalse(host._automark_owners)
+                    self.assertFalse(host._automark_cleanup)
+                    self.assertFalse(host._automark_cooldowns)
+
+    def test_gaze_and_rule_delivery_expiry_is_checked_before_delay_and_post(self):
+        for feature in ("gaze", "rule"):
+            for boundary in ("queued", "delay", "post"):
+                with self.subTest(feature=feature, boundary=boundary), Endpoint() as endpoint:
+                    client = self.client(endpoint)
+                    host = Host(client) if feature == "gaze" else self.rule_host(client, "ABC")
+                    now = time.monotonic()
+                    clock = [now]
+                    with patch("time.monotonic", side_effect=lambda: clock[0]):
+                        if feature == "gaze":
+                            host.tell()
+                            host.gain(A, "3")
+                            host.gain(B, "3")
+                        else:
+                            host._match_automark_rules(["26", "gain", "ABC", "status", "3",
+                                                       "E0000000", "", A, "player"])
+                        if boundary == "queued":
+                            clock[0] = now + 3.1
+
+                        def expire(_argument):
+                            clock[0] = now + 3.1
+
+                        post = client._post
+
+                        def expire_before_post(message):
+                            expire(message)
+                            post(message)
+
+                        with patch.object(client, "_sleep_command_delay",
+                                          side_effect=expire if boundary == "delay" else None), \
+                                patch.object(client, "_post",
+                                             side_effect=expire_before_post if boundary == "post" else post):
+                            while not client._queue.empty():
+                                item = client._queue.get_nowait()
+                                try:
+                                    client._send_queued(item, client._stopping)
+                                finally:
+                                    client._finish_delivery(item)
+                    self.assertEqual(endpoint.commands, [])
+                    self.assertTrue(all(not claim.delivery.pending and not claim.delivery.current
+                                        for claims in host._automark_deliveries.values() for claim in claims))
+
+    def test_raw_refresh_updates_pending_delivery_without_resetting_its_command_age(self):
+        for duration, dispatch_at, expected in ((6, 3.1, ["/mk triangle <1>"]), (1, 3.1, []),
+                                                (60, MAX_COMMAND_AGE_S + 1, [])):
+            with self.subTest(duration=duration), Endpoint() as endpoint:
+                client = self.client(endpoint)
+                host = self.rule_host(client, "ABC")
+                now = time.monotonic()
+                clock = [now]
+                with patch("time.monotonic", side_effect=lambda: clock[0]):
+                    gain = ["26", "gain", "ABC", "status", "3", "E0000000", "", A, "player"]
+                    host._match_automark_rules(gain)
+                    clock[0] = now + 2
+                    gain[4] = str(duration)
+                    host._match_automark_rules(gain)
+                    self.assertEqual(len(host._automark_deliveries[A]), 1)
+                    self.assertEqual(host._automark_deliveries[A][0].delivery.expires_at, now + 2 + duration)
+                    clock[0] = now + dispatch_at
+                    while not client._queue.empty():
+                        item = client._queue.get_nowait()
+                        try:
+                            client._send_queued(item, client._stopping)
+                        finally:
+                            client._finish_delivery(item)
+                self.assertEqual(endpoint.commands, expected)
+
+    def test_gaze_and_rule_expiry_preserves_attempted_claims_and_unbounded_cleanup(self):
+        for feature in ("gaze", "rule"):
+            with self.subTest(feature=feature), Endpoint() as endpoint:
+                client = self.client(endpoint)
+                host = Host(client) if feature == "gaze" else self.rule_host(client, "ABC")
+                now = time.monotonic()
+                clock = [now]
+                endpoint.stall = True
+                try:
+                    with patch("time.monotonic", side_effect=lambda: clock[0]):
+                        if feature == "gaze":
+                            host.tell()
+                            host.gain(A, "3")
+                            host.gain(B, "3")
+                        else:
+                            host._match_automark_rules(["26", "gain", "ABC", "status", "3",
+                                                       "E0000000", "", A, "player"])
+                        client.start()
+                        self.assertTrue(endpoint.entered.wait(2))
+                        delivery = host._automark_deliveries[A][0].delivery
+                        self.assertTrue(delivery.current)
+                        clock[0] = now + 4
+                        self.assertFalse(client.update_pending_mark_expiry(delivery, None))
+                        if feature == "gaze":
+                            host._on_umad_gaze_flush()
+                        else:
+                            host._match_automark_unmark(["30", "loss", "ABC", "status", "0",
+                                                       "E0000000", "", A, "player"])
+                        self.assertFalse(delivery.cancelled)
+                        queued_cleanup = [item for item in list(client._queue.queue) if item[6] is not None]
+                        self.assertTrue(queued_cleanup)
+                        self.assertTrue(all(item[8] is None for item in queued_cleanup))
+                        endpoint.stall = False
+                        endpoint.release.set()
+                        self.drain(client, endpoint)
+                    marker = "ignore1" if feature == "gaze" else "triangle"
+                    self.assertEqual(endpoint.commands, [f"/mk {marker} <1>", "/mk clear <1>"])
+                    self.assertFalse(delivery.current)
+                finally:
+                    endpoint.stall = False
+                    endpoint.release.set()
+
+    def test_raw_roster_retry_refreshes_its_deadline_when_pending_capacity_is_full(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint, roster=False)
+            host = self.rule_host(client, "ABC")
+            host._automark_rules = [{"status": f"{0xABC + index:X}", "marker": "circle", "scope": "party"}
+                                    for index in range(16)]
+            now = time.monotonic()
+            clock = [now]
+            with patch("time.monotonic", side_effect=lambda: clock[0]):
+                for rule in host._automark_rules:
+                    host._match_automark_rules(["26", "gain", rule["status"], "status", "3",
+                                               "E0000000", "", A, "player"])
+                self.assertEqual(len(host._automark_pending), 16)
+                clock[0] = now + 2
+                host._match_automark_rules(["26", "refresh", "ABC", "status", "6",
+                                           "E0000000", "", A, "player"])
+                self.assertEqual(len(host._automark_pending), 16)
+                self.assertEqual(host._automark_pending[0][3], now)
+                self.assertEqual(host._automark_pending[0][6], host._automark_rules[0])
+                self.assertEqual(host._automark_pending[0][7], now + 8)
+                clock[0] = now + 3.1
+                client._update_party_slots(b'{"response":[{"actor":"10000001","order":1}]}')
+                host._retry_automark_pending()
+                self.assertFalse(host._automark_pending)
+                while not client._queue.empty():
+                    item = client._queue.get_nowait()
+                    try:
+                        client._send_queued(item, client._stopping)
+                    finally:
+                        client._finish_delivery(item)
+            self.assertEqual(endpoint.commands, ["/mk circle <1>"])
+
+    def test_expired_roster_retries_do_not_discard_a_fresh_status_at_capacity(self):
+        for duration, elapsed in (("3", 3.1), ("0", MAX_COMMAND_AGE_S + 0.1)):
+            with self.subTest(duration=duration), Endpoint() as endpoint:
+                client = self.client(endpoint, roster=False)
+                host = self.rule_host(client, "ABC")
+                host._automark_rules = [
+                    {"status": f"{0xABC + index:X}", "marker": "circle", "scope": "party"}
+                    for index in range(16)]
+                host._automark_rules.append({"status": "DEF", "marker": "square", "scope": "party"})
+                now = time.monotonic()
+                clock = [now]
+                with patch("time.monotonic", side_effect=lambda: clock[0]):
+                    for rule in host._automark_rules[:16]:
+                        host._match_automark_rules(["26", "gain", rule["status"], "status", duration,
+                                                   "E0000000", "", A, "player"])
+                    self.assertEqual(len(host._automark_pending), 16)
+                    clock[0] = now + elapsed
+                    host._match_automark_rules(["26", "fresh", "DEF", "status", "60",
+                                               "E0000000", "", A, "player"])
+                    self.assertEqual(len(host._automark_pending), 1)
+                    self.assertEqual(host._automark_pending[0][4], "DEF")
+                    self.assertEqual(host._automark_pending[0][3], clock[0])
+                    client._update_party_slots(b'{"response":[{"actor":"10000001","order":1}]}')
+                    host._retry_automark_pending()
+                    while not client._queue.empty():
+                        item = client._queue.get_nowait()
+                        try:
+                            client._send_queued(item, client._stopping)
+                        finally:
+                            client._finish_delivery(item)
+                self.assertEqual(endpoint.commands, ["/mk square <1>"])
+
+    def test_expired_unsent_rule_does_not_block_a_fresh_roster_retry(self):
+        for boundary in ("queued status", "finished status", "queued command", "finished command"):
+            for identity in ("party", "id", "name"):
+                self_target = identity != "party"
+                with self.subTest(boundary=boundary, identity=identity), Endpoint() as endpoint:
+                    client = self.client(endpoint)
+                    host = self.rule_host(client, "ABC")
+                    host._me_id = A if identity == "id" else ""
+                    host._me_name = "player" if identity == "name" else ""
+                    host._automark_rules.append({"status": "DEF", "marker": "square", "scope": "party"})
+                    clock = [time.monotonic()]
+                    with patch("time.monotonic", side_effect=lambda: clock[0]):
+                        duration = "120" if "command" in boundary else "3"
+                        host._match_automark_rules(["26", "gain", "ABC", "status", duration,
+                                                   "40000001", "boss", A, "player"])
+                        expired = host._automark_deliveries[A][-1].delivery
+                        clock[0] += MAX_COMMAND_AGE_S + .1 if "command" in boundary else 3.1
+                        if boundary.startswith("finished"):
+                            self.drain(client, endpoint)
+                        self.assertFalse(expired.current)
+                        client._update_party_slots(b'{"response":[]}')
+                        with patch.object(client, "mark_self", return_value=False) if self_target else nullcontext():
+                            host._match_automark_rules(["26", "fresh", "DEF", "status", "60",
+                                                       "40000001", "boss", A, "player"])
+                        self.assertEqual(len(host._automark_pending), 1)
+                        client._update_party_slots(b'{"response":[{"actor":"10000001","order":1}]}')
+                        host._retry_automark_pending()
+                        self.assertFalse(host._automark_pending)
+                        self.drain(client, endpoint)
+                    target = "me" if self_target else "1"
+                    self.assertEqual(endpoint.commands, [f"/mk square <{target}>"])
+                    self.assertEqual(host._automark_active, {"me" if self_target else A: "DEF"})
+                    self.assertEqual(host._automark_owners, {A: ("rule", "square")})
+                    self.assertEqual(len(host._automark_deliveries[A]), 1)
+
+    def test_expired_rule_replacement_restores_a_delivered_owner_before_retry(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint)
+            host = self.rule_host(client, "ABC")
+            host._automark_rules.extend({"status": effect, "marker": marker, "scope": "party"}
+                                       for effect, marker in (("DEF", "square"), ("123", "circle")))
+            clock = [time.monotonic()]
+            with patch("time.monotonic", side_effect=lambda: clock[0]):
+                self.rule_gain(host, "ABC")
+                self.drain(client, endpoint)
+                current = host._automark_deliveries[A][-1].delivery
+                host._match_automark_rules(["26", "gain", "DEF", "status", "3",
+                                           "40000001", "boss", A, "player"])
+                expired = host._automark_deliveries[A][-1].delivery
+                clock[0] += 3.1
+                client._update_party_slots(b'{"response":[]}')
+                host._match_automark_rules(["26", "fresh", "123", "status", "60",
+                                           "40000001", "boss", A, "player"])
+                client._update_party_slots(b'{"response":[{"actor":"10000001","order":1}]}')
+                host._retry_automark_pending()
+                self.assertFalse(host._automark_pending)
+                self.assertTrue(expired.cancelled)
+                self.assertTrue(current.current)
+                self.assertEqual(host._automark_active, {A: "ABC"})
+                self.assertEqual(host._automark_owners, {A: ("rule", "triangle")})
+                host._match_automark_unmark(["30", "loss", "ABC", "status", "0",
+                                           "40000001", "boss", A, "player"])
+                self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands, ["/mk triangle <1>", "/mk clear <1>"])
+            self.assertFalse(current.current)
+
+    def test_expired_delivered_rule_keeps_its_owner_until_cleanup(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint)
+            host = self.rule_host(client, "ABC")
+            host._automark_rules.append({"status": "DEF", "marker": "square", "scope": "party"})
+            clock = [time.monotonic()]
+            with patch("time.monotonic", side_effect=lambda: clock[0]):
+                host._match_automark_rules(["26", "gain", "ABC", "status", "3",
+                                           "40000001", "boss", A, "player"])
+                self.drain(client, endpoint)
+                current = host._automark_deliveries[A][-1].delivery
+                clock[0] += 3.1
+                client._update_party_slots(b'{"response":[]}')
+                host._match_automark_rules(["26", "fresh", "DEF", "status", "60",
+                                           "40000001", "boss", A, "player"])
+                client._update_party_slots(b'{"response":[{"actor":"10000001","order":1}]}')
+                host._retry_automark_pending()
+                self.assertTrue(current.current)
+                self.assertFalse(current.cancelled)
+                self.assertEqual(host._automark_active, {A: "ABC"})
+                host._match_automark_unmark(["30", "loss", "ABC", "status", "0",
+                                           "40000001", "boss", A, "player"])
+                self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands, ["/mk triangle <1>", "/mk clear <1>"])
+
+    def test_expired_unattempted_rule_releases_cooldown_for_a_fresh_gain(self):
+        for boundary in ("queued", "finished"):
+            for identity in ("party", "id", "name"):
+                self_target = identity != "party"
+                with self.subTest(boundary=boundary, identity=identity), Endpoint() as endpoint:
+                    client = self.client(endpoint)
+                    host = self.rule_host(client, "ABC")
+                    host._me_id = A if identity == "id" else ""
+                    host._me_name = "player" if identity == "name" else ""
+                    clock = [time.monotonic()]
+                    with patch("time.monotonic", side_effect=lambda: clock[0]):
+                        fields = ["26", "gain", "ABC", "status", "1",
+                                  "40000001", "boss", A, "player"]
+                        host._match_automark_rules(fields)
+                        expired = host._automark_deliveries[A][-1].delivery
+                        clock[0] += 1.1
+                        if boundary == "finished":
+                            self.drain(client, endpoint)
+                        self.assertFalse(expired.attempted)
+                        fields[4] = "60"
+                        host._match_automark_rules(fields)
+                        self.drain(client, endpoint)
+                        self.assertTrue(host._automark_deliveries[A][-1].delivery.attempted)
+                        host._match_automark_rules(fields)
+                        self.drain(client, endpoint)
+                    target = "me" if self_target else "1"
+                    self.assertEqual(endpoint.commands, [f"/mk triangle <{target}>"])
+
+    def test_attempted_rule_retains_its_cooldown_after_http_failure(self):
+        with Endpoint() as endpoint:
+            endpoint.code = 400
+            client = self.client(endpoint)
+            host = self.rule_host(client, "ABC")
+            clock = [time.monotonic()]
+            with patch("time.monotonic", side_effect=lambda: clock[0]):
+                fields = ["26", "gain", "ABC", "status", "1",
+                          "40000001", "boss", A, "player"]
+                host._match_automark_rules(fields)
+                delivery = host._automark_deliveries[A][-1].delivery
+                self.drain(client, endpoint)
+                self.assertTrue(delivery.attempted)
+                self.assertFalse(delivery.current)
+                clock[0] += 1.1
+                fields[4] = "60"
+                host._match_automark_rules(fields)
+                self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands, ["/mk triangle <1>"])
+
+    def test_worker_rejection_before_rule_claim_does_not_block_a_fresh_retry(self):
+        for boundary in ("gain", "roster retry"):
+            with self.subTest(boundary=boundary), Endpoint() as endpoint:
+                endpoint.code = 400
+                client = self.client(endpoint, roster=boundary == "gain")
+                host = self.rule_host(client, "ABC")
+                host._automark_cleanup = set()
+                fields = ["26", "gain", "ABC", "status", "60",
+                          "40000001", "boss", A, "player"]
+                if boundary == "roster retry":
+                    host._match_automark_rules(fields)
+                    client._update_party_slots(b'{"response":[{"actor":"10000001","order":1}]}')
+                client.start()
+                original = AutomarkersTabMixin._claim_automark
+                deliveries = []
+
+                def claim_after_response(window, actor, marker, owner, delivery=None, status=None, **kwargs):
+                    self.assertTrue(wait_for(lambda: not delivery.pending))
+                    deliveries.append(delivery)
+                    original(window, actor, marker, owner, delivery, status, **kwargs)
+
+                with patch.object(AutomarkersTabMixin, "_claim_automark", claim_after_response):
+                    if boundary == "gain":
+                        host._match_automark_rules(fields)
+                    else:
+                        host._retry_automark_pending()
+                self.assertTrue(deliveries[0].attempted)
+                self.assertFalse(deliveries[0].current)
+                self.assertEqual(host._automark_active, {})
+                self.assertEqual(host._automark_owners, {})
+                self.assertEqual(host._automark_cleanup, set())
+                host._match_automark_rules(fields)
+                self.drain(client, endpoint)
+                self.assertEqual(endpoint.commands, ["/mk triangle <1>"])
+                endpoint.code = 200
+                client._update_party_slots(b'{"response":[]}')
+                host._automark_rules.append({"status": "DEF", "marker": "circle", "scope": "party"})
+                fields[2] = "DEF"
+                host._match_automark_rules(fields)
+                self.assertEqual(len(host._automark_pending), 1)
+                client._update_party_slots(b'{"response":[{"actor":"10000001","order":1}]}')
+                host._retry_automark_pending()
+                self.drain(client, endpoint)
+                self.assertEqual(endpoint.commands, ["/mk triangle <1>", "/mk circle <1>"])
+                self.assertEqual(host._automark_active, {A: "DEF"})
+
+    def test_worker_rejection_before_replacement_claim_restores_the_delivered_owner(self):
+        for boundary in ("mechanic", "gain", "roster retry"):
+            for self_target in (False, True):
+                with self.subTest(boundary=boundary, self_target=self_target), Endpoint() as endpoint:
+                    client = self.client(endpoint)
+                    host = self.rule_host(client, "ABC")
+                    host._me_id = A if self_target else ""
+                    self.rule_gain(host, "ABC")
+                    self.drain(client, endpoint)
+                    current = host._automark_deliveries[A][-1].delivery
+                    target = "me" if self_target else "1"
+                    endpoint.command_codes[f"/mk circle <{target}>"] = 400
+                    host._automark_rules.append({"status": "DEF", "marker": "circle", "scope": "party"})
+                    fields = ["26", "gain", "DEF", "status", "60",
+                              "40000001", "boss", A, "player"]
+                    if boundary == "roster retry":
+                        with patch.object(host, "_mark_player", return_value=False):
+                            host._match_automark_rules(fields)
+                        host._automark_active.clear()
+                    original = AutomarkersTabMixin._claim_automark
+
+                    def claim_after_response(window, actor, marker, owner, delivery=None, status=None, **kwargs):
+                        self.assertTrue(wait_for(lambda: not delivery.pending))
+                        self.assertTrue(delivery.attempted)
+                        self.assertFalse(delivery.current)
+                        original(window, actor, marker, owner, delivery, status, **kwargs)
+
+                    with patch.object(AutomarkersTabMixin, "_claim_automark", claim_after_response):
+                        if boundary == "mechanic":
+                            self.assertEqual(host._dispatch_mark_actions(
+                                [("mark", A, "circle")], [], owner="gaze"), [])
+                        elif boundary == "gain":
+                            host._match_automark_rules(fields)
+                        else:
+                            host._retry_automark_pending()
+                    self.assertEqual(host._automark_active, {"me" if self_target else A: "ABC"})
+                    self.assertEqual(host._automark_owners, {A: ("rule", "triangle")})
+                    self.assertEqual([claim.delivery for claim in host._automark_deliveries[A]], [current])
+                    host._match_automark_unmark(["30", "loss", "ABC", "status", "0",
+                                               "40000001", "boss", A, "player"])
+                    self.drain(client, endpoint)
+                    self.assertEqual(endpoint.commands, [f"/mk triangle <{target}>",
+                                                         f"/mk circle <{target}>", f"/mk clear <{target}>"])
+                    self.assertFalse(current.current)
+
+    def test_successful_roster_retry_starts_the_rule_cooldown(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint, roster=False)
+            host = self.rule_host(client, "ABC")
+            clock = [time.monotonic()]
+            with patch("time.monotonic", side_effect=lambda: clock[0]):
+                fields = ["26", "gain", "ABC", "status", "60",
+                          "40000001", "boss", A, "player"]
+                host._match_automark_rules(fields)
+                host._retry_automark_pending()
+                self.assertEqual(len(host._automark_pending), 1)
+                self.assertFalse(host._automark_cooldowns)
+                clock[0] += 5
+                client._update_party_slots(b'{"response":[{"actor":"10000001","order":1}]}')
+                host._retry_automark_pending()
+                self.assertFalse(host._automark_pending)
+                self.assertEqual(host._automark_cooldowns, {("ABC", A, "triangle"): clock[0]})
+                retried_at = clock[0]
+                clock[0] = retried_at + .1
+                host._match_automark_rules(fields)
+                self.drain(client, endpoint)
+                self.assertEqual(endpoint.commands, ["/mk triangle <1>"])
+                clock[0] = retried_at + 3
+                host._match_automark_rules(fields)
+                self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands, ["/mk triangle <1>", "/mk triangle <1>"])
+
+    def test_older_expired_command_cannot_release_a_newer_attempted_cooldown(self):
+        with Endpoint() as endpoint:
+            endpoint.code = 400
+            client = self.client(endpoint)
+            host = self.rule_host(client, "ABC")
+            clock = [1000.0]
+            with patch("time.monotonic", side_effect=lambda: clock[0]):
+                fields = ["26", "gain", "ABC", "status", "120",
+                          "40000001", "boss", A, "player"]
+                host._match_automark_rules(fields)
+                old = host._automark_deliveries[A][-1].delivery
+                clock[0] = 1029.0
+                host._match_automark_rules(fields)
+                newer = host._automark_deliveries[A][-1].delivery
+                self.assertEqual(old.command_expires_at, 1030)
+                self.assertEqual(newer.command_expires_at, 1059)
+                clock[0] = 1030.1
+                self.drain(client, endpoint)
+                self.assertFalse(old.attempted)
+                self.assertTrue(newer.attempted)
+                self.assertFalse(newer.current)
+                clock[0] = 1030.2
+                host._match_automark_rules(fields)
+                self.drain(client, endpoint)
+                self.assertEqual(host._automark_cooldowns, {("ABC", A, "triangle"): 1029})
+            self.assertEqual(endpoint.commands, ["/mk triangle <1>"])
+
+    def test_newer_unattempted_expiry_releases_its_own_cooldown(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint)
+            host = self.rule_host(client, "ABC")
+            clock = [1000.0]
+            with patch("time.monotonic", side_effect=lambda: clock[0]):
+                fields = ["26", "gain", "ABC", "status", "120",
+                          "40000001", "boss", A, "player"]
+                host._match_automark_rules(fields)
+                self.drain(client, endpoint)
+                old = host._automark_deliveries[A][-1].delivery
+                clock[0] = 1004.0
+                fields[4] = "1"
+                host._match_automark_rules(fields)
+                newer = host._automark_deliveries[A][-1].delivery
+                clock[0] = 1005.1
+                self.drain(client, endpoint)
+                self.assertTrue(old.attempted)
+                self.assertTrue(old.current)
+                self.assertFalse(newer.attempted)
+                clock[0] = 1005.2
+                fields[4] = "60"
+                host._match_automark_rules(fields)
+                self.drain(client, endpoint)
+                self.assertEqual(host._automark_cooldowns, {("ABC", A, "triangle"): 1005.2})
+            self.assertEqual(endpoint.commands, ["/mk triangle <1>", "/mk triangle <1>"])
+
+    def test_older_http_failure_cannot_keep_a_newer_unattempted_cooldown(self):
+        with Endpoint() as endpoint:
+            endpoint.stall = True
+            endpoint.code = 400
+            client = self.client(endpoint, timeout=10)
+            host = self.rule_host(client, "ABC")
+            clock = [1000.0]
+            try:
+                with patch("time.monotonic", side_effect=lambda: clock[0]):
+                    fields = ["26", "gain", "ABC", "status", "120",
+                              "40000001", "boss", A, "player"]
+                    host._match_automark_rules(fields)
+                    old = host._automark_deliveries[A][-1].delivery
+                    client.start()
+                    self.assertTrue(endpoint.entered.wait(2))
+                    clock[0] = 1004.0
+                    fields[4] = "1"
+                    host._match_automark_rules(fields)
+                    newer = host._automark_deliveries[A][-1].delivery
+                    clock[0] = 1005.1
+                    endpoint.stall = False
+                    endpoint.release.set()
+                    self.drain(client, endpoint)
+                    self.assertTrue(old.attempted)
+                    self.assertFalse(old.current)
+                    self.assertFalse(newer.attempted)
+                    clock[0] = 1005.2
+                    fields[4] = "60"
+                    host._match_automark_rules(fields)
+                    self.drain(client, endpoint)
+                    self.assertEqual(host._automark_cooldowns, {("ABC", A, "triangle"): 1005.2})
+                self.assertEqual(endpoint.commands, ["/mk triangle <1>", "/mk triangle <1>"])
+            finally:
+                endpoint.stall = False
+                endpoint.release.set()
+
+    def test_status_expiry_interrupts_a_stalled_reply_without_retiring_cleanup(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint, timeout=4)
+            host = self.rule_host(client, "ABC")
+            clock = [time.monotonic()]
+            finished = threading.Event()
+            finish = client._finish_delivery
+            endpoint.stall = True
+            try:
+                with patch("time.monotonic", side_effect=lambda: clock[0]):
+                    host._match_automark_rules(["26", "gain", "ABC", "status", "3",
+                                               "E0000000", "", A, "player"])
+                    delivery = host._automark_deliveries[A][0].delivery
+
+                    def finish_marker(item):
+                        finish(item)
+                        if item[-1] is delivery and item[6] is None:
+                            finished.set()
+
+                    with patch.object(client, "_finish_delivery", side_effect=finish_marker):
+                        client.start()
+                        self.assertTrue(endpoint.entered.wait(2))
+                        clock[0] += 4
+                        self.assertTrue(finished.wait(1))
+                        self.assertFalse(delivery.pending)
+                        self.assertTrue(delivery.current)
+                        host._match_automark_unmark(["30", "loss", "ABC", "status", "0",
+                                                   "E0000000", "", A, "player"])
+                        endpoint.stall = False
+                        endpoint.release.set()
+                        self.drain(client, endpoint)
+                self.assertEqual(endpoint.commands, ["/mk triangle <1>", "/mk clear <1>"])
+                self.assertFalse(delivery.current)
+            finally:
+                endpoint.stall = False
+                endpoint.release.set()
+
+    def test_raw_loss_with_auto_cleanse_disabled_preserves_earlier_delivered_owner(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint)
+            host = self.rule_host(client, "15A9")
+            host._settings["telesto_uri"] = endpoint.url
+            host._update_automark_status_label = lambda: None
+            host._automark_clear_on_loss = False
+            self.rule_gain(host, "15A9")
+            self.drain(client, endpoint)
+            host._automark_rules.append({"fight": "UMAD", "status": "15AA",
+                                        "marker": "circle", "scope": "any"})
+            self.rule_gain(host, "15AA")
+            host._match_automark_unmark(["30", "loss", "15AA", "status", "0",
+                                       "E0000000", "", A, "player"])
+            self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands, ["/mk triangle <1>"])
+            self.assertEqual(host._automark_active, {A: "15A9"})
+            self.assertEqual(host._automark_owners, {A: ("rule", "triangle")})
+            host._match_automark_unmark(["30", "loss", "15A9", "status", "0",
+                                       "E0000000", "", A, "player"])
+            self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands, ["/mk triangle <1>"])
+            host._settings["telesto_enabled"] = False
+            host._apply_automark_state()
+            self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands, ["/mk triangle <1>", "/mk clear <1>"])
+
+    def test_raw_loss_with_auto_cleanse_disabled_keeps_an_attempted_mark(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint)
+            host = self.rule_host(client, "15AA")
+            host._settings["telesto_uri"] = endpoint.url
+            host._update_automark_status_label = lambda: None
+            host._automark_clear_on_loss = False
+            endpoint.stall = True
+            try:
+                self.rule_gain(host, "15AA")
+                client.start()
+                self.assertTrue(endpoint.entered.wait(2))
+                delivery = host._automark_deliveries[A][-1].delivery
+                host._match_automark_unmark(["30", "loss", "15AA", "status", "0",
+                                           "E0000000", "", A, "player"])
+                self.assertFalse(delivery.cancelled)
+                endpoint.stall = False
+                endpoint.release.set()
+                self.drain(client, endpoint)
+                self.assertEqual(endpoint.commands, ["/mk triangle <1>"])
+                self.assertTrue(delivery.current)
+                host._settings["telesto_enabled"] = False
+                host._apply_automark_state()
+                self.drain(client, endpoint)
+                self.assertEqual(endpoint.commands, ["/mk triangle <1>", "/mk clear <1>"])
+            finally:
+                endpoint.stall = False
+                endpoint.release.set()
+
+    def test_grand_cross_cleanup_keeps_an_ambiguous_attempt(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint, timeout=.15)
+            host, status, actors = self.grand_cross_host(client, "lightning")
+            endpoint.stall = True
+            try:
+                self.grand_cross_wave(host, status, actors)
+                client.start()
+                self.assertTrue(endpoint.entered.wait(2))
+                delivery = host._automark_deliveries[A][0].delivery
+                self.assertTrue(delivery.current)
+                host._umad_grand_cross_line(["30", "loss", status, "status", "0",
+                                            "40000001", "boss", A, "player"])
+                self.assertFalse(delivery.cancelled)
+                self.assertTrue(wait_for(lambda: not delivery.pending))
+                endpoint.stall = False
+                endpoint.release.set()
+                self.drain(client, endpoint)
+                self.assertEqual(endpoint.commands, ["/mk attack1 <1>", "/mk attack2 <2>",
+                                                     "/mk clear <1>"])
+                self.assertFalse(delivery.current)
+            finally:
+                endpoint.stall = False
+                endpoint.release.set()
+
+    def test_pending_cancel_between_delay_and_post_never_reaches_endpoint(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint)
+            delivery = MarkerDelivery(int(A, 16), "attack1")
+            post = client._post
+
+            def cancel_before_post(message):
+                if message["type"] == "ExecuteCommand":
+                    self.assertTrue(client.cancel_pending_mark(delivery))
+                post(message)
+
+            with patch.object(client, "_post", side_effect=cancel_before_post):
+                self.assertTrue(client.mark_actor(A, "attack1", delivery=delivery))
+                self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands, [])
+            self.assertTrue(delivery.cancelled)
+            self.assertFalse(delivery.pending)
+            self.assertFalse(delivery.current)
+
+    def test_chain_and_gaze_reset_cancel_only_unattempted_deliveries(self):
+        for owner, method in (("chains", "chain"), ("gaze", "gaze")):
+            for boundary in ("reset", "other duty"):
+                for state in ("queued", "attempted", "delivered"):
+                    with self.subTest(owner=owner, boundary=boundary, state=state), Endpoint() as endpoint:
+                        client = self.client(endpoint)
+                        host = Host(client)
+                        host._settings["telesto_uri"] = endpoint.url
+                        host._update_automark_status_label = lambda: None
+                        host._current_fight_tag = ""
+                        dispatch = getattr(host, f"_dispatch_umad_{method}_actions")
+                        endpoint.stall = state == "attempted"
+                        try:
+                            dispatch([("mark", A, "triangle")])
+                            delivery = host._automark_deliveries[A][-1].delivery
+                            if state == "attempted":
+                                client.start()
+                                self.assertTrue(endpoint.entered.wait(2))
+                            elif state == "delivered":
+                                self.drain(client, endpoint)
+                            if boundary == "other duty":
+                                host._current_fight_tag = "FRU"
+                                dispatch([])
+                            else:
+                                getattr(host, f"_umad_{method}_reset")()
+                            self.assertEqual(delivery.cancelled, state == "queued")
+                            endpoint.stall = False
+                            endpoint.release.set()
+                            self.drain(client, endpoint)
+                            expected = [] if state == "queued" else ["/mk triangle <1>"]
+                            self.assertEqual(endpoint.commands, expected)
+                            host._settings["telesto_enabled"] = False
+                            host._apply_automark_state()
+                            self.drain(client, endpoint)
+                            self.assertEqual(endpoint.commands,
+                                             expected + (["/mk clear <1>"] if expected else []))
+                        finally:
+                            endpoint.stall = False
+                            endpoint.release.set()
 
     def test_repeated_wipes_clear_rule_marks_once_before_new_pull_marks(self):
         with Endpoint() as endpoint:

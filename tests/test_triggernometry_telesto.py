@@ -1,12 +1,15 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+from pathlib import Path
 import queue
 import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest.mock import patch
 
-from nyaatriggers.triggernometry_telesto import TriggernometryTelesto
+from nyaatriggers.telesto_client import read_telesto_response
+from nyaatriggers.triggernometry_telesto import TriggernometryTelesto, _Server
 
 
 def post(url, message):
@@ -88,6 +91,133 @@ def envelope(kind, **payload):
 
 
 class TelestoRelayTests(unittest.TestCase):
+    def test_failed_deadline_worker_reports_io_error_without_opening_a_request(self):
+        request = urllib.request.Request("http://127.0.0.1:1/", data=b"{}")
+        with patch.object(threading.Thread, "start", side_effect=RuntimeError("cannot start new thread")), \
+                patch.object(urllib.request.OpenerDirector, "open") as opened:
+            with self.assertRaises(OSError) as error:
+                read_telesto_response(request, 1, threading.Event(), use_proxy=False)
+        self.assertIsInstance(error.exception.__cause__, RuntimeError)
+        opened.assert_not_called()
+
+    def test_global_worker_exhaustion_still_finishes_local_relay_cleanup(self):
+        errors = []
+        with FakeTelesto() as peer:
+            relay = TriggernometryTelesto(lambda _body: None, errors.append, peer.url)
+            relay.start()
+            try:
+                self.assertEqual(post(relay.url, envelope("Subscribe", id="memory", type="memory"))[0], 200)
+                before = dict(peer.subscriptions)
+                with patch.object(threading.Thread, "start", side_effect=RuntimeError("cannot start new thread")), \
+                        patch.object(urllib.request.OpenerDirector, "open") as opened:
+                    relay.close(wait=True)
+                    self.assertTrue(relay.is_finished())
+                    relay.close(wait=True)
+                opened.assert_not_called()
+                self.assertEqual(relay._server.socket.fileno(), -1)
+                self.assertFalse(relay._owned_subscriptions)
+                self.assertEqual(peer.subscriptions, before)
+                self.assertTrue(any("Telesto deadline worker could not start" in error for error in errors))
+            finally:
+                relay._finish()
+
+    def test_failed_listener_worker_reports_bridge_startup_failure_without_spawning(self):
+        from nyaatriggers import triggernometry_bridge as bridge_module
+
+        bridge = bridge_module.TriggernometryBridge()
+        statuses = []
+        bridge.status.connect(lambda *state: statuses.append(state))
+        with patch.object(bridge_module, "_find_exe", return_value=Path(__file__)), \
+                patch.object(bridge_module, "has_mono", return_value=True), \
+                patch.object(bridge_module, "_find_packs", return_value=[]), \
+                patch.object(bridge_module, "_make_bundled_mono_executable"), \
+                patch.object(bridge_module, "_log"), \
+                patch.object(bridge, "_launch_cmd", return_value=["simulated-sidecar"]), \
+                patch.object(bridge_module.subprocess, "Popen") as spawn, \
+                patch.object(threading.Thread, "start", side_effect=RuntimeError("cannot start new thread")):
+            bridge.start()
+        spawn.assert_not_called()
+        self.assertFalse(bridge.is_active())
+        self.assertEqual(bridge.generation(), 0)
+        self.assertEqual(statuses, [(False,
+            "Telesto callback listener failed: Telesto callback worker could not start", 0)])
+
+    def test_failed_listener_worker_releases_its_socket_and_can_close(self):
+        relay = TriggernometryTelesto(lambda _body: None, self.fail)
+        servers = []
+
+        def create_server(owner):
+            server = _Server(owner)
+            servers.append(server)
+            self.addCleanup(server.server_close)
+            return server
+
+        with patch("nyaatriggers.triggernometry_telesto._Server", side_effect=create_server), \
+                patch.object(threading.Thread, "start", side_effect=RuntimeError("cannot start new thread")):
+            with self.assertRaises(OSError) as error:
+                relay.start()
+        self.assertIsInstance(error.exception.__cause__, RuntimeError)
+        self.assertEqual(servers[0].socket.fileno(), -1)
+        self.assertIsNone(relay._server)
+        relay.close(wait=True)
+        self.assertTrue(relay.is_finished())
+        relay.close(wait=True)
+
+    def test_failed_cleanup_worker_releases_owned_resources_before_reporting_finished(self):
+        with FakeTelesto() as peer:
+            relay = TriggernometryTelesto(lambda _body: None, self.fail, peer.url)
+            relay.start()
+
+            def cleanup_relay():
+                with patch.object(relay, "report", lambda _message: None):
+                    relay._finish()
+
+            self.addCleanup(cleanup_relay)
+            self.assertEqual(post(relay.url, envelope("Subscribe", id="memory", type="memory"))[0], 200)
+            self.assertEqual(post(relay.url, envelope("EnableDoodle", name="circle", type="circle"))[0], 200)
+            entered, release = threading.Event(), threading.Event()
+            original_post = relay._post
+            original_start = threading.Thread.start
+            failures = []
+
+            def fail_cleanup_start(thread):
+                if thread.name == "tn-telesto-cleanup":
+                    raise RuntimeError("cannot start new thread")
+                return original_start(thread)
+
+            def stalled_cleanup(message, **options):
+                entered.set()
+                if not release.wait(3):
+                    raise RuntimeError("cleanup was not released")
+                return original_post(message, **options)
+
+            def close_relay():
+                try:
+                    relay.close(wait=True)
+                except Exception as exc:
+                    failures.append(exc)
+
+            with patch.object(threading.Thread, "start", fail_cleanup_start), \
+                    patch.object(relay, "_post", side_effect=stalled_cleanup):
+                worker = threading.Thread(target=close_relay, daemon=True)
+                worker.start()
+                try:
+                    self.assertTrue(entered.wait(2), failures)
+                    self.assertFalse(relay.is_finished())
+                    self.assertEqual(relay._server.socket.fileno(), -1)
+                    self.assertEqual(relay.receive({}, relay.callback_path), 410)
+                    relay.close()
+                    self.assertFalse(relay.is_finished())
+                finally:
+                    release.set()
+                    worker.join(timeout=5)
+                self.assertFalse(worker.is_alive())
+            self.assertEqual(failures, [])
+            self.assertTrue(relay.is_finished())
+            relay.close(wait=True)
+            self.assertFalse(peer.subscriptions)
+            self.assertFalse(peer.drawings)
+
     def test_drawing_replacement_in_a_bundle_keeps_callbacks_and_cleanup(self):
         received = []
         with FakeTelesto() as peer:
@@ -144,6 +274,23 @@ class TelestoRelayTests(unittest.TestCase):
                 relay.close(wait=True)
             self.assertTrue(errors)
             self.assertFalse(peer.subscriptions)
+
+    def test_drawing_expression_timeout_returns_error_without_removing_resources(self):
+        errors = []
+        with FakeTelesto() as peer:
+            relay = TriggernometryTelesto(lambda _body: None, errors.append, peer.url)
+            relay.start()
+            try:
+                name = "a" * 1000 + "!"
+                self.assertEqual(post(relay.url, envelope("EnableDoodle", name=name, type="circle"))[0], 200)
+                before = dict(peer.drawings)
+                self.assertEqual(post(relay.url, envelope("DisableDoodleRegex", regex="(a|aa)+$"))[0], 400)
+                self.assertEqual(peer.drawings, before)
+                self.assertTrue(any("Drawing expression timed out" in error for error in errors))
+                self.assertEqual(post(relay.url, envelope("DisableDoodle", name=name))[0], 200)
+                self.assertFalse(peer.drawings)
+            finally:
+                relay.close(wait=True)
 
     def test_drawing_expiry_cannot_remove_a_new_activation(self):
         received = []

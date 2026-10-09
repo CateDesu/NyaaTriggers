@@ -27,10 +27,23 @@ class NativeAutomarkersPanel(QWidget):
         self._markers = []
         self._blocked_umad = False
         self._umad_note = None
-        self._layout.addWidget(QLabel(_("Waiting for native automarker controls.")))
+        self._engine_message = _("Loading native automarker controls.")
+        self._engine_note = QLabel(self._engine_message)
+        self._engine_note.setWordWrap(True)
+        self._layout.addWidget(self._engine_note)
+
+    def set_engine_status(self, message):
+        self._engine_message = message
+        if message and self._settings:
+            message += "\n" + _("Changes are saved and applied when the Triggevent engine is ready.")
+        self._engine_note.setText(message)
+        self._engine_note.setVisible(bool(message))
+        self.setEnabled(bool(self._settings))
 
     def set_inventory(self, payload, overrides, requested_umad, blocked_umad):
         self._loading = True
+        self._engine_message = ""
+        self.setEnabled(True)
         previous_tab = getattr(self, "_tabs", None)
         previous_fight = previous_tab.tabText(previous_tab.currentIndex()) if previous_tab else ""
         selections = {ident: editor._input.currentItem().text() for ident, editor in self._editors.items()
@@ -52,6 +65,10 @@ class NativeAutomarkersPanel(QWidget):
         overrides = overrides if isinstance(overrides, dict) else {}
         self._jobs = self._choices(payload.get("jobs"))
         self._markers = self._choices(payload.get("markers"))
+        self._engine_note = QLabel(self._engine_message)
+        self._engine_note.setWordWrap(True)
+        self._engine_note.setVisible(bool(self._engine_message))
+        self._layout.addWidget(self._engine_note)
         error = QLabel(payload.get("error") if isinstance(payload.get("error"), str) else "")
         error.setObjectName("native_automarker_error")
         error.setTextFormat(Qt.TextFormat.PlainText)
@@ -75,6 +92,7 @@ class NativeAutomarkersPanel(QWidget):
                 self._settings[ident] = setting
                 self._values[ident] = deepcopy(value)
         if not self._settings:
+            self.setEnabled(False)
             self._layout.addWidget(QLabel(_("Native automarker controls are unavailable.")))
             self._loading = False
             return
@@ -263,7 +281,8 @@ class NativeAutomarkersPanel(QWidget):
             presets = QComboBox()
             presets.setObjectName(ident + ".preset")
             presets.addItem(_("Choose a preset"), None)
-            for preset in setting.get("presets", ()):
+            choices = setting.get("presets")
+            for preset in choices if isinstance(choices, list) else ():
                 if isinstance(preset, dict) and self._valid(setting, preset.get("value")):
                     presets.addItem(str(preset.get("name") or ""), deepcopy(preset["value"]))
             presets.activated.connect(lambda index: self._preset(ident, presets.itemData(index)))
@@ -347,10 +366,16 @@ class NativeAutomarkersPanel(QWidget):
                 continue
             editor = self._editors[ident]
             override = setting.get("override_enabled")
-            enabled = self._values.get(override, True)
+            enabled = self._values.get(override) if isinstance(override, str) else None
+            enabled = enabled if type(enabled) is bool else True
             editor._input.setEnabled(enabled)
             editor._reset.setEnabled(enabled and self._valid(setting, setting.get("default")))
             for button in editor._priority_buttons:
                 button.setEnabled(enabled)
-            effective = self._values[ident] if enabled else self._values.get(setting.get("parent"), setting.get("effective_order", []))
+            parent = setting.get("parent")
+            effective = self._values.get(parent) if isinstance(parent, str) else None
+            if not self._valid(setting, effective):
+                effective = setting.get("effective_order")
+            if enabled or not self._valid(setting, effective):
+                effective = self._values[ident]
             editor._priority_note.setText(_("Effective priority: {jobs}").format(jobs=", ".join(effective)))

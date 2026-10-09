@@ -41,6 +41,8 @@ def copy_response(response, output, max_bytes: int, *, stall: float, deadline: f
     """Copy a bounded response before the absolute deadline. The caller owns the files."""
     done = threading.Event()
     progress = [0]
+    last_change = [time.monotonic()]
+    finished_at = [0.0]
     errors = []
 
     def read():
@@ -50,8 +52,14 @@ def copy_response(response, output, max_bytes: int, *, stall: float, deadline: f
             last_notice = time.monotonic()
             while True:
                 chunk = read_chunk(65536)
+                now = time.monotonic()
+                if now >= deadline:
+                    raise ReadTimeout(stalled=False)
+                if now - last_change[0] >= stall:
+                    raise ReadTimeout(stalled=True)
                 if not chunk:
                     break
+                last_change[0] = now
                 progress[0] += len(chunk)
                 if progress[0] > max_bytes:
                     raise OSError(f"Download exceeded the {max_bytes} byte safety cap")
@@ -68,20 +76,20 @@ def copy_response(response, output, max_bytes: int, *, stall: float, deadline: f
         except BaseException as exc:
             errors.append(exc)
         finally:
+            finished_at[0] = time.monotonic()
             done.set()
 
     threading.Thread(target=read, daemon=True, name="http-file-reader").start()
-    last_seen = progress[0]
-    last_change = time.monotonic()
-    while not done.wait(timeout=min(stall, max(0.0, deadline - time.monotonic()))):
+    while not done.wait(max(0.0, min(deadline, last_change[0] + stall) - time.monotonic())):
         now = time.monotonic()
-        if progress[0] == last_seen or now > deadline:
-            _unblock_reader(response)
-            raise ReadTimeout(stalled=now - last_change >= stall)
-        last_seen = progress[0]
-        last_change = now
+        if now < deadline and now < last_change[0] + stall:
+            continue
+        _unblock_reader(response)
+        raise ReadTimeout(stalled=now < deadline)
     if errors:
         raise errors[0]
+    if finished_at[0] >= deadline:
+        raise ReadTimeout(stalled=False)
     return progress[0]
 
 
@@ -92,6 +100,7 @@ def open_response(request, timeout: float, deadline: float):
     cancelled = threading.Event()
     lock = threading.Lock()
     connections, responses, result, errors = [], [], [], []
+    finished_at = [0.0]
 
     def check_cancelled():
         if cancelled.is_set() or time.monotonic() >= deadline:
@@ -156,10 +165,11 @@ def open_response(request, timeout: float, deadline: float):
         finally:
             if response is not None:
                 response.close()
+            finished_at[0] = time.monotonic()
             done.set()
 
     threading.Thread(target=acquire, daemon=True, name="http-response-reader").start()
-    if not done.wait(max(0.0, deadline - time.monotonic())) or time.monotonic() >= deadline:
+    if not done.wait(max(0.0, deadline - time.monotonic())) or finished_at[0] >= deadline:
         with lock:
             cancelled.set()
             sockets = [conn.sock for conn in connections if conn.sock is not None]
@@ -206,6 +216,7 @@ def fetch_bytes(request, max_bytes: int, timeout: float = 15,
     done = threading.Event()
     cancelled = threading.Event()
     state = {"response": None, "progress": time.monotonic()}
+    finished_at = [0.0]
     result = []
     errors = []
 
@@ -214,10 +225,16 @@ def fetch_bytes(request, max_bytes: int, timeout: float = 15,
             headers_deadline = min(end, state["progress"] + stall)
             with open_response(request, timeout, headers_deadline) as response:
                 state["response"] = response
+                state["progress"] = time.monotonic()
                 body = bytearray()
                 read_chunk = getattr(response, "read1", response.read)
                 while not cancelled.is_set():
                     chunk = read_chunk(min(65536, max_bytes + 1 - len(body)))
+                    now = time.monotonic()
+                    if now >= end:
+                        raise ReadTimeout(stalled=False)
+                    if now - state["progress"] >= stall:
+                        raise ReadTimeout(stalled=True)
                     if not chunk:
                         remaining = getattr(response, "length", None)
                         if isinstance(remaining, int) and remaining > 0:
@@ -225,12 +242,13 @@ def fetch_bytes(request, max_bytes: int, timeout: float = 15,
                         result.append(bytes(body))
                         return
                     body.extend(chunk)
-                    state["progress"] = time.monotonic()
+                    state["progress"] = now
                     if len(body) > max_bytes:
                         raise ResponseTooLarge(f"response exceeds {max_bytes} bytes")
         except Exception as exc:
             errors.append(exc)
         finally:
+            finished_at[0] = time.monotonic()
             done.set()
 
     end = time.monotonic() + deadline
@@ -244,4 +262,6 @@ def fetch_bytes(request, max_bytes: int, timeout: float = 15,
         raise ReadTimeout(stalled=now < end)
     if errors:
         raise errors[0]
+    if finished_at[0] >= end:
+        raise ReadTimeout(stalled=False)
     return result[0]

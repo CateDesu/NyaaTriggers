@@ -1,23 +1,23 @@
 # UMAD (Dancing Mad Ultimate) player debuffs
 
-Reference for **Load UMAD preset**, defined by `_UMAD_AUTOMARK_PRESET` in `nyaatriggers/app_common.py`. IDs use the ACT log's hexadecimal form. Party slots are `<1>` through `<8>`.
+Reference for the UMAD mechanic tabs and native Triggevent P4 controls. IDs use the ACT log's hexadecimal form. Party slots are `<1>` through `<8>`.
 
 The original checks used cactbot `0.37.3`, its generated 7.51 status data, FFLogs zone 76 and encounter 1085, XIVAPI/datamining CSVs, and Icy Veins and Materia guides. Evidence details are below.
 
-Preset rules start **unassigned** and do not mark until you choose a sign. One sign can mark only one player, even when several share a debuff. Reserve the P3 chain signs, attack1 through attack3 by default, for their cleanse queues.
+Bomb and Lightning assignments start **unassigned**. One sign can mark only one player. P3 black-hole chains use attack1 and attack2 by default; the separate Accretion controller uses ignore1 and ignore2. Saved debuff rules from older versions are inactive.
 
-## Seeded by the preset (verified, P3-P4)
+## Encounter statuses (verified, P3-P4)
 
-Compound entries such as `A+B` require both statuses on one player, in either arrival order. Black-hole chains suspend overlapping rules while enabled.
+The Accretion controller identifies carriers by Accretion and their line order, in either arrival order. Native Triggevent handles P4 statuses without a dedicated local tab.
 
 | Hex  | Debuff                     | Phase | Notes |
 |------|----------------------------|-------|-------|
-| 644+BBC | Accretion (1st in Line) | P3    | Compound: the Accretion carrier who cleanses first |
-| 644+BBD | Accretion (2nd in Line) | P3    | Compound: the Accretion carrier who cleanses second |
+| 644+BBC | Accretion (1st in Line) | P3    | First carrier, ignore1 until third tether hit |
+| 644+BBD | Accretion (2nd in Line) | P3    | Second carrier, ignore2 after first completes |
 | 15A7 | Cursed Shriek              | P4    | 2 pairs, one per Grand Cross wave; real: look away / fake: look at, identified by Neo Exdeath's status VFX |
 | 15A8 | Forked Lightning           | P4    | 1 Sup+1 DPS; real: spread / fake: stack |
 | 15A9 | Compressed Water           | P4    | Stack marker |
-| 15AA | Acceleration Bomb          | P4    | Stop everything when it expires |
+| 15AA | Acceleration Bomb          | P4    | Real: stay still / fake: keep moving when it expires |
 | 15A5 | White Wound                | P4    | Real: lethal in White Antilight / fake: lethal in Black |
 | 15A6 | Black Wound                | P4    | Real: lethal in Black Antilight / fake: lethal in White |
 | 566  | Beyond Death               | P4    | 4 players; real: take lethal to cleanse / fake: avoid lethal |
@@ -46,12 +46,13 @@ Rows marked "Trimmed" were dropped from the preset on 2026-07-03 as unnecessary 
 | 13D6 | Double-trouble Trap  | P1 | Trimmed. Knockback carrier (1 DPS+1 Sup), jumps to a fresh player x3 |
 | 642  | Headwind             | P3 | Trimmed. Cleanse knockback facing away |
 | 643  | Tailwind             | P3 | Trimmed. Cleanse knockback facing toward |
-| 1312 | Unbecoming           | P3 | Trimmed. Black-hole tether DoT, stacks |
+| 154C | Unbecoming           | P3 | First tether hit |
+| 154D | Meanest Existence    | P3 | Second tether hit |
 | 640  | Entropy              | P3 | Trimmed. Point-blank AoE on expiry - spread |
 | 641  | Dynamic Fluid        | P3 | Trimmed. Donut AoE on expiry |
 | 15AB | Entropy              | P4 | Trimmed. P4 copy of the P3 spread (new 7.51 id) |
 | 15AC | Dynamic Fluid        | P4 | Trimmed. P4 copy of the P3 donut (new 7.51 id) |
-| 644  | Accretion            | P3 | Single-status rules cannot order the pair. Use the compound entries above |
+| 644  | Accretion            | P3 | Healed off before tether hits. Carrier identity remains until Crust loss |
 
 ### How the P4 block was verified (2026-07-03)
 
@@ -59,32 +60,25 @@ The original P4 status identification combined game data and guides. The later g
 
 - **7.51 data:** cactbot `0.37.3`, built 2026-06-23, contains the contiguous `15A5` through `15AC` block for White Wound, Black Wound, Cursed Shriek, Forked Lightning, Compressed Water, Acceleration Bomb, Entropy, and Dynamic Fluid. These names match the P4 debuffs described by the guides.
 - **Guide coverage:** Icy Veins and Materia describe White or Black Wound on all players, Allagan Field on four, Beyond Death on four, and the other statuses above. Cactbot identifies Kefka Says with `C2DC`. The mechanics use positioning and gaze direction; Forced March inversion IDs `50D` through `510` are not UMAD rules.
-- **Reused IDs:** Beyond Death `566` and Allagan Field `1C6` each have one name match in that status sheet. The same identification method gives Accretion `644`, Unbecoming `1312`, Epic Hero `1060`, Fated Hero `1062`, and Primordial Crust `154E`.
+- **Reused IDs:** Beyond Death `566` and Allagan Field `1C6` each have one name match in that status sheet. The same identification method gives Accretion `644`, Epic Hero `1060`, Fated Hero `1062`, and Primordial Crust `154E`. The earlier name-only Unbecoming match `1312` is not the P3 tether status; the encounter uses `154C`.
 - **P1 through P3:** cactbot's fight triggers directly match `13D6`, `130C` through `130F`, `13D7` through `13DA`, `13DB`, `1060`, `1062`, `642`, and `643`. Its comments identify Confused `503` from Indulgent Will `BAB5` and Sleep `131E` from Idyllic Will `BAB6`.
 
 ## Unconfirmed status IDs
 
 - **P5 Celestriad resistance-downs:** Fire, Ice, and Lightning Resistance Down each affect two players for 20 seconds during three sets of nine towers. Their names have multiple status IDs, so names alone cannot establish the hex. Cactbot handles towers through actor IDs. Capture the status IDs from Current Instance before adding rules.
-- **Other unpinned statuses:** Magic Vulnerability Up, Damage Down, Weakness, Brink of Death, Earth Resistance Down, Wind Resistance Down II, and the RSV-masked Meanest Existence.
+- **Other unpinned statuses:** Magic Vulnerability Up, Damage Down, Weakness, Brink of Death, Earth Resistance Down, Wind Resistance Down II.
 
 ## P3 black-hole cleanse order (First/Second/Third in Line)
 
 First, Second, and Third in Line use `BBC`, `BBD`, and `BBE`. During the black hole, every player receives Primordial Crust `154E` and an order status. One DPS and one healer also receive Accretion `644`. Tether hits cleanse Crust in line order.
 
-Plain order rules would move a sign between players sharing the status. **UMAD black-hole chains** instead runs `BlackHoleChains` in `nyaatriggers/umad_chains.py`, with one sign per queue:
+**Black-hole chains** marks DPS without Accretion with attack1 and supports without Accretion with attack2. Each sign marks the earliest player in its queue who still has Crust. It advances on Crust loss and clears after the last cleanse. Roles come from job data and combatant snapshots. Both Accretion carriers must be known so they are excluded from these queues. Missing jobs, membership or line order leave the affected queue unmarked.
 
-| Queue | Default sign |
-|---|---|
-| DPS without Accretion | attack1 |
-| Supports without Accretion | attack2 |
-| Accretion pair | attack3 |
+**Accretion** is a separate tab and toggle. First in Line receives ignore1. Healing removes Accretion before the tether sequence, so its loss leaves that mark in place. The first tether hit applies Unbecoming `154C`, the second applies Meanest Existence `154D`, and the third removes Primordial Crust `154E`. That Crust loss clears the first mark and gives Second in Line ignore2. The second carrier's Crust loss clears ignore2. This follows status events rather than a fixed timer. Beyond Death belongs to P4 and does not advance this queue.
 
-Each sign marks the earliest player in its queue who still has Crust. It advances on Crust loss and clears after the last cleanse.
+The third-hit completion signal and status IDs come from [cactbot's encounter implementation](https://github.com/OverlayPlugin/cactbot/blob/main/ui/raidboss/data/07-dt/ultimate/dancing_mad.ts#L5975). The native [Triggevent DMU trigger](https://github.com/CateDesu/event-trigger/blob/main/triggers/triggers-dt/src/main/java/gg/xp/xivsupport/triggers/ultimate/DMU.java#L1573) also waits for Crust loss. The local Accretion fixture is a synthetic event sequence, not a recorded P3 pull.
 
-- Enabling chains suspends overlapping `644`, `154E`, and `BBC/BBD/BBE` rules in UMAD.
-- Roles come from AddedCombatant job data, PartyChanged, and combatant snapshots. Every queue needs all its members, including both Accretion carriers. Unknown jobs, missing membership, or incomplete order data leave the affected queue unmarked after debounce too.
-- Late Accretion data moves its sign to the correct queue head.
-- Unknown party slots delay marking until a roster refresh. If the queue advances first, the newer mark replaces the pending request.
+Incomplete or conflicting Accretion ranks leave the pair unmarked. Unknown party slots delay marking until a roster refresh. If the queue advances first, the obsolete pending mark is cancelled before the next mark is sent. Disabling either P3 toggle clears its own signs.
 
 ## P4 Cursed Shriek gaze pairing (look away vs look at)
 
@@ -104,16 +98,28 @@ The pair is numbered by party slot, with actor ID as fallback. Marking begins wh
 - Missing VFX evidence leaves the set unmarked. A complete pair can wait for a delayed VFX for the five-second burst window.
 - An incomplete pair expires after the five-second burst gap.
 - If both waves need the same signs, the earlier pair keeps them until its gaze ends. The later pair then receives those signs.
-- The plain `15A7` preset rule is suspended while pairing is enabled.
 - Status loss or expiry clears that player's sign. A wipe, a new Kefka Says, or disabling the toggle clears all remaining signs and waiting assignments.
 - Unknown party slots delay marks until a roster refresh.
 
-Local rules, chain queues and gaze pairs retain ownership of their signs. An older mechanic's loss or expiry cannot clear a newer local mark on the same actor. Pending marks expire with their gaze before any roster retry. Wipes clear owned local signs and cancel queued marks. Zone changes and feed loss discard actors and pending actions because party slots may have changed.
+## P4 Acceleration Bomb and Forked Lightning
 
-Local gaze pairing or an enabled assigned local rule for a P4 preset debuff suppresses native Triggevent Kefka marking. This applies to UMAD and any-fight rules, matching the P4 IDs above, their exact status names, or compound rules containing those IDs. Other UMAD rules, including the P3 Accretion queues, leave native P4 marking available.
+The **Acceleration Bomb** and **Forked Lightning** tabs provide separate real and fake marker assignments. They read the same Neo Exdeath status `808` tell as Cursed Shriek: `461` is fake and `462` is real. A missing tell or incomplete wave leaves players unmarked.
+
+| Debuff | Real | Fake | Carriers per wave |
+|---|---|---|---|
+| Acceleration Bomb `15AA` | Stay still on expiry | Keep moving on expiry | Four, two short and two long |
+| Forked Lightning `15A8` | Spread | Stack | Two |
+
+Bomb wave one has two 51-second and two 76-second timers. Wave two has two 36-second and two 61-second timers. Bomb signs are numbered within the short and long pairs by party slot, with actor ID as fallback. Lightning signs use party order. The real or fake tell applies to the entire wave and does not depend on duration. These mechanics and the tell mapping are recorded in [cactbot's encounter implementation](https://github.com/OverlayPlugin/cactbot/blob/main/ui/raidboss/data/07-dt/ultimate/dancing_mad.ts).
+
+New Bomb and Lightning assignments start unassigned. Choose distinct signs for the players you want marked and enable the mechanic. Unassigned players receive no sign. When both waves use the same signs, the earlier carriers retain them until loss or expiry. Later carriers then receive the available signs.
+
+Local chain queues, Accretion and Grand Cross controllers retain ownership of their signs. An older mechanic's loss or expiry cannot clear a newer local mark on the same actor. Grand Cross pending marks expire with their debuff before any roster retry. Accretion pending marks are cancelled on Crust completion. Wipes clear owned local signs and cancel queued marks. Zone changes and feed loss discard actors and pending actions because party slots may have changed.
+
+Local gaze, Bomb or Lightning controls suppress native Triggevent Kefka marking. P3 black-hole chains and Accretion leave native P4 marking available.
 
 Telesto commands are queued with a thirty-second age limit. Cleanup follows the existing encounter and party boundaries. Diagnostics distinguish queueing, a POST attempt and an accepted HTTP response. Telesto returns no confirmation that the game applied the command, so an accepted response cannot prove marker delivery. Requests with ambiguous timeout outcomes are not retried.
 
 ## IDs shared by name
 
-Entropy and Dynamic Fluid use `640/641` in P3 and `15AB/15AC` in P4. Matching by hex keeps the phases separate. These rules were removed from the preset, but older saved rules remain. If you still use them with P3 chains, keep their signs separate from the chain queues. Earlier presets used attack5/attack6 for the P3 pair and attack1/attack2 for P4.
+Entropy and Dynamic Fluid use `640/641` in P3 and `15AB/15AC` in P4. Matching by hex keeps the phases separate. Older saved rules remain inactive. Native P4 controls handle the encounter debuffs without the removed assignment list.

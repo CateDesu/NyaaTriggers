@@ -14,6 +14,7 @@ prog_sessions/
 cache/recap_icons/
 trigger_profiles/
 triggevent_inventory.json
+triggevent_automarkers.json
 callouts_ja.cache.json
 timelines/*.cactbot.cache.txt
 triggers.repo.json

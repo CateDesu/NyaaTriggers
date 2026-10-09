@@ -59,7 +59,7 @@ On Bazzite, install those Fedora packages inside a `distrobox` or `toolbox` and 
 
 ### Linux from source
 
-Use Python 3.11 or newer. On Arch, CachyOS, Debian, or Ubuntu:
+Release builds and tests use Python 3.14. Source runs support Python 3.11 or newer. On Arch, CachyOS, Debian, or Ubuntu:
 
 ```bash
 git clone https://github.com/CateDesu/NyaaTriggers
@@ -128,15 +128,19 @@ Packs can use Telesto memory notifications and drawings through the **Telesto UR
 | **Death Recap** | A minute of damage, incoming healing, HP and shield bars, ability icons, and filterable statuses. Targeted mitigation separates player defenses and attacker damage-down effects from other statuses. The latest 80 deaths remain available until the program closes. |
 | **Prog** | Saved duty sessions with pull durations, endings, deaths, phase progress, session comparisons, a chart, bookmarks, notes, and death recaps. |
 
-The meter runs whenever the combat feed is connected. **Record encounters**, off by default, saves full pull summaries to `dps_logs/`, retaining five completed logs plus the active log. **Reset display after** affects only the live display.
+The meter runs whenever the combat feed is connected and automatically saves full pull summaries to `dps_logs/`, retaining five completed logs plus the active log. **Reset display after** affects only the live display.
 
-In Prog, **Start session** begins collection once the duty and combat state are known. Starting during combat waits for the next full pull. **End session** or leaving the duty ends collection; wipes and breaks stay in the session. Interrupted attempts are listed separately. **Combat ended** does not mean a clear.
+Prog sessions start automatically with combat once the duty is known. Joining during combat waits for the next full pull. Leaving the duty ends the session; wipes and breaks stay in it. Interrupted attempts are listed separately. **Combat ended** does not mean a clear.
 
-Notes and death recaps save automatically, independently of DPS recording and log rotation. Select a pull and choose **View death recaps** to review it, including after restart. Recaps retain observed HP and rounded shield percentages. Events missed before connection cannot be recovered. UMAD phases are confirmed by boss casts and ability events. Older pulls without phase data remain **Not recorded**. See the [Prog guide](docs/GUIDE.md#prog-tab) for recording and recovery details.
+Notes and death recaps save automatically, independently of DPS log rotation. Saved Prog sessions remain until deleted and can be compared, archived, restored, or deleted before the game opens. Select a pull and choose **View death recaps** to review it, including after restart. Recaps retain observed HP and rounded shield percentages. Events missed before connection cannot be recovered. UMAD phases are confirmed by boss casts and ability events. Older pulls without phase data remain **Not recorded**. See the [Prog guide](docs/GUIDE.md#prog-tab) for recording and recovery details.
+
+Duty progress shows each phase's first recorded date and lowest observed boss HP across saved sessions. Missing historical HP remains **Not recorded**.
 
 Search saved sessions by name or duty, and use star arrow buttons to move between bookmarked pulls. **Copy pull summary** shares the selected pull's observed details and notes through the clipboard.
 
-Archive finished sessions to keep the usual list short. **Show archived** keeps their notes and recaps available and offers **Restore session**.
+**Delete pull** removes a saved attempt, its notes, and its death recaps after confirmation. It is available in Prog, the saved Death Recap view, and the **Saved pulls…** browser. Completed earlier pulls can be deleted while their session continues recording. The active pull cannot be deleted.
+
+Archive finished sessions to keep the usual list short. **Show archived** keeps their notes and recaps available and offers **Restore session**. **Delete session** permanently removes a finished session and its saved pulls and death recaps after confirmation.
 
 **Compare with…** reviews two sessions in the same duty. Phase rates show confirmed reach with sample sizes and excluded pulls. Interrupted attempts keep their observations but stay out of the rates. Older sessions retain their ordinary pull summaries. Different tracking rules prevent phase and duration comparisons where their recording conventions differ.
 
@@ -160,11 +164,11 @@ The sidebar slider controls audio from 0% to 200%. Click its speaker to mute, or
 
 The optional [NyaaTriggers Overlay](https://github.com/CateDesu/NyaaTriggers-Overlay) Dalamud plugin draws timeline bars, callouts, and DPS inside the game. Follow its README to install, then use `/nyaa` to position and lock the windows. **Settings - In-Game Overlay** shows connection status. The link connects automatically when ports match. Speech works without it.
 
-Automarkers use [Telesto](https://github.com/paissaheavyindustries/Telesto). Set **Telesto URL**, use **Test mark (on me)**, then enable marking. Rules mark you or the party member with a debuff. Unassigned rules place no mark.
+Automarkers use [Telesto](https://github.com/paissaheavyindustries/Telesto). Set **Telesto URL**, use **Test mark (on me)**, then enable marking. Choose the encounter controls and signs for the mechanics you want marked. Marking party members requires a known party roster.
 
 **Triggevent encounter automarkers** includes UWU Titan Gaols, DSR Thunderstruck and Wroth Flames, TOP's eight marker mechanics with separate Omega sets, and UMAD P4 debuffs. Configure their native switches, job priorities, marker maps, presets and delays in the same tab. Changes are saved and replayed after engine restarts. The master switch still gates marking.
 
-**Load UMAD preset** adds Dancing Mad Ultimate debuff rules. Assign signs for your strategy. The tab also provides P3 black-hole cleanse queues, P4 Cursed Shriek gaze pairs, automatic removal on debuff loss, and **Clear all party marks**. See the [automarker guide](docs/GUIDE.md#automarkers-tab).
+Separate UMAD tabs provide P3 black-hole cleanse queues, Accretion tether order, and P4 real and fake markers for Cursed Shriek, Acceleration Bomb and Forked Lightning. Accretion marks the first carrier with ignore1, then switches to the second with ignore2 when the first finishes three tether hits and loses Primordial Crust. Triggevent's encounter controls load at startup. See the [automarker guide](docs/GUIDE.md#automarkers-tab).
 
 ## Updating and saved data
 

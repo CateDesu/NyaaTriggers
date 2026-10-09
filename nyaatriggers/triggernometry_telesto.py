@@ -98,6 +98,7 @@ class TriggernometryTelesto:
         self._lock = threading.RLock()
         self._sending = threading.Lock()
         self._closed = threading.Event()
+        self._finished = threading.Event()
         self._subscriptions = {}
         self._pending_subscriptions = {}
         self._drawings = {}
@@ -118,7 +119,12 @@ class TriggernometryTelesto:
         self._thread = threading.Thread(target=self._server.serve_forever,
                                         kwargs={"poll_interval": 0.1}, daemon=True,
                                         name="tn-telesto")
-        self._thread.start()
+        try:
+            self._thread.start()
+        except RuntimeError as exc:
+            self._server.server_close()
+            self._server = None
+            raise OSError("Telesto callback worker could not start") from exc
 
     def configure(self, commands_enabled):
         with self._lock:
@@ -200,7 +206,10 @@ class TriggernometryTelesto:
             pattern = compile_user_regex(self._name(payload, "regex"))
             if pattern is None:
                 raise ValueError("Invalid drawing expression")
-            names = [name for name in self._drawings if pattern.search(name, timeout=0.02)]
+            try:
+                names = [name for name in self._drawings if pattern.search(name, timeout=0.02)]
+            except TimeoutError as exc:
+                raise ValueError("Drawing expression timed out") from exc
             return self._bundle([self._disable("DisableDoodle", "name", self._drawings.pop(name))
                                  for name in names])
         return message
@@ -373,16 +382,23 @@ class TriggernometryTelesto:
         return 200
 
     def close(self, wait=False):
+        finish_directly = False
         with self._lock:
             if not self._closed.is_set():
                 self._closed.set()
                 self._cleanup = threading.Thread(target=self._finish, daemon=True, name="tn-telesto-cleanup")
-                self._cleanup.start()
-        if wait and self._cleanup:
-            self._cleanup.join(timeout=10)
+                try:
+                    self._cleanup.start()
+                except RuntimeError:
+                    self._cleanup = None
+                    finish_directly = True
+        if finish_directly:
+            self._finish()
+        if wait:
+            self._finished.wait(timeout=10)
 
     def is_finished(self):
-        return self._closed.is_set() and self._cleanup is not None and not self._cleanup.is_alive()
+        return self._finished.is_set()
 
     def _finish(self):
         if self._server:
@@ -405,3 +421,4 @@ class TriggernometryTelesto:
                 self._drawing_expiry.clear()
             if items:
                 self._post(self._bundle(items), cleanup=True)
+        self._finished.set()

@@ -128,7 +128,7 @@ class SessionFinalSaveTests(unittest.TestCase):
         case.setUp()
         self.addCleanup(case.doCleanups)
         case.connect()
-        case.window._prog_tab.start_button.click()
+        case.start_session()
         case.window._prog_sessions.poll_saves(wait=True)
         case.clock.value += 12
         return case
@@ -218,6 +218,64 @@ class VoiceEnvironmentRecoveryTests(unittest.TestCase):
                 self.assertEqual({p.relative_to(backup): p.read_bytes()
                                   for p in backup.rglob("*") if p.is_file()}, original)
                 self.assertFalse(install.voice_repair_pending(root))
+
+    def test_compatible_uv_environment_keeps_program_packages_during_voice_setup(self):
+        import install
+        import main
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "runtime"
+            scripts = root / ("Scripts" if os.name == "nt" else "bin")
+            scripts.mkdir(parents=True)
+            pip = scripts / ("pip.exe" if os.name == "nt" else "pip")
+            pip.write_bytes(b"existing installer")
+            config = root / "pyvenv.cfg"
+            original = f"implementation = CPython\nversion_info = {sys.version_info.major}.{sys.version_info.minor}.8\n"
+            config.write_text(original)
+            packages = Path(sysconfig.get_path("purelib", scheme="venv",
+                            vars={"base": str(root), "platbase": str(root)}))
+            (packages / "piper").mkdir(parents=True)
+            (packages / "PyQt6").mkdir()
+            sentinel = packages / "PyQt6" / "program-dependency"
+            sentinel.write_bytes(b"keep the shared runtime")
+            run = Mock()
+            with patch.object(install, "run_setup_command") as probe, \
+                    patch.object(sys, "frozen", False, create=True):
+                self.assertTrue(main._piper_installed(root))
+                install.prepare_voice_venv(root, run)
+            probe.assert_not_called()
+            self.assertEqual(install.voice_venv_version(root), sys.version_info[:2])
+            self.assertEqual(config.read_text(), original)
+            self.assertEqual(sentinel.read_bytes(), b"keep the shared runtime")
+            self.assertEqual(list(root.parent.glob("runtime.backup-*")), [])
+            self.assertFalse(install.voice_setup_pending(root))
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_args_list[0].args[0][0], str(pip))
+            self.assertFalse(any(call.args[0][1:3] == ["-m", "venv"]
+                                 for call in run.call_args_list))
+
+    def test_another_python_versions_uv_environment_is_repaired_and_preserved(self):
+        import install
+        import main
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "voice"
+            self.old_environment(root, kokoro=False)
+            config = root / "pyvenv.cfg"
+            config.write_text(config.read_text().replace("version =", "version_info ="))
+            packages = Path(sysconfig.get_path("purelib", scheme="venv",
+                            vars={"base": str(root), "platbase": str(root)}))
+            (packages / "piper").mkdir(parents=True)
+            original = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            with patch.object(sys, "frozen", False, create=True):
+                self.assertFalse(main._piper_installed(root))
+                install.prepare_voice_venv(root, self.fake_installer(root))
+            backup, = root.parent.glob("voice.backup-*")
+            self.assertEqual({p.relative_to(backup): p.read_bytes()
+                              for p in backup.rglob("*") if p.is_file()}, original)
+            self.assertEqual(install.voice_venv_version(root), sys.version_info[:2])
+            self.assertTrue(main._piper_installed(root))
+            self.assertFalse(install.voice_setup_pending(root))
 
     def test_failed_creation_install_and_validation_restore_the_original(self):
         import install

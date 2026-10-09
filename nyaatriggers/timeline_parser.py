@@ -91,7 +91,7 @@ def _strip_comment(line: str) -> str:
     return line
 
 
-def _find_jump(rest: str) -> re.Match[str] | None:
+def _find_unquoted(rest: str, pattern, *, skip_sync: bool = False) -> re.Match[str] | None:
     quote = ''
     esc = False
     prev = ''
@@ -108,10 +108,10 @@ def _find_jump(rest: str) -> re.Match[str] | None:
         elif ch == '"' or (ch == "'" and prev in ":,[{"):
             quote = ch
         else:
-            jm = _JUMP_RE.match(rest, i)
-            if jm:
-                return jm
-            sm = _LEGACY_SYNC_RE.match(rest, i)
+            match = pattern.match(rest, i)
+            if match:
+                return match
+            sm = _LEGACY_SYNC_RE.match(rest, i) if skip_sync else None
             if sm:
                 i = sm.end()
                 prev = '/'
@@ -170,7 +170,7 @@ def parse(text: str) -> list[TimelineEntry]:
         jump: float | None = None
         jump_label = ''
         force = False
-        jm = _find_jump(rest)
+        jm = _find_unquoted(rest, _JUMP_RE, skip_sync=True)
         if jm:
             force = jm.group('force') is not None
             if jm.group('jlabel') is not None:
@@ -185,14 +185,15 @@ def parse(text: str) -> list[TimelineEntry]:
             rest = rest[:jm.start()] + ' ' + rest[jm.end():]
 
         legacy_sync = False
-        lm = _LEGACY_SYNC_RE.search(rest)
+        lm = _find_unquoted(rest, _LEGACY_SYNC_RE)
         if lm:
             legacy_sync = True
             rest = rest[:lm.start()] + ' ' + rest[lm.end():]
 
         event_type = ''
         event_fields: dict[str, str] = {}
-        em = _EVENT_RE.search(rest)
+        kw = _find_unquoted(rest, _EVENT_KW_RE, skip_sync=True)
+        em = _EVENT_RE.match(rest, kw.start()) if kw else None
         if em:
             event_type = em.group('event')
             fields_text = em.group('fields') or ''
@@ -201,8 +202,15 @@ def parse(text: str) -> list[TimelineEntry]:
             for key, body, start, end in arrays:
                 scalar_chars[start:end] = ' ' * (end - start)
             scalar_text = ''.join(scalar_chars)
-            event_fields = {key.strip("\"'"): dq or sq or bq
-                            for key, dq, sq, bq in _KV_RE.findall(scalar_text)}
+            scalar_matches = list(_KV_RE.finditer(scalar_text))
+            event_fields = {match.group(1).strip("\"'"):
+                            next(value for value in match.groups()[1:] if value is not None)
+                            for match in scalar_matches}
+            remainder = list(scalar_text)
+            for match in scalar_matches:
+                remainder[match.start():match.end()] = ' ' * (match.end() - match.start())
+            if ''.join(remainder).strip(' \t\r\n,'):
+                event_type += " invalid fields"
             # Scalar fields take precedence over arrays of alternatives.
             for key, body, start, end in arrays:
                 if key in event_fields:
@@ -219,12 +227,11 @@ def parse(text: str) -> list[TimelineEntry]:
             rest = rest[:em.start()] + ' ' + rest[em.end():]
         else:
             # Unsupported nested constraints must prevent matching.
-            kw = _EVENT_KW_RE.search(rest)
             if kw:
                 event_type = kw.group(1) + " nested fields"
 
         wbefore = wafter = 2.5
-        wm = _WINDOW_RE.search(rest)
+        wm = _find_unquoted(rest, _WINDOW_RE, skip_sync=True)
         if wm:
             try:
                 wbefore = float(wm.group('before'))

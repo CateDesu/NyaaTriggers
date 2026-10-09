@@ -147,7 +147,10 @@ def read_telesto_response(request, timeout: float, stopping: threading.Event,
                     pass
 
     watcher = threading.Thread(target=watch, daemon=True, name="TelestoDeadline")
-    watcher.start()
+    try:
+        watcher.start()
+    except RuntimeError as exc:
+        raise OSError("Telesto deadline worker could not start") from exc
     try:
         check_cancelled()
         with opener.open(request, timeout=timeout) as response:
@@ -176,6 +179,10 @@ class MarkerDelivery:
     current: bool = False
     clearing: bool = False
     target: str = ""
+    cancelled: bool = False
+    expires_at: float | None = None
+    attempted: bool = False
+    command_expires_at: float | None = None
 
 
 # Ignore marker tokens vary by client language. Other markers use English tokens.
@@ -419,6 +426,22 @@ class TelestoClient(QObject):
             return self._enqueue(game_command_message(mark_command(marker, slot)),
                                  delay=True, force=force, actor=_actor_int(actor_id), delivery=delivery)
 
+    def cancel_pending_mark(self, delivery: MarkerDelivery) -> bool:
+        """Cancel an unattempted marker while retaining uncertain attempts for cleanup."""
+        with self._lock:
+            if not delivery.pending or delivery.current:
+                return False
+            delivery.cancelled = True
+            delivery.pending = False
+            return True
+
+    def update_pending_mark_expiry(self, delivery: MarkerDelivery, expires_at: float | None) -> bool:
+        with self._lock:
+            if not delivery.pending or delivery.current or delivery.cancelled:
+                return False
+            delivery.expires_at = expires_at
+            return True
+
     def slot_of_actor(self, actor_id) -> "int | None":
         aid = _actor_int(actor_id)
         if aid is None:
@@ -465,11 +488,13 @@ class TelestoClient(QObject):
                     return False
                 if cleanup and delivery is not None and delivery.clearing:
                     return True
+                expires = time.monotonic() + MAX_COMMAND_AGE_S if delay and not cleanup else None
                 self._queue.put_nowait((msg, delay, force, self._command_epoch,
                                        self._endpoint_epoch, self._encounter_epoch,
                                        self._cleanup_epoch if cleanup else None, actor,
-                                       time.monotonic() + MAX_COMMAND_AGE_S if delay and not cleanup else None,
-                                       delivery))
+                                       expires, delivery))
+                if not cleanup and delivery is not None:
+                    delivery.command_expires_at = expires
                 if cleanup and delivery is not None:
                     delivery.clearing = True
                 _record_marker_transport(msg, "queued")
@@ -538,20 +563,33 @@ class TelestoClient(QObject):
 
     def _send_queued(self, item, stopping):
         msg, delay, force, epoch, endpoint, encounter, cleanup, actor, expires, delivery = item
+
+        def expired():
+            now = time.monotonic()
+            status_expires = delivery.expires_at if cleanup is None and delivery is not None else None
+            return ((expires is not None and now >= expires)
+                    or (status_expires is not None and now >= status_expires))
+
+        if cleanup is None and delivery is not None and delivery.cancelled:
+            _record_marker_transport(msg, "cancelled")
+            return
         if not self._can_send(force, epoch, endpoint, encounter, cleanup):
             _record_marker_transport(msg, "cancelled")
             return
-        if expires is not None and time.monotonic() >= expires:
+        if expired():
             _record_marker_transport(msg, "stale")
             return
         if delay:
             self._sleep_command_delay(stopping)
         if stopping.is_set():
             return
+        if cleanup is None and delivery is not None and delivery.cancelled:
+            _record_marker_transport(msg, "cancelled")
+            return
         if not self._can_send(force, epoch, endpoint, encounter, cleanup):
             _record_marker_transport(msg, "cancelled")
             return
-        if expires is not None and time.monotonic() >= expires:
+        if expired():
             _record_marker_transport(msg, "stale")
             return
         if cleanup is not None and delivery is not None and not delivery.current:
@@ -591,7 +629,11 @@ class TelestoClient(QObject):
             _actor, delivery = getattr(self._request_context, "marker", (None, None))
             clearing = msg.get("payload", {}).get("command", "").startswith("/mk clear ")
             if delivery is not None and not clearing:
+                if delivery.cancelled:
+                    _record_marker_transport(msg, "cancelled")
+                    return
                 # A missing reply does not prove the mark failed.
+                delivery.attempted = True
                 delivery.current = True
                 delivery.target = msg["payload"]["command"].split()[-1]
                 self._delivered_marks.add(delivery)
@@ -672,9 +714,13 @@ class TelestoClient(QObject):
     def _response_current(self, endpoint: int) -> bool:
         command = getattr(self._request_context, "command", None)
         expires = getattr(self._request_context, "expires", None)
+        _actor, delivery = getattr(self._request_context, "marker", (None, None))
+        status_expires = (delivery.expires_at if delivery is not None
+                          and (command is None or command[4] is None) else None)
         return (endpoint == self._endpoint_epoch
                 and (command is None or self._can_send(*command))
                 and (expires is None or time.monotonic() < expires)
+                and (status_expires is None or time.monotonic() < status_expires)
                 and not getattr(self._request_context, "stopping", self._stopping).is_set())
 
     def _read_response(self, request, timeout: float) -> tuple[int, bytes]:
@@ -682,11 +728,15 @@ class TelestoClient(QObject):
         command = getattr(self._request_context, "command", None)
         endpoint = getattr(self._request_context, "endpoint", self._endpoint_epoch)
         expires = getattr(self._request_context, "expires", None)
+        _actor, delivery = getattr(self._request_context, "marker", (None, None))
 
         def is_current():
+            status_expires = (delivery.expires_at if delivery is not None
+                              and (command is None or command[4] is None) else None)
             return (endpoint == self._endpoint_epoch
                     and (command is None or self._can_send(*command))
-                    and (expires is None or time.monotonic() < expires))
+                    and (expires is None or time.monotonic() < expires)
+                    and (status_expires is None or time.monotonic() < status_expires))
 
         return read_telesto_response(request, timeout, stopping, is_current=is_current)
 

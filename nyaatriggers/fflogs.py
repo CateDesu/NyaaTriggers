@@ -61,7 +61,8 @@ class FflogsClient:
         headers_deadline = min(deadline, time.monotonic() + _READ_STALL_S)
         with open_response(req, timeout, headers_deadline) as resp:
             done = threading.Event()
-            progress = [0]
+            last_change = [time.monotonic()]
+            finished_at = [0.0]
             reader_error = [None]
             buf = bytearray()
 
@@ -70,32 +71,38 @@ class FflogsClient:
                     read_chunk = getattr(resp, "read1", resp.read)
                     while True:
                         chunk = read_chunk(1 << 16)
+                        now = time.monotonic()
+                        if now >= deadline:
+                            raise TimeoutError("fflogs response timed out after 60 s")
+                        if now - last_change[0] >= _READ_STALL_S:
+                            raise TimeoutError(
+                                f"fflogs response stalled, no new bytes for {_READ_STALL_S} seconds")
                         if not chunk:
                             break
+                        last_change[0] = now
                         buf.extend(chunk)
-                        progress[0] = len(buf)
                         if len(buf) > _MAX_RESPONSE_BYTES:
                             raise ValueError("fflogs response exceeded the size cap")
                 except BaseException as exc:
                     reader_error[0] = exc
                 finally:
+                    finished_at[0] = time.monotonic()
                     done.set()
 
             threading.Thread(target=_reader, daemon=True).start()
-            last_seen = progress[0]
-            last_change = time.monotonic()
-            while not done.wait(timeout=min(_READ_STALL_S, max(0.0, deadline - time.monotonic()))):
+            while not done.wait(max(0.0, min(deadline, last_change[0] + _READ_STALL_S) - time.monotonic())):
                 now = time.monotonic()
-                if progress[0] == last_seen or now > deadline:
-                    _unblock_reader(resp)
-                    if now - last_change >= _READ_STALL_S:
-                        raise TimeoutError(
-                            f"fflogs response stalled, no new bytes for {_READ_STALL_S} seconds")
-                    raise TimeoutError("fflogs response timed out after 60 s")
-                last_seen = progress[0]
-                last_change = now
+                if now < deadline and now < last_change[0] + _READ_STALL_S:
+                    continue
+                _unblock_reader(resp)
+                if now < deadline:
+                    raise TimeoutError(
+                        f"fflogs response stalled, no new bytes for {_READ_STALL_S} seconds")
+                raise TimeoutError("fflogs response timed out after 60 s")
             if reader_error[0]:
                 raise reader_error[0]
+            if finished_at[0] >= deadline:
+                raise TimeoutError("fflogs response timed out after 60 s")
             data = bytes(buf)
         return resp.status, data
 

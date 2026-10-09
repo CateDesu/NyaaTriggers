@@ -88,6 +88,10 @@ class DeathRecapTabMixin:
         self._recap_next.clicked.connect(lambda: self._step_recap_pull(1))
         self._recap_next.hide()
         controls.addWidget(self._recap_next)
+        self._recap_delete_pull = QPushButton(_("Delete pull"))
+        self._recap_delete_pull.clicked.connect(self._delete_recap_pull)
+        self._recap_delete_pull.hide()
+        controls.addWidget(self._recap_delete_pull)
         self._recap_recent = QPushButton(_("Recent deaths"))
         self._recap_recent.clicked.connect(self._show_recent_recaps)
         self._recap_recent.hide()
@@ -171,7 +175,7 @@ class DeathRecapTabMixin:
                 self._refresh_recap_list()
         self._update_recap_notice()
 
-    def _show_pull_recaps(self, session, pull, number):
+    def _show_pull_recaps(self, session, pull, number, *, navigate=True):
         self._close_imported_recaps()
         self._recap_context = (session, pull, number)
         self._recap_records, self._recap_read_errors = self._prog_sessions.recaps.load(session["id"], pull["id"])
@@ -185,7 +189,12 @@ class DeathRecapTabMixin:
         self._recap_next.setEnabled(number < len(session["pulls"]))
         self._refresh_recap_list()
         self._update_recap_notice()
-        self._nav_buttons[self._stack.indexOf(self._death_recap_tab)].click()
+        if navigate:
+            self._nav_buttons[self._stack.indexOf(self._death_recap_tab)].click()
+
+    def _delete_recap_pull(self):
+        if self._recap_context is not None:
+            self._prog_tab.delete_pull(*self._recap_context[:2], parent=self._death_recap_tab)
 
     def _show_recent_recaps(self):
         self._close_imported_recaps()
@@ -309,6 +318,9 @@ class DeathRecapTabMixin:
             elif len(self._recap_records) < count:
                 messages.append(_("Only {available} of {recorded} recorded death recaps are available.").format(
                     available=len(self._recap_records), recorded=count))
+        self._recap_delete_pull.setVisible(self._recap_context is not None)
+        self._recap_delete_pull.setEnabled(
+            self._recap_context is not None and self._prog_sessions.can_delete_pull(*self._recap_context[:2]))
         if self._recap_import is not None:
             messages.append(_("Imported {count} deaths. Pulls are inferred from combat activity and wipe signals.").format(
                 count=len(self._recap_records)))

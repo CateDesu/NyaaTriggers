@@ -35,7 +35,8 @@ class SessionUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
-        cls.app.setStyleSheet(theme.STYLESHEET)
+        if cls.app.styleSheet() != theme.STYLESHEET:
+            cls.app.setStyleSheet(theme.STYLESHEET)
 
     def setUp(self):
         self.stack = ExitStack()
@@ -75,6 +76,21 @@ class SessionUiTests(unittest.TestCase):
     def line(self, fields):
         self.window._on_log_line("|".join(fields))
 
+    def start_session(self):
+        window = self.window
+        tab = window._prog_tab
+        tab.session = tab.sessions.start(
+            window._current_zone, window._current_zone_id, window._current_zone,
+            window._in_game_combat or window._dps_meter.current is not None)
+        tab.refresh()
+        return tab.session
+
+    def end_session(self):
+        tab = self.window._prog_tab
+        tab.flush()
+        tab.sessions.end(self.window._dps_meter.full_snapshot())
+        tab.refresh()
+
     def pull(self):
         self.window._on_in_combat(True, True)
         self.line(ability())
@@ -87,7 +103,8 @@ class SessionUiTests(unittest.TestCase):
         self.window._on_ws_zone_changed(1363, "UMAD")
         self.window._on_ws_primary_player(int(PLAYER, 16), "Player")
         self.window._prog_sessions.definitions = (fixture_definition(),)
-        self.window._prog_tab.start_button.click()
+        self.window._prog_sessions.invalidate_phase_progress()
+        self.start_session()
         self.window._on_in_combat(True, True)
         self.line(marker(0))
         self.line(ability())
@@ -239,7 +256,7 @@ class SessionUiTests(unittest.TestCase):
     def test_partial_metadata_after_a_name_correction_keeps_the_session(self):
         self.connect()
         window = self.window
-        window._prog_tab.start_button.click()
+        self.start_session()
         session = window._prog_sessions.current
         self.assertIsNotNone(session)
         window._on_ws_zone_changed(1, "Localized duty")
@@ -301,7 +318,7 @@ class SessionUiTests(unittest.TestCase):
     def test_reconnect_to_another_duty_still_ends_the_previous_session(self):
         self.connect()
         window = self.window
-        window._prog_tab.start_button.click()
+        self.start_session()
         session = window._prog_sessions.current
         window._ws.status_changed.emit(False, "Disconnected")
         window._ws.status_changed.emit(True, "Connected")
@@ -502,22 +519,34 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         window._settings["telesto_enabled"] = True
-        window._umad_chain_enabled = window._umad_gaze_enabled = True
+        window._umad_chain_enabled = window._umad_accretion_enabled = window._umad_gaze_enabled = True
+        self.enterContext(patch.object(window, "_clear_player"))
         window._triggers = [Trigger(fight="Other", zone_regex="Test duty|New duty"),
                             Trigger(fight="UMAD", zone_regex="Dancing Mad|UMAD")]
-        for kind, metadata in product(("chain", "gaze"), (None, (2, "New duty"), (1363, "UMAD"))):
+        for kind, metadata in product(("chain", "accretion", "gaze"), (None, (2, "New duty"), (1363, "UMAD"))):
             with self.subTest(kind=kind, metadata=metadata):
                 window._ws._on_disconnected()
                 window._ws.status_changed.emit(True, "Connected")
                 with patch.object(window, "_mark_player", return_value=False):
                     if kind == "gaze":
                         self.line(["26", "ts", GAZE_VFX_STATUS, "VFX", "9999", "E0000000", "", "40000001", "Boss", REAL_GAZE_VFX])
-                    for index, actor in enumerate((PLAYER, "10FF0002")):
-                        effects = ((ACCRETION, f"{0xBBC + index:X}", CRUST) if kind == "chain"
-                                   else (next(iter(window._umad_gaze.ids)),))
+                    actors = (PLAYER, "10FF0002")
+                    if kind == "chain":
+                        actors = (PLAYER, *(f"10FF000{index}" for index in range(2, 9)))
+                        window._actor_jobs.update({int(actor, 16): job
+                                                   for actor, job in zip(actors, (34, 38, 42, 19, 21, 24, 41, 40))})
+                        for actor in actors[-2:]:
+                            self.line(["26", "ts", ACCRETION, "Status", "30", "40000001", "Boss", actor, "Player"])
+                    for index, actor in enumerate(actors):
+                        if kind == "chain":
+                            effects = (f"{0xBBC + index % 3:X}", CRUST)
+                        elif kind == "accretion":
+                            effects = (ACCRETION, f"{0xBBC + index:X}")
+                        else:
+                            effects = (next(iter(window._umad_gaze.ids)),)
                         for effect in effects:
                             self.line(["26", "ts", effect, "Status", "30", "40000001", "Boss", actor, "Player"])
-                pending = getattr(window, f"_umad_{kind}_pending")
+                pending = list(getattr(window, f"_umad_{kind}_pending"))
                 self.assertTrue(pending)
                 if metadata is not None:
                     window._ws.zone_changed.emit(*metadata)
@@ -589,24 +618,17 @@ class SessionUiTests(unittest.TestCase):
                     {"status": "ABC", "marker": "attack1", "scope": "party"},
                     {"status": "DEF", "marker": "attack2", "scope": "party"},
                 ]
-                window._refresh_automark_rules_list()
-                window._automark_rules_list.setCurrentRow(0)
                 with patch.object(window, "_mark_player", return_value=False):
                     for effect, actor in (("ABC", PLAYER), ("DEF", "10FF0002")):
                         self.line(["26", "ts", effect, "Status", "30", "40000001", "Boss", actor, "Player"])
                 self.assertEqual(len(window._automark_pending), 2)
                 original = window._automark_rules[0].copy()
-                if action == "remove":
-                    window._on_automark_remove_rule()
-                    if restore:
-                        window._automark_rules.append(original)
-                else:
-                    combo = window._automark_assign_combo
-                    combo.setCurrentIndex(combo.findData("attack3"))
-                    window._on_automark_assign_marker()
-                    if restore:
-                        combo.setCurrentIndex(combo.findData("attack1"))
-                        window._on_automark_assign_marker()
+                window._automark_rules[0]["marker"] = "" if action == "remove" else "attack3"
+                window._cancel_changed_rule_marks()
+                self.assertEqual(len(window._automark_rules), 2)
+                if restore:
+                    window._automark_rules[0] = original
+                    window._cancel_changed_rule_marks()
                 with patch.object(window, "_mark_player", return_value=True) as mark:
                     window._retry_automark_pending()
                     self.assertEqual([(call.args[0], call.args[1]) for call in mark.call_args_list],
@@ -628,9 +650,10 @@ class SessionUiTests(unittest.TestCase):
                 self.line([*status[:2], "DEF", *status[3:]])
         self.assertEqual(len(window._automark_pending), 2)
         self.line(["30", *status[1:]])
+        expires_at = window._automark_pending[0][7]
         with patch.object(window, "_mark_player", return_value=True) as mark:
             window._retry_automark_pending()
-            mark.assert_called_once_with(PLAYER, "attack1", "Player")
+            mark.assert_called_once_with(PLAYER, "attack1", "Player", expires_at=expires_at)
         self.assertFalse(window._automark_pending)
 
     def test_admitted_engine_actions_cancel_conflicting_rule_retries(self):
@@ -1139,7 +1162,7 @@ class SessionUiTests(unittest.TestCase):
     def test_reconnect_does_not_add_an_unconfirmed_duty_to_the_previous_session(self):
         self.connect()
         window = self.window
-        window._prog_tab.start_button.click()
+        self.start_session()
         session = window._prog_sessions.current
         window._ws.status_changed.emit(False, "Disconnected")
         window._ws.status_changed.emit(True, "Connected")
@@ -1152,23 +1175,23 @@ class SessionUiTests(unittest.TestCase):
         self.assertEqual(session["pulls"], [])
         self.assertIsNotNone(window._dps_meter.current)
 
-    def test_session_start_waits_for_fresh_zone_metadata_after_reconnect(self):
+    def test_automatic_session_waits_for_fresh_zone_metadata_after_reconnect(self):
         self.connect()
         window = self.window
         window._ws.status_changed.emit(False, "Disconnected")
         window._ws.status_changed.emit(True, "Connected")
         window._ws.in_combat.emit(False, False)
         window._prog_tab.tick()
-        with self.subTest(action="button"):
-            self.assertFalse(window._prog_tab.start_button.isEnabled())
-        with self.subTest(action="start"):
-            window._prog_tab.start_session()
-            self.assertIsNone(window._prog_sessions.current)
+        window._ws.in_combat.emit(True, True)
+        self.line(ability())
+        self.assertIsNone(window._prog_sessions.current)
         window._ws.zone_changed.emit(2, "New duty")
+        window._ws.in_combat.emit(False, False)
+        self.pull()
         window._prog_tab.tick()
-        self.assertTrue(window._prog_tab.start_button.isEnabled())
-        window._prog_tab.start_button.click()
         self.assertEqual(window._prog_sessions.current["zone_id"], 2)
+        self.assertEqual(len(window._prog_sessions.current["pulls"]), 1)
+        self.assertTrue(window._prog_sessions.current["pulls"][0]["complete"])
 
     def test_phase_markers_before_reconnect_metadata_do_not_start_old_session_pulls(self):
         previous = self.phase_pull()
@@ -1186,7 +1209,7 @@ class SessionUiTests(unittest.TestCase):
     def test_same_duty_reconnect_resumes_after_idle_and_zone_in_either_order(self):
         self.connect()
         window = self.window
-        window._prog_tab.start_button.click()
+        self.start_session()
         session = window._prog_sessions.current
         for index, order in enumerate(permutations(("zone", "idle", "player")), start=1):
             with self.subTest(order=order):
@@ -1244,7 +1267,7 @@ class SessionUiTests(unittest.TestCase):
         self.window._on_ws_zone_changed(1363, "UMAD")
         self.window._on_ws_primary_player(int(PLAYER, 16), "Player")
         tab = self.window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         self.window._on_in_combat(True, True)
         self.line(ability())
         for ability_id in ("C403", "C24C", "C3F7", "C2DC", "C24A"):
@@ -1265,7 +1288,7 @@ class SessionUiTests(unittest.TestCase):
         self.window._on_ws_zone_changed(1363, "UMAD")
         self.window._on_ws_primary_player(int(PLAYER, 16), "Player")
         tab = self.window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         self.pull()
         self.window._prog_sessions.current["pulls"][0]["phase_tracking"] = None
         tab.tick()
@@ -1412,8 +1435,8 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         tab = window._prog_tab
         tab.tick()
-        self.assertTrue(tab.start_button.isEnabled())
-        tab.start_button.click()
+        for control in ("start_button", "end_button", "start_session", "end_session"):
+            self.assertFalse(hasattr(tab, control))
         self.pull()
         self.assertEqual(tab.table.rowCount(), 1)
         self.assertIn("1 complete pulls", tab.stats.text())
@@ -1427,7 +1450,7 @@ class SessionUiTests(unittest.TestCase):
         self.line(["25", "ts", PLAYER, "Player"])
         self.assertEqual(window._recap_list.count(), 1)
         self.assertGreater(window._recap_table.rowCount(), 0)
-        tab.end_button.click()
+        window._on_ws_zone_changed(2, "Other duty")
         self.window._prog_sessions.poll_saves(wait=True)
         saved = ProgSessions(self.temp / "prog_sessions").sessions[0]
         self.assertEqual(saved["pulls"][0]["note"], "First clean towers")
@@ -1440,7 +1463,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         window._on_in_combat(True, True)
         self.line(ability())
         self.clock.value += 5
@@ -1758,7 +1781,7 @@ class SessionUiTests(unittest.TestCase):
     def test_nameless_duty_transition_ends_session(self):
         self.connect()
         window = self.window
-        window._prog_tab.start_button.click()
+        self.start_session()
         window._on_ws_zone_changed(2, "")
         self.assertIsNone(window._prog_sessions.current)
 
@@ -1766,7 +1789,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         self.pull()
         first = tab.pull
         tab.note.setPlainText("First pull note")
@@ -1803,7 +1826,7 @@ class SessionUiTests(unittest.TestCase):
     def test_recap_events_run_newest_first_and_details_resize(self):
         self.connect()
         window = self.window
-        window._prog_tab.start_button.click()
+        self.start_session()
         window._on_in_combat(True, True)
         self.line(ability())
         self.clock.value += 5
@@ -1840,7 +1863,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         tab.name.setText("Static prog")
         tab.name.textEdited.emit("Static prog")
         window._on_in_combat(True, True)
@@ -1854,7 +1877,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         window._on_in_combat(True, True)
         self.line(ability())
         self.line(["25", "ts", PLAYER, "First player"])
@@ -1875,7 +1898,7 @@ class SessionUiTests(unittest.TestCase):
         self.assertEqual(window._recap_records[0]["name"], "First player")
         window._recap_recent.click()
         self.assertEqual(window._recap_list.count(), 2)
-        tab.end_button.click()
+        self.end_session()
         window._death_recap.deaths.clear()
         self.window._prog_sessions.poll_saves(wait=True)
         restarted = ProgSessions(self.temp / "prog_sessions")
@@ -1894,7 +1917,7 @@ class SessionUiTests(unittest.TestCase):
         window = self.window
         tab = window._prog_tab
         self.assertFalse(tab.recap_button.isEnabled())
-        tab.start_button.click()
+        self.start_session()
         self.pull()
         self.line(["25", "ts", PLAYER, "Player"])
         self.assertGreater(window._recap_table.rowCount(), 0)
@@ -1912,7 +1935,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         for name in ("First", "Second"):
             window._on_in_combat(True, True)
             self.line(ability())
@@ -1951,7 +1974,7 @@ class SessionUiTests(unittest.TestCase):
         self.assertEqual(window._recap_list.count(), 1)
         self.assertEqual(window._recap_table.item(0, 0).text(), "-2.0s")
         self.connect()
-        window._prog_tab.start_button.click()
+        self.start_session()
         window._on_in_combat(True, True)
         self.line(ability())
         self.line(["25", "ts", PLAYER, "Live"])
@@ -1981,7 +2004,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         window._on_in_combat(True, True)
         self.line(ability())
         tab.recap_button.click()
@@ -1998,7 +2021,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         window._on_in_combat(True, True)
         self.line(ability())
         with patch("nyaatriggers.recap_store.write_record", side_effect=OSError("Disk failed")):
@@ -2024,7 +2047,7 @@ class SessionUiTests(unittest.TestCase):
     def test_normal_pull_end_resets_observations_before_next_pull(self):
         self.connect()
         window = self.window
-        window._prog_tab.start_button.click()
+        self.start_session()
         self.pull()
         window._on_in_combat(True, True)
         self.line(["25", "ts", PLAYER, "Player"])
@@ -2033,7 +2056,7 @@ class SessionUiTests(unittest.TestCase):
     def test_crash_after_death_keeps_observed_pull_duration_and_death_count(self):
         self.connect()
         window = self.window
-        window._prog_tab.start_button.click()
+        self.start_session()
         window._on_in_combat(True, True)
         self.line(ability())
         self.clock.value += 12
@@ -2047,7 +2070,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         self.pull()
         self.clock.value += 3
         self.line(["26", "ts", "ABC", "Preparation buff", "30", PLAYER, "Player", PLAYER, "Player"])
@@ -2071,7 +2094,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         window._on_in_combat(True, True)
         self.line(ability())
         with patch("nyaatriggers.prog_session.write_record", wraps=write_record) as save:
@@ -2098,7 +2121,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         window._on_in_combat(True, True)
         self.line(ability(pairs=[("33", "0")]))
         self.clock.value += 1
@@ -2122,7 +2145,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         window._on_in_combat(True, True)
         self.line(ability())
         death = ["25", "ts", PLAYER, "Player"]
@@ -2177,7 +2200,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         death = ["25", "ts", PLAYER, "Player"]
         process = window._dps_meter.process
 
@@ -2214,7 +2237,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         for act_first in (True, False):
             with self.subTest(act_first=act_first):
                 self.clock.value += 3
@@ -2246,7 +2269,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         for act_first in (True, False):
             with self.subTest(act_first=act_first):
                 self.clock.value += 3
@@ -2320,7 +2343,7 @@ class SessionUiTests(unittest.TestCase):
         players = [f"{int(PLAYER, 16) + index:X}" for index in range(8)]
         for actor in players:
             self.line(["03", "ts", actor, actor, "18", "100", "0"])
-        tab.start_button.click()
+        self.start_session()
         window._on_in_combat(True, True)
         for index, actor in enumerate(players):
             self.line(ability(target=actor, pairs=[("03", f"{(index + 1) << 16:X}")]))
@@ -2358,7 +2381,7 @@ class SessionUiTests(unittest.TestCase):
     def test_pending_note_saves_to_its_pull_when_selection_changes(self):
         self.connect()
         tab = self.window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         self.pull()
         self.pull()
         tab.table.selectRow(1)
@@ -2378,11 +2401,11 @@ class SessionUiTests(unittest.TestCase):
     def test_pending_note_survives_switching_sessions_and_background_collection(self):
         self.connect()
         tab = self.window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         self.pull()
         first = tab.session
-        tab.end_button.click()
-        tab.start_button.click()
+        self.end_session()
+        self.start_session()
         self.pull()
         second = tab.session
         tab.picker.setCurrentIndex(tab.picker.findData(first["id"]))
@@ -2401,11 +2424,11 @@ class SessionUiTests(unittest.TestCase):
     def test_shutdown_flushes_a_pending_note_on_a_historical_session(self):
         self.connect()
         tab = self.window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         self.pull()
         first = tab.session
-        tab.end_button.click()
-        tab.start_button.click()
+        self.end_session()
+        self.start_session()
         self.window._on_in_combat(True, True)
         self.line(ability())
         second = tab.session
@@ -2423,7 +2446,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         window._on_in_combat(True, True)
         for index in range(MAX_DEATHS):
             self.clock.value += 1.1
@@ -2465,7 +2488,7 @@ class SessionUiTests(unittest.TestCase):
         tab = window._prog_tab
         for target in ("nyaatriggers.recap_store.write_record", "nyaatriggers.prog_session.write_record"):
             with self.subTest(target=target):
-                tab.start_button.click()
+                self.start_session()
                 window._on_in_combat(True, True)
                 self.line(ability(pairs=[("33", "0")]))
                 window._on_in_combat(False, False)
@@ -2495,13 +2518,13 @@ class SessionUiTests(unittest.TestCase):
                 session = next(s for s in loaded.sessions if s["id"] == tab.session["id"])
                 self.assertEqual(len(session["pulls"]), 1)
                 self.assertEqual(session["pulls"][0]["recap_count"], 1)
-                tab.end_session()
+                self.end_session()
                 window._show_recent_recaps()
 
     def test_zone_and_disconnect_stop_late_deaths_reaching_old_pull(self):
         self.connect()
         window = self.window
-        window._prog_tab.start_button.click()
+        self.start_session()
         self.pull()
         session = window._prog_sessions.current
         pull = session["pulls"][0]
@@ -2518,7 +2541,7 @@ class SessionUiTests(unittest.TestCase):
         self.connect()
         window = self.window
         tab = window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         self.pull()
         self.line(["25", "ts", PLAYER, "Player"])
         tab.tick()

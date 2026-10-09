@@ -53,7 +53,7 @@ class FakeWindow:
     def _umad_name_of(self, actor_id):
         return ""
 
-    def _mark_player(self, tid, marker, name, is_me=False):
+    def _mark_player(self, tid, marker, name, is_me=False, *, expires_at=None):
         if not self._mark_ok:
             return False
         self.marks.append((tid, marker))

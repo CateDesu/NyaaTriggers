@@ -27,6 +27,8 @@ class SavedRecapDialog(QDialog):
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Open | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
+        self.delete_button = self.buttons.addButton(_("Delete pull"), QDialogButtonBox.ButtonRole.ActionRole)
+        self.delete_button.clicked.connect(self._delete_pull)
         self.pulls.itemDoubleClicked.connect(lambda _item: self.accept())
         self.pulls.currentRowChanged.connect(self._select)
         self.session.currentIndexChanged.connect(self._refresh)
@@ -56,6 +58,12 @@ class SavedRecapDialog(QDialog):
             index = item.data(Qt.ItemDataRole.UserRole)
             self.selection = session, session["pulls"][index], index + 1
         self.buttons.button(QDialogButtonBox.StandardButton.Open).setEnabled(self.selection is not None)
+        self.delete_button.setEnabled(self.selection is not None
+                                      and self.parent()._prog_sessions.can_delete_pull(*self.selection[:2]))
+
+    def _delete_pull(self):
+        if self.selection is not None and self.parent()._prog_tab.delete_pull(*self.selection[:2], parent=self):
+            self._refresh()
 
     def accept(self):
         if self.selection is not None:

@@ -234,12 +234,13 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             self._triggevent.callout.connect(self._on_triggevent_callout)
             self._triggevent.tts.connect(self._on_triggevent_tts)
             self._triggevent.inventory.connect(self._on_triggevent_inventory)
-            self._triggevent.automark_inventory.connect(self._on_native_automark_inventory)
+            self._triggevent.automark_inventory.connect(self._receive_native_automark_inventory)
             self._triggevent.telesto.connect(self._on_telesto_status)
             self._triggevent.status.connect(
                 lambda active, msg, gen: self._on_engine_sidecar_status("triggevent", active, msg, gen))
             self._triggevent.chain_failure.connect(self._on_engine_chain_failure)
             self._triggevent.ready.connect(self._on_custom_triggevent_ready)
+            self._triggevent.ready.connect(self._on_native_automarkers_ready)
             self._triggevent.custom_status.connect(self._on_custom_triggevent_status)
             self._triggevent_recovery = TriggeventRecovery(
                 self._triggevent, self._ws, self._find_iinact_log_dir, self)
@@ -248,6 +249,63 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             self._apply_engine_overrides("triggevent")
             self._triggevent.set_disabled(self._triggevent_disabled)
         return self._triggevent
+
+    def _load_cached_native_automark_inventory(self) -> None:
+        panel = getattr(self, "_native_automarkers_panel", None)
+        if panel is None:
+            return
+        for path in (ac._TRIGGEVENT_AUTOMARK_INVENTORY_CACHE,
+                     ac._TRIGGEVENT_AUTOMARK_INVENTORY_SEED):
+            try:
+                inventory = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, RecursionError):
+                continue
+            if (not isinstance(inventory, dict) or inventory.get("version") != 1
+                    or not isinstance(inventory.get("settings"), list)):
+                continue
+            panel.set_inventory(inventory, self._settings.get("triggevent_automark_settings", {}),
+                                self._native_umad_preference(), self._native_umad_owned_locally())
+            if panel._settings:
+                break
+        panel.set_engine_status(_("Loading native automarker controls."))
+
+    def _receive_native_automark_inventory(self, payload: str, generation: int) -> None:
+        if (_stale_gen(self._triggevent, generation)
+                or not self._triggevent.is_active()):
+            return
+        try:
+            inventory = json.loads(payload)
+        except (TypeError, ValueError, RecursionError):
+            return
+        if (not isinstance(inventory, dict) or inventory.get("version") != 1
+                or not isinstance(inventory.get("settings"), list)):
+            return
+        self._on_native_automark_inventory(payload, generation)
+        if (_stale_gen(self._triggevent, generation)
+                or not self._triggevent.is_active()
+                or getattr(self, "_native_automark_inventory_generation", None) != generation):
+            return
+        panel = getattr(self, "_native_automarkers_panel", None)
+        if panel is not None:
+            panel.set_engine_status("")
+        if "error" not in inventory:
+            try:
+                _atomic_write_json(ac._TRIGGEVENT_AUTOMARK_INVENTORY_CACHE, inventory)
+            except OSError as exc:
+                ac.log_drop("save", f"native automarker inventory cache: {exc}")
+
+    def _on_native_automarkers_ready(self, generation: int) -> None:
+        QTimer.singleShot(5000, lambda: self._check_native_automarkers_ready(generation))
+
+    def _check_native_automarkers_ready(self, generation: int) -> None:
+        if (_stale_gen(self._triggevent, generation)
+                or not self._triggevent.is_active()
+                or getattr(self, "_native_automark_inventory_generation", None) == generation):
+            return
+        panel = getattr(self, "_native_automarkers_panel", None)
+        if panel is not None:
+            panel.set_engine_status(
+                _("Native automarker controls did not load. Update the Triggevent engine in Settings, then restart the program."))
 
     def _on_triggevent_combatants_request(self, ids, generation):
         if not _stale_gen(self._triggevent, generation):
@@ -294,6 +352,12 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             return
         state = "good" if active else ("unknown" if msg == "Off" else "bad")
         self._engine_sidecar_state[src] = (state, msg)
+        panel = getattr(self, "_native_automarkers_panel", None)
+        if src == "triggevent" and panel is not None:
+            if not active:
+                panel.set_engine_status(engine_status(msg))
+            elif getattr(self, "_native_automark_inventory_generation", None) != gen:
+                panel.set_engine_status(_("Loading native automarker controls."))
         (_te_log if src == "triggevent" else _tn_log)(f"status: active={active} {msg}")
         if src == "triggevent" and active:
             self._engine_chain_failures = deque(maxlen=50)
@@ -337,6 +401,9 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         else:
             return
         self._engine_sidecar_state["triggevent"] = ("bad", msg)
+        panel = getattr(self, "_native_automarkers_panel", None)
+        if panel is not None:
+            panel.set_engine_status(msg)
         self._update_engine_status_label()
         # Offer installation once, except during offscreen tests.
         headless = QApplication.platformName() == "offscreen"

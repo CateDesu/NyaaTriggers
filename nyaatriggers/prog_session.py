@@ -1,12 +1,14 @@
 from copy import deepcopy
-from collections import Counter
+from collections import Counter, OrderedDict
 from pathlib import Path
+import shutil
 import time
 from uuid import uuid4
 
 from nyaatriggers.recap_store import RecapStore
 from nyaatriggers.record_store import load_records, record_id, write_record
 from nyaatriggers.prog_phases import DEFINITIONS, PhaseAttempt, definition_for, match_event, new_tracking, read_tracking
+from nyaatriggers.prog_progress import hp_samples, phase_progress, player_damage_target, wire_number
 
 COMPLETE_REASONS = {"combat-ended", "wipe"}
 LATE_DEATH_SECONDS = 2
@@ -194,6 +196,86 @@ class ProgSessions:
         self.last_attempt = None
         self._awaiting_snapshot = None
         self._wipe_candidate = None
+        self._phase_progress = {}
+        self._boss_actors = OrderedDict()
+        self._boss_ids = {ident for definition in self.definitions
+                          for _, ids in definition.bosses for ident in ids}
+        self._boss_names = {ident for definition in self.definitions
+                            for _, ident in definition.caster_bosses}
+        self._attacked_bosses = set()
+
+    def invalidate_phase_progress(self, zone_id=None):
+        if zone_id is None:
+            self._phase_progress.clear()
+        else:
+            self._phase_progress.pop(zone_id, None)
+
+    def phase_progress(self, zone_id):
+        if zone_id not in self._phase_progress:
+            self._phase_progress[zone_id] = phase_progress(self.sessions, zone_id, self.definitions)
+        return self._phase_progress[zone_id]
+
+    def reset_bosses(self):
+        self._boss_actors.clear()
+        self._attacked_bosses.clear()
+
+    def observe_hp(self, fields):
+        if not fields:
+            return False
+        if fields[0] == "01":
+            self.reset_bosses()
+        elif fields[0] in ("03", "04") and len(fields) > 2:
+            actor = wire_number(fields[2], 16)
+            self._boss_actors.pop(actor, None)
+            self._attacked_bosses.discard(actor)
+            if fields[0] == "03" and len(fields) > 12:
+                npc_id = wire_number(fields[10])
+                name_id = wire_number(fields[9])
+                owner = wire_number(fields[6], 16)
+                maximum = wire_number(fields[12])
+                if (actor is not None and 0x40000000 <= actor < 0x50000000
+                        and npc_id and (npc_id in self._boss_ids or name_id in self._boss_names)
+                        and owner == 0):
+                    self._boss_actors[actor] = (npc_id, maximum, name_id)
+                    while len(self._boss_actors) > 64:
+                        discarded, _ = self._boss_actors.popitem(last=False)
+                        self._attacked_bosses.discard(discarded)
+        attempt = self.attempt
+        if (attempt is None or attempt.closed or attempt.waiting
+                or not attempt.data["observations"]):
+            return False
+        phase = attempt.data["observations"][-1]["phase"]
+        bosses = dict(attempt.definition.bosses).get(phase, ())
+        caster_name = dict(attempt.definition.caster_bosses).get(phase)
+        caster = attempt.data["observations"][-1].get("actor")
+        if caster_name is not None and player_damage_target(fields) == caster:
+            self._attacked_bosses.add(caster)
+        changed = False
+        for actor, current, maximum, missing_maximum in hp_samples(fields):
+            metadata = self._boss_actors.get(actor)
+            caster_confirmed = (metadata is not None and caster_name is not None
+                                and metadata[2] == caster_name and actor == caster
+                                and actor in self._attacked_bosses)
+            if metadata is None or not (metadata[0] in bosses or caster_confirmed):
+                continue
+            if missing_maximum:
+                maximum = metadata[1]
+            if (current is None or maximum is None or maximum == 0
+                    or current > maximum):
+                continue
+            self._boss_actors[actor] = (metadata[0], maximum, metadata[2])
+            samples = attempt.data.setdefault("boss_hp", {})
+            previous = samples.get(phase)
+            if previous is not None and current * previous["maximum"] >= previous["current"] * maximum:
+                continue
+            samples[phase] = {"current": current, "maximum": maximum,
+                              "npc_id": metadata[0], "observed_at": self.wall()}
+            if caster_confirmed:
+                samples[phase].update(actor=actor, npc_name_id=metadata[2], target_confirmed=True)
+            changed = True
+        if changed:
+            self.invalidate_phase_progress(self.current["zone_id"])
+        return changed
 
     def start(self, name, zone_id, zone, in_combat):
         if self.current is not None:
@@ -290,6 +372,96 @@ class ProgSessions:
         if self.writer is not None:
             self.writer.poll(wait=wait)
 
+    def delete(self, session):
+        if not any(record is session for record in self.sessions):
+            raise ValueError("Invalid session selection")
+        if session is self.current or session["state"] == "active":
+            raise ValueError("End the session before deleting it")
+        ident = record_id(session["id"])
+        self.poll_saves(wait=True)
+        try:
+            shutil.rmtree(self.recaps.directory / ident)
+        except FileNotFoundError:
+            pass
+        (Path(self.directory) / (ident + ".json")).unlink(missing_ok=True)
+        self.sessions = [record for record in self.sessions if record is not session]
+        self.invalidate_phase_progress(session["zone_id"])
+        self.unsaved.pop(ident, None)
+        self.save_errors.pop(ident, None)
+        self._saving.pop(ident, None)
+        self.save_error = "\n".join(self.save_errors.values())
+        for recap_id, data in list(self.recaps.unsaved.items()):
+            if data["session_id"] == ident:
+                self.recaps.unsaved.pop(recap_id)
+                self.recaps.errors.pop(recap_id, None)
+                self.recaps._saving.pop(recap_id, None)
+        self.errors = [error for error in self.errors if not error.startswith(ident + "/")]
+
+    def can_delete_pull(self, session, pull):
+        if not any(record is session for record in self.sessions) or not isinstance(pull, dict):
+            return False
+        if not any(record is pull for record in session["pulls"]) or pull.get("ending") == "active":
+            return False
+        try:
+            record_id(session["id"])
+            record_id(pull["id"])
+        except (KeyError, ValueError):
+            return False
+        if session is self.current:
+            if self.pending == pull["id"] or (self.attempt is not None and self.attempt.pull is pull):
+                return False
+            if (self._awaiting_snapshot is not None
+                    and self._awaiting_snapshot["Encounter"]["pull_id"] == pull["id"]):
+                return False
+        return True
+
+    def delete_pull(self, session, pull):
+        if not self.can_delete_pull(session, pull):
+            raise ValueError("Select a finished saved pull before deleting it")
+        session_id, pull_id = record_id(session["id"]), record_id(pull["id"])
+        self.poll_saves(wait=True)
+        remaining = [record for record in session["pulls"] if record is not pull]
+        record = deepcopy({**session, "pulls": remaining})
+        if session is self.current:
+            record["elapsed"] = self.elapsed(session)
+            if self._empty_pull is not None and self._empty_pull is not pull:
+                record["pulls"].append(deepcopy(self._empty_pull))
+        validate_session(record)
+        write_record(self.directory, record)
+        session["pulls"] = remaining
+        session["elapsed"] = record["elapsed"]
+        self.unsaved.pop(session_id, None)
+        self.save_errors.pop(session_id, None)
+        self._saving.pop(session_id, None)
+        self.save_error = "\n".join(self.save_errors.values())
+        if session is self.current:
+            self._checkpoint_at = self.clock()
+            if self._recap_pull == pull_id:
+                self._recap_pull = None
+                self._recap_until = None
+                self._recap_ids.clear()
+            if self._empty_pull is pull:
+                self._empty_pull = None
+            if self.last_attempt is not None and self.last_attempt.pull is pull:
+                self.last_attempt = None
+            if self._wipe_candidate is not None and self._wipe_candidate[0] is pull:
+                self._wipe_candidate = None
+        for recap_id, data in list(self.recaps.unsaved.items()):
+            if (data["session_id"], data["pull_id"]) == (session_id, pull_id):
+                self.recaps.unsaved.pop(recap_id)
+                self.recaps.errors.pop(recap_id, None)
+                self.recaps._saving.pop(recap_id, None)
+        prefix = f"{session_id}/{pull_id}:"
+        self.errors = [error for error in self.errors if not error.startswith(prefix)]
+        self.invalidate_phase_progress(session["zone_id"])
+        try:
+            shutil.rmtree(self.recaps._directory(session_id, pull_id))
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            return str(exc) or type(exc).__name__
+        return None
+
     def flush_pending(self, *, wait=False):
         self.poll_saves(wait=wait)
         for session in list(self.unsaved.values()):
@@ -328,6 +500,7 @@ class ProgSessions:
                 "deaths": 0, "bookmark": False, "note": "", "recap_count": 0,
                 "phase_tracking": new_tracking(self.definition) if self.definition else None}
         self.current["pulls"].append(pull)
+        self._attacked_bosses.clear()
         self.pending = pull["id"]
         self._recap_pull = pull["id"]
         self._recap_until = None
@@ -375,6 +548,7 @@ class ProgSessions:
         self.save(self.current)
 
     def feed_lost(self):
+        self.reset_bosses()
         self._interrupt_attempt("feed-lost")
         self.ready = False
         self._recap_pull = None
@@ -422,6 +596,8 @@ class ProgSessions:
                 return
 
     def end(self, snapshot=None, reason="session-ended"):
+        if reason == "duty-left":
+            self.reset_bosses()
         if self.current is None:
             return
         if self.pending and snapshot:
@@ -471,6 +647,7 @@ class ProgSessions:
                 if self._awaiting_snapshot["Encounter"]["pull_id"] == snapshot["Encounter"]["pull_id"]:
                     self._awaiting_snapshot = snapshot
             started = self.observe_phase(fields, now) or started
+            self.observe_hp(fields)
             for kind, notification in notifications:
                 if kind == "finish":
                     if wipe and self.attempt is not None:
@@ -515,7 +692,8 @@ class ProgSessions:
         if attempt is None:
             return False
         try:
-            if attempt.observe(fields, self.clock() if now is None else now):
+            if attempt.observe(fields, self.clock() if now is None else now, self.wall()):
+                self.invalidate_phase_progress(self.current["zone_id"])
                 self.save(self.current)
         except Exception:
             self._interrupt_attempt("boundary-uncertain")

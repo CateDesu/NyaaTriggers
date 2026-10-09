@@ -4,6 +4,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6 import sip
 from PyQt6.QtCore import QCoreApplication, QEvent, Qt
 from PyQt6.QtWidgets import QApplication, QCheckBox, QComboBox, QGroupBox, QLabel, QLineEdit, QListWidget, QPushButton, QSpinBox
 
@@ -113,6 +114,8 @@ class NativeAutomarkersUiTests(unittest.TestCase):
         self.panel.close()
         self.panel.deleteLater()
         _QT_APP.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.assertTrue(sip.isdeleted(self.panel))
 
     def control(self, cls, name):
         widget = self.panel.findChild(cls, name)
@@ -130,6 +133,16 @@ class NativeAutomarkersUiTests(unittest.TestCase):
                               if group.objectName().startswith("native_mechanic.")]), 13)
         self.assertEqual(len(self.panel.findChildren(QSpinBox, "telesto.delay_base_ms.value")), 1)
         self.assertEqual(self.changes, [])
+
+    def test_engine_status_keeps_controls_editable_and_explains_saved_changes(self):
+        self.panel.set_engine_status("Sidecar exited")
+        self.assertTrue(self.panel.isEnabled())
+        self.assertIn("Sidecar exited", self.panel._engine_note.text())
+        self.assertIn("Changes are saved", self.panel._engine_note.text())
+        self.control(QCheckBox, "top.looper.enabled.value").click()
+        self.assertEqual(self.changes, [("top.looper.enabled", True)])
+        self.panel.set_engine_status("")
+        self.assertTrue(self.panel._engine_note.isHidden())
 
     def test_saved_values_and_requested_umad_do_not_emit(self):
         overrides = {"top.looper.enabled": True, "top.sigma.delay_seconds": 17, "native_umad": True}

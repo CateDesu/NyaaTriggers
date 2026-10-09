@@ -618,10 +618,11 @@ class DataSafetyTests(unittest.TestCase):
             self.assertEqual(list(Path(folder).iterdir()), [path])
 
     def test_notification_exit_failure_is_logged(self):
-        result = subprocess.CompletedProcess(['aplay'], 1, stderr=b'audio device busy')
+        process = Mock(returncode=1, stderr=io.BytesIO())
+        process.communicate.return_value = (None, b'audio device busy')
         with patch.object(tts.platform, 'system', return_value='Linux'), \
                 patch.object(tts, '_wav_seconds', return_value=1), \
-                patch.object(tts.subprocess, 'run', return_value=result), \
+                patch.object(tts.subprocess, 'Popen', return_value=process), \
                 patch.object(tts, 'log_drop') as log:
             tts._play_wav_detached('unused.wav')
             self.assertEqual(log.call_count, 1)

@@ -10,6 +10,8 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6 import sip
+from PyQt6.QtCore import QCoreApplication, QEvent
 from PyQt6.QtWidgets import QApplication, QCheckBox, QComboBox, QListWidget, QPushButton, QSpinBox, QWidget
 
 from nyaatriggers import app_common as ac
@@ -82,6 +84,8 @@ class NativeAutomarkerSettingsTests(unittest.TestCase):
         self.host.close()
         self.host.deleteLater()
         _QT_APP.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.assertTrue(sip.isdeleted(self.host))
 
     def commands(self):
         result = []
@@ -100,6 +104,68 @@ class NativeAutomarkerSettingsTests(unittest.TestCase):
         widget = self.host._native_automarkers_panel.findChild(cls, name)
         self.assertIsNotNone(widget, name)
         return widget
+
+    def load_offline_controls(self):
+        seed = self.directory / "automarkers.seed.json"
+        seed.write_text(json.dumps(self.inventory))
+        with patch.multiple(ac, _TRIGGEVENT_AUTOMARK_INVENTORY_CACHE=self.directory / "missing-cache.json",
+                            _TRIGGEVENT_AUTOMARK_INVENTORY_SEED=seed):
+            self.host._load_cached_native_automark_inventory()
+
+    def test_offline_edits_persist_reload_and_replay_on_engine_start_and_restart(self):
+        self.bridge._active = False
+        self.load_offline_controls()
+        self.assertTrue(self.host._native_automarkers_panel.isEnabled())
+        self.assertIsNone(self.host._native_automark_inventory)
+        self.control(QCheckBox, "top.looper.enabled.value").click()
+        self.control(QSpinBox, "top.sigma.delay_seconds.value").setValue(17)
+        jobs = self.control(QListWidget, "top.priority.value")
+        jobs.setCurrentRow(1)
+        self.control(QPushButton, "top.priority.up").click()
+        marker = self.control(QComboBox, "top.delta.markers.NearWorld.marker")
+        marker.setCurrentIndex(marker.findData("IGNORE1"))
+        self.control(QCheckBox, "native_umad.value").click()
+        expected = {"top.looper.enabled": True, "top.sigma.delay_seconds": 17,
+                    "top.priority": ["WAR", "DRG", "SCH"],
+                    "top.delta.markers": {"NearWorld": {"enabled": True, "marker": "IGNORE1"},
+                                          "DistantWorld": {"enabled": True, "marker": "ATTACK2"}}}
+        self.assertEqual(self.commands(), [])
+        self.assertEqual(json.loads(self.settings_path.read_text())["triggevent_automark_settings"], expected)
+        self.assertEqual(self.saved.call_count, 5)
+        self.host._settings = {}
+        self.host._load_settings()
+        self.load_offline_controls()
+        self.assertEqual(self.host._native_automarkers_panel._values["top.delta.markers"], expected["top.delta.markers"])
+        self.assertFalse(self.control(QCheckBox, "native_umad.value").isChecked())
+        self.assertEqual(self.commands(), [])
+        self.saved.reset_mock()
+        self.bridge._active = True
+        for generation in (4, 5):
+            with self.subTest(generation=generation):
+                self.bridge._gen = generation
+                self.bridge._dispatch({"t": "inventory", "triggers": []}, gen=generation)
+                self.assertEqual(self.commands(), [{"nyaa_cmd": "set_automark", "native_umad": False},
+                                                   self.full_command(expected, native_umad=False)])
+                self.render()
+                self.assertEqual(self.commands(), [])
+                self.assertEqual(self.host._native_automarkers_panel._values["top.priority"], expected["top.priority"])
+                self.assertTrue(self.control(QCheckBox, "top.looper.enabled.value").isChecked())
+        self.saved.assert_not_called()
+
+    def test_before_bridge_creation_umad_preference_and_local_ownership_stay_current(self):
+        self.host._triggevent = None
+        self.load_offline_controls()
+        self.host._settings["umad_gaze_enabled"] = True
+        self.host._apply_native_automark_state()
+        self.assertFalse(self.host._native_automarkers_panel._umad_note.isHidden())
+        self.control(QCheckBox, "native_umad.value").click()
+        self.assertFalse(json.loads(self.settings_path.read_text())["native_umad_enabled"])
+        self.assertFalse(self.control(QCheckBox, "native_umad.value").isChecked())
+        self.host._settings["umad_gaze_enabled"] = False
+        self.host._apply_native_automark_state()
+        self.assertTrue(self.host._native_automarkers_panel._umad_note.isHidden())
+        self.assertTrue(self.host._native_automarkers_panel.isEnabled())
+        self.assertEqual(self.commands(), [])
 
     def test_typed_panel_changes_persist_and_share_the_enable_command(self):
         self.render()

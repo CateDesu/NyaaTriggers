@@ -1,0 +1,21 @@
+# Synthetic ACT status sequence from cactbot's dancing_mad.ts P3 Nothingness description.
+# This is not a recorded pull. Crust loss after the third hit completes each carrier.
+# Source: https://github.com/OverlayPlugin/cactbot/blob/main/ui/raidboss/data/07-dt/ultimate/dancing_mad.ts#L5975
+26|2026-10-08T12:00:00.000|BBD|Second in Line|120|40000001|Chaos|10FF0002|Second Carrier
+26|2026-10-08T12:00:00.010|BBC|First in Line|120|40000001|Chaos|10FF0001|First Carrier
+26|2026-10-08T12:00:00.020|644|Accretion|120|40000001|Chaos|10FF0002|Second Carrier
+26|2026-10-08T12:00:00.030|644|Accretion|120|40000001|Chaos|10FF0001|First Carrier
+26|2026-10-08T12:00:00.040|154E|Primordial Crust|120|40000001|Chaos|10FF0001|First Carrier
+26|2026-10-08T12:00:00.050|154E|Primordial Crust|120|40000001|Chaos|10FF0002|Second Carrier
+30|2026-10-08T12:00:03.000|644|Accretion|0|40000001|Chaos|10FF0001|First Carrier
+30|2026-10-08T12:00:04.000|644|Accretion|0|40000001|Chaos|10FF0002|Second Carrier
+26|2026-10-08T12:00:20.000|154C|Unbecoming|30|40000002|Black Hole|10FF0001|First Carrier
+30|2026-10-08T12:00:25.000|154C|Unbecoming|0|40000002|Black Hole|10FF0001|First Carrier
+26|2026-10-08T12:00:25.010|154D|Meanest Existence|30|40000002|Black Hole|10FF0001|First Carrier
+30|2026-10-08T12:00:30.000|154D|Meanest Existence|0|40000002|Black Hole|10FF0001|First Carrier
+30|2026-10-08T12:00:30.010|154E|Primordial Crust|0|40000002|Black Hole|10FF0001|First Carrier
+26|2026-10-08T12:00:50.000|154C|Unbecoming|30|40000002|Black Hole|10FF0002|Second Carrier
+30|2026-10-08T12:00:55.000|154C|Unbecoming|0|40000002|Black Hole|10FF0002|Second Carrier
+26|2026-10-08T12:00:55.010|154D|Meanest Existence|30|40000002|Black Hole|10FF0002|Second Carrier
+30|2026-10-08T12:01:00.000|154E|Primordial Crust|0|40000002|Black Hole|10FF0002|Second Carrier
+30|2026-10-08T12:01:00.010|154D|Meanest Existence|0|40000002|Black Hole|10FF0002|Second Carrier

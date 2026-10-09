@@ -420,18 +420,18 @@ class TriggersTabMixin:
         folder_names = {fo["name"] for fo in self._folders}
         grouped: dict[str, list] = {}
         for t in custom:
-            key = t.fight if t.fight else _GENERAL_TAB
-            if key not in folder_names:
+            key = t.fight
+            if not key or key not in folder_names:
                 grouped.setdefault(key, [])
         if any(not row["fight"] for row in getattr(self, "_custom_triggevent", [])):
-            grouped.setdefault(_GENERAL_TAB, [])
+            grouped.setdefault("", [])
         if any(row.get("source") == "triggernometry" and not self._engine_fight_tag(row)
                for row in self._engine_inventory):
-            grouped.setdefault(_GENERAL_TAB, [])
+            grouped.setdefault("", [])
 
         for fight_key in sorted(grouped):
-            fi = QTreeWidgetItem([_(fight_key) if fight_key == _GENERAL_TAB else fight_key])
-            fi.setData(0, Qt.ItemDataRole.UserRole, "" if fight_key == _GENERAL_TAB else fight_key)
+            fi = QTreeWidgetItem([fight_key or _(_GENERAL_TAB)])
+            fi.setData(0, Qt.ItemDataRole.UserRole, fight_key)
             fi.setData(0, _ITEM_TYPE_ROLE, "custom_group")
             # Inline name edits would be lost on refresh.
             fi.setFlags(fi.flags() & ~Qt.ItemFlag.ItemIsEditable)

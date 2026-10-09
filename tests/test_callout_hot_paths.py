@@ -93,7 +93,7 @@ class HotPathTests(unittest.TestCase):
     def test_slow_recap_storage_does_not_block_dispatch_and_close_flushes(self):
         window = self.window
         self.fixture.connect()
-        window._prog_tab.start_button.click()
+        self.fixture.start_session()
         window._on_in_combat(True, True)
         self.fixture.line(ability())
         sessions = window._prog_sessions
@@ -159,7 +159,7 @@ class HotPathTests(unittest.TestCase):
     def test_queued_late_recap_remains_reachable_if_final_summary_fails(self):
         window = self.window
         self.fixture.connect()
-        window._prog_tab.start_button.click()
+        self.fixture.start_session()
         sessions = window._prog_sessions
         sessions.poll_saves(wait=True)
         entered, release = threading.Event(), threading.Event()

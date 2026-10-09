@@ -227,7 +227,11 @@ class InstanceTabMixin:
         self._actor_jobs.clear()
         self._umad_actor_names.clear()
         self._umad_chain_reset()
+        if hasattr(self, "_umad_accretion_reset"):
+            self._umad_accretion_reset()
         self._umad_gaze_reset()
+        if hasattr(self, "_umad_grand_cross_reset"):
+            self._umad_grand_cross_reset()
         self._automark_pairs.reset()
         self._automark_pending.clear()
         self._automark_active.clear()
@@ -246,7 +250,7 @@ class InstanceTabMixin:
             self._queue_timeline_event(fields)
         track_combat = getattr(self, "_track_combat", None)
         if track_combat is not None:
-            track_combat(act, game)
+            track_combat(act, game, was_in_game=was)
         try:
             self._dps_meter.set_in_combat(act, game)
         except Exception as exc:  # noqa: BLE001
@@ -347,7 +351,11 @@ class InstanceTabMixin:
             if client is not None:
                 client.cancel_pending()
             self._umad_chain_reset(clear_marks=True)
+            if hasattr(self, "_umad_accretion_reset"):
+                self._umad_accretion_reset(clear_marks=True)
             self._umad_gaze_reset(clear_marks=True)
+            if hasattr(self, "_umad_grand_cross_reset"):
+                self._umad_grand_cross_reset(clear_marks=True)
             tracked = set()
             for actor, claims in getattr(self, "_automark_deliveries", {}).items():
                 for claim in claims:
@@ -376,7 +384,7 @@ class InstanceTabMixin:
             _eff_n = self._norm_hex(fields[2])
             if _eff_n in self._automark_pairs.tracked:
                 if fields[0] == "26":
-                    self._automark_pairs.on_gain(_eff_n, fields[7], time.monotonic())
+                    self._automark_pairs.on_gain(_eff_n, fields[7], time.monotonic(), fields[4])
                 else:
                     self._automark_pairs.on_loss(_eff_n, fields[7])
 
@@ -392,7 +400,10 @@ class InstanceTabMixin:
         if fields[0] in ("26", "30"):
             try:
                 self._umad_chain_line(fields)
+                if hasattr(self, "_umad_accretion_line"):
+                    self._umad_accretion_line(fields)
                 self._umad_gaze_line(fields)
+                self._umad_grand_cross_line(fields)
             except Exception as exc:  # noqa: BLE001
                 ac.log_drop("umad", f"{exc!r} on {raw[:140]!r}")
         elif fields[0] == "20":

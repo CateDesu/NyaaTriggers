@@ -3,7 +3,7 @@ from datetime import datetime
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRectF
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout,
-                             QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
+                             QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
                              QScrollArea, QTableWidget, QTableWidgetItem, QToolButton,
                              QVBoxLayout, QWidget)
 
@@ -140,10 +140,6 @@ class ProgTab(QWidget):
         self.compare_button = QPushButton(_("Compare with…"))
         self.compare_button.setCheckable(True)
         controls.addWidget(self.compare_button)
-        self.start_button = QPushButton(_("Start session"))
-        self.end_button = QPushButton(_("End session"))
-        controls.addWidget(self.start_button)
-        controls.addWidget(self.end_button)
         header.addLayout(controls)
         outer.addWidget(self.content_scroll)
         self.name = QLineEdit()
@@ -153,6 +149,8 @@ class ProgTab(QWidget):
         name_controls.addWidget(self.name, 1)
         self.archive_button = QPushButton(_("Archive session"))
         name_controls.addWidget(self.archive_button)
+        self.delete_button = QPushButton(_("Delete session"))
+        name_controls.addWidget(self.delete_button)
         layout.addLayout(name_controls)
         self.status = QLabel()
         self.status.setWordWrap(True)
@@ -166,6 +164,17 @@ class ProgTab(QWidget):
         self.phase_progress.setTextFormat(Qt.TextFormat.PlainText)
         self.phase_progress.setToolTip(_("Phase rates include complete attempts with matching verified rules. Interrupted, active, unreadable, and unrecorded pulls are excluded."))
         layout.addWidget(self.phase_progress)
+        self.milestone_heading = QLabel(_("Duty progress across saved sessions"))
+        layout.addWidget(self.milestone_heading)
+        self.milestone_table = QTableWidget(0, 3)
+        self.milestone_table.setHorizontalHeaderLabels([_("Phase"), _("First reached"), _("Best boss HP")])
+        self.milestone_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.milestone_table.verticalHeader().hide()
+        self.milestone_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.milestone_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.milestone_table.setToolTip(_("First observed phase date and lowest observed boss HP across saved pulls in this duty."))
+        layout.addWidget(self.milestone_table)
+        self._milestone_view = None
         self.comparison = SessionComparison(self.flush)
         self.comparison.hide()
         layout.addWidget(self.comparison)
@@ -215,11 +224,17 @@ class ProgTab(QWidget):
         self.next_bookmark.setAccessibleName(_("Next bookmarked pull"))
         pull_controls.addWidget(self.next_bookmark)
         pull_controls.addStretch()
-        self.copy_pull_button = QPushButton(_("Copy pull summary"))
-        pull_controls.addWidget(self.copy_pull_button)
-        self.recap_button = QPushButton(_("View death recaps"))
-        pull_controls.addWidget(self.recap_button)
         layout.addLayout(pull_controls)
+        pull_actions = QHBoxLayout()
+        pull_actions.addStretch()
+        self.copy_pull_button = QPushButton(_("Copy pull summary"))
+        pull_actions.addWidget(self.copy_pull_button)
+        self.recap_button = QPushButton(_("View death recaps"))
+        pull_actions.addWidget(self.recap_button)
+        self.delete_pull_button = QPushButton(_("Delete pull"))
+        self.delete_pull_button.clicked.connect(lambda: self.delete_pull())
+        pull_actions.addWidget(self.delete_pull_button)
+        layout.addLayout(pull_actions)
         self.note = QPlainTextEdit()
         self.note.setPlaceholderText(_("Notes for the selected pull"))
         self.note.setMaximumHeight(85)
@@ -232,9 +247,8 @@ class ProgTab(QWidget):
         self.session_search.textChanged.connect(self.refresh)
         self.show_archived.toggled.connect(self.refresh)
         self.archive_button.clicked.connect(self.toggle_archived)
+        self.delete_button.clicked.connect(self.delete_session)
         self.compare_button.toggled.connect(self.toggle_comparison)
-        self.start_button.clicked.connect(self.start_session)
-        self.end_button.clicked.connect(self.end_session)
         self.table.itemSelectionChanged.connect(self.select_pull)
         self.chart.selected.connect(lambda index: self.table.selectRow(self.table.rowCount() - 1 - index))
         self.bookmark.toggled.connect(self.edit_pull)
@@ -317,6 +331,7 @@ class ProgTab(QWidget):
         self.note.blockSignals(False)
         self.refresh_phase_details()
         self.refresh_bookmark_buttons()
+        self.delete_pull_button.setEnabled(self.sessions.can_delete_pull(self.session, self.pull))
 
     def bookmark_targets(self):
         pulls = self.session["pulls"] if self.session else []
@@ -442,6 +457,82 @@ class ProgTab(QWidget):
                 return
             self.refresh()
 
+    def delete_session(self):
+        session = self.session
+        if session is None or session is self.sessions.current or session["state"] == "active":
+            return
+        self.flush()
+        answer = QMessageBox.question(
+            self, _("Delete session"),
+            _('Delete "{name}" and all its saved pulls and death recaps? This cannot be undone.').format(
+                name=session["name"]),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.sessions.delete(session)
+        except (OSError, ValueError) as exc:
+            message = _("Could not delete the session:\n{error}").format(error=exc)
+            if isinstance(exc, OSError):
+                message += "\n\n" + _("Some death recaps may already have been removed. The session remains available.")
+            QMessageBox.warning(self, _("Delete session"), message)
+            self.tick()
+            return
+        if self.dirty is session:
+            self.dirty = None
+            self.save_timer.stop()
+        if self._hidden_selection and self._hidden_selection[0] == session["id"]:
+            self._hidden_selection = None
+        if self.session is session:
+            self.session = None
+            self.pull = None
+        context = self.window._recap_context
+        if context is not None and context[0] is session:
+            self.window._show_recent_recaps()
+        self.refresh()
+
+    def delete_pull(self, session=None, pull=None, *, parent=None):
+        session = self.session if session is None else session
+        pull = self.pull if pull is None else pull
+        if not self.sessions.can_delete_pull(session, pull):
+            return False
+        number = session["pulls"].index(pull) + 1
+        dialog_parent = parent if parent is not None else self
+        answer = QMessageBox.question(
+            dialog_parent, _("Delete pull"),
+            _('Delete pull {number} from "{name}", including its notes and saved death recaps? This cannot be undone.').format(
+                number=number, name=session["name"]),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        self.flush()
+        try:
+            warning = self.sessions.delete_pull(session, pull)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(dialog_parent, _("Delete pull"),
+                                _("Could not delete the pull:\n{error}").format(error=exc))
+            self.tick()
+            return False
+        if self.pull is pull:
+            self.pull = None
+        if self._hidden_selection == (session["id"], pull["id"]):
+            self._hidden_selection = session["id"], None
+        context = self.window._recap_context
+        if context is not None and context[0] is session:
+            if context[1] is pull:
+                self.window._show_recent_recaps()
+            else:
+                self.window._show_pull_recaps(session, context[1], session["pulls"].index(context[1]) + 1,
+                                              navigate=False)
+        self.refresh()
+        if warning:
+            QMessageBox.warning(dialog_parent, _("Delete pull"),
+                                _("The pull was deleted, but some saved death recaps could not be removed:\n{error}").format(
+                                    error=warning))
+        return True
+
     def flush(self):
         self.save_timer.stop()
         if self.dirty is not None:
@@ -449,25 +540,22 @@ class ProgTab(QWidget):
             self.dirty = None
         self.sessions.flush_pending()
 
-    def start_session(self):
-        window = self.window
-        if window._awaiting_zone_metadata:
+    def refresh_milestones(self):
+        rows = self.sessions.phase_progress(self.session["zone_id"]) if self.session else ()
+        if rows == self._milestone_view:
             return
-        try:
-            self.session = self.sessions.start(window._current_zone, window._current_zone_id,
-                                               window._current_zone,
-                                               window._in_game_combat or window._dps_meter.current is not None)
-            self.session_search.blockSignals(True)
-            self.session_search.clear()
-            self.session_search.blockSignals(False)
-        except (OSError, ValueError) as exc:
-            self.sessions.save_error = str(exc)
-        self.refresh()
-
-    def end_session(self):
-        self.flush()
-        self.sessions.end(self.window._dps_meter.full_snapshot())
-        self.refresh()
+        self._milestone_view = rows
+        self.milestone_heading.setVisible(bool(rows))
+        self.milestone_table.setVisible(bool(rows))
+        self.milestone_table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            values = [_("P{number}").format(number=index + 1),
+                      f"{datetime.fromtimestamp(row.first_reached):%Y-%m-%d %H:%M:%S}" if row.first_reached is not None else _("Not recorded"),
+                      f"{row.best_hp_percent:.2f}%" if row.best_hp_percent is not None else _("Not recorded")]
+            for column, value in enumerate(values):
+                self.milestone_table.setItem(index, column, QTableWidgetItem(value))
+        self.milestone_table.setFixedHeight(self.milestone_table.horizontalHeader().height()
+                                          + self.milestone_table.verticalHeader().defaultSectionSize() * len(rows) + 4)
 
     def tick(self):
         self.sessions.poll_saves()
@@ -494,14 +582,13 @@ class ProgTab(QWidget):
                 tooltips.append(f"{index + 1} · {duration(pull['duration'])} · {phase} · {ending_label(pull['ending'])}")
             self.chart.tooltips = tooltips
         self.refresh_phase_details()
-        self.start_button.setEnabled(active is None and self.window._connected
-                                     and not self.window._awaiting_zone_metadata
-                                     and self.window._current_zone_id > 0
-                                     and self.window._combat_known)
-        self.end_button.setEnabled(active is not None)
+        self.refresh_milestones()
+        self.delete_pull_button.setEnabled(self.sessions.can_delete_pull(self.session, self.pull))
         self.compare_button.setEnabled(self.session is not None)
         self.archive_button.setEnabled(self.session is not None and self.session is not active
                                        and self.session["state"] != "active")
+        self.delete_button.setEnabled(self.session is not None and self.session is not active
+                                      and self.session["state"] != "active")
         self.archive_button.setText(_("Restore session") if self.session and self.session.get("archived") is True
                                     else _("Archive session"))
         self.picker.setToolTip(session_label(self.session) if self.session else "")
@@ -515,7 +602,7 @@ class ProgTab(QWidget):
             if not self.sessions.ready and self.sessions.definition is not None:
                 text = _("Waiting for a verified fresh pull.")
         else:
-            text = _("Start a session in the current duty to collect pulls. Saved sessions remain available after restart.")
+            text = _("Sessions record automatically when combat starts in a known duty. Saved sessions can be managed without the game running.")
         recap_warning = self.window._recap_save_warning()
         if recap_warning:
             text += "\n" + recap_warning

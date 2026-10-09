@@ -19,6 +19,7 @@ class ComparisonUiTests(unittest.TestCase):
     connect = session_ui.SessionUiTests.connect
     line = session_ui.SessionUiTests.line
     phase_pull = session_ui.SessionUiTests.phase_pull
+    start_session = session_ui.SessionUiTests.start_session
 
     @classmethod
     def setUpClass(cls):
@@ -109,6 +110,7 @@ class ComparisonUiTests(unittest.TestCase):
         previous = session([pull("p2", definition=revision)])
         tab = self.load((selected, previous))
         tab.sessions.definitions = UMAD, revision
+        tab.sessions.invalidate_phase_progress()
         tab.tick()
         tab.compare_button.click()
         self.assertIsNone(tab.comparison.picker.currentData())
@@ -157,7 +159,7 @@ class ComparisonUiTests(unittest.TestCase):
         tab = self.load((selected, previous))
         self.connect()
         self.window._on_ws_zone_changed(1363, "UMAD")
-        tab.start_button.click()
+        self.start_session()
         tab.picker.setCurrentIndex(tab.picker.findData(selected["id"]))
         tab.table.selectRow(4)
         selected_pull = tab.pull
@@ -240,14 +242,19 @@ class ComparisonUiTests(unittest.TestCase):
                 self.app.processEvents()
                 position = tab.note.mapTo(tab.content_scroll.viewport(), tab.note.rect().center())
                 self.assertTrue(tab.content_scroll.viewport().rect().contains(position))
-                for control in (tab.session_search, tab.picker, tab.compare_button,
-                                tab.start_button, tab.end_button):
+                for control in (tab.session_search, tab.picker, tab.compare_button):
                     position = control.mapTo(self.window, control.rect().center())
                     self.assertTrue(self.window.rect().contains(position))
+                tab.content_scroll.ensureWidgetVisible(tab.delete_pull_button)
+                self.app.processEvents()
+                position = tab.delete_pull_button.mapTo(
+                    tab.content_scroll.viewport(), tab.delete_pull_button.rect().center())
+                self.assertTrue(tab.content_scroll.viewport().rect().contains(position))
                 self.assertEqual(tab.content_scroll.horizontalScrollBar().maximum(), 0)
                 self.assertFalse(tab.comparison.table.isHidden())
                 self.assertEqual(tab.comparison.table.verticalScrollBar().maximum(), 0)
                 self.assertEqual(tab.phase_table.verticalScrollBar().maximum(), 0)
+                self.assertEqual(tab.milestone_table.verticalScrollBar().maximum(), 0)
                 self.assertEqual(tab.comparison.picker.count(), 2)
                 self.window.grab().save(f"/tmp/nyaatriggers-comparison-{locale}.png")
 
@@ -259,6 +266,7 @@ class ComparisonUiTests(unittest.TestCase):
         tab = self.load((session([pull("p16", definition=definition)], started=2),
                          session([pull("p12", definition=definition)])))
         tab.sessions.definitions = (definition,)
+        tab.sessions.invalidate_phase_progress()
         tab.tick()
         self.window._nav_buttons[4].click()
         tab.compare_button.click()
@@ -270,8 +278,11 @@ class ComparisonUiTests(unittest.TestCase):
         self.assertEqual(tab.comparison.table.item(19, 0).text(), "P16")
         self.assertEqual(tab.phase_table.rowCount(), 16)
         self.assertEqual(tab.phase_table.item(15, 0).text(), "P16")
+        self.assertEqual(tab.milestone_table.rowCount(), 16)
+        self.assertEqual(tab.milestone_table.item(15, 0).text(), "P16")
         self.assertEqual(tab.comparison.table.verticalScrollBar().maximum(), 0)
         self.assertEqual(tab.phase_table.verticalScrollBar().maximum(), 0)
+        self.assertEqual(tab.milestone_table.verticalScrollBar().maximum(), 0)
         tab.content_scroll.ensureWidgetVisible(tab.note)
         self.app.processEvents()
         position = tab.note.mapTo(tab.content_scroll.viewport(), tab.note.rect().center())

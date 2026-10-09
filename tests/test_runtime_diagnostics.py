@@ -1,4 +1,5 @@
 from contextlib import ExitStack
+import io
 import json
 from pathlib import Path
 from queue import Queue
@@ -67,13 +68,17 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
                 patch.object(tts, "_load_piper", return_value=None), patch.object(tts, "_piper_failed", True):
             tts._pipeline(PRIVATE)
         self.assertEqual([r["result"] for r in self.rows("tts_backend")], ["attempt", "unavailable"])
-        process = SimpleNamespace(returncode=17, communicate=lambda **_: (b"", PRIVATE.encode()))
+        process = SimpleNamespace(returncode=17, stdin=None, stderr=io.BytesIO(),
+                                  poll=lambda: 17, wait=lambda **_: 17,
+                                  communicate=lambda **_: (b"", PRIVATE.encode()))
         with patch.object(tts.platform, "system", return_value="Linux"), \
                 patch.object(tts.subprocess, "Popen", return_value=process), \
                 patch.object(tts, "_wav_seconds", return_value=1.0):
             tts._play_wav("/home/PrivateUser/voice.wav")
         self.assertEqual(self.rows("tts_backend")[-1],
                          {"backend": "aplay", "result": "failed", "returncode": 17})
+        self.assertTrue(process.stderr.closed)
+        self.assertIsNone(tts._current_proc)
 
     def test_unwritable_diagnostic_sink_does_not_stop_feed_or_queue(self):
         with patch.object(diagnostics, "_LOG_FILE", self.root):

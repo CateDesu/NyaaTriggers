@@ -37,6 +37,8 @@ class PhaseDefinition:
     transitions: tuple[TransitionRule, ...] = ()
     verified: bool = False
     continuous_combat: bool = False
+    bosses: tuple[tuple[str, tuple[int, ...]], ...] = ()
+    caster_bosses: tuple[tuple[str, int], ...] = ()
 
     def __post_init__(self):
         if (not text_id(self.ident) or type(self.revision) is not int or self.revision < 1
@@ -64,6 +66,15 @@ class PhaseDefinition:
                 raise ValueError("Invalid phase transition")
         if self.verified and {r.phase for r in self.rules} != set(self.phases):
             raise ValueError("Verified definitions must cover every phase")
+        if (len({phase for phase, _ in self.bosses}) != len(self.bosses)
+                or any(phase not in self.phases or not ids
+                       or any(type(ident) is not int or not 0 < ident <= 0xFFFFFFFF for ident in ids)
+                       for phase, ids in self.bosses)):
+            raise ValueError("Invalid phase bosses")
+        if (len({phase for phase, _ in self.caster_bosses}) != len(self.caster_bosses)
+                or any(phase not in self.phases or type(ident) is not int
+                       or not 0 < ident <= 0xFFFFFFFF for phase, ident in self.caster_bosses)):
+            raise ValueError("Invalid phase boss casters")
 
 
 def text_id(value):
@@ -83,6 +94,8 @@ UMAD = PhaseDefinition(
                                  ("p4", 0xC2DC), ("p5", 0xBB40))
           for event in ("20", "21", "22")),
     verified=True, continuous_combat=True,
+    bosses=(("p1", (19504,)), ("p2", (19506,)), ("p3", (19508, 19509)), ("p4", (18475,))),
+    caster_bosses=(("p5", 7131),),
 )
 DEFINITIONS: tuple[PhaseDefinition, ...] = (UMAD,)
 
@@ -198,7 +211,7 @@ class PhaseAttempt:
         self.update(encounter)
         return True
 
-    def observe(self, fields, now):
+    def observe(self, fields, now, wall=None):
         event = match_event(fields)
         if event is None or self.closed:
             return False
@@ -228,6 +241,9 @@ class PhaseAttempt:
             at = max(0, now - self.origin)
             self.pull["duration"] = max(self.pull["duration"], at)
             observations.append({"phase": rule.phase, "at": at, "rule": rule.ident})
+            observations[-1]["actor"] = int(fields[2], 16)
+            if seconds(wall):
+                observations[-1]["observed_at"] = wall
             return True
         for rule in self.definition.transitions:
             if event == (rule.event, rule.ability) and furthest == rule.source:

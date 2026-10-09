@@ -242,7 +242,7 @@ if hasattr(os, "mkfifo"):
     os.mkfifo(_fifo)
     _played = []
     _o_detached = tts._play_wav_detached
-    tts._play_wav_detached = lambda p: _played.append(p)
+    tts._play_wav_detached = lambda p, epoch=None: _played.append(p)
     try:
         # Acquire the chime slot that the worker releases in finally.
         tts._notification_slots.acquire()
@@ -596,7 +596,7 @@ with open(_big, "wb") as _f:
 _played, _drops = [], []
 _o_pwd, _o_ld, _o_mv = tts._play_wav_detached, tts.log_drop, tts._master_volume
 try:
-    tts._play_wav_detached = lambda p: _played.append(p)
+    tts._play_wav_detached = lambda p, epoch=None: _played.append(p)
     tts.log_drop = lambda site, detail, throttle_s=1.0: _drops.append(site)
     tts._master_volume = 1.0
     check("a chime slot is free for the notification test",
@@ -687,6 +687,8 @@ class _FakePopen:
     def __init__(self, *a, **k):
         _spawned.append(a[0] if a else None)
         self.returncode = 0
+        self.stdin = None
+        self.stderr = None
 
     def communicate(self, *a, **k):
         return (b"", b"")

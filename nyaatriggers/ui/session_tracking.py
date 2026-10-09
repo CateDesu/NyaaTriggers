@@ -1,9 +1,24 @@
 class SessionTrackingMixin:
+    def _ensure_automatic_prog_session(self, *, in_combat=None):
+        if (self._prog_sessions.current is not None or not self._connected
+                or self._awaiting_zone_metadata or not self._combat_known
+                or not self._current_zone_id or not self._current_zone):
+            return
+        if in_combat is None:
+            in_combat = self._in_game_combat and not self._prog_sessions.ready
+        try:
+            self._prog_sessions.start(self._current_zone, self._current_zone_id,
+                                      self._current_zone, in_combat)
+        except (OSError, ValueError) as exc:
+            self._prog_sessions.save_error = str(exc)
+        self._prog_tab.refresh()
+
     def _prog_pull_started(self, snapshot):
         events = getattr(self, "_prog_events", None)
         if events is not None:
             events.append(("start", snapshot))
             return
+        self._ensure_automatic_prog_session()
         started = self._prog_sessions.pull_started(snapshot)
         if started or self._prog_sessions.attempt is None:
             self._death_recap.begin_pull()
@@ -33,6 +48,8 @@ class SessionTrackingMixin:
         # Confirm the duty before adding fresh feed events to the retained session.
         if getattr(self, "_awaiting_zone_metadata", False):
             return
+        if any(kind == "start" for kind, _ in events):
+            self._ensure_automatic_prog_session()
         snapshot = self._dps_meter.full_snapshot() if self._prog_sessions.needs_phase_snapshot(fields) else None
         started, ended = self._prog_sessions.process_event(
             fields, events, self._prog_event_time, snapshot)
@@ -50,11 +67,15 @@ class SessionTrackingMixin:
             self._prog_sessions.end(self._dps_meter.full_snapshot(), "duty-left")
             self._prog_tab.refresh()
 
-    def _track_combat(self, act, game):
+    def _track_combat(self, act, game, *, was_in_game):
         self._begin_activity_event()
+        known = self._combat_known
         self._combat_known = True
         if not getattr(self, "_awaiting_zone_metadata", False):
             self._prog_sessions.combat(game)
+            if (act or game) and (not known or game and not was_in_game):
+                self._ensure_automatic_prog_session(
+                    in_combat=not known or was_in_game or self._dps_meter.current is not None)
 
     def _track_activity_connection(self, connected, message):
         if not connected:
@@ -78,6 +99,7 @@ class SessionTrackingMixin:
             self._prog_sessions.combat(self._in_game_combat)
         if not first_metadata and (changed_id or (not known_ids and changed_name)):
             self._death_recap.reset()
+            self._prog_sessions.reset_bosses()
         if first_metadata or zone or changed_id:
             self._death_recap.zone = zone
 

@@ -61,6 +61,8 @@ _queue          = Queue(maxsize=64)
 # Serialize eviction and insertion so competing callers do not evict twice.
 _enqueue_lock   = threading.Lock()
 _notification_slots = threading.BoundedSemaphore(4)
+_notification_epoch = 0
+_notification_procs: set = set()
 _worker_started = threading.Event()
 _worker_lock    = threading.Lock()
 _master_volume: float = 1.0
@@ -95,6 +97,7 @@ def set_master_volume(v: float) -> None:
     _master_volume = max(0.0, min(2.0, v))
     if previous > 0 and _master_volume == 0:
         interrupt()
+        _stop_notifications()
 
 
 def set_engine(name: str) -> None:
@@ -465,14 +468,24 @@ def play_notification(path: str, volume: float = 1.0) -> None:
     if not path or not os.path.exists(path):
         return
     if platform.system() == "Windows":
-        play_sound(path, volume)
+        try:
+            play_sound(path, volume)
+        except RuntimeError as exc:
+            log_drop("tts-notify", f"notification worker could not start: {exc!r}")
         return
-    if not _notification_slots.acquire(blocking=False):
-        log_drop("tts-notify", "notification chime dropped; too many plays in flight")
-        return
+    with _enqueue_lock:
+        if _master_volume <= 0 or _speech_suspended:
+            return
+        epoch = _notification_epoch
+        if not _notification_slots.acquire(blocking=False):
+            log_drop("tts-notify", "notification chime dropped; too many plays in flight")
+            return
     try:
-        threading.Thread(target=_notification_worker, args=(path, volume),
+        threading.Thread(target=_notification_worker, args=(path, volume, epoch),
                          daemon=True).start()
+    except RuntimeError as exc:
+        _notification_slots.release()
+        log_drop("tts-notify", f"notification worker could not start: {exc!r}")
     except Exception:
         _notification_slots.release()
         raise
@@ -521,6 +534,31 @@ def suspend() -> None:
     with _enqueue_lock:
         _speech_suspended = True
     interrupt(wait=True)
+    _stop_notifications(wait=True)
+
+
+def _stop_notifications(*, wait: bool = False) -> None:
+    global _notification_epoch
+    with _proc_lock:
+        _notification_epoch += 1
+        processes = tuple(_notification_procs)
+        for process in processes:
+            try:
+                process.kill()
+            except OSError:
+                pass
+    if wait:
+        for process in processes:
+            try:
+                process.wait(timeout=.5)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                    process.wait(timeout=1)
+                except (OSError, subprocess.TimeoutExpired):
+                    log_drop("tts-shutdown", "notification process did not stop after kill")
+            except OSError:
+                pass
 
 
 def resume() -> None:
@@ -786,6 +824,9 @@ def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool
     with _proc_lock:
         if gen is not None and gen != _generation:
             return True
+        if _current_proc is not None and _current_proc.poll() is None:
+            log_drop("tts-backend", "previous speech process has not exited; callout dropped")
+            return True
         try:
             proc = subprocess.Popen(cmd, **kwargs)
         except OSError as exc:
@@ -826,11 +867,20 @@ def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool
                 except subprocess.TimeoutExpired:
                     pass
     finally:
-        with _proc_lock:
-            was_interrupted = _interrupted_proc is proc
-            if was_interrupted:
-                _interrupted_proc = None
-            _current_proc = None
+        try:
+            if proc.returncode is None:
+                proc.kill()
+            proc.wait(timeout=5)
+        finally:
+            with _proc_lock:
+                was_interrupted = _interrupted_proc is proc
+                if was_interrupted:
+                    _interrupted_proc = None
+                if proc.returncode is not None:
+                    _current_proc = None
+            for pipe in (proc.stdin, proc.stderr):
+                if pipe is not None:
+                    pipe.close()
     # Intentional termination counts as handled. Real backend failures can use fallback.
     if was_interrupted:
         record("tts_backend", gen=gen, backend="system", result="interrupted")
@@ -841,7 +891,7 @@ def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool
         return True
     if kill_failed:
         record("tts_backend", gen=gen, backend="system", result="failed")
-        log_drop("tts-backend", f"system TTS survived the kill; callout dropped: {text[:60]!r}")
+        log_drop("tts-backend", f"system TTS did not finish cleanly; callout dropped: {text[:60]!r}")
         return True
     if proc.returncode != 0:
         log_drop("tts-backend", f"system TTS failed with exit status {proc.returncode}")
@@ -1057,6 +1107,9 @@ def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
             log_drop("tts-interrupt",
                      "callout cut off by a newer interrupt before playback started")
             return
+        if _current_proc is not None and _current_proc.poll() is None:
+            log_drop("tts-playback", "previous speech process has not exited; callout dropped")
+            return
         try:
             proc = subprocess.Popen(player, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.PIPE,
@@ -1081,11 +1134,19 @@ def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
         except subprocess.TimeoutExpired:
             pass
     finally:
-        with _proc_lock:
-            was_interrupted = _interrupted_proc is proc
-            if was_interrupted:
-                _interrupted_proc = None
-            _current_proc = None
+        try:
+            if proc.returncode is None:
+                proc.kill()
+            proc.wait(timeout=5)
+        finally:
+            with _proc_lock:
+                was_interrupted = _interrupted_proc is proc
+                if was_interrupted:
+                    _interrupted_proc = None
+                if proc.returncode is not None:
+                    _current_proc = None
+            if proc.stderr is not None:
+                proc.stderr.close()
     # Intentional interruption is not a playback failure.
     if was_interrupted:
         record("tts_backend", gen=gen, backend="aplay", result="interrupted")
@@ -1188,8 +1249,10 @@ def _play_wav_file(path: str, volume: float = 1.0, gen: "int | None" = None) -> 
                 pass
 
 
-def _notification_worker(path: str, volume: float) -> None:
+def _notification_worker(path: str, volume: float, epoch: "int | None" = None) -> None:
     tmp_path = None
+    if epoch is None:
+        epoch = _notification_epoch
     try:
         effective = max(0.0, min(2.0, volume * _master_volume))
         if effective <= 0.0:
@@ -1214,7 +1277,7 @@ def _notification_worker(path: str, volume: float) -> None:
             if os.path.getsize(path) > _MAX_SOUND_BYTES:
                 log_drop("tts-notify", f"sound file over {_MAX_SOUND_BYTES >> 20} MiB; not played: {path!r}")
                 return
-        _play_wav_detached(play_path)
+        _play_wav_detached(play_path, epoch)
     except Exception as exc:  # noqa: BLE001
         print(f"[tts] notification failed: {exc!r}", file=sys.stderr)
     finally:
@@ -1232,16 +1295,40 @@ def _log_notification_result(result) -> None:
         log_drop("tts-notify", f"aplay exited {result.returncode}: {detail}")
 
 
-def _play_wav_detached(wav_path: str) -> None:
+def _play_wav_detached(wav_path: str, epoch: "int | None" = None) -> None:
+    if epoch is None:
+        epoch = _notification_epoch
+    command = ["aplay", "-q", "--", wav_path]
     try:
-        result = subprocess.run(["aplay", "-q", "--", wav_path],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                                timeout=max(60.0, _wav_seconds(wav_path) * 1.5 + 5),
-                                env=proc_env.child_env())
-        _log_notification_result(result)
+        with _proc_lock:
+            if epoch != _notification_epoch or _master_volume <= 0 or _speech_suspended:
+                return
+            process = subprocess.Popen(command, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.PIPE, env=proc_env.child_env())
+            _notification_procs.add(process)
     except FileNotFoundError:
         _aplay_missing()
+        return
+    timed_out = False
+    try:
+        _, error = process.communicate(timeout=max(60.0, _wav_seconds(wav_path) * 1.5 + 5))
+        if epoch == _notification_epoch:
+            _log_notification_result(subprocess.CompletedProcess(
+                command, process.returncode, stderr=error))
     except subprocess.TimeoutExpired:
+        timed_out = True
+    finally:
+        try:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+        finally:
+            with _proc_lock:
+                if process.poll() is not None:
+                    _notification_procs.discard(process)
+            if process.stderr is not None:
+                process.stderr.close()
+    if timed_out:
         print("[tts] notification playback timed out; killed aplay",
               file=sys.stderr)
 

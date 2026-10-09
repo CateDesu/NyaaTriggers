@@ -18,6 +18,8 @@ class PullUiTests(unittest.TestCase):
     setUp = session_ui.SessionUiTests.setUp
     connect = session_ui.SessionUiTests.connect
     line = session_ui.SessionUiTests.line
+    start_session = session_ui.SessionUiTests.start_session
+    end_session = session_ui.SessionUiTests.end_session
 
     @classmethod
     def setUpClass(cls):
@@ -154,7 +156,7 @@ class PullUiTests(unittest.TestCase):
         self.addCleanup(self.app.clipboard().clear)
         self.connect()
         tab = self.window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         self.window._on_in_combat(True, True)
         self.line(session_ui.ability())
         self.clock.value += 12
@@ -172,7 +174,7 @@ class PullUiTests(unittest.TestCase):
         historical = self.marked_session()
         tab = self.load((historical,))
         self.connect()
-        tab.start_button.click()
+        self.start_session()
         tab.picker.setCurrentIndex(tab.picker.findData(historical["id"]))
         tab.previous_bookmark.click()
         selected = tab.pull
@@ -228,7 +230,7 @@ class PullUiTests(unittest.TestCase):
         historical.update(name="Tuesday towers", zone="UMAD")
         tab = self.load((historical,))
         self.connect()
-        tab.start_button.click()
+        self.start_session()
         tab.session_search.setText("Tuesday UMAD")
         tab.note.setPlainText("Review towers")
         cursor = tab.note.textCursor()
@@ -243,26 +245,27 @@ class PullUiTests(unittest.TestCase):
         self.assertIs(tab.pull, selected)
         self.assertEqual(tab.note.textCursor().position(), 4)
 
-    def test_search_does_not_stop_capture_and_starting_a_session_clears_the_search(self):
+    def test_search_does_not_stop_automatic_capture_or_reset_the_search(self):
         tab = self.load((self.marked_session(),))
+        historical = tab.session
         self.connect()
         tab.session_search.setText("No matching session")
-        tab.start_button.click()
-        self.assertEqual(tab.session_search.text(), "")
-        active = tab.sessions.current
-        self.assertIs(tab.session, active)
-        tab.session_search.setText("No matching session")
+        self.assertIsNone(tab.sessions.current)
         self.window._on_in_combat(True, True)
         self.line(session_ui.ability())
+        active = tab.sessions.current
+        self.assertIsNotNone(active)
         self.clock.value += 12
         self.line(session_ui.ability())
         self.window._on_in_combat(False, False)
+        self.assertEqual(tab.session_search.text(), "No matching session")
         self.assertIsNone(tab.session)
         self.assertIs(tab.sessions.current, active)
         self.assertEqual(len(active["pulls"]), 1)
         self.assertTrue(active["pulls"][0]["complete"])
         tab.session_search.clear()
-        self.assertIs(tab.session, active)
+        self.assertIs(tab.session, historical)
+        self.assertIs(tab.sessions.current, active)
 
     def test_switching_to_an_identical_note_does_not_inherit_another_pulls_undo(self):
         record = self.marked_session()
@@ -326,7 +329,7 @@ class PullUiTests(unittest.TestCase):
     def test_live_boundaries_do_not_normalize_a_session_name_while_it_is_being_typed(self):
         self.connect()
         tab = self.window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         self.window._nav_buttons[4].click()
         self.window.show()
         self.window.activateWindow()
@@ -402,7 +405,7 @@ class PullUiTests(unittest.TestCase):
     def test_active_capture_cannot_be_archived(self):
         self.connect()
         tab = self.window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         active = tab.sessions.current
         self.assertFalse(tab.archive_button.isEnabled())
         tab.archive_button.click()
@@ -413,13 +416,13 @@ class PullUiTests(unittest.TestCase):
     def test_archived_pull_opens_its_saved_death_recap_after_restart(self):
         self.connect()
         tab = self.window._prog_tab
-        tab.start_button.click()
+        self.start_session()
         self.window._on_in_combat(True, True)
         self.line(session_ui.ability())
         self.clock.value += 3
         self.line(["25", "ts", session_ui.PLAYER, "Player"])
         self.window._on_in_combat(False, False)
-        tab.end_button.click()
+        self.end_session()
         ident, pull_id = tab.session["id"], tab.pull["id"]
         saved, errors = tab.sessions.recaps.load(ident, pull_id)
         self.assertFalse(errors)

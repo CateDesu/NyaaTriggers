@@ -22,7 +22,7 @@ class Host(AutomarkersTabMixin):
         self._umad_gaze_flush_timer = types.SimpleNamespace(start=lambda: None)
         self.signs = {}
 
-    def _mark_player(self, actor, marker, name=""):
+    def _mark_player(self, actor, marker, name="", *, expires_at=None):
         if marker in self.signs and self.signs[marker] != actor:
             raise AssertionError(f"{marker} stolen from {self.signs[marker]} by {actor}")
         self.signs[marker] = actor

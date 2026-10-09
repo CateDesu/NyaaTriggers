@@ -232,7 +232,7 @@ w7._umad_chain_reset = lambda clear_marks=False: \
 w7._umad_gaze_reset = lambda clear_marks=False: \
     MainWindow._umad_gaze_reset(w7, clear_marks=clear_marks)
 marker_actions = []
-w7._mark_player = lambda actor, marker, name="": marker_actions.append(("mark", actor, marker)) or True
+w7._mark_player = lambda actor, marker, name="", **options: marker_actions.append(("mark", actor, marker)) or True
 w7._clear_player = lambda actor, name="", **kwargs: marker_actions.append(("clear", actor)) or True
 w7._telesto_client = SimpleNamespace(
     cancel_pending=lambda: None,

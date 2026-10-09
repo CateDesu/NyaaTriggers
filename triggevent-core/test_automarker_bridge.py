@@ -1,6 +1,7 @@
 """Replay recorded UWU jails through Python, the native engine and loopback Telesto."""
 
 import argparse
+from copy import deepcopy
 from datetime import datetime, timezone
 import json
 import os
@@ -17,8 +18,9 @@ sys.path.insert(0, str(CORE.parent))
 
 from PyQt6.QtCore import QObject
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QCheckBox, QPushButton, QSpinBox
+from PyQt6.QtWidgets import QApplication, QCheckBox, QLineEdit, QPushButton, QSpinBox
 
+from nyaatriggers import app_common as ac
 from nyaatriggers import triggevent_bridge
 from nyaatriggers.telesto_client import TelestoClient
 from nyaatriggers.ui.automarkers_tab import AutomarkersTabMixin
@@ -47,7 +49,8 @@ class InventoryHost(QObject, EnginesMixin, AutomarkersTabMixin):
         self._native_automarkers_panel = NativeAutomarkersPanel()
         self._native_automarkers_panel.changed.connect(self._on_native_automark_setting_changed)
         bridge.inventory.connect(self._on_triggevent_inventory)
-        bridge.automark_inventory.connect(self._on_native_automark_inventory)
+        bridge.automark_inventory.connect(self._receive_native_automark_inventory)
+        bridge.ready.connect(self._on_native_automarkers_ready)
 
     def _save_triggevent_inventory_cache(self):
         pass
@@ -148,11 +151,25 @@ def main():
         with patch.dict(os.environ, {"JAVA_TOOL_OPTIONS": f"-Duser.home={temp}",
                                      "NYAA_AUTOMARK": "0", "NYAA_TELESTO_URI": endpoint.url}), \
                 patch.object(triggevent_bridge, "_log", side_effect=diagnostics.append), \
-                patch.object(triggevent_bridge, "record_engine", side_effect=capture):
+                patch.object(triggevent_bridge, "record_engine", side_effect=capture), \
+                patch.object(ac, "_TRIGGEVENT_AUTOMARK_INVENTORY_CACHE", Path(temp) / "native.json"):
             try:
                 for run in range(2):
                     events.clear()
                     host._engine_inventory = []
+                    host._load_cached_native_automark_inventory()
+                    panel = host._native_automarkers_panel
+                    if len(panel._editors) != 46 or not panel.isEnabled():
+                        raise AssertionError("Native controls were not editable before engine startup")
+                    if run == 0:
+                        panel.findChild(QCheckBox, "top.delta.enabled.value").click()
+                        delay = panel.findChild(QLineEdit, "uwu.clear_delay_ms.value")
+                        delay.setText("12000")
+                        delay.editingFinished.emit()
+                    offline_settings = deepcopy(host._settings.get("triggevent_automark_settings", {}))
+                    if (bridge.is_active() or offline_settings.get("top.delta.enabled") is not True
+                            or offline_settings.get("uwu.clear_delay_ms") != (12000 if run == 0 else 2000)):
+                        raise AssertionError("Offline native edits did not save without starting the engine")
                     bridge.start()
                     wait_for(lambda: host._engine_inventory and any(
                         item["event"] == "engine_automark_config"
@@ -161,17 +178,30 @@ def main():
                     wait_for(lambda: getattr(host, "_native_automark_inventory", None),
                              "Native automarker controls did not arrive")
                     inventory = host._native_automark_inventory
+                    if not host._native_automarkers_panel.isEnabled() or host._native_automarkers_panel._engine_message:
+                        raise AssertionError("Live native controls were not enabled")
                     if len(inventory["mechanics"]) != 13 or sum(
                             setting["type"] == "marker_map" for setting in inventory["settings"]) != 8:
                         raise AssertionError("Native encounter or marker map inventory is incomplete")
+                    wait_for(lambda: "error" not in host._native_automark_inventory
+                             and any(setting["id"] == "top.delta.enabled" and setting["value"] is True
+                                     for setting in host._native_automark_inventory["settings"])
+                             and any(setting["id"] == "uwu.clear_delay_ms"
+                                     and setting["value"] == (12000 if run == 0 else 2000)
+                                     for setting in host._native_automark_inventory["settings"]),
+                             "Live native inventory did not retain the offline edits")
+                    if (not panel.findChild(QCheckBox, "top.delta.enabled.value").isChecked()
+                            or panel.findChild(QLineEdit, "uwu.clear_delay_ms.value").text()
+                            != str(12000 if run == 0 else 2000)
+                            or host._settings.get("triggevent_automark_settings", {}) != offline_settings):
+                        raise AssertionError("Live controls or saved preferences replaced the offline edits")
                     if run == 1:
-                        wait_for(lambda: any(setting["id"] == "top.ps.priority_override" and setting["value"] is True
-                                             for setting in host._native_automark_inventory["settings"]),
-                                 "TOP priority override did not restore")
-                        restored = next(setting["effective_order"] for setting in host._native_automark_inventory["settings"]
-                                        if setting["id"] == "top.ps.priority")
-                        if restored != override_order:
-                            raise AssertionError("Restart changed the retained TOP priority override")
+                        wait_for(lambda: "error" not in host._native_automark_inventory
+                                 and any(setting["id"] == "top.ps.priority_override" and setting["value"] is True
+                                         for setting in host._native_automark_inventory["settings"])
+                                 and any(setting["id"] == "top.ps.priority" and setting["effective_order"] == override_order
+                                         for setting in host._native_automark_inventory["settings"]),
+                                 "Restart did not restore the retained TOP priority override")
                     now = datetime.now(timezone.utc)
                     feed_state(ws, state, now)
                     checkpoint = 70 + run
@@ -301,6 +331,7 @@ def main():
                 if endpoint.commands != expected:
                     raise AssertionError("Local ownership transition emitted unexpected actions")
                 print("PASS real WSClient, bridge inventory replay, native UWU actor selection and ordered Telesto marks")
+                print("PASS native controls edited before engine startup retain saved choices through live inventory and restart")
                 print("PASS disabled negative case, engine restart settings replay and delayed native clearing")
                 print("PASS complete native controls, saved priority and delay replay, identical settings and mechanic disable")
                 print("PASS enabled TOP priority override survives shared priority changes and engine restart")

@@ -1,0 +1,2734 @@
+{
+  "jobs": [
+    {
+      "id": "GLA",
+      "label": "Gladiator"
+    },
+    {
+      "id": "PGL",
+      "label": "Pugilist"
+    },
+    {
+      "id": "MRD",
+      "label": "Marauder"
+    },
+    {
+      "id": "LNC",
+      "label": "Lancer"
+    },
+    {
+      "id": "ARC",
+      "label": "Archer"
+    },
+    {
+      "id": "CNJ",
+      "label": "Conjurer"
+    },
+    {
+      "id": "THM",
+      "label": "Thaumaturge"
+    },
+    {
+      "id": "PLD",
+      "label": "Paladin"
+    },
+    {
+      "id": "MNK",
+      "label": "Monk"
+    },
+    {
+      "id": "WAR",
+      "label": "Warrior"
+    },
+    {
+      "id": "DRG",
+      "label": "Dragoon"
+    },
+    {
+      "id": "BRD",
+      "label": "Bard"
+    },
+    {
+      "id": "WHM",
+      "label": "White Mage"
+    },
+    {
+      "id": "BLM",
+      "label": "Black Mage"
+    },
+    {
+      "id": "ACN",
+      "label": "Arcanist"
+    },
+    {
+      "id": "SMN",
+      "label": "Summoner"
+    },
+    {
+      "id": "SCH",
+      "label": "Scholar"
+    },
+    {
+      "id": "ROG",
+      "label": "Rogue"
+    },
+    {
+      "id": "NIN",
+      "label": "Ninja"
+    },
+    {
+      "id": "MCH",
+      "label": "Machinist"
+    },
+    {
+      "id": "DRK",
+      "label": "Dark Knight"
+    },
+    {
+      "id": "AST",
+      "label": "Astrologian"
+    },
+    {
+      "id": "SAM",
+      "label": "Samurai"
+    },
+    {
+      "id": "RDM",
+      "label": "Red Mage"
+    },
+    {
+      "id": "BLU",
+      "label": "Blue Mage"
+    },
+    {
+      "id": "GNB",
+      "label": "Gunbreaker"
+    },
+    {
+      "id": "DNC",
+      "label": "Dancer"
+    },
+    {
+      "id": "RPR",
+      "label": "Reaper"
+    },
+    {
+      "id": "SGE",
+      "label": "Sage"
+    },
+    {
+      "id": "VPR",
+      "label": "Viper"
+    },
+    {
+      "id": "PCT",
+      "label": "Pictomancer"
+    },
+    {
+      "id": "BST",
+      "label": "Beastmaster"
+    }
+  ],
+  "version": 1,
+  "t": "automark_inventory",
+  "mechanics": [
+    {
+      "settings": [
+        "uwu.enabled",
+        "uwu.priority",
+        "uwu.clear_delay_ms",
+        "uwu.override_zone_lock",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "Titan Gaols",
+      "id": "uwu.gaols",
+      "fight": "UWU"
+    },
+    {
+      "settings": [
+        "dsr.p5.enabled",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "P5 Thunderstruck",
+      "id": "dsr.p5",
+      "fight": "DSR"
+    },
+    {
+      "settings": [
+        "dsr.p6.enabled",
+        "dsr.p6.priority",
+        "dsr.p6.rot_priority",
+        "dsr.p6.reverse_priority",
+        "dsr.p6.markers",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "P6 Wroth Flames",
+      "id": "dsr.p6",
+      "fight": "DSR"
+    },
+    {
+      "settings": [
+        "top.looper.enabled",
+        "top.priority",
+        "top.p1.priority_override",
+        "top.p1.priority",
+        "top.p1.markers",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "P1 Program Loop",
+      "id": "top.looper",
+      "fight": "TOP"
+    },
+    {
+      "settings": [
+        "top.panto.enabled",
+        "top.priority",
+        "top.p1.priority_override",
+        "top.p1.priority",
+        "top.p1.markers",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "P1 Pantokrator",
+      "id": "top.panto",
+      "fight": "TOP"
+    },
+    {
+      "settings": [
+        "top.ps.enabled",
+        "top.priority",
+        "top.ps.priority_override",
+        "top.ps.priority",
+        "top.ps.mid_markers",
+        "top.ps.far_markers",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "P2 Party Synergy",
+      "id": "top.ps",
+      "fight": "TOP"
+    },
+    {
+      "settings": [
+        "top.sniper.enabled",
+        "top.priority",
+        "top.sniper.priority_override",
+        "top.sniper.priority",
+        "top.sniper.markers",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "P3 Sniper Cannon",
+      "id": "top.sniper",
+      "fight": "TOP"
+    },
+    {
+      "settings": [
+        "top.monitor.enabled",
+        "top.priority",
+        "top.monitor.priority_override",
+        "top.monitor.priority",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "P3 Monitors",
+      "id": "top.monitor",
+      "fight": "TOP"
+    },
+    {
+      "settings": [
+        "top.delta.enabled",
+        "top.delta.markers",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "P5 Run Dynamis Delta",
+      "id": "top.delta",
+      "fight": "TOP"
+    },
+    {
+      "settings": [
+        "top.sigma.enabled",
+        "top.priority",
+        "top.sigma.priority_override",
+        "top.sigma.priority",
+        "top.sigma.markers",
+        "top.sigma.delay_seconds",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "P5 Run Dynamis Sigma",
+      "id": "top.sigma",
+      "fight": "TOP"
+    },
+    {
+      "settings": [
+        "top.omega.enabled",
+        "top.omega.first_enabled",
+        "top.priority",
+        "top.omega.priority_override",
+        "top.omega.priority",
+        "top.omega.markers",
+        "top.omega.first_delay_seconds",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "P5 Run Dynamis Omega first set",
+      "id": "top.omega.first",
+      "fight": "TOP"
+    },
+    {
+      "settings": [
+        "top.omega.enabled",
+        "top.omega.second_enabled",
+        "top.priority",
+        "top.omega.priority_override",
+        "top.omega.priority",
+        "top.omega.markers",
+        "top.omega.second_delay_seconds",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "P5 Run Dynamis Omega second set",
+      "id": "top.omega.second",
+      "fight": "TOP"
+    },
+    {
+      "settings": [
+        "native_umad",
+        "telesto.delay_base_ms",
+        "telesto.delay_plus_ms"
+      ],
+      "name": "P4 Kefka and Grand Cross debuffs",
+      "id": "umad.p4",
+      "fight": "UMAD"
+    }
+  ],
+  "markers": [
+    {
+      "id": "ATTACK_NEXT",
+      "label": "Next Attack"
+    },
+    {
+      "id": "ATTACK1",
+      "label": "Attack 1"
+    },
+    {
+      "id": "ATTACK2",
+      "label": "Attack 2"
+    },
+    {
+      "id": "ATTACK3",
+      "label": "Attack 3"
+    },
+    {
+      "id": "ATTACK4",
+      "label": "Attack 4"
+    },
+    {
+      "id": "ATTACK5",
+      "label": "Attack 5"
+    },
+    {
+      "id": "ATTACK6",
+      "label": "Attack 6"
+    },
+    {
+      "id": "ATTACK7",
+      "label": "Attack 7"
+    },
+    {
+      "id": "ATTACK8",
+      "label": "Attack 8"
+    },
+    {
+      "id": "BIND_NEXT",
+      "label": "Next Bind"
+    },
+    {
+      "id": "BIND1",
+      "label": "Bind 1"
+    },
+    {
+      "id": "BIND2",
+      "label": "Bind 2"
+    },
+    {
+      "id": "BIND3",
+      "label": "Bind 3"
+    },
+    {
+      "id": "IGNORE_NEXT",
+      "label": "Next Ignore"
+    },
+    {
+      "id": "IGNORE1",
+      "label": "Ignore 1"
+    },
+    {
+      "id": "IGNORE2",
+      "label": "Ignore 2"
+    },
+    {
+      "id": "CIRCLE",
+      "label": "Circle"
+    },
+    {
+      "id": "CROSS",
+      "label": "Cross"
+    },
+    {
+      "id": "SQUARE",
+      "label": "Square"
+    },
+    {
+      "id": "TRIANGLE",
+      "label": "Triangle"
+    },
+    {
+      "id": "CLEAR",
+      "label": "Clear Marker"
+    }
+  ],
+  "settings": [
+    {
+      "id": "uwu.enabled",
+      "type": "boolean",
+      "label": "Enable Titan Gaols markers",
+      "value": true,
+      "default": true
+    },
+    {
+      "id": "uwu.override_zone_lock",
+      "type": "boolean",
+      "label": "Allow outside UWU",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "uwu.priority",
+      "type": "jobs",
+      "label": "Gaols priority",
+      "value": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "default": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "effective_order": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ]
+    },
+    {
+      "id": "uwu.clear_delay_ms",
+      "type": "integer",
+      "label": "Clear delay milliseconds",
+      "value": 10000,
+      "default": 10000
+    },
+    {
+      "id": "dsr.p5.enabled",
+      "type": "boolean",
+      "label": "Enable Thunderstruck markers",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "dsr.p6.enabled",
+      "type": "boolean",
+      "label": "Enable Wroth Flames markers",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "dsr.p6.rot_priority",
+      "type": "boolean",
+      "label": "Prioritize Rot holders",
+      "value": true,
+      "default": true
+    },
+    {
+      "id": "dsr.p6.reverse_priority",
+      "type": "boolean",
+      "label": "Reverse priority",
+      "value": true,
+      "default": true
+    },
+    {
+      "id": "dsr.p6.priority",
+      "type": "jobs",
+      "label": "Wroth priority",
+      "value": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "default": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "effective_order": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ]
+    },
+    {
+      "id": "dsr.p6.markers",
+      "type": "marker_map",
+      "label": "Wroth markers",
+      "slots": [
+        {
+          "id": "Spread_1",
+          "label": "Spread 1"
+        },
+        {
+          "id": "Spread_2",
+          "label": "Spread 2"
+        },
+        {
+          "id": "Spread_3",
+          "label": "Spread 3"
+        },
+        {
+          "id": "Spread_4",
+          "label": "Spread 4"
+        },
+        {
+          "id": "Stack_Buff_1",
+          "label": "Stack Buff 1"
+        },
+        {
+          "id": "Stack_Buff_2",
+          "label": "Stack Buff 2"
+        },
+        {
+          "id": "Nothing_1",
+          "label": "Nothing 1"
+        },
+        {
+          "id": "Nothing_2",
+          "label": "Nothing 2"
+        }
+      ],
+      "presets": [
+        {
+          "name": "Defaults",
+          "value": {
+            "Spread_1": {
+              "marker": "ATTACK1",
+              "enabled": true
+            },
+            "Spread_2": {
+              "marker": "ATTACK2",
+              "enabled": true
+            },
+            "Spread_3": {
+              "marker": "ATTACK3",
+              "enabled": true
+            },
+            "Spread_4": {
+              "marker": "ATTACK4",
+              "enabled": true
+            },
+            "Stack_Buff_1": {
+              "marker": "BIND1",
+              "enabled": true
+            },
+            "Stack_Buff_2": {
+              "marker": "IGNORE1",
+              "enabled": true
+            },
+            "Nothing_1": {
+              "marker": "BIND2",
+              "enabled": true
+            },
+            "Nothing_2": {
+              "marker": "IGNORE2",
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "value": {
+        "Spread_1": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "Spread_2": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "Spread_3": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "Spread_4": {
+          "marker": "ATTACK4",
+          "enabled": true
+        },
+        "Stack_Buff_1": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "Stack_Buff_2": {
+          "marker": "IGNORE1",
+          "enabled": true
+        },
+        "Nothing_1": {
+          "marker": "BIND2",
+          "enabled": true
+        },
+        "Nothing_2": {
+          "marker": "IGNORE2",
+          "enabled": true
+        }
+      },
+      "default": {
+        "Spread_1": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "Spread_2": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "Spread_3": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "Spread_4": {
+          "marker": "ATTACK4",
+          "enabled": true
+        },
+        "Stack_Buff_1": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "Stack_Buff_2": {
+          "marker": "IGNORE1",
+          "enabled": true
+        },
+        "Nothing_1": {
+          "marker": "BIND2",
+          "enabled": true
+        },
+        "Nothing_2": {
+          "marker": "IGNORE2",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": "top.priority",
+      "type": "jobs",
+      "label": "Shared TOP priority",
+      "value": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "default": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "effective_order": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ]
+    },
+    {
+      "id": "top.looper.enabled",
+      "type": "boolean",
+      "label": "Enable Program Loop markers",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.panto.enabled",
+      "type": "boolean",
+      "label": "Enable Pantokrator markers",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.ps.enabled",
+      "type": "boolean",
+      "label": "Enable Party Synergy markers",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.sniper.enabled",
+      "type": "boolean",
+      "label": "Enable Sniper Cannon markers",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.monitor.enabled",
+      "type": "boolean",
+      "label": "Enable monitor markers",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.delta.enabled",
+      "type": "boolean",
+      "label": "Enable Delta markers",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.sigma.enabled",
+      "type": "boolean",
+      "label": "Enable Sigma markers",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.omega.enabled",
+      "type": "boolean",
+      "label": "Enable Omega markers",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.omega.first_enabled",
+      "type": "boolean",
+      "label": "Mark first Omega set",
+      "value": true,
+      "default": true
+    },
+    {
+      "id": "top.omega.second_enabled",
+      "type": "boolean",
+      "label": "Mark second Omega set",
+      "value": true,
+      "default": true
+    },
+    {
+      "id": "top.p1.priority_override",
+      "type": "boolean",
+      "label": "Override shared priority",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.p1.priority",
+      "type": "jobs",
+      "label": "P1 priority",
+      "parent": "top.priority",
+      "override_enabled": "top.p1.priority_override",
+      "value": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "default": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "effective_order": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ]
+    },
+    {
+      "id": "top.ps.priority_override",
+      "type": "boolean",
+      "label": "Override shared priority",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.ps.priority",
+      "type": "jobs",
+      "label": "Party Synergy priority",
+      "parent": "top.priority",
+      "override_enabled": "top.ps.priority_override",
+      "value": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "default": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "effective_order": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ]
+    },
+    {
+      "id": "top.sniper.priority_override",
+      "type": "boolean",
+      "label": "Override shared priority",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.sniper.priority",
+      "type": "jobs",
+      "label": "Sniper priority",
+      "parent": "top.priority",
+      "override_enabled": "top.sniper.priority_override",
+      "value": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "default": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "effective_order": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ]
+    },
+    {
+      "id": "top.monitor.priority_override",
+      "type": "boolean",
+      "label": "Override shared priority",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.monitor.priority",
+      "type": "jobs",
+      "label": "Monitor priority",
+      "parent": "top.priority",
+      "override_enabled": "top.monitor.priority_override",
+      "value": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "default": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "effective_order": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ]
+    },
+    {
+      "id": "top.sigma.priority_override",
+      "type": "boolean",
+      "label": "Override shared priority",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.sigma.priority",
+      "type": "jobs",
+      "label": "Sigma priority",
+      "parent": "top.priority",
+      "override_enabled": "top.sigma.priority_override",
+      "value": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "default": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "effective_order": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ]
+    },
+    {
+      "id": "top.omega.priority_override",
+      "type": "boolean",
+      "label": "Override shared priority",
+      "value": false,
+      "default": false
+    },
+    {
+      "id": "top.omega.priority",
+      "type": "jobs",
+      "label": "Omega priority",
+      "parent": "top.priority",
+      "override_enabled": "top.omega.priority_override",
+      "value": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "default": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ],
+      "effective_order": [
+        "PGL",
+        "LNC",
+        "MNK",
+        "DRG",
+        "ROG",
+        "NIN",
+        "SAM",
+        "RPR",
+        "VPR",
+        "BST",
+        "GLA",
+        "MRD",
+        "PLD",
+        "WAR",
+        "DRK",
+        "GNB",
+        "THM",
+        "BLM",
+        "ACN",
+        "SMN",
+        "RDM",
+        "BLU",
+        "PCT",
+        "ARC",
+        "BRD",
+        "MCH",
+        "DNC",
+        "CNJ",
+        "WHM",
+        "SCH",
+        "AST",
+        "SGE"
+      ]
+    },
+    {
+      "id": "top.p1.markers",
+      "type": "marker_map",
+      "label": "Line markers",
+      "slots": [
+        {
+          "id": "GROUP1_NUM1",
+          "label": "Group 1 Number 1"
+        },
+        {
+          "id": "GROUP1_NUM2",
+          "label": "Group 1 Number 2"
+        },
+        {
+          "id": "GROUP1_NUM3",
+          "label": "Group 1 Number 3"
+        },
+        {
+          "id": "GROUP1_NUM4",
+          "label": "Group 1 Number 4"
+        },
+        {
+          "id": "GROUP2_NUM1",
+          "label": "Group 2 Number 1"
+        },
+        {
+          "id": "GROUP2_NUM2",
+          "label": "Group 2 Number 2"
+        },
+        {
+          "id": "GROUP2_NUM3",
+          "label": "Group 2 Number 3"
+        },
+        {
+          "id": "GROUP2_NUM4",
+          "label": "Group 2 Number 4"
+        }
+      ],
+      "presets": [
+        {
+          "name": "Defaults",
+          "value": {
+            "GROUP1_NUM1": {
+              "marker": "ATTACK1",
+              "enabled": true
+            },
+            "GROUP1_NUM2": {
+              "marker": "ATTACK2",
+              "enabled": true
+            },
+            "GROUP1_NUM3": {
+              "marker": "ATTACK3",
+              "enabled": true
+            },
+            "GROUP1_NUM4": {
+              "marker": "ATTACK4",
+              "enabled": true
+            },
+            "GROUP2_NUM1": {
+              "marker": "BIND1",
+              "enabled": true
+            },
+            "GROUP2_NUM2": {
+              "marker": "BIND2",
+              "enabled": true
+            },
+            "GROUP2_NUM3": {
+              "marker": "BIND3",
+              "enabled": true
+            },
+            "GROUP2_NUM4": {
+              "marker": "CROSS",
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "value": {
+        "GROUP1_NUM1": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "GROUP1_NUM2": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "GROUP1_NUM3": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "GROUP1_NUM4": {
+          "marker": "ATTACK4",
+          "enabled": true
+        },
+        "GROUP2_NUM1": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "GROUP2_NUM2": {
+          "marker": "BIND2",
+          "enabled": true
+        },
+        "GROUP2_NUM3": {
+          "marker": "BIND3",
+          "enabled": true
+        },
+        "GROUP2_NUM4": {
+          "marker": "CROSS",
+          "enabled": true
+        }
+      },
+      "default": {
+        "GROUP1_NUM1": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "GROUP1_NUM2": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "GROUP1_NUM3": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "GROUP1_NUM4": {
+          "marker": "ATTACK4",
+          "enabled": true
+        },
+        "GROUP2_NUM1": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "GROUP2_NUM2": {
+          "marker": "BIND2",
+          "enabled": true
+        },
+        "GROUP2_NUM3": {
+          "marker": "BIND3",
+          "enabled": true
+        },
+        "GROUP2_NUM4": {
+          "marker": "CROSS",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": "top.ps.mid_markers",
+      "type": "marker_map",
+      "label": "Mid glitch markers",
+      "slots": [
+        {
+          "id": "GROUP1_CIRCLE",
+          "label": "Group 1 Circle"
+        },
+        {
+          "id": "GROUP1_TRIANGLE",
+          "label": "Group 1 Triangle"
+        },
+        {
+          "id": "GROUP1_SQUARE",
+          "label": "Group 1 Square"
+        },
+        {
+          "id": "GROUP1_X",
+          "label": "Group 1 X"
+        },
+        {
+          "id": "GROUP2_CIRCLE",
+          "label": "Group 2 Circle"
+        },
+        {
+          "id": "GROUP2_TRIANGLE",
+          "label": "Group 2 Triangle"
+        },
+        {
+          "id": "GROUP2_SQUARE",
+          "label": "Group 2 Square"
+        },
+        {
+          "id": "GROUP2_X",
+          "label": "Group 2 X"
+        }
+      ],
+      "presets": [
+        {
+          "name": "Defaults",
+          "value": {
+            "GROUP1_CIRCLE": {
+              "marker": "ATTACK1",
+              "enabled": true
+            },
+            "GROUP1_TRIANGLE": {
+              "marker": "ATTACK2",
+              "enabled": true
+            },
+            "GROUP1_SQUARE": {
+              "marker": "ATTACK3",
+              "enabled": true
+            },
+            "GROUP1_X": {
+              "marker": "ATTACK4",
+              "enabled": true
+            },
+            "GROUP2_CIRCLE": {
+              "marker": "BIND1",
+              "enabled": true
+            },
+            "GROUP2_TRIANGLE": {
+              "marker": "BIND2",
+              "enabled": true
+            },
+            "GROUP2_SQUARE": {
+              "marker": "BIND3",
+              "enabled": true
+            },
+            "GROUP2_X": {
+              "marker": "CROSS",
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "value": {
+        "GROUP1_CIRCLE": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "GROUP1_TRIANGLE": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "GROUP1_SQUARE": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "GROUP1_X": {
+          "marker": "ATTACK4",
+          "enabled": true
+        },
+        "GROUP2_CIRCLE": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "GROUP2_TRIANGLE": {
+          "marker": "BIND2",
+          "enabled": true
+        },
+        "GROUP2_SQUARE": {
+          "marker": "BIND3",
+          "enabled": true
+        },
+        "GROUP2_X": {
+          "marker": "CROSS",
+          "enabled": true
+        }
+      },
+      "default": {
+        "GROUP1_CIRCLE": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "GROUP1_TRIANGLE": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "GROUP1_SQUARE": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "GROUP1_X": {
+          "marker": "ATTACK4",
+          "enabled": true
+        },
+        "GROUP2_CIRCLE": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "GROUP2_TRIANGLE": {
+          "marker": "BIND2",
+          "enabled": true
+        },
+        "GROUP2_SQUARE": {
+          "marker": "BIND3",
+          "enabled": true
+        },
+        "GROUP2_X": {
+          "marker": "CROSS",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": "top.ps.far_markers",
+      "type": "marker_map",
+      "label": "Far glitch markers",
+      "slots": [
+        {
+          "id": "GROUP1_CIRCLE",
+          "label": "Group 1 Circle"
+        },
+        {
+          "id": "GROUP1_TRIANGLE",
+          "label": "Group 1 Triangle"
+        },
+        {
+          "id": "GROUP1_SQUARE",
+          "label": "Group 1 Square"
+        },
+        {
+          "id": "GROUP1_X",
+          "label": "Group 1 X"
+        },
+        {
+          "id": "GROUP2_CIRCLE",
+          "label": "Group 2 Circle"
+        },
+        {
+          "id": "GROUP2_TRIANGLE",
+          "label": "Group 2 Triangle"
+        },
+        {
+          "id": "GROUP2_SQUARE",
+          "label": "Group 2 Square"
+        },
+        {
+          "id": "GROUP2_X",
+          "label": "Group 2 X"
+        }
+      ],
+      "presets": [
+        {
+          "name": "Defaults",
+          "value": {
+            "GROUP1_CIRCLE": {
+              "marker": "ATTACK1",
+              "enabled": true
+            },
+            "GROUP1_TRIANGLE": {
+              "marker": "ATTACK2",
+              "enabled": true
+            },
+            "GROUP1_SQUARE": {
+              "marker": "ATTACK3",
+              "enabled": true
+            },
+            "GROUP1_X": {
+              "marker": "ATTACK4",
+              "enabled": true
+            },
+            "GROUP2_CIRCLE": {
+              "marker": "BIND1",
+              "enabled": true
+            },
+            "GROUP2_TRIANGLE": {
+              "marker": "BIND2",
+              "enabled": true
+            },
+            "GROUP2_SQUARE": {
+              "marker": "BIND3",
+              "enabled": true
+            },
+            "GROUP2_X": {
+              "marker": "CROSS",
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "value": {
+        "GROUP1_CIRCLE": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "GROUP1_TRIANGLE": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "GROUP1_SQUARE": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "GROUP1_X": {
+          "marker": "ATTACK4",
+          "enabled": true
+        },
+        "GROUP2_CIRCLE": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "GROUP2_TRIANGLE": {
+          "marker": "BIND2",
+          "enabled": true
+        },
+        "GROUP2_SQUARE": {
+          "marker": "BIND3",
+          "enabled": true
+        },
+        "GROUP2_X": {
+          "marker": "CROSS",
+          "enabled": true
+        }
+      },
+      "default": {
+        "GROUP1_CIRCLE": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "GROUP1_TRIANGLE": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "GROUP1_SQUARE": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "GROUP1_X": {
+          "marker": "ATTACK4",
+          "enabled": true
+        },
+        "GROUP2_CIRCLE": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "GROUP2_TRIANGLE": {
+          "marker": "BIND2",
+          "enabled": true
+        },
+        "GROUP2_SQUARE": {
+          "marker": "BIND3",
+          "enabled": true
+        },
+        "GROUP2_X": {
+          "marker": "CROSS",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": "top.sniper.markers",
+      "type": "marker_map",
+      "label": "Sniper markers",
+      "slots": [
+        {
+          "id": "SPREAD_1",
+          "label": "Spread 1"
+        },
+        {
+          "id": "SPREAD_2",
+          "label": "Spread 2"
+        },
+        {
+          "id": "SPREAD_3",
+          "label": "Spread 3"
+        },
+        {
+          "id": "SPREAD_4",
+          "label": "Spread 4"
+        },
+        {
+          "id": "STACK_1",
+          "label": "Stack 1"
+        },
+        {
+          "id": "STACK_2",
+          "label": "Stack 2"
+        },
+        {
+          "id": "NOTHING_1",
+          "label": "Nothing 1"
+        },
+        {
+          "id": "NOTHING_2",
+          "label": "Nothing 2"
+        }
+      ],
+      "presets": [
+        {
+          "name": "Defaults",
+          "value": {
+            "SPREAD_1": {
+              "marker": "ATTACK1",
+              "enabled": true
+            },
+            "SPREAD_2": {
+              "marker": "ATTACK2",
+              "enabled": true
+            },
+            "SPREAD_3": {
+              "marker": "ATTACK3",
+              "enabled": true
+            },
+            "SPREAD_4": {
+              "marker": "ATTACK4",
+              "enabled": true
+            },
+            "STACK_1": {
+              "marker": "BIND1",
+              "enabled": true
+            },
+            "STACK_2": {
+              "marker": "IGNORE1",
+              "enabled": true
+            },
+            "NOTHING_1": {
+              "marker": "BIND2",
+              "enabled": true
+            },
+            "NOTHING_2": {
+              "marker": "IGNORE2",
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "value": {
+        "SPREAD_1": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "SPREAD_2": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "SPREAD_3": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "SPREAD_4": {
+          "marker": "ATTACK4",
+          "enabled": true
+        },
+        "STACK_1": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "STACK_2": {
+          "marker": "IGNORE1",
+          "enabled": true
+        },
+        "NOTHING_1": {
+          "marker": "BIND2",
+          "enabled": true
+        },
+        "NOTHING_2": {
+          "marker": "IGNORE2",
+          "enabled": true
+        }
+      },
+      "default": {
+        "SPREAD_1": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "SPREAD_2": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "SPREAD_3": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "SPREAD_4": {
+          "marker": "ATTACK4",
+          "enabled": true
+        },
+        "STACK_1": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "STACK_2": {
+          "marker": "IGNORE1",
+          "enabled": true
+        },
+        "NOTHING_1": {
+          "marker": "BIND2",
+          "enabled": true
+        },
+        "NOTHING_2": {
+          "marker": "IGNORE2",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": "top.delta.markers",
+      "type": "marker_map",
+      "label": "Delta markers",
+      "slots": [
+        {
+          "id": "NearWorld",
+          "label": "Near World"
+        },
+        {
+          "id": "DistantWorld",
+          "label": "Distant World"
+        }
+      ],
+      "presets": [
+        {
+          "name": "Defaults",
+          "value": {
+            "NearWorld": {
+              "marker": "IGNORE1",
+              "enabled": true
+            },
+            "DistantWorld": {
+              "marker": "IGNORE2",
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "value": {
+        "NearWorld": {
+          "marker": "IGNORE1",
+          "enabled": true
+        },
+        "DistantWorld": {
+          "marker": "IGNORE2",
+          "enabled": true
+        }
+      },
+      "default": {
+        "NearWorld": {
+          "marker": "IGNORE1",
+          "enabled": true
+        },
+        "DistantWorld": {
+          "marker": "IGNORE2",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": "top.sigma.markers",
+      "type": "marker_map",
+      "label": "Sigma markers",
+      "slots": [
+        {
+          "id": "NearWorld",
+          "label": "Near World"
+        },
+        {
+          "id": "DistantWorld",
+          "label": "Distant World"
+        },
+        {
+          "id": "OneStack1",
+          "label": "One Stack #1"
+        },
+        {
+          "id": "OneStack2",
+          "label": "One Stack #2"
+        },
+        {
+          "id": "OneStack3",
+          "label": "One Stack #3"
+        },
+        {
+          "id": "OneStack4",
+          "label": "One Stack #4"
+        },
+        {
+          "id": "Remaining1",
+          "label": "Leftover #1"
+        },
+        {
+          "id": "Remaining2",
+          "label": "Leftover #2"
+        }
+      ],
+      "presets": [
+        {
+          "name": "Defaults",
+          "value": {
+            "NearWorld": {
+              "marker": "IGNORE1",
+              "enabled": true
+            },
+            "DistantWorld": {
+              "marker": "IGNORE2",
+              "enabled": true
+            },
+            "OneStack1": {
+              "marker": "ATTACK1",
+              "enabled": true
+            },
+            "OneStack2": {
+              "marker": "ATTACK2",
+              "enabled": true
+            },
+            "OneStack3": {
+              "marker": "ATTACK3",
+              "enabled": true
+            },
+            "OneStack4": {
+              "marker": "BIND1",
+              "enabled": true
+            },
+            "Remaining1": {
+              "marker": "BIND2",
+              "enabled": true
+            },
+            "Remaining2": {
+              "marker": "BIND3",
+              "enabled": true
+            }
+          }
+        },
+        {
+          "name": "Sausage Strat",
+          "value": {
+            "NearWorld": {
+              "marker": "TRIANGLE",
+              "enabled": true
+            },
+            "DistantWorld": {
+              "marker": "CROSS",
+              "enabled": true
+            },
+            "OneStack1": {
+              "marker": "BIND1",
+              "enabled": true
+            },
+            "OneStack2": {
+              "marker": "BIND2",
+              "enabled": true
+            },
+            "OneStack3": {
+              "marker": "ATTACK1",
+              "enabled": true
+            },
+            "OneStack4": {
+              "marker": "ATTACK2",
+              "enabled": true
+            },
+            "Remaining1": {
+              "marker": "ATTACK3",
+              "enabled": true
+            },
+            "Remaining2": {
+              "marker": "ATTACK4",
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "value": {
+        "NearWorld": {
+          "marker": "IGNORE1",
+          "enabled": true
+        },
+        "DistantWorld": {
+          "marker": "IGNORE2",
+          "enabled": true
+        },
+        "OneStack1": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "OneStack2": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "OneStack3": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "OneStack4": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "Remaining1": {
+          "marker": "BIND2",
+          "enabled": true
+        },
+        "Remaining2": {
+          "marker": "BIND3",
+          "enabled": true
+        }
+      },
+      "default": {
+        "NearWorld": {
+          "marker": "IGNORE1",
+          "enabled": true
+        },
+        "DistantWorld": {
+          "marker": "IGNORE2",
+          "enabled": true
+        },
+        "OneStack1": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "OneStack2": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "OneStack3": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "OneStack4": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "Remaining1": {
+          "marker": "BIND2",
+          "enabled": true
+        },
+        "Remaining2": {
+          "marker": "BIND3",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": "top.omega.markers",
+      "type": "marker_map",
+      "label": "Omega markers",
+      "slots": [
+        {
+          "id": "NearWorld",
+          "label": "Near World"
+        },
+        {
+          "id": "DistantWorld",
+          "label": "Distant World"
+        },
+        {
+          "id": "Baiter1",
+          "label": "Baiter #1"
+        },
+        {
+          "id": "Baiter2",
+          "label": "Baiter #2"
+        },
+        {
+          "id": "Baiter3",
+          "label": "Baiter #3"
+        },
+        {
+          "id": "Baiter4",
+          "label": "Baiter #4"
+        },
+        {
+          "id": "Remaining1",
+          "label": "Monitor/Tether #1"
+        },
+        {
+          "id": "Remaining2",
+          "label": "Monitor/Tether #2"
+        }
+      ],
+      "presets": [
+        {
+          "name": "Defaults",
+          "value": {
+            "NearWorld": {
+              "marker": "IGNORE1",
+              "enabled": true
+            },
+            "DistantWorld": {
+              "marker": "IGNORE2",
+              "enabled": true
+            },
+            "Baiter1": {
+              "marker": "ATTACK1",
+              "enabled": true
+            },
+            "Baiter2": {
+              "marker": "ATTACK2",
+              "enabled": true
+            },
+            "Baiter3": {
+              "marker": "ATTACK3",
+              "enabled": true
+            },
+            "Baiter4": {
+              "marker": "ATTACK4",
+              "enabled": true
+            },
+            "Remaining1": {
+              "marker": "BIND1",
+              "enabled": true
+            },
+            "Remaining2": {
+              "marker": "BIND2",
+              "enabled": true
+            }
+          }
+        },
+        {
+          "name": "Sausage Strat",
+          "value": {
+            "NearWorld": {
+              "marker": "TRIANGLE",
+              "enabled": true
+            },
+            "DistantWorld": {
+              "marker": "CROSS",
+              "enabled": true
+            },
+            "Baiter1": {
+              "marker": "ATTACK1",
+              "enabled": true
+            },
+            "Baiter2": {
+              "marker": "ATTACK2",
+              "enabled": true
+            },
+            "Baiter3": {
+              "marker": "ATTACK3",
+              "enabled": true
+            },
+            "Baiter4": {
+              "marker": "ATTACK4",
+              "enabled": true
+            },
+            "Remaining1": {
+              "marker": "BIND1",
+              "enabled": true
+            },
+            "Remaining2": {
+              "marker": "BIND2",
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "value": {
+        "NearWorld": {
+          "marker": "IGNORE1",
+          "enabled": true
+        },
+        "DistantWorld": {
+          "marker": "IGNORE2",
+          "enabled": true
+        },
+        "Baiter1": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "Baiter2": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "Baiter3": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "Baiter4": {
+          "marker": "ATTACK4",
+          "enabled": true
+        },
+        "Remaining1": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "Remaining2": {
+          "marker": "BIND2",
+          "enabled": true
+        }
+      },
+      "default": {
+        "NearWorld": {
+          "marker": "IGNORE1",
+          "enabled": true
+        },
+        "DistantWorld": {
+          "marker": "IGNORE2",
+          "enabled": true
+        },
+        "Baiter1": {
+          "marker": "ATTACK1",
+          "enabled": true
+        },
+        "Baiter2": {
+          "marker": "ATTACK2",
+          "enabled": true
+        },
+        "Baiter3": {
+          "marker": "ATTACK3",
+          "enabled": true
+        },
+        "Baiter4": {
+          "marker": "ATTACK4",
+          "enabled": true
+        },
+        "Remaining1": {
+          "marker": "BIND1",
+          "enabled": true
+        },
+        "Remaining2": {
+          "marker": "BIND2",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": "top.sigma.delay_seconds",
+      "type": "integer",
+      "label": "Sigma delay seconds",
+      "min": 0,
+      "max": 50,
+      "value": 0,
+      "default": 0
+    },
+    {
+      "id": "top.omega.first_delay_seconds",
+      "type": "integer",
+      "label": "First Omega delay seconds",
+      "min": 0,
+      "max": 28,
+      "value": 1,
+      "default": 1
+    },
+    {
+      "id": "top.omega.second_delay_seconds",
+      "type": "integer",
+      "label": "Second Omega delay seconds",
+      "min": 0,
+      "max": 20,
+      "value": 0,
+      "default": 0
+    },
+    {
+      "id": "telesto.delay_base_ms",
+      "type": "integer",
+      "label": "Command delay milliseconds",
+      "min": 0,
+      "max": 5000,
+      "value": 100,
+      "default": 100
+    },
+    {
+      "id": "telesto.delay_plus_ms",
+      "type": "integer",
+      "label": "Additional random delay milliseconds",
+      "min": 0,
+      "max": 5000,
+      "value": 100,
+      "default": 100
+    },
+    {
+      "managed": "frontend",
+      "default": true,
+      "id": "native_umad",
+      "label": "Enable native P4 debuff markers",
+      "type": "boolean",
+      "value": true
+    }
+  ]
+}

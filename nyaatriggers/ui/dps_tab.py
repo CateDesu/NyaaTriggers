@@ -39,10 +39,6 @@ class DpsTabMixin:
     def _dps_dir(self) -> Path:
         return ac._DATA_DIR / "dps_logs"
 
-    def _on_dps_record_toggled(self, on: bool) -> None:
-        self._settings["dps_enabled"] = on
-        self._save_settings()
-
     def _on_dps_idle_changed(self, _idx: int) -> None:
         secs = self._dps_idle_combo.currentData()
         self._settings["dps_idle_timeout"] = secs
@@ -174,8 +170,7 @@ class DpsTabMixin:
         title = enc.get("title") or ""
         if title:
             self._fflogs_last_title = title
-        if self._settings.get("dps_enabled", False):
-            self._write_dps_snapshot(snapshot)
+        self._write_dps_snapshot(snapshot)
         self._maybe_fetch_fflogs(title)
         self._clear_callout_dedup()
         # Reset cooldowns because status effect IDs remain the same across pulls.
@@ -239,7 +234,11 @@ class DpsTabMixin:
 
         self._dps_write_threads = [t for t in self._dps_write_threads if t.is_alive()]
         worker = threading.Thread(target=work, daemon=True)
-        worker.start()
+        try:
+            worker.start()
+        except RuntimeError as exc:
+            ac.log_drop("dps-snapshot", f"writer could not start: {exc!r}")
+            return
         self._dps_write_threads.append(worker)
 
     def _fflogs_configured(self) -> bool:

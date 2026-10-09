@@ -327,6 +327,34 @@ check("an unmarked carrier loss does not clear a sign",
 check("a lost waiting carrier never receives the released sign",
       marks(e.flush(70.1)) == {D: IGN2})
 
+for tell_first in (True, False):
+    e = eng()
+    if tell_first:
+        e.on_vfx(REAL, 100.0, event_id="first")
+    gain(e, A, 1.0, 100.0)
+    if tell_first:
+        actions = gain(e, B, 10.0, 101.1)
+    else:
+        gain(e, B, 10.0, 100.0)
+        actions = e.on_vfx(REAL, 101.1, event_id="first")
+    check(f"expired incomplete gaze cannot form a pair, tell first {tell_first}", actions == [])
+    check(f"only the live gaze waits for a partner, tell first {tell_first}",
+          e._set == [B] and e._sets_done == 0)
+    e.on_vfx(FAKE, 101.2, event_id="second")
+    check(f"fresh gaze pairing recovers after incomplete expiry, tell first {tell_first}",
+          marks(gain(e, C, 10.0, 101.3)) == {B: BND1, C: BND2})
+    check(f"late expired carrier loss preserves the fresh pair, tell first {tell_first}",
+          e.on_loss(CURSED_SHRIEK, A, 101.4) == [] and e.outstanding() == [B, C])
+
+e = eng()
+e.on_vfx(REAL, 100.0)
+gain(e, A, 1.0, 100.0)
+check("expiry empties an incomplete pair without clearing a mark", e.flush(101.0) == [])
+check("an expired incomplete pair cannot lend its tell to later carriers",
+      wave(e, [B, C], 10.0, 101.1) == [])
+check("a fresh tell recovers after the whole incomplete pair expires",
+      marks(e.on_vfx(FAKE, 101.2)) == {B: BND1, C: BND2})
+
 print()
 if FAILS:
     print(f"{len(FAILS)} FAILED")

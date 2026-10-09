@@ -35,14 +35,20 @@ class RecordWriter:
                 raise OSError("Session writer queue is full")
             if self._executor is None:
                 self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="session-writer")
+            if not self._running:
+                try:
+                    self._future = self._executor.submit(self._run)
+                except RuntimeError as exc:
+                    self._executor.shutdown(wait=False, cancel_futures=True)
+                    self._executor = None
+                    self._future = None
+                    raise OSError(f"Session writer could not start: {exc}") from exc
+                self._running = True
             self._latest[key] = token
             # Only adjacent snapshots can be replaced without reordering records.
             if replace:
                 self._pending.pop()
             self._pending.append((key, job))
-            if not self._running:
-                self._future = self._executor.submit(self._run)
-                self._running = True
 
     def _run(self):
         while True:

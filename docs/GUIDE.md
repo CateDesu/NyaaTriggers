@@ -30,7 +30,7 @@ Windows and Linux release builds bundle the Python dependencies and English Pipe
 | Requirement | Notes |
 |---|---|
 | [IINACT](https://github.com/marzent/IINACT) | Running and connected to the game |
-| Python 3.11+ | System Python is fine |
+| Python 3.11+ | Release builds and tests use Python 3.14. System Python is fine. |
 | PyQt6 with Qt WebSockets | `sudo pacman -S python-pyqt6 qt6-websockets` / `sudo apt install python3-pyqt6 python3-pyqt6.qtwebsockets` / `pip install PyQt6`. The program needs Qt WebSockets for the game feed. |
 | piper-tts | Installed automatically on first launch into `~/.venv/ffxiv` |
 | Audio backend | `aplay` via `alsa-utils` |
@@ -187,7 +187,7 @@ The meter updates every second from the combat log. It shows per-player DPS, dam
 
 - **Reset display after** pauses the display after no damage and starts a new segment when damage resumes. Options range from 15 seconds to 10 minutes, defaulting to 2 minutes. Recorded pulls include all downtime.
 - Finished pulls stay visible until the next starts. **Recent pulls** lists this run's attempts newest first. Select one to review it, then use **<- Back to live** or wait for the next pull.
-- **Record encounters**, off by default, saves one JSONL record per pull in `dps_logs/`. Logs roll over after 25 pulls of one fight or 5 distinct fights. The newest five completed logs are retained.
+- Every encounter automatically saves one JSONL record per pull in `dps_logs/`. Logs roll over after 25 pulls of one fight or 5 distinct fights. The newest five completed logs and the active log are retained.
 - The companion overlay receives live DPS once a second for up to 24 players. Its settings control appearance and whether the last encounter remains visible.
 
 ---
@@ -214,6 +214,8 @@ From Prog, **View death recaps** opens only the selected pull's saved deaths, id
 
 **Saved pulls…** opens saved sessions and pulls directly from Death Recap. Use **Previous pull** and **Next pull** to browse adjacent attempts, then select a player and death in the list.
 
+**Delete pull** is available for a saved pull in Death Recap and the **Saved pulls…** browser. Confirmation permanently removes that pull, its notes, and its saved recaps. Completed earlier pulls remain removable while the same session records another attempt. The active pull cannot be deleted. Imported logs and recent live deaths are separate from saved Prog pulls.
+
 **Open log…** reads an IINACT network `.log` file in the background with progress and cancellation. Browse all its deaths or select an inferred pull and player. Imported recaps use the original log timestamps, statuses, HP, and healing. Pull boundaries are inferred from combat activity and wipe signals, so their numbers can differ from Prog. Importing does not write to Prog or replace live recording. Cancelled or failed imports keep the current view. Imported details use temporary storage and are loaded one death at a time, beyond the live view's 80-death limit, up to 50,000 deaths per file. Return to recent deaths or open another source to release that storage. Reopen the source log after restarting the program. A growing log is read only up to its size when opened.
 
 Recaps describe the observed feed. Incoming healing amounts include overheal. The light green segment uses the observed HP rise at resolution, capped at the reported heal. Confirmed HP updates take precedence over ability snapshots that may be stale. Shields are rounded percentages of maximum HP. Some ticks are aggregated, and events missed before connection cannot be recovered. Status list updates recover buffs already active at connection. A recap retains at most 256 observations. Older saved recaps remain readable and show **Not recorded** for missing HP and per-event statuses. Ability events may arrive before their effects resolve. See the [combat log format](https://github.com/OverlayPlugin/cactbot/blob/main/docs/LogGuide.md).
@@ -222,9 +224,13 @@ Unlike the in-game Death Recap plugin, this program reconstructs events from IIN
 
 ## Prog tab
 
-**Start session** begins a named duty session after connection, duty identification, and the first combat-state message. Starting during combat waits for the next full pull.
+Sessions begin automatically when combat starts after connection and duty identification. Pulls and breaks in the same duty stay in that session. Joining during combat waits for the next full pull.
 
-**Find sessions by name or duty** searches the saved list using all the words you enter, ignoring case. Names and duty names can match different words. Clearing a search with no results restores the previous session and pull. Searching saves pending notes and leaves collection running even when the active session is hidden. Starting a session clears the search so the new session is visible.
+Saved sessions load with the program. Comparing, archiving, restoring, deleting, and editing their notes work before the game opens or the feed connects.
+
+**Find sessions by name or duty** searches the saved list using all the words you enter, ignoring case. Names and duty names can match different words. Clearing a search with no results restores the previous session and pull. Searching saves pending notes and leaves collection running even when the active session is hidden.
+
+**Delete session** permanently removes the selected finished session, its saved pulls, notes, and death recaps after confirmation. Active sessions finish when you leave the duty or close the program. A failed deletion keeps the session available and reports the error; some recaps may already have been removed.
 
 **Archive session** hides a finished session from the usual picker and comparison choices. Enable **Show archived** to review its notes and recaps, copy its details, or compare it again. Archived entries have a label next to their names. **Restore session** returns an archived session to the usual list. Archiving retains the saved files and recaps. Active sessions must end first. A failed archive write keeps the previous visibility and reports the save error.
 
@@ -232,9 +238,13 @@ Each pull records its start, duration, ending, and deaths. The pull table lists 
 
 The star arrow buttons move to the previous or next bookmarked pull in its original order. They stop at the first or last bookmark, and notes save before moving. **Copy pull summary** puts the selected session, duty, pull number, observed duration, ending, deaths, phase confirmations, and notes on the clipboard. Earlier phases established by later evidence keep their confirmation time unavailable in the copied text.
 
+**Delete pull** permanently removes the selected saved pull, its notes, and its death recaps after confirmation. It also works for a completed earlier pull in the active session. The pull currently being recorded cannot be deleted. The session and its other attempts remain available.
+
 **Furthest phase** and **Phase confirmations** record UMAD progress from boss casts and ability events. Times identify the first confirming event after pull start. P5 requires Ultima Repeater because Ultima Upsurge also occurs in P4. Earlier phases established by later evidence have no invented time. Interrupted recordings retain their observations. Pulls without confirming events show **No confirmation**. Older pulls without phase data remain **Not recorded**; unsupported duties show **Not supported**. Unreadable phase data does not hide notes or recaps.
 
 **Phase progress** summarizes the furthest confirmed phase among eligible pulls, with its count and sample size. Only complete attempts with readable phase data and matching verified rules contribute. Quick wipes without confirmations remain in the denominator. Active, interrupted, uncertain, unreadable, and unrecorded pulls are excluded, with counts by reason. Zero eligible pulls shows **No eligible pulls**. Rates describe received confirmations, so missing feed events can hide a phase that the party reached.
+
+**Duty progress across saved sessions** shows **First reached** and **Best boss HP** for each phase in the selected duty. The date is the earliest recorded phase confirmation, shown in local time. Boss HP is the lowest observed percentage for that phase. Matching verified records contribute, including active and interrupted pulls and archived sessions. Deleting pulls or sessions updates these values. Earlier phases inferred from later evidence have no invented confirmation date, and missing historical dates or HP show **Not recorded**.
 
 **Compare with…** opens a comparison area for another saved, finished session in the same duty. An interrupted session can still contain eligible complete pulls. The first opening chooses the most recent earlier compatible session when available. The table shows finished pull counts, eligible phase pull counts, furthest confirmed phases, longest finished pulls, and each phase's confirmed reach. Rates include sample sizes, and changes use percentage points calculated before rounding. For example, 6/20 and 3/15 show 30% and 20%, with a change of +10 percentage points.
 
@@ -244,11 +254,11 @@ Phase comparisons require identical tracking definitions and revisions. Mixed or
 
 **View death recaps** opens the selected attempt in Death Recap. Deaths save as they arrive, including during interrupted pulls. Late deaths can attach for two seconds after combat ends or a wipe. A new pull, disconnect, duty change, or session end closes that window. Starting midcombat skips the partial attempt and its recaps. An empty meter encounter with observed deaths remains reviewable as interrupted.
 
-**End session** or leaving the duty ends collection. Wipes and breaks stay in the session. A disconnect preserves the observed pull as interrupted and waits for a fresh pull after reconnecting. Interrupted attempts do not count toward longest complete pull. **Combat ended** does not establish a clear. Session controls leave the live meter and callouts running.
+Leaving the duty ends the session. Wipes and breaks stay in the session. A disconnect preserves the observed pull as interrupted and waits for a fresh pull after reconnecting. Interrupted attempts do not count toward longest complete pull. **Combat ended** does not establish a clear.
 
 A wipe signal received within five seconds of combat ending updates that pull's ending. This does not extend the two-second allowance for late deaths.
 
-Sessions save in `prog_sessions/`, independently of DPS recording and log rotation. Notes save after a typing pause and flush on shutdown. Active progress and elapsed time also save every 15 seconds. The session picker opens previous sessions after restart. Crash recovery retains the last successful save and marks unfinished sessions interrupted. Unreadable files are preserved and errors are shown.
+Sessions save in `prog_sessions/`, independently of DPS log rotation, and remain until deleted. Notes save after a typing pause and flush on shutdown. Active progress and elapsed time also save every 15 seconds. The session picker opens previous sessions after restart. Crash recovery retains the last successful save and marks unfinished sessions interrupted. Unreadable files are preserved and errors are shown.
 
 Recaps save separately under `prog_sessions/recaps/`, grouped by session and pull IDs. Failed writes retry when session changes flush. The queue holds the latest 256 unsaved recaps and reports any dropped records. Storage must recover before queued records can survive closing the program.
 
@@ -268,13 +278,19 @@ The active profile and separate Default setup survive restarts. Applying preserv
 
 ## Automarkers tab
 
-Place party signs through [Telesto](https://github.com/paissaheavyindustries/Telesto). Each rule maps a fight and debuff to a marker for **me** or **whoever gets the debuff**. Marking another player requires a known party slot.
+Place party signs through [Telesto](https://github.com/paissaheavyindustries/Telesto). Select the encounter controls and markers for each mechanic. Marking another player requires a known party slot.
 
 **Enable automarkers** and **Telesto URL** also configure Triggevent's native
 markers after an engine restart. **Triggevent encounter automarkers** exposes all
 13 bundled output sets across UWU, DSR, TOP and UMAD, using their native encounter
 logic. Turning off Triggevent callouts leaves markers running. Nyaa supports
 Telesto for marking.
+
+Native controls load with the program from the bundled inventory or the latest
+saved inventory and can be configured before the game or engine starts. Changes
+are saved immediately and applied as soon as the engine is ready. The controls
+stay editable while the engine restarts or is unavailable. If an older engine
+cannot supply the controls, the tab directs you to update it in Settings.
 
 The native controls include independent mechanic switches, shared and overridden
 job priorities, eight marker maps with per-slot enable and presets, and encounter
@@ -295,10 +311,9 @@ Use a control's **Reset** button to replace an invalid saved preference with its
 native default. This also repairs values whose displayed fallback already looks
 correct, allowing later edits to other controls.
 
-Local UMAD gaze pairing or an assigned local P4 debuff rule scoped to UMAD or any
-fight keeps P4 marker ownership in Nyaa. Native UMAD P4 marks are then suppressed,
+Local UMAD gaze, Bomb or Lightning controls keep P4 marker ownership in Nyaa. Native UMAD P4 marks are then suppressed,
 even when **Enable native P4 debuff markers** is selected.
-P1 and P3 rules leave native P4 marking available.
+P3 black-hole chains and Accretion leave native P4 marking available.
 Other native encounters keep their existing settings.
 
 Native P4 pairs players by debuff resolution across two waves. Nyaa's local gaze
@@ -311,8 +326,8 @@ does not confirm that a marker appeared in the game. A timed-out command may
 already have been submitted, so it is not retried automatically.
 
 - **Connection:** set **Telesto URL**, default `http://localhost:45678/`, use **Test mark (on me)**, then select **Enable automarkers**.
-- **Rules:** unassigned rules do not fire. Select a rule and choose its **Marker**, or choose *(unassigned)* to disable it. **Load UMAD preset** adds the selected Dancing Mad Ultimate rules. **Remove the mark when the debuff falls off** is on by default. **Clear all party marks** clears every sign.
-- **UMAD sequences:** **black-hole chains** assign roaming signs to the P3 DPS, support, and Accretion cleanse queues, each with its own picker. **Cursed Shriek gaze pairs** assign P4 look-at and look-away signs using Neo Exdeath's status VFX. When both pairs need the same signs, the later pair receives them after the first gaze ends. Both suspend overlapping plain rules. See [UMAD debuff rules and evidence](UMAD-DEBUFFS.md).
+- **Clear all party marks:** clears every sign and cancels waiting local assignments. Saved debuff assignments from older versions are inactive.
+- **UMAD sequences:** separate tabs hold P3 **black-hole chains** and **Accretion**, plus P4 **Cursed Shriek**, **Acceleration Bomb** and **Forked Lightning**. Accretion marks First in Line with ignore1 and Second in Line with ignore2. The first mark remains after Accretion is healed off; losing Primordial Crust after the third tether hit clears it and marks the second carrier. The second mark clears on that carrier's Crust loss. Shriek uses real look-away and fake look-at pairs. Bomb provides real stay-still and fake keep-moving signs for both short and long pairs. Lightning provides real spread and fake stack pairs. Choose signs before enabling Bomb or Lightning. Grand Cross controllers retain shared signs until the earlier debuff ends. See [UMAD debuff rules and evidence](UMAD-DEBUFFS.md).
 
 ---
 

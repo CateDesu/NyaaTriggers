@@ -58,7 +58,7 @@ def voice_venv_version(directory: Path) -> tuple[int, int] | None:
             lines = stream.read(16384).splitlines()
         for line in lines:
             key, _, value = line.partition("=")
-            if key.strip() == "version":
+            if key.strip() in ("version", "version_info"):
                 major, minor, *_ = value.strip().split(".")
                 return int(major), int(minor)
     except (OSError, ValueError):
