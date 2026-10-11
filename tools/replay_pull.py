@@ -18,7 +18,7 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO))
-from nyaatriggers.combatant_responses import CombatantResponses
+from nyaatriggers.combatant_responses import CombatantResponses, extract_raw
 
 _DEFAULT_JAR = _REPO / "triggevent-core" / "target" / "triggevent-core.jar"
 
@@ -43,17 +43,16 @@ def _line_time(line: str):
     try:
         msg = json.loads(line)
     except (ValueError, RecursionError):
-        return None
-    if not isinstance(msg, dict) or msg.get("type") != "LogLine":
-        return None
-    try:
-        fields = msg["line"]
-        if not isinstance(fields, list):
+        raw = line
+    else:
+        if not isinstance(msg, dict):
             return None
-        stamp = datetime.fromisoformat(str(fields[1]))
+        raw = extract_raw(msg)
+    try:
+        stamp = datetime.fromisoformat(raw.split("|", 2)[1])
         # Captures without an offset use UTC throughout duration and pacing.
         return stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
-    except (KeyError, IndexError, TypeError, ValueError):
+    except (IndexError, TypeError, ValueError):
         return None
 
 
@@ -123,7 +122,8 @@ def main() -> int:
     try:
         paced_duration = duration / args.speed
         budget = float(args.timeout) or (paced_duration + args.hold + _TIMEOUT_MARGIN_S)
-        valid_budget = math.isfinite(budget) and math.isfinite(paced_duration)
+        valid_budget = (math.isfinite(budget) and math.isfinite(paced_duration)
+                        and max(budget, paced_duration, args.hold) <= threading.TIMEOUT_MAX)
     except OverflowError:
         valid_budget = False
     if not valid_budget:

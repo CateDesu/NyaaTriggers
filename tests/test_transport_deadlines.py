@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from time import monotonic as _wait_clock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import unittest
 from unittest.mock import patch
@@ -22,8 +23,8 @@ APP = QCoreApplication.instance() or QCoreApplication([])
 
 
 def wait_for(predicate, timeout=4):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    deadline = _wait_clock() + timeout
+    while _wait_clock() < deadline:
         if predicate():
             return True
         time.sleep(0.01)

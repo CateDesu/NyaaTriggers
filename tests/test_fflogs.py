@@ -55,7 +55,7 @@ class FakeHTTP:
 
 
 def fresh_client(fake):
-    FflogsClient._zones_cache = None      # the zone cache is process-wide
+    FflogsClient._zones_cache = None
     return FflogsClient("cid", "secret", http_post=fake)
 
 

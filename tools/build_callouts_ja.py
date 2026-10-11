@@ -114,7 +114,7 @@ def main() -> int:
         "names": dict(sorted(names.items())),
         "names_text": dict(sorted(name_map.items())),
     }
-    # A sibling temporary file preserves the previous output if interrupted.
+    # Stage beside the output to keep replacement atomic.
     tmp = _OUT.with_name(_OUT.name + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, _OUT)

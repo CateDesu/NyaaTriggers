@@ -36,15 +36,7 @@ if not exist "%EVENT_TRIGGER_DIR%\.git" (
 )
 
 echo ^>^> installing Triggevent Engine modules to local Maven repo
-python "%HERE%build_engine.py" "%EVENT_TRIGGER_DIR%" "%HERE%patches\same-zone-history.patch" || exit /b 1
-
-echo ^>^> building triggevent-core.jar
-set "ET_COMMIT="
-for /f %%i in ('git -C "%EVENT_TRIGGER_DIR%" rev-parse HEAD') do set "ET_COMMIT=%%i"
-if not defined ET_COMMIT exit /b 1
-pushd "%HERE%"
-call mvn -q -Dmaven.test.skip=true "-Dnyaa.engine.commit=%ET_COMMIT%" clean package || (popd & exit /b 1)
-popd
+python "%HERE%build_engine.py" "%EVENT_TRIGGER_DIR%" "%HERE%patches\same-zone-history.patch" --wrapper "%HERE%." || exit /b 1
 
 echo.
 echo Built: %HERE%target\triggevent-core.jar

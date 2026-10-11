@@ -132,9 +132,9 @@ class TimelineEntry:
     window_after: float = 2.5
     jump: float | None = None
     force_jump: bool = False
-    jump_label: str = ""     # unresolved 'jump "name"' target, resolved in parse
-    silent: bool = False     # 'label "name"' line, a jump target, never spoken
-    legacy_sync: bool = False  # had a 'sync /regex/' clause we do not support
+    jump_label: str = ""     # Resolved during parsing.
+    silent: bool = False     # Unspoken label used as a jump target.
+    legacy_sync: bool = False  # Unsupported sync /regex/ clause.
     hidden: bool = False     # named by a hideall directive, syncs but never shows
 
     @property

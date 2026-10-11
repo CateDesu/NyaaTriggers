@@ -82,6 +82,8 @@ def main():
         paths = [temp, str(jar)]
         if args.variant:
             paths.insert(0, str(args.variant.resolve()))
+        environment = os.environ.copy()
+        environment["NYAA_AUTOMARK"] = "0"
         for name, recording, cut in cases:
             command = ["java", f"-Duser.home={temp}", "-cp", os.pathsep.join(paths),
                        "gg.xp.nyaa.RecoveryVerification"]
@@ -92,7 +94,7 @@ def main():
                 if args.history_folder:
                     command.extend([str(args.history_folder.resolve()), args.zone, args.player])
             result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    text=True, timeout=120, cwd=core)
+                                    text=True, timeout=120, cwd=core, env=environment)
             output = result.stdout
             if result.returncode or "RESULT PASS" not in output:
                 print(output)
@@ -113,7 +115,7 @@ def main():
                     reference_command = list(command)
                     reference_command.insert(reference_command.index("java") + 1, "-Drecovery.reference=true")
                     reference = subprocess.run(reference_command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                               text=True, timeout=120, cwd=core)
+                                               text=True, timeout=120, cwd=core, env=environment)
                     if reference.returncode or "RESULT PASS" not in reference.stdout:
                         print(reference.stdout)
                         raise SystemExit(f"FAIL {name}: uninterrupted reference")

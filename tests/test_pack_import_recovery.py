@@ -31,7 +31,8 @@ class PackImportRecoveryTests(unittest.TestCase):
         self.original = xml_bytes(document.root)
         self.updated = self.original.replace(b"Original ${label}", b"Updated ${label}")
         self.source.write_bytes(self.original)
-        self.host = SimpleNamespace(_triggers=[], _triggers_enabled=False, _local_ids=set())
+        self.host = SimpleNamespace(_triggers=[], _triggers_enabled=False, _local_ids=set(),
+                                    _update_triggernometry_pack_inventory=Mock())
         self.stack.enter_context(patch.object(ac.QFileDialog, "getOpenFileName",
                                              return_value=(str(self.source), "")))
         self.stack.enter_context(patch.object(engines, "_tn_packs_dir", return_value=self.packs))
@@ -56,6 +57,44 @@ class PackImportRecoveryTests(unittest.TestCase):
         self.assertEqual((self.packs / "callouts.xml").read_bytes(), self.updated)
         self.assertEqual((self.packs / "callouts.xml.bak").read_bytes(), self.original)
         self.confirm.assert_called_once()
+
+    def test_new_pack_rejected_by_the_native_validator_is_not_staged(self):
+        document = PackDocument(self.source, self.original)
+        document.root.find(".//Trigger").set("Source", "NotAnEngineSource")
+        self.source.write_bytes(xml_bytes(document.root))
+        self.validate.side_effect = validate_native
+        self.import_pack()
+        self.assertEqual(list(self.packs.iterdir()), [])
+        self.error.assert_called_once()
+        self.success.assert_not_called()
+        self.host._update_triggernometry_pack_inventory.assert_not_called()
+
+    def test_duplicate_trigger_ids_within_one_export_are_rejected(self):
+        document = PackDocument(self.source, self.original)
+        first = document.root.find(".//Trigger")
+        duplicate = ET.fromstring(ET.tostring(first))
+        duplicate.set("Id", "{" + first.get("Id").upper() + "}")
+        duplicate.find("Actions/Action").set("UseTTSTextExpression", "Different speech")
+        document.root.find("ExportedFolder/Triggers").append(duplicate)
+        self.source.write_bytes(xml_bytes(document.root))
+        self.validate.side_effect = validate_native
+        self.import_pack()
+        self.assertEqual(list(self.packs.iterdir()), [])
+        self.error.assert_called_once()
+        self.success.assert_not_called()
+
+    def test_multiple_exported_folders_cannot_silently_lose_the_second_folders_triggers(self):
+        document = PackDocument(self.source, self.original)
+        second = ET.fromstring(ET.tostring(document.root.find("ExportedFolder")))
+        second.set("Id", str(uuid.uuid4()))
+        second.find("Triggers/Trigger").set("Id", str(uuid.uuid4()))
+        document.root.append(second)
+        self.source.write_bytes(xml_bytes(document.root))
+        self.validate.side_effect = validate_native
+        self.import_pack()
+        self.assertEqual(list(self.packs.iterdir()), [])
+        self.error.assert_called_once()
+        self.success.assert_not_called()
 
     def test_maximum_length_pack_names_can_be_replaced_with_a_backup(self):
         for stem in ("a" * 251, "猫" * 83 + "ab"):

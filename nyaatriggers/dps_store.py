@@ -16,11 +16,9 @@ MAX_FIGHTS_PER_LOG = 5
 # Keep this many retired logs in addition to the active log.
 MAX_LOGS = 5
 
-# Track the actual active file because a backward clock change can make newer filenames
-# sort before older ones.
+# Clock changes can break filename order.
 _last_written: "Path | None" = None
 
-# Serialize appends, rollover and retention across encounter writer threads.
 _write_lock = threading.Lock()
 
 _LOG_NAME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}(?:_[0-9]{3})?\.jsonl")

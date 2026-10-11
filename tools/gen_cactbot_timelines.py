@@ -123,7 +123,7 @@ def main() -> None:
         f'  "{z}": {{"tag": {json.dumps(e["tag"])}, '
         f'"txt_path": {json.dumps(e["txt_path"])}}}'
         for z, e in sorted(index.items()))
-    # A sibling temporary file preserves the previous output if interrupted.
+    # Stage beside the output to keep replacement atomic.
     tmp = OUT.with_name(OUT.name + ".tmp")
     tmp.write_text("{\n" + body + "\n}\n", encoding="utf-8")
     os.replace(tmp, OUT)

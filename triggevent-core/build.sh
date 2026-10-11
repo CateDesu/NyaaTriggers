@@ -44,11 +44,7 @@ else
 fi
 
 echo ">> installing Triggevent Engine modules to local Maven repo"
-python3 "$HERE/build_engine.py" "$ET_DIR" "$HERE/patches/same-zone-history.patch"
-
-echo ">> building triggevent-core.jar"
-ET_COMMIT="$(git -C "$ET_DIR" rev-parse HEAD)"
-( cd "$HERE" && mvn -q -Dmaven.test.skip=true "-Dnyaa.engine.commit=$ET_COMMIT" clean package )
+python3 "$HERE/build_engine.py" "$ET_DIR" "$HERE/patches/same-zone-history.patch" --wrapper "$HERE"
 
 echo ""
 echo "Built: $HERE/target/triggevent-core.jar"

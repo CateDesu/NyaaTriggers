@@ -35,7 +35,7 @@ class SequentialRunner(QObject):
         self._cancelled = False
         self._delay_deadline = None
         self._step_deadline = None
-        self._step = 0  # index into trigger.sequence, step 0 is the first subsequent step
+        self._step = 0  # Step 0 follows the initial trigger.
         first_action = _ability_action_key(start_fields)
         self._seen_abilities = {first_action} if first_action is not None else set()
         self._timer = QTimer(self)

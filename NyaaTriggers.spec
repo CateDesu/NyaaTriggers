@@ -49,7 +49,6 @@ if _webengine_spec is None:
         'pip install PyQt6-WebEngine==6.11.0 (keep in sync with requirements.txt)')
 
 # Packaged builds require websockets despite the optional source import.
-# find_spec may raise when a parent package is missing.
 try:
     _ws_client_spec = importlib.util.find_spec('websockets.sync.client')
 except ModuleNotFoundError:
@@ -65,7 +64,7 @@ for f in sorted(glob.glob('voices/en_US-*.onnx') + glob.glob('voices/en_US-*.onn
 
 datas += [
     ('assets/triggers.json', 'assets'),
-    # Retirements must also remove withdrawn triggers from local overrides.
+    # Retirements also apply to local overrides.
     ('assets/retired.json', 'assets'),
     ('assets/zone_names.json', 'assets'),
     ('assets/cactbot_timelines.json', 'assets'),
@@ -92,18 +91,16 @@ datas.append((os.path.join(qt_translations, 'qtbase_ja.qm'), 'lang'))
 datas.append(('lang/SOURCES.txt', 'lang'))
 datas.append(('assets/game_data_ja.json', 'assets'))
 
-# Seed engine rows before launch. The writable cache takes precedence.
+# Seed rows before launch. Prefer the writable cache.
 if os.path.isfile('triggevent_inventory.seed.json'):
     datas.append(('triggevent_inventory.seed.json', '.'))
 
-# Japanese callout downloads use a separate cache.
 if os.path.isfile('assets/callouts_ja.json'):
     datas.append(('assets/callouts_ja.json', 'assets'))
 
 for f in sorted(glob.glob('sounds/*.wav')):
     datas.append((f, 'sounds'))
 
-# NYAA_ALLOW_NO_ENGINE permits development builds without Java assets.
 _allow_no_engine = os.environ.get('NYAA_ALLOW_NO_ENGINE') == '1'
 
 

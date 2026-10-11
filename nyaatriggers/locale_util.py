@@ -29,7 +29,7 @@ def normalize_locale(loc: str | None) -> str:
 def _system_locale_name() -> str:
     """Read the system locale from Qt, then the environment, or return an empty string."""
     try:
-        from PyQt6.QtCore import QLocale  # lazy, keeps Qt off the module-load path
+        from PyQt6.QtCore import QLocale  # Keep Qt off the module import path.
         name = QLocale.system().name()
         if name:
             return name

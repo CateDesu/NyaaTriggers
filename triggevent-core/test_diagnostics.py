@@ -15,8 +15,10 @@ def main():
                    "gg.xp.nyaa.DiagnosticsVerification"]
         if os.name != "nt":
             command = ["xvfb-run", "-a", *command]
+        environment = os.environ.copy()
+        environment["NYAA_AUTOMARK"] = "0"
         result = subprocess.run(command, cwd=temp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, timeout=60)
+                                text=True, timeout=60, env=environment)
         if result.returncode or "RESULT PASS" not in result.stdout:
             print(result.stdout)
             raise SystemExit("FAIL engine diagnostics")

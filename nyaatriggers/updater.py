@@ -34,7 +34,7 @@ RELEASES_URL    = f"https://github.com/{REPO}/releases/latest"
 LINUX_ASSET     = "NyaaTriggers-linux.tar.gz"
 WINDOWS_ASSET   = "NyaaTriggers-windows.zip"
 _USER_AGENT     = "NyaaTriggers"
-_BACKUP_SUFFIX  = ".nyaa-old"     # marks files left behind for next-launch cleanup
+_BACKUP_SUFFIX  = ".nyaa-old"     # Next-launch cleanup marker.
 _BOOT_OK_MARKER = ".nyaa-boot-ok"
 _UPDATE_LOG_NAME = "nyaatriggers-update.log"
 _REJECTED_NAME   = ".nyaa-update-rejected"
@@ -45,7 +45,7 @@ _UPDATE_LOCK = ".nyaa-update.lock"
 _LINUX_PENDING = ".nyaa-linux-update"
 _MAX_DOWNLOAD_BYTES = 2 * 1024**3
 _MAX_RELEASE_BYTES = 4 << 20
-# Socket read timeouts reset on each byte, so enforce total deadlines separately.
+# Socket timeouts reset per byte, so bound total read time too.
 _READ_STALL_S = 60
 _RELEASE_DEADLINE_S = 30
 _DOWNLOAD_DEADLINE_S = 3600
@@ -62,7 +62,7 @@ class Release:
     version: str                         # tag with a leading "v" stripped
     html_url: str
     body: str = ""
-    assets: dict[str, str] = field(default_factory=dict)   # name -> download url
+    assets: dict[str, str] = field(default_factory=dict)   # asset name -> URL
 
 
 

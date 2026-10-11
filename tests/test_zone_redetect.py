@@ -32,24 +32,32 @@ app_common.RETIRED_FILE = TMP / "retired.json"
 app_common.TIMELINES_DIR = TMP / "timelines"
 app_common._BUNDLE_TIMELINES_DIR = TMP / "bundle_timelines"
 app_common.CACTBOT_TIMELINES_FILE = TMP / "cactbot_timelines.json"
+_stamp_ns = 1_700_000_000_000_000_000
+
+
+def write_stamped(path, text):
+    global _stamp_ns
+    path.write_text(text, encoding="utf-8")
+    _stamp_ns += 1_000_000_000
+    os.utime(path, ns=(_stamp_ns, _stamp_ns))
 
 
 def write_shipped(triggers):
-    SHIPPED.write_text(json.dumps([t.to_dict() for t in triggers]), encoding="utf-8")
+    write_stamped(SHIPPED, json.dumps([t.to_dict() for t in triggers]))
 
 
 def swap_shipped(triggers):
     tmp = SHIPPED.with_suffix(SHIPPED.suffix + ".tmp")
-    tmp.write_text(json.dumps([t.to_dict() for t in triggers]), encoding="utf-8")
+    write_stamped(tmp, json.dumps([t.to_dict() for t in triggers]))
     os.replace(tmp, SHIPPED)
 
 
 def write_local(records, deleted=()):
-    LOCAL.write_text(json.dumps({
+    write_stamped(LOCAL, json.dumps({
         "triggers": [r.to_dict() if isinstance(r, Trigger) else r for r in records],
         "deleted": sorted(deleted),
         "folders": [],
-    }), encoding="utf-8")
+    }))
 
 
 class _TrigWin:
@@ -369,15 +377,17 @@ check("reload re-baselines: a second poll does nothing", w.refreshes == 2)
 p = _PollWin()
 p._match_zone = "Zone One"
 ship_a2 = Trigger.from_dict(ship_a.to_dict())
-ship_a2.zone_regex = "Somewhere Else"
+ship_a2.zone_regex = "Zone Two"
 write_shipped([ship_a2])
 LOCAL.unlink(missing_ok=True)
 p._load_triggers()
 p._poll_zone_and_triggers()
 check("unmatched zone loads nothing", p.loads == [] and p._timeline_fight == "")
 
+previous_size = SHIPPED.stat().st_size
 ship_a2.zone_regex = "Zone One"
 swap_shipped([ship_a2])
+check("zone edit keeps the file size unchanged", SHIPPED.stat().st_size == previous_size)
 p._poll_zone_and_triggers()
 check("fix hot-reloads triggers", p.refreshes == 2)
 check("and re-detects without a zone change", p.loads == ["Zone One"])
@@ -416,13 +426,18 @@ write_shipped([ship_a, ship_d])
 w2._maybe_reload_triggers()
 check("valid file reloads after the missing phase", w2.refreshes == 4)
 before = [t.id for t in w2._triggers]
-SHIPPED.write_text('{"not json', encoding="utf-8")
+repaired = json.dumps([ship_a.to_dict()])
+write_stamped(SHIPPED, "!" + repaired[1:])
+failed_stat = SHIPPED.stat()
 w2._maybe_reload_triggers()
 check("torn write skips the reload", w2.refreshes == 4)
 check("live set untouched by the torn write",
       [t.id for t in w2._triggers] == before)
-# Vary file size on repair to cover coarse timestamps.
-swap_shipped([ship_a])
+SHIPPED.write_text(repaired, encoding="utf-8")
+os.utime(SHIPPED, ns=(failed_stat.st_atime_ns, failed_stat.st_mtime_ns))
+check("repair keeps the failed read's size and timestamp",
+      SHIPPED.stat().st_size == failed_stat.st_size
+      and SHIPPED.stat().st_mtime_ns == failed_stat.st_mtime_ns)
 w2._maybe_reload_triggers()
 check("recovers once the file is whole again", w2.refreshes == 5)
 

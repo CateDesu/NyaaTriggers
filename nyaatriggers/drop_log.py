@@ -18,7 +18,6 @@ _LOG_FILE = data_root() / "nyaatriggers.log"
 _lock = threading.Lock()
 _last: dict[str, float] = {}
 
-# Rotate and append under the same lock.
 _MAX_BYTES = 1 << 20
 _native_crash_file = None
 

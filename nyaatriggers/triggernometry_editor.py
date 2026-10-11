@@ -43,7 +43,8 @@ def matching_import(packs, source, raw):
             other_folder, other_triggers = identity(previous)
         except (OSError, ValueError, RecursionError):
             continue
-        if path.resolve() == Path(source).resolve() or (folder_id and folder_id == other_folder):
+        if (path.resolve() == Path(source).resolve() or previous == raw
+                or (folder_id and folder_id == other_folder)):
             matches.append((path, previous))
         elif trigger_ids & other_triggers:
             overlaps.append(path)
@@ -85,6 +86,31 @@ def xml_bytes(root):
     raw = ET.tostring(root, encoding="utf-8", xml_declaration=True)
     parse_xml(raw, root.tag)
     return raw
+
+
+def prepare_import(raw):
+    root = parse_xml(raw)
+    if len(root.findall("ExportedFolder")) != 1:
+        raise ValueError(_("The file must contain one Triggernometry folder export"))
+    folder = root.find("ExportedFolder")
+    namespace = uuid.uuid5(uuid.NAMESPACE_URL, "NyaaTriggers Triggernometry import")
+    occurrences = {}
+    changed = False
+    for path, trigger, _parent in trigger_entries(root):
+        if trigger.get("Id") is not None:
+            continue
+        key = repr((folder.get("Id", ""), path, ET.tostring(trigger, encoding="unicode")))
+        index = occurrences.get(key, 0)
+        occurrences[key] = index + 1
+        trigger.set("Id", str(uuid.uuid5(namespace, key + ":" + str(index))))
+        changed = True
+    ids = set()
+    for _path, trigger, _parent in trigger_entries(root):
+        ident = normalized_id(trigger.get("Id"))
+        if ident and ident in ids:
+            raise ValueError(_("Duplicate trigger ID: {id}").format(id=ident))
+        ids.add(ident)
+    return xml_bytes(root) if changed else raw
 
 
 def new_trigger(name=""):

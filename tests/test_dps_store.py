@@ -128,8 +128,12 @@ with tempfile.TemporaryDirectory() as tmp:
     p = dps_store.write_pull(d, pull("Everkeep"), when=at(7200))
     os.chmod(p, 0o644)
     dps_store.write_pull(d, pull("Everkeep"), when=at(7201))
-    check("0644 log tightened to 0600 on append",
-          (p.stat().st_mode & 0o777) == 0o600)
+    check("permission updates preserve both recorded pulls", len(read_lines(p)) == 2)
+    if os.name == "posix":
+        check("0644 log tightened to 0600 on append",
+              (p.stat().st_mode & 0o777) == 0o600)
+    else:
+        print("SKIP  POSIX permission bits are unavailable")
 
 print()
 if FAILS:

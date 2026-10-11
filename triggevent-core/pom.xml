@@ -16,6 +16,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <tv.version>1.0-SNAPSHOT</tv.version>
         <nyaa.engine.commit>unknown</nyaa.engine.commit>
+        <nyaa.build.directory>${project.basedir}/target</nyaa.build.directory>
     </properties>
 
     <dependencies>
@@ -81,6 +82,7 @@
     </dependencies>
 
     <build>
+        <directory>${nyaa.build.directory}</directory>
         <finalName>triggevent-core</finalName>
         <plugins>
             <plugin>

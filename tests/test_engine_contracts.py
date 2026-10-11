@@ -174,6 +174,22 @@ class TriggeventContracts(unittest.TestCase):
         self.ws._on_message(json.dumps(line))
         self.assertEqual(self.queued(), [line])
 
+    def test_empty_initial_state_does_not_prepend_later_state_to_the_feed(self):
+        self.assertEqual(self.ws.state_snapshot(), ())
+        player = {"type": "ChangePrimaryPlayer", "charID": 0x10000001, "charName": "Player"}
+        zone = {"type": "ChangeZone", "zoneID": 1363, "zoneName": "Arena"}
+        initial = {"type": "InCombat", "inACTCombat": False, "inGameCombat": False}
+        active = {**initial, "inACTCombat": True, "inGameCombat": True}
+        line = {"type": "LogLine", "rawLine": "00|2026-10-04T12:00:00Z|0038|Player|Before combat|"}
+        received = [player, zone, initial, line, active]
+        for event in received:
+            self.ws._on_message(json.dumps(event))
+        self.bridge.ready.emit(1)
+        rows = self.queued()
+        self.assertEqual(rows[0]["nyaa_cmd"], "recover_begin")
+        self.assertEqual(rows[1:-1], received)
+        self.assertEqual(rows[-1], {"nyaa_cmd": "recover_checkpoint", "checkpoint": 1})
+
     def test_callout_mode_changes_preserve_engine_generation_and_pending_recovery(self):
         host = ModeHost(self.bridge)
         self.bridge._speech_cancel_all_gen = 1

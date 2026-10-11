@@ -434,14 +434,14 @@ def _make_bundled_jre_executable() -> None:
 
 class TriggeventBridge(QObject):
 
-    # Generation stamps let UI slots reject stale output after restarts.
-    callout     = pyqtSignal(str, str, int)   # on-screen text, severity in {info, alert, alarm}, generation
-    tts         = pyqtSignal(str, int)        # spoken text, generation
+    # Final int arguments tag the generation so UI slots can reject stale output.
+    callout     = pyqtSignal(str, str, int)   # text, severity in {info, alert, alarm}
+    tts         = pyqtSignal(str, int)
     status      = pyqtSignal(bool, str, int)
-    phrase_seen = pyqtSignal(str)        # a callout phrase observed, for the override UI
+    phrase_seen = pyqtSignal(str)
     inventory   = pyqtSignal(str, int)
     automark_inventory = pyqtSignal(str, int)
-    telesto     = pyqtSignal(str, int)   # Telesto automark connection status, "good"|"bad"|"unknown", generation
+    telesto     = pyqtSignal(str, int)   # good, bad or unknown
     ready       = pyqtSignal(int)
     chain_failure = pyqtSignal(str, int)
     combatants_request = pyqtSignal(object, int)
@@ -475,7 +475,6 @@ class TriggeventBridge(QObject):
         self._writer: threading.Thread | None = None
         self._wq: queue.Queue = _ByteQueue(maxsize=10000)
         self._active = False
-        # An active flag alone cannot distinguish replaced readers.
         self._gen = 0
         self._replacements: list = []
         self._disabled: frozenset = frozenset()

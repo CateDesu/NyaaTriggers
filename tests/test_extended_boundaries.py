@@ -45,6 +45,12 @@ class ExtendedBoundaryTests(unittest.TestCase):
             expired.assert_called_once_with(runner)
 
     def test_nested_inventory_caches_do_not_prevent_startup(self):
+        class Host(engines.EnginesMixin, SimpleNamespace):
+            pass
+
+        packs = self.root / "packs"
+        packs.mkdir()
+        self.stack.enter_context(patch.object(engines, "_tn_packs_dir", return_value=packs))
         for name in ("_TRIGGEVENT_INVENTORY_CACHE", "_TRIGGERNOMETRY_INVENTORY_CACHE",
                      "_TRIGGEVENT_INVENTORY_SEED"):
             self.stack.enter_context(patch.object(ac, name, self.root / name))
@@ -54,7 +60,9 @@ class ExtendedBoundaryTests(unittest.TestCase):
         ac._TRIGGEVENT_INVENTORY_SEED.write_text('[{"id":"seed","name":"Seed"}]')
         for source in ("triggevent", "triggernometry"):
             with self.subTest(source=source):
-                host = SimpleNamespace(_engine_inventory=[], _record_engine_seen=Mock())
+                host = Host(_engine_inventory=[], _record_engine_seen=Mock(),
+                            _triggernometry_disabled=set(), _triggernometry_callout_edits={},
+                            _settings={}, _save_settings=Mock())
                 getattr(engines.EnginesMixin, f"_load_cached_{source}_inventory")(host)
                 self.assertEqual([row["id"] for row in host._engine_inventory],
                                  ["seed"] if source == "triggevent" else [])
@@ -138,7 +146,8 @@ with patch.object(ac.QFileDialog, "getOpenFileName", return_value=(str(source), 
         success.assert_not_called()
 
     def import_pack(self, source, packs):
-        host = SimpleNamespace(_triggers=[], _triggers_enabled=False, _local_ids=set())
+        host = SimpleNamespace(_triggers=[], _triggers_enabled=False, _local_ids=set(),
+                               _update_triggernometry_pack_inventory=Mock())
         self.stack.enter_context(patch.object(ac.QFileDialog, "getOpenFileName",
                                              return_value=(str(source), "")))
         failure = self.stack.enter_context(patch.object(ac.QMessageBox, "critical"))
@@ -300,18 +309,20 @@ with patch.object(ac.QFileDialog, "getOpenFileName", return_value=(str(source), 
 
     def test_pack_collision_counter_can_grow_and_managed_packs_can_be_reimported(self):
         source = self.root / ("a" * 251 + ".XML")
-        content = b'<TriggernometryExport><ExportedFolder Name="New"/></TriggernometryExport>'
-        source.write_bytes(content)
         packs = self.root / "packs"
         packs.mkdir()
-        for _ in range(12):
+        contents = set()
+        for index in range(12):
+            content = f'<TriggernometryExport><ExportedFolder Name="Pack {index}"/></TriggernometryExport>'.encode()
+            contents.add(content)
+            source.write_bytes(content)
             failure, success, warning = self.import_pack(source, packs)
             failure.assert_not_called()
             warning.assert_not_called()
             success.assert_called_once()
         imports = list(packs.iterdir())
         self.assertEqual(len(imports), 12)
-        self.assertTrue(all(path.read_bytes() == content for path in imports))
+        self.assertEqual({path.read_bytes() for path in imports}, contents)
         failure, success, warning = self.import_pack(imports[0], packs)
         failure.assert_not_called()
         warning.assert_not_called()

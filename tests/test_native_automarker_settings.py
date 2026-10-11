@@ -1,4 +1,5 @@
 from contextlib import ExitStack
+from concurrent.futures import Future
 from copy import deepcopy
 import json
 import os
@@ -318,13 +319,32 @@ class NativeAutomarkerSettingsTests(unittest.TestCase):
         self.assertFalse(self.settings_path.exists())
 
     def test_queued_old_generation_metadata_cannot_replace_new_controls(self):
-        thread = threading.Thread(target=self.bridge._dispatch, args=(deepcopy(self.inventory),), kwargs={"gen": 4})
-        thread.start()
-        thread.join()
+        def dispatch_in_worker(generation):
+            outcome = Future()
+
+            def dispatch():
+                try:
+                    self.bridge._dispatch(deepcopy(self.inventory), gen=generation)
+                except BaseException as exc:
+                    outcome.set_exception(exc)
+                else:
+                    outcome.set_result(None)
+
+            thread = threading.Thread(target=dispatch, daemon=True)
+            thread.start()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive(), "Inventory dispatch did not finish")
+            outcome.result()
+
+        dispatch_in_worker(4)
         self.assertIsNone(self.host._native_automark_inventory)
         self.bridge._gen = 5
         _QT_APP.processEvents()
         self.assertIsNone(self.host._native_automark_inventory)
+        dispatch_in_worker(5)
+        self.assertIsNone(self.host._native_automark_inventory)
+        _QT_APP.processEvents()
+        self.assertEqual(self.host._native_automark_inventory, self.inventory)
         self.assertEqual(self.commands(), [])
         self.saved.assert_not_called()
 

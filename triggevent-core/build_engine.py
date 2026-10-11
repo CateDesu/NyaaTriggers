@@ -18,21 +18,43 @@ def git(source, *args, check=True):
                           text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
-def install_modules(source):
+def run_maven(source, arguments, properties=None):
     maven = shutil.which("mvn")
     if maven is None:
         raise RuntimeError("Maven was not found")
+    properties = properties or {}
     if sys.platform == "win32" and Path(maven).suffix.lower() in (".bat", ".cmd"):
         environment = os.environ.copy()
         environment["NYAA_BUILD_MAVEN"] = maven
+        options = list(arguments)
+        for index, (name, value) in enumerate(properties.items()):
+            variable = f"NYAA_BUILD_PROPERTY_{index}"
+            environment[variable] = str(value)
+            options.append(f'"-D{name}=%{variable}%"')
         # Quote the environment expansion so Maven paths remain literal.
-        command = '""%NYAA_BUILD_MAVEN%" ' + " ".join(MAVEN_ARGS) + '"'
+        command = '""%NYAA_BUILD_MAVEN%" ' + " ".join(options) + '"'
         interpreter = os.environ.get("COMSPEC", "cmd.exe")
         # cmd's command text needs literal quotes rather than CRT backslash escaping.
         command_line = subprocess.list2cmdline([interpreter, "/d", "/v:off", "/s", "/c"]) + " " + command
         subprocess.run(command_line, executable=interpreter, cwd=source, env=environment, check=True)
     else:
-        subprocess.run([maven, *MAVEN_ARGS], cwd=source, check=True)
+        options = [f"-D{name}={value}" for name, value in properties.items()]
+        subprocess.run([maven, *arguments, *options], cwd=source, check=True)
+
+
+def install_modules(source):
+    run_maven(source, MAVEN_ARGS)
+
+
+def package_wrapper(wrapper, commit):
+    target = Path(wrapper).resolve() / "target"
+    target.mkdir(parents=True, exist_ok=True)
+    # Maven clean and partial jars must stay separate from the installed engine.
+    with tempfile.TemporaryDirectory(prefix=".nyaa-build-", dir=target) as temporary:
+        output = Path(temporary) / "target"
+        run_maven(wrapper, ["-q", "-Dmaven.test.skip=true", "clean", "package"],
+                  {"nyaa.engine.commit": commit, "nyaa.build.directory": output})
+        os.replace(output / "triggevent-core.jar", target / "triggevent-core.jar")
 
 
 def remove_tree(path):
@@ -89,20 +111,25 @@ def prepared_source(source, patch):
             remove_worktree(source, worktree, common)
 
 
-def build(source, patch):
+def build(source, patch, wrapper=None):
     with prepared_source(source, patch) as prepared:
         if prepared != Path(source).resolve():
             print(">> installing patched Triggevent Engine modules", flush=True)
         install_modules(prepared)
+        if wrapper is not None:
+            commit = git(prepared, "rev-parse", "HEAD").stdout.strip()
+    if wrapper is not None:
+        package_wrapper(wrapper, commit)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Install engine modules without modifying the source clone")
     parser.add_argument("source", help="Clean engine source clone")
     parser.add_argument("patch", help="Engine compatibility patch")
+    parser.add_argument("--wrapper", type=Path, help="Package and install the host after building modules")
     args = parser.parse_args()
     try:
-        build(args.source, args.patch)
+        build(args.source, args.patch, args.wrapper)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else str(exc)
         print(f"ERROR: {detail}", file=sys.stderr)

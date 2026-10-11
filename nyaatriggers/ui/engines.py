@@ -32,7 +32,7 @@ from nyaatriggers.triggevent_bridge import (
 )
 from nyaatriggers.triggevent_recovery import TriggeventRecovery
 from nyaatriggers.ui.custom_triggevent import CustomTriggeventMixin
-from nyaatriggers.ui.triggernometry_editor import TriggernometryEditorMixin
+from nyaatriggers.ui.triggernometry_editor import TriggernometryEditorMixin, pack_speech_rows, speech_rows
 try:
     from nyaatriggers.triggernometry_bridge import TriggernometryBridge, has_packs as _tn_has_packs, \
         packs_dir as _tn_packs_dir, _log as _tn_log
@@ -486,7 +486,16 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
                 br = self._ensure_triggernometry_bridge()
                 br.configure_telesto(self._settings.get("telesto_uri"),
                                      self._settings.get("telesto_enabled", False))
+                was_active = br.is_active()
+                if not was_active:
+                    br.set_disabled(self._triggernometry_disabled)
                 br.start()
+                if (not was_active and br.is_active()
+                        and getattr(self, "_triggernometry_reload_pending", False)):
+                    self._triggernometry_reload_pending = False
+                    label = getattr(self, "_triggernometry_editor_status", None)
+                    if label is not None:
+                        label.hide()
                 self._replay_triggernometry_callout_edits()
                 for raw in self._ws.state_snapshot():
                     state = json.loads(raw)
@@ -548,17 +557,26 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             return
         if not isinstance(items, list):
             return
+        rows = _inventory_rows(items, "triggernometry")
+        baseline = {row["id"]: row for row in self._read_triggernometry_inventory_cache()}
+        baseline.update((row["id"], row) for row in self._engine_inventory
+                        if row.get("source") == "triggernometry")
+        available = {row["id"].split("#", 1)[0] for row in rows}
+        previous = [row for row in baseline.values() if row["id"].split("#", 1)[0] in available]
+        unavailable = [row for row in baseline.values() if row["id"].split("#", 1)[0] not in available]
+        self._reconcile_triggernometry_speech(previous, rows)
         self._engine_inventory = [e for e in self._engine_inventory if e.get("source") != "triggernometry"]
-        self._engine_inventory.extend(_inventory_rows(items, "triggernometry"))
-        self._save_triggernometry_inventory_cache()
+        self._engine_inventory.extend(rows)
+        self._save_triggernometry_inventory_cache(unavailable=unavailable)
         self._record_engine_seen("triggernometry")
         self._apply_engine_disabled("triggernometry")
         self._refresh_table()
         self._replay_triggernometry_callout_edits()
 
-    def _save_triggernometry_inventory_cache(self) -> None:
-        """Remove empty inventory caches so stale rows cannot return at startup."""
+    def _save_triggernometry_inventory_cache(self, *, unavailable=()) -> None:
         tn = [e for e in self._engine_inventory if e.get("source") == "triggernometry"]
+        ids = {row["id"] for row in tn}
+        tn.extend(row for row in unavailable if row["id"] not in ids)
         try:
             if tn:
                 _atomic_write_json(ac._TRIGGERNOMETRY_INVENTORY_CACHE, tn)
@@ -569,21 +587,40 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
                   file=sys.stderr)
             ac.log_drop("save", f"triggernometry inventory cache: {exc}")
 
-    def _load_cached_triggernometry_inventory(self) -> None:
-        """Show cached Triggernometry rows until a live harvest replaces them."""
+    def _read_triggernometry_inventory_cache(self):
         try:
             parsed = json.loads(ac._TRIGGERNOMETRY_INVENTORY_CACHE.read_text(encoding="utf-8"))
         except (OSError, ValueError, RecursionError):
-            return
-        if not isinstance(parsed, list) or not parsed:
-            return
+            parsed = []
+        return _inventory_rows(parsed, "triggernometry") if isinstance(parsed, list) else []
+
+    def _load_cached_triggernometry_inventory(self) -> None:
+        cached = self._read_triggernometry_inventory_cache()
+        rows = cached
+        scanned = False
+        unavailable = []
+        if _tn_packs_dir is not None:
+            try:
+                rows, incomplete = pack_speech_rows(_tn_packs_dir())
+            except (OSError, ValueError, RecursionError):
+                pass
+            else:
+                scanned = True
+                previous = cached
+                if incomplete:
+                    available = {row["id"].split("#", 1)[0] for row in rows}
+                    previous = [row for row in cached if row["id"].split("#", 1)[0] in available]
+                    unavailable = [row for row in cached if row["id"].split("#", 1)[0] not in available]
+                self._reconcile_triggernometry_speech(previous, rows)
         self._engine_inventory = [e for e in self._engine_inventory if e.get("source") != "triggernometry"]
-        self._engine_inventory.extend(_inventory_rows(parsed, "triggernometry"))
+        self._engine_inventory.extend(rows)
+        if scanned:
+            self._save_triggernometry_inventory_cache(unavailable=unavailable)
         self._record_engine_seen("triggernometry")
 
     def _replay_triggernometry_callout_edits(self) -> None:
         bridge = getattr(self, "_triggernometry", None)
-        if bridge is None:
+        if bridge is None or getattr(self, "_triggernometry_reload_pending", False):
             return
         for tid, text in (self._callout_edits_for("triggernometry") or {}).items():
             bridge.set_callout(tid, tts=text, text=text)
@@ -591,7 +628,8 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
     def _set_triggernometry_callout_edit(self, tid: str, text: str) -> None:
         self._triggernometry_callout_edits[tid] = text
         self._settings["triggernometry_callout_edits"] = self._triggernometry_callout_edits
-        if getattr(self, "_triggernometry", None) is not None:
+        if (getattr(self, "_triggernometry", None) is not None
+                and not getattr(self, "_triggernometry_reload_pending", False)):
             self._triggernometry.set_callout(tid, tts=text, text=text)
         self._save_settings()
         self._refresh_table()
@@ -600,7 +638,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         self._triggernometry_callout_edits.pop(tid, None)
         self._settings["triggernometry_callout_edits"] = self._triggernometry_callout_edits
         bridge = getattr(self, "_triggernometry", None)
-        if bridge is not None:
+        if bridge is not None and not getattr(self, "_triggernometry_reload_pending", False):
             shipped = self._shipped_callout_defaults.get("triggernometry", {}).get(tid)
             if shipped is not None:
                 bridge.set_callout(tid, tts=shipped, text=shipped)
@@ -918,7 +956,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             elif chosen is a_reset:
                 self._reset_callout_edit(src, tid)
             return
-        # Cactbot inventory contains no editable text. Disable the row to silence it.
+        # Cactbot rows can be disabled but have no editable text.
         a_test = menu.addAction(_("Test TTS (example)"))
         a_cl = menu.addAction(_("Clear override"))
         a_cl.setEnabled(key in self._engine_text_overrides)
@@ -1014,7 +1052,8 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         elif src == "triggevent" and getattr(self, "_triggevent", None) is not None:
             self._triggevent.set_disabled(self._engine_disabled["triggevent"])
             self._sync_custom_triggevent()
-        elif src == "triggernometry" and getattr(self, "_triggernometry", None) is not None:
+        elif (src == "triggernometry" and getattr(self, "_triggernometry", None) is not None
+              and not getattr(self, "_triggernometry_reload_pending", False)):
             self._triggernometry.set_disabled(self._engine_disabled["triggernometry"])
 
     def _record_engine_seen(self, src: str) -> None:
@@ -1118,15 +1157,19 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         engine_available = (TriggernometryBridge is not None
                             and TriggernometryBridge.is_available())
         if TriggernometryBridge is not None and _tn_packs_dir is not None:
-            from nyaatriggers.triggernometry_editor import matching_import, pack_backup_path, validate_native
+            from nyaatriggers.triggernometry_editor import matching_import, pack_backup_path, parse_xml, prepare_import, validate_native
             existing = None
             try:
                 try:
                     packs = _tn_packs_dir()
                     src = Path(path)
+                    xml_bytes = prepare_import(xml_bytes)
                     existing = matching_import(packs, src, xml_bytes)
-                    if existing is not None and existing[1] != xml_bytes and engine_available:
+                    old_rows = speech_rows(parse_xml(existing[1])) if existing is not None else []
+                    new_rows = speech_rows(parse_xml(xml_bytes))
+                    if engine_available and (existing is None or existing[1] != xml_bytes):
                         validate_native(xml_bytes)
+                    if existing is not None and existing[1] != xml_bytes and engine_available:
                         answer = ac.QMessageBox.question(self, _("Replace Triggernometry pack"), _(
                             "An imported copy of this pack already exists:\n{path}\n\n"
                             "Replace it with this version? The previous file will be kept as a backup.")
@@ -1169,6 +1212,9 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
                 if existing is not None:
                     return
 
+        if staged:
+            self._update_triggernometry_pack_inventory(old_rows, new_rows, directory=packs)
+
         # Convert simple triggers only when the sidecar cannot run the pack.
         engine_path = staged and engine_available
         added: list[Trigger] = []
@@ -1202,8 +1248,12 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             if (pack_changed or not self._triggernometry_mode
                     or bridge is None or not bridge.is_active()
                     or not bridge.pack_is_current(target)):
-                self._set_triggernometry_enabled(False)
-                self._set_triggernometry_enabled(True)
+                if getattr(self, "_in_game_combat", False):
+                    self._triggernometry_reload_pending = True
+                    self._apply_pending_triggernometry_packs()
+                else:
+                    self._set_triggernometry_enabled(False)
+                    self._set_triggernometry_enabled(True)
                 bridge = getattr(self, "_triggernometry", None)
             engine_running = (self._triggernometry_mode
                               and bridge is not None and bridge.is_active())
@@ -1218,7 +1268,9 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             return
         parts: list[str] = []
         if staged:
-            if engine_running:
+            if getattr(self, "_triggernometry_reload_pending", False):
+                verb = _("will run after combat ends")
+            elif engine_running:
                 verb = _("is now running")
             elif engine_available and not self._triggers_enabled:
                 verb = _("will run when you turn Cactbot off")

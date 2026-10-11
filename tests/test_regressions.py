@@ -441,8 +441,9 @@ def test_r2_locale_catalog_guard():
     check("_load_catalog rejects a path-shaped locale",
           locale_util._load_catalog("../../etc/passwd") == {})
     check("_load_catalog rejects an unknown code", locale_util._load_catalog("xx") == {})
+    catalog = locale_util._load_catalog("ja")
     check("_load_catalog still serves supported locales",
-          isinstance(locale_util._load_catalog("ja"), dict))
+          isinstance(catalog, dict) and bool(catalog))
 
 
 def test_r2_triggernometry_disabled_replay():
@@ -1494,11 +1495,12 @@ def test_ws_replay_state_includes_incombat():
     c = WSClient()
     got = []
     c.raw_message.connect(got.append)
-    c._on_message(json.dumps({"type": "InCombat", "inACTCombat": True,
-                              "inGameCombat": True}))
+    state = {"type": "InCombat", "inACTCombat": True, "inGameCombat": True}
+    c._on_message(json.dumps(state))
+    got.clear()
     c.replay_state()
     check("cached incombat state replays",
-          any(json.loads(m).get("type", "").lower() == "incombat" for m in got))
+          [json.loads(message) for message in got] == [state])
 
 
 

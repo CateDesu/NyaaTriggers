@@ -10,31 +10,23 @@ from pathlib import Path
 
 from nyaatriggers.paths import bundle_root
 
-# A shared UUID namespace preserves IDs across repeated imports.
+# A shared namespace keeps IDs stable across imports.
 _ID_NS = uuid.UUID('c6a2b8e4-9d31-4f75-a0b8-5e2c7d94f1a6')
 
-# Empty repository mappings are deliberately skipped.
 REPO_TO_FIGHT: dict[str, str] = {
-    # DT ultimate
     "DMU Triggers":          "UMAD",
-    # DT savage
     "M1S": "M1S",   "M2S": "M2S",   "M3S": "M3S",   "M4S": "M4S",
     "M5S": "M5S",   "M6S": "M6S",   "M7S": "M7S",   "M8S": "M8S",
     "M9S": "M9S",   "M10S": "M10S", "M11S": "M11S", "M12S": "M12S",
-    # DT normal
     "M1N": "M1N",   "M2N": "M2N",   "M3N": "M3N",   "M4N": "M4N",
-    # DT ultimate + extremes
     "FRU Triggers":          "FRU",
     "EX1":                   "Valigarmanda EX",
     "EX2":                   "Zoraal Ja EX",
-    # EW ultimates
     "TOP Triggers":          "TOP",
     "Dragonsong's Reprise":  "DSR",
-    # SHB / SB ultimates
     "TEA":                                  "TEA",
     "The Unending Coil of Bahamut":         "UCoB",
     "The Weapon's Refrain":                 "UwU",
-    # EW savage, Pandaemonium
     "P1S": "P1S",   "P2S": "P2S",   "P3S": "P3S",   "P4S": "P4S",
     "P5S": "P5S",   "P6S": "P6S",   "P7S": "P7S",
     "P8S Door Boss":   "P8S",
@@ -43,11 +35,9 @@ REPO_TO_FIGHT: dict[str, str] = {
     "P9S": "P9S",   "P10S": "P10S", "P11S": "P11S",
     "P12S Doorboss":   "P12S",
     "P12S Final Boss": "P12S",
-    # EW normal
     "P1N": "P1N",   "P2N": "P2N",   "P3N": "P3N",   "P4N": "P4N",
     "P5N": "P5N",   "P6N": "P6N",   "P7N": "P7N",   "P8N": "P8N",
     "P9N": "P9N",   "P10N": "P10N", "P11N": "P11N", "P12N": "P12N",
-    # EW extremes
     "Endsinger Extreme": "Endsinger EX",
     "EX4": "Barbariccia EX",
     "EX5": "Rubicante EX",
@@ -76,7 +66,6 @@ def parse_hex_ids(annotation_body: str) -> list[str]:
             ids.append(token[2:].upper() if token.lower().startswith('0x')
                        else format(int(token, 10), 'X'))
         return [h for h in ids if 3 <= len(h) <= 6]
-    # Annotation expressions retain their existing hexadecimal ID support.
     hex_scan = re.sub(r'\b(?!value\b)\w+\s*=\s*[^,}]+', '', annotation_body)
     ids = [h.upper() for h in re.findall(r'0x([0-9A-Fa-f]{1,8})(?![0-9A-Fa-f])', hex_scan)]
     return [h for h in ids if 3 <= len(h) <= 6]
@@ -263,7 +252,7 @@ def main() -> None:
             print(f'ERROR: 0 triggers extracted, refusing to overwrite {out_path}',
                   file=sys.stderr)
             sys.exit(1)
-        # A sibling temporary file preserves the previous output if interrupted.
+        # Stage beside the output to keep replacement atomic.
         tmp_path = out_path.with_name(out_path.name + '.tmp')
         tmp_path.write_text(out, encoding='utf-8')
         os.replace(tmp_path, out_path)

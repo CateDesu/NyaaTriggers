@@ -150,7 +150,7 @@ class RelayBoundaries(unittest.TestCase):
 
                 def delayed(message):
                     entered.set()
-                    release.wait(2)
+                    release.wait()
                     return original_post(message)
 
                 with patch.object(relay, "_post", side_effect=delayed):
@@ -196,7 +196,7 @@ class RelayBoundaries(unittest.TestCase):
 
                 def delayed(_message):
                     entered.set()
-                    release.wait(2)
+                    release.wait()
                     return 503, b""
 
                 with patch.object(relay, "_post", side_effect=delayed):
@@ -273,7 +273,7 @@ class RelayBoundaries(unittest.TestCase):
 
                     def delayed(_message):
                         entered.set()
-                        release.wait(2)
+                        release.wait()
                         return 503, b""
 
                     expiry = {"notificationid": old["name"], "notificationtype": "doodleexpired"}
@@ -381,7 +381,7 @@ class RelayBoundaries(unittest.TestCase):
 
                 def delayed(_message):
                     entered.set()
-                    release.wait(2)
+                    release.wait()
                     return 503, b""
 
                 with patch.object(relay, "_post", side_effect=delayed):

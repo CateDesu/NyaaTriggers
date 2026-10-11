@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -51,6 +52,28 @@ print(json.dumps({'t': 'callout', 'text': f'{gap:.3f} {hold:.3f}'}))
         self.assertGreater(gap, 0.35)
         self.assertGreater(hold, 0.2)
 
+    def test_all_supported_capture_formats_preserve_act_pacing(self):
+        formats = (
+            lambda raw: raw,
+            lambda raw: json.dumps({"type": "LogLine", "rawLine": raw}),
+            lambda raw: json.dumps({"type": "LogLine", "raw_line": raw}),
+            lambda raw: json.dumps({"type": "broadcast", "msgtype": "LogLine", "msg": raw}),
+            lambda raw: json.dumps({"type": "logline", "line": raw.split("|")}),
+        )
+        for frame in formats:
+            with self.subTest(frame=frame("00|2026-09-07T00:00:00Z|test")):
+                lines = [frame(f"00|{stamp}|test") for stamp in (
+                    "2026-09-07T00:00:00Z", "2026-09-07T00:00:00.400Z")]
+                code, _elapsed, output = self.run_replay(lines,
+                    """import json, sys, time
+stamps = [time.monotonic() for line in sys.stdin]
+print(json.dumps({'t': 'callout', 'text': str(stamps[1] - stamps[0])}))
+""")
+                self.assertEqual(code, 0, output)
+                gap = float(next(line.split(":", 1)[1] for line in output.splitlines()
+                                 if "callout:" in line))
+                self.assertGreater(gap, 0.2, output)
+
     def test_timestamp_sleep_obeys_deadline(self):
         code, elapsed, output = self.run_replay(
             [log_line("2026-09-07T00:00:00Z"), log_line("2026-09-07T00:00:30Z")],
@@ -96,7 +119,9 @@ print(json.dumps({'t': 'callout', 'text': f'{gap:.3f} {hold:.3f}'}))
 
     def test_invalid_timing_values_fail_cleanly(self):
         for options in (["--speed", "nan"], ["--hold", "inf"], ["--timeout", "-1"],
-                        ["--speed", "1e-320"]):
+                        ["--speed", "1e-320"], ["--hold", str(threading.TIMEOUT_MAX * 2)],
+                        ["--timeout", str(int(threading.TIMEOUT_MAX) * 2)],
+                        ["--speed", str(1 / (threading.TIMEOUT_MAX * 2))]):
             code, elapsed, output = self.run_replay(
                 [log_line("2026-09-07T00:00:00Z"), log_line("2026-09-07T00:00:01Z")],
                 "import sys\nsys.stdin.read()\n", *options)

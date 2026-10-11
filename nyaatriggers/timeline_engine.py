@@ -65,8 +65,8 @@ _WIPE_COMMAND = "4000000F"
 
 
 class TimelineEngine(QObject):
-    tts          = pyqtSignal(str)   # label to speak
-    phase_update = pyqtSignal(str, float)  # label, fight_time, for UI
+    tts          = pyqtSignal(str)
+    phase_update = pyqtSignal(str, float)  # label, fight_time
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -212,7 +212,7 @@ class TimelineEngine(QObject):
         if fields[0] not in ("20", "21", "22"):
             return False
         src_id = fields[2] if len(fields) > 2 else ""
-        # Player entity IDs begin with 1. Skip those and empty IDs.
+        # Player entity IDs begin with 1.
         return bool(src_id) and not src_id.upper().startswith("1")
 
     def _is_wipe(self, fields: list[str]) -> bool:

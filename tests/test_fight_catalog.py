@@ -46,6 +46,7 @@ check("every live ultimate stem is mapped", stems <= set(fc._ULTIMATE_STEM_TO_TA
 
 offline = fc.build_offline(FIGHT_TREE, set())
 online = fc.parse_cactbot_paths(LIVE_PATHS)
+check("every live ultimate path produces a row", len(online) == len(LIVE_PATHS))
 offline_keys = {(e["difficulty"], e["name"]) for e in offline}
 check("each derived ultimate row matches an offline entry",
       all((e["difficulty"], e["name"]) in offline_keys for e in online))

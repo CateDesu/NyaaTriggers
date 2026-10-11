@@ -11,7 +11,6 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nyaatriggers import updater
 
-# Keep a handle on the real pid-wait before the swap tests stub it out below.
 _real_wait_for_pid_exit = updater._wait_for_pid_exit
 
 updater._wait_for_pid_exit = lambda pid, timeout=90.0: True

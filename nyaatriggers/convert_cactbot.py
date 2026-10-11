@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert cactbot TypeScript triggers to local JSON."""
+"""Convert static cactbot callouts to local JSON."""
 
 import json
 import os
@@ -11,7 +11,7 @@ from pathlib import Path
 from nyaatriggers.paths import bundle_root
 
 
-# A shared UUID namespace preserves IDs across repeated imports.
+# A shared namespace keeps IDs stable across imports.
 _ID_NS = uuid.UUID('c6a2b8e4-9d31-4f75-a0b8-5e2c7d94f1a6')
 
 
@@ -120,17 +120,13 @@ OUTPUTS = {**RESPONSES, **{
 
 TARGETS = [
     ('00-misc/general.ts',                               ''),
-    # DT raids, 7.0 through 7.2
     *[(f'07-dt/raid/r{i}s.ts',  f'M{i}S')  for i in range(1, 13)],
     *[(f'07-dt/raid/r{i}n.ts',  f'M{i}N')  for i in range(1, 13)],
     ('07-dt/ultimate/futures_rewritten.ts',              'FRU'),
     ('07-dt/ultimate/dancing_mad.ts',                    'UMAD'),
-    # EW ultimates
     ('06-ew/ultimate/dragonsongs_reprise_ultimate.ts',   'DSR'),
     ('06-ew/ultimate/the_omega_protocol.ts',             'TOP'),
-    # SHB ultimate
     ('05-shb/ultimate/the_epic_of_alexander.ts',         'TEA'),
-    # DT extreme trials
     ('07-dt/trial/zoraal-ja-ex.ts',    'Zoraal Ja EX'),
     ('07-dt/trial/queen-eternal-ex.ts','Queen EX'),
     ('07-dt/trial/valigarmanda-ex.ts', 'Valigarmanda EX'),
@@ -347,8 +343,7 @@ def _unescape_js(s: str) -> str:
         return ' ' if esc in 'ntr' else esc
 
     s = re.sub(r'\\(u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|.)', _sub, s)
-    # Combine valid surrogate pairs and drop lone surrogates that cannot encode as
-    # UTF-8.
+    # Combine surrogate pairs. Drop lone surrogates that cannot encode as UTF-8.
     s = re.sub(r'[\ud800-\udbff][\udc00-\udfff]',
                lambda m: chr(0x10000 + ((ord(m.group(0)[0]) - 0xd800) << 10)
                              + (ord(m.group(0)[1]) - 0xdc00)), s)
@@ -364,46 +359,90 @@ def _clean_callout(s: str | None) -> str | None:
     return s
 
 
+def _object_fields(block: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    if not block.startswith('{') or not block.endswith('}'):
+        return fields
+    text = block[1:-1] + ','
+    stack: list[str] = []
+    start, i, quote = 0, 0, ''
+    while i < len(text):
+        char = text[i]
+        if quote:
+            if char == '\\':
+                i += 2
+                continue
+            if char == quote:
+                quote = ''
+        elif char in ('"', "'", '`'):
+            quote = char
+        elif char == '/' and _regex_can_start(text, i):
+            i = _regex_end(text, i)
+            continue
+        elif char in '([{':
+            stack.append(char)
+        elif char in ')]}':
+            if not stack or stack.pop() != {')': '(', ']': '[', '}': '{'}[char]:
+                return {}
+        elif char == ',' and not stack:
+            part = text[start:i].strip()
+            if part:
+                match = re.fullmatch(r"(?:([\w$]+)|['\"]([\w$]+)['\"])\s*:\s*(.*)",
+                                     part, re.DOTALL)
+                if not match:
+                    return {}
+                fields[match.group(1) or match.group(2)] = match.group(3).strip()
+            start = i + 1
+        i += 1
+    return {} if quote or stack or start != len(text) else fields
+
+
 def resolve_output_key(key: str, os_block: str) -> str | None:
-    # Require a key boundary so text cannot match context.
-    m = re.search(
-        r'(?<![\w$])[\'"]?' + re.escape(key) + r'[\'"]?\s*:\s*\{[^}]*en\s*:\s*' + _QSTR,
-        os_block, re.DOTALL,
-    )
-    if m:
-        return m.group('v')
-    m = re.search(r'(?<![\w$])[\'"]?' + re.escape(key) + r'[\'"]?\s*:\s*Outputs\.(\w+)', os_block)
-    if m:
-        return OUTPUTS.get(m.group(1))
-    return None
+    value = _object_fields(os_block).get(key, '')
+    if value.startswith('{'):
+        english = _object_fields(value).get('en', '')
+        match = re.fullmatch(_QSTR, english, re.DOTALL)
+        return match.group('v') if match else None
+    match = re.fullmatch(r'Outputs\.(\w+)', value)
+    return OUTPUTS.get(match.group(1)) if match else None
 
 
 def get_callout(block: str) -> str | None:
-    m = re.search(r'\bresponse\s*:\s*Responses\.(\w+)\(', block)
-    if m:
-        callout = _clean_callout(RESPONSES.get(m.group(1)))
-        if callout:
-            return callout
+    fields = _object_fields(block)
+    callouts = []
+    if 'response' in fields:
+        match = re.fullmatch(r'Responses\.(\w+)\([^()]*\)', fields['response'])
+        if not match:
+            return None
+        callouts.append(_clean_callout(RESPONSES.get(match.group(1))))
 
-    os_block = find_sub_block(block, 'outputStrings')
+    os_block = fields.get('outputStrings', '')
 
     for fld in ('alarmText', 'alertText', 'infoText'):
-        m = re.search(fld + r'\s*:\s*' + _QSTR, block)
-        if m:
-            callout = _clean_callout(m.group('v'))
+        if fld not in fields:
+            continue
+        value = fields[fld]
+        arrow = re.fullmatch(r'\(\s*(?:\w+\s*(?:,\s*\w+\s*)*)?\)\s*=>\s*(.*)',
+                             value, re.DOTALL)
+        if arrow:
+            value = arrow.group(1).strip()
+            body = re.fullmatch(r'\{\s*return[ \t]+(.*?)\s*;?\s*\}', value, re.DOTALL)
+            if body:
+                value = body.group(1)
+        match = re.fullmatch(_QSTR, value, re.DOTALL)
+        if match:
+            callout = _clean_callout(match.group('v'))
         else:
-            # Keep output lookups inside the field that owns them.
-            m = re.search(fld + r'(?:(?!(?:alarmText|alertText|infoText|outputStrings)\s*:).)*?'
-                          r'output\.(\w+)!\(\)', block, re.DOTALL)
-            if not m:
-                continue
-            key = m.group(1)
-            val = resolve_output_key(key, os_block) if os_block else None
-            callout = _clean_callout(val if val else OUTPUTS.get(key))
-        if callout:
-            return callout
+            match = re.fullmatch(r'output\.(\w+)!?\(\)', value) if arrow else None
+            if not match:
+                # Local rows cannot evaluate branches or compose JavaScript expressions.
+                return None
+            key = match.group(1)
+            val = resolve_output_key(key, os_block) if os_block else OUTPUTS.get(key)
+            callout = _clean_callout(val)
+        callouts.append(callout)
 
-    return None
+    return next((callout for callout in callouts if callout), None)
 
 
 def parse_netregex_ids(block: str) -> list[str]:
@@ -577,7 +616,7 @@ def main() -> None:
             print(f'ERROR: 0 triggers extracted, refusing to overwrite {out_path}',
                   file=sys.stderr)
             sys.exit(1)
-        # A sibling temporary file preserves the previous output if interrupted.
+        # Stage beside the output to keep replacement atomic.
         tmp_path = out_path.with_name(out_path.name + '.tmp')
         tmp_path.write_text(out, encoding='utf-8')
         os.replace(tmp_path, out_path)

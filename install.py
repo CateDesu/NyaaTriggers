@@ -38,7 +38,7 @@ VOICE_ONNX_SHA256 = (
 )
 
 _MAX_DOWNLOAD_BYTES = 1 << 30
-# Socket timeouts reset on every byte, so enforce total and stall deadlines separately.
+# Per-byte socket timeouts need separate total and stall deadlines.
 _READ_STALL_S = 60
 _DOWNLOAD_DEADLINE_S = 3600
 

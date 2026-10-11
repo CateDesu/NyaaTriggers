@@ -85,6 +85,43 @@ class LogTests(unittest.TestCase):
         latest = result.read(result.records[0])
         self.assertEqual([event["amount"] for event in latest["events"]], [2000])
 
+    def test_only_late_deaths_remain_in_the_finished_pull(self):
+        for damage in (False, True):
+            with self.subTest(damage=damage):
+                text = line(["260", "", "1", "1"], 0)
+                if damage:
+                    text += line(hit(), 1)
+                text += line(["260", "", "0", "0"], 3)
+                text += line(["25", "", PLAYER, "Player"], 3.5)
+                text += line(["25", "", "10FF0002", "Other player"], 6)
+                result = self.load(text)
+                self.assertEqual([death["pull"] for death in result.records], [0, 1])
+
+    def test_zone_changes_and_clock_resets_end_late_death_attribution(self):
+        for boundary, death_at in ((line(["01", "", "2", "Other duty"], 3.2), 3.5),
+                                    ("", 0)):
+            with self.subTest(boundary=boundary):
+                text = line(hit(), 1)
+                text += line(["33", "", "0", "4000000F"], 3)
+                text += boundary
+                text += line(["25", "", PLAYER, "Player"], death_at)
+                result = self.load(text)
+                self.assertEqual(result.records[0]["pull"], 0)
+                self.assertEqual(result.read(result.records[0])["events"], [])
+
+    def test_late_wipe_correction_does_not_extend_the_death_window(self):
+        text = line(hit(), 1)
+        text += line(["260", "", "0", "0"], 3)
+        text += line(["33", "", "0", "4000000F"], 4.5)
+        text += line(["25", "", PLAYER, "Player"], 5.5)
+        result = self.load(text)
+        self.assertEqual(result.records[0]["pull"], 0)
+
+    def test_incomplete_zone_line_cannot_clear_the_current_pull(self):
+        result = self.load(line(hit(), 1) + line(["01", "", "1"], 2)
+                           + line(["25", "", PLAYER, "Player"], 3))
+        self.assertEqual(result.records[0]["pull"], 1)
+
     def test_invalid_combat_transition_does_not_clear_a_pull(self):
         text = line(["260", "", "1", "1", "1", "1"], 0)
         text += line(hit(), 1)

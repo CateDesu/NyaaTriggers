@@ -314,6 +314,71 @@ check("unknown response name drops with a WARN naming the trigger",
       "notARealResponse" in err.getvalue()
       and "Test Unknown Response" in err.getvalue())
 
+for label, fields, expected in (
+    ("conditional expression", """
+      alertText: (data, matches, output) =>
+        data.me === matches.target ? output.in!() : output.out!(),
+    """, []),
+    ("conditional function body", """
+      alertText: (data, matches, output) => {
+        if (data.me === matches.target) return output.in!();
+        return output.out!();
+      },
+    """, []),
+    ("expression after an output call", """
+      alertText: (_data, _matches, output) => output.in!() + ' then ' + output.out!(),
+    """, []),
+    ("expression after a literal", """
+      alertText: 'Stack on ' + data.me,
+    """, []),
+    ("nested response fields", """
+      response: (data) => {
+        if (data.role === 'tank') return { alarmText: 'Take buster' };
+        return { infoText: 'Avoid buster' };
+      },
+    """, []),
+    ("nested helper fields", """
+      run: () => { const unused = { alertText: 'Wrong callout' }; },
+      infoText: 'Spread',
+    """, ["Spread"]),
+    ("dynamic override of a mapped response", """
+      response: Responses.getOut(),
+      alertText: (data, _matches, output) => data.in ? output.in!() : output.out!(),
+    """, []),
+    ("dynamic output translation", """
+      infoText: (_data, _matches, output) => output.text!(),
+      outputStrings: { text: { en: 'Stack on ' + data.me } },
+    """, []),
+    ("local output does not fall back to a different global output", """
+      infoText: (_data, _matches, output) => output.in!(),
+      outputStrings: { in: { en: data.me } },
+    """, []),
+    ("line break after return", """
+      infoText: (_data, _matches, output) => {
+        return
+          output.in!();
+      },
+    """, []),
+    ("static arrow body", """
+      alertText: (_data, _matches, output) => { return output.in!(); },
+    """, ["In"]),
+    ("static arrow literal", """
+      alertText: () => 'Stack, then spread',
+    """, ["Stack, then spread"]),
+    ("balanced values and regex literals", r"""
+      run: () => { const values = [1, 2]; const pattern = /[,}]/; },
+      infoText: 'Boss\'s {left, right}',
+    """, ["Boss's {left, right}"]),
+):
+    with tempfile.TemporaryDirectory() as td:
+        ts = Path(td) / "fixture.ts"
+        ts.write_text("const triggerSet = { triggers: [{ id: 'Static Only', "
+                      "type: 'StartsUsing', netRegex: { id: '8B75' }, "
+                      + fields + "}] };", encoding="utf-8")
+        rows = convert_file(ts, "TST")
+    check(label + " preserves static callout semantics",
+          [row["tts_text"] for row in rows] == expected)
+
 with tempfile.TemporaryDirectory() as td:
     (Path(td) / "ui" / "raidboss" / "data").mkdir(parents=True)
     bad = Path(td) / "triggers.json"

@@ -223,6 +223,73 @@ class TriggernometryHostTests(unittest.TestCase):
             host.log("260", "0", "1")
             self.assertEqual(self.combat_probe(host, "gameonly")[0], 0)
 
+    def test_local_fallback_does_not_remove_native_speech_conditions(self):
+        from nyaatriggers.convert_triggernometry import convert_xml
+
+        tree = ET.parse(PACKS / "combat-state.xml")
+        trigger = tree.find(".//Trigger")
+        trigger.set("RegularExpression", r"^21\|(?:[^|]*\|){3}ABCD\|")
+        actions = trigger.find("Actions")
+        conditional = actions[1]
+        conditional.set("UseTTSTextExpression", "Only in combat")
+        sentinel = actions[3]
+        sentinel.set("UseTTSTextExpression", "Done ${_incombat}")
+        actions[:] = [conditional, sentinel]
+        tree.find(".//Triggers")[:] = [trigger]
+        with tempfile.TemporaryDirectory() as directory:
+            pack = Path(directory) / "conditional.xml"
+            tree.write(pack, encoding="utf-8")
+            self.assertEqual(convert_xml(pack, {}), [])
+            with replay(pack) as host:
+                host.log("21", "40001234", "Boss", "ABCD", "Attack")
+                host.until(lambda frame: frame.get("tts") == "Done 0")
+                self.assertEqual(host.calls, ["Done 0"])
+                host.send(t="combat", active=True)
+                host.log("21", "40001234", "Boss", "ABCD", "Attack")
+                host.until(lambda frame: frame.get("tts") == "Done 1")
+                self.assertEqual(host.calls, ["Done 0", "Only in combat", "Done 1"])
+
+    def test_local_fallback_preserves_native_actor_and_folder_gates(self):
+        from nyaatriggers.convert_triggernometry import convert_xml
+
+        for gate in ("source", "folder", "nonempty-target"):
+            with self.subTest(gate=gate), tempfile.TemporaryDirectory() as directory:
+                tree = ET.parse(PACKS / "combat-state.xml")
+                folder = tree.find("ExportedFolder")
+                trigger = tree.find(".//Trigger")
+                trigger.set("RegularExpression", r"^21\|(?:[^|]*\|){3}ABCD\|")
+                if gate == "source":
+                    trigger.set("RegularExpression", r"^21\|[^|]*\|40001234\|[^|]*\|ABCD\|")
+                elif gate == "folder":
+                    folder.set("ZoneFilterEnabled", "True")
+                    folder.set("ZoneFilterRegularExpression", "^Allowed$")
+                else:
+                    trigger.set("RegularExpression", r"^21\|(?:[^|]*\|){3}ABCD\|[^|]*\|[^|]*\|[^|]+\|")
+                actions = trigger.find("Actions")
+                actions[:] = [actions[0]]
+                actions[0].set("UseTTSTextExpression", "Move")
+                tree.find(".//Triggers")[:] = [trigger]
+                pack = Path(directory) / "filtered.xml"
+                tree.write(pack, encoding="utf-8")
+                self.assertEqual(convert_xml(pack, {}), [])
+                # Include the event in native output so its repeat filter cannot hide a leak.
+                actions[0].set("UseTTSTextExpression", "Move ${_event}")
+                tree.write(pack, encoding="utf-8")
+                bad = "21|2026-09-13T12:00:00Z|40009999|Other|ABCD|Attack|test"
+                good = "21|2026-09-13T12:00:01Z|40001234|Boss|ABCD|Attack|test"
+                if gate == "nonempty-target":
+                    bad = "21|2026-09-13T12:00:00Z|40001234|Boss|ABCD|Attack|E0000000||test"
+                    good = "21|2026-09-13T12:00:01Z|40001234|Boss|ABCD|Attack|10001234|Player|test"
+                with replay(pack) as host:
+                    host.log("01", "1", "Other")
+                    host.send(t="log", line=bad)
+                    host.log("01", "2", "Allowed")
+                    host.send(t="log", line=good)
+                    self.assertEqual(host.call(), "Move " + good)
+                    host.send(t="ping")
+                    host.until(lambda frame: frame.get("t") == "pong")
+                    self.assertEqual(host.calls, ["Move " + good])
+
     def test_pack_can_change_act_combat_state(self):
         with replay(PACKS / "combat-state.xml") as host:
             host.send(t="log", line="NYAA_START")

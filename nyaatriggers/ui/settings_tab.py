@@ -12,7 +12,7 @@ from nyaatriggers.locale_util import _, active_locale
 from nyaatriggers.plugin_link import DEFAULT_PORT, parse_port
 
 from nyaatriggers import app_common as ac
-from nyaatriggers.app_common import _AbilityData, _atomic_write_json, _fsync_file, _next_bad_name
+from nyaatriggers.app_common import _AbilityData, _atomic_write_json, _next_bad_name
 
 _MAX_SETTINGS_BYTES = 4 << 20
 
@@ -153,19 +153,8 @@ class SettingsTabMixin:
             return
         path = dlg.selectedFiles()[0]
         try:
-            # A sibling temporary file preserves the previous export if interrupted.
-            dest = Path(path)
-            tmp = dest.with_suffix(dest.suffix + ".tmp")
-            try:
-                tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-                _fsync_file(tmp)
-                os.replace(tmp, dest)
-            except OSError:
-                try:
-                    tmp.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                raise
+            text = ("\n".join(lines) + "\n").replace("\n", os.linesep)
+            ac._atomic_write_bytes(Path(path), text.encode("utf-8"))
         except OSError as exc:
             ac.QMessageBox.critical(self, _("Save Log"), _("Could not write file:\n{error}").format(error=exc))
             return

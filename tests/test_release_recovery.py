@@ -65,8 +65,9 @@ class ReleaseRecoveryTests(unittest.TestCase):
         source = self.root / "source"
         source.mkdir()
         subprocess.run(["git", "init", "-q", str(source)], check=True)
-        subprocess.run(["git", "-C", str(source), "-c", "user.name=Test",
-                        "-c", "user.email=test@example.invalid", "commit",
+        subprocess.run(["git", "-C", str(source), "-c", "user.name=CateDesu",
+                        "-c", "user.email=205492565+CateDesu@users.noreply.github.com",
+                        "-c", "commit.gpgsign=false", "commit",
                         "--allow-empty", "-qm", "initial"], check=True)
         worktree = self.root / "worktree"
         subprocess.run(["git", "-C", str(source), "worktree", "add", "--detach",
@@ -117,8 +118,9 @@ class ReleaseRecoveryTests(unittest.TestCase):
         origin = self.root / "origin"
         clone = self.root / "clone"
         def git(folder, *args):
-            return subprocess.run(["git", "-C", str(folder), "-c", "user.name=Test",
-                                   "-c", "user.email=test@example.invalid", *args],
+            return subprocess.run(["git", "-C", str(folder), "-c", "user.name=CateDesu",
+                                   "-c", "user.email=205492565+CateDesu@users.noreply.github.com",
+                                   "-c", "commit.gpgsign=false", *args],
                                   check=True, capture_output=True, text=True, timeout=5)
         origin.mkdir()
         git(origin, "init", "-q", "-b", "main")

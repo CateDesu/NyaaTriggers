@@ -167,7 +167,7 @@ def load_catalog(fight_tree: FightTree, known_tags: set[str], cache_path: Path) 
 _REFRESH_RUNNING = threading.Event()
 _CACHE_FRESH_S = 3600
 _TREE_MAX_BYTES = 16_000_000
-# Socket timeouts reset on each byte, so enforce total and stall deadlines separately.
+# Per-byte socket timeouts need separate total and stall deadlines.
 _TREE_STALL_S = 15
 _TREE_DEADLINE_S = 60
 

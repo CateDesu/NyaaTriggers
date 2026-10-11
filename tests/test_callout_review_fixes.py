@@ -175,7 +175,8 @@ class CalloutReviewFixTests(unittest.TestCase):
                                   lambda r, c: done.append(time.monotonic()), lambda r: None)
         self.addCleanup(runner.cancel)
         QTest.qWait(15)
-        self.assertFalse(done)
+        if time.monotonic() - start < 0.06:
+            self.assertFalse(done)
         QTest.qWait(100)
         self.assertEqual(len(done), 1)
         self.assertGreaterEqual(done[0] - start, 0.06)

@@ -190,10 +190,10 @@ class _BrandLabel(QLabel):
         p.end()
 
 class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, AmbientFxMixin, DpsTabMixin, TimelineTabMixin, ConnectionMixin, SettingsTabMixin, VoiceTabMixin, AutomarkersTabMixin, UpdaterUiMixin, InstanceTabMixin, EnginesMixin, TriggersTabMixin, QMainWindow):
-    _trig_update_signal    = pyqtSignal(object, str)   # button that started the fetch, plus an ok or err payload
+    _trig_update_signal    = pyqtSignal(object, str)   # button, ok or err payload
     _upd_available_signal  = pyqtSignal(object)    # updater.Release, or None if up to date
-    _upd_checkmsg_signal   = pyqtSignal(bool, str) # run was manual, plus feedback text, "" means none
-    _upd_progress_signal   = pyqtSignal(int, str)  # percent, -1 indeterminate, plus status
+    _upd_checkmsg_signal   = pyqtSignal(bool, str) # manual, feedback or empty text
+    _upd_progress_signal   = pyqtSignal(int, str)  # -1 means indeterminate progress.
     _upd_done_signal       = pyqtSignal(bool, str) # installed_ok and message
     _cactbot_tl_signal     = pyqtSignal(str)       # fight tag
     _te_update_signal      = pyqtSignal(bool, str, bool)  # changed, message, manual
@@ -213,9 +213,9 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._save_warned = False
         self._triggers: list[Trigger] = []
         self._official_ids: set[str] = set()            # IDs loaded from triggers.json
-        self._official_triggers: dict[str, Trigger] = {} # id to original trigger, for reset
-        self._local_ids: set[str] = set()               # IDs that belong in triggers.local.json
-        self._deleted_ids: set[str] = set()             # official IDs the user has deleted
+        self._official_triggers: dict[str, Trigger] = {} # Originals for reset.
+        self._local_ids: set[str] = set()
+        self._deleted_ids: set[str] = set()             # Deleted official IDs.
         self._retired_ids: set[str] = set()
         self._folders: list[dict] = []                  # [{id, name, parent_id}]
         self._current_zone: str = ""
@@ -411,7 +411,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         else:
             QTimer.singleShot(950, lambda: self._set_triggers_enabled(True))
 
-        # Rollback backups remain until main.py verifies startup.
         try:
             if self._settings.get("auto_check_updates", True):
                 QTimer.singleShot(2500, lambda: self._start_update_check(manual=False))
@@ -1167,8 +1166,6 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
                 break
         self._save_triggers()
         self._update_fight_controls()
-
-    # Give local triggers time to claim guest text when enabled.
 
     def _flush_guest(self, loc: str, severity: str, key: str) -> None:
         speak(loc, reading=self._reading_for(loc))

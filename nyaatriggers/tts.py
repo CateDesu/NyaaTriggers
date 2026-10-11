@@ -28,8 +28,8 @@ try:
 except Exception:
     _np = None
 
-_venv_sps: list[str] = []   # site-packages entries we inserted, swapped around by set_venv_path
-_stale_venv_sps: set[str] = set()   # entries a previous venv used, their leftover modules get purged
+_venv_sps: list[str] = []   # Voice site-packages inserted into sys.path.
+_stale_venv_sps: set[str] = set()   # Previous venv paths whose modules need purging.
 if not getattr(sys, 'frozen', False):
     _FFXIV_VENV = Path.home() / ".venv" / "ffxiv"
     _sp_paths = voice_site_packages(_FFXIV_VENV)
@@ -46,9 +46,9 @@ _MODEL_DIR = (Path(sys.executable).parent / "voices"
               if getattr(sys, 'frozen', False) else _VOICES)
 
 _piper_voice: object | None = None
-_piper_failed = False   # sticky failed load marker, cleared when the model or venv changes
+_piper_failed = False   # Retry only after the model or venv changes.
 _piper_lock  = threading.Lock()
-# Lock only slow session construction. GUI setters must not wait on model loading.
+# Model loading must not block GUI setters.
 _piper_build_lock = threading.Lock()
 # Discard builds started before the model or voice environment changed.
 _piper_epoch: int = 0
@@ -56,6 +56,7 @@ _proc_lock   = threading.Lock()
 _current_proc: "subprocess.Popen | None" = None
 # Interrupted synthesis must not trigger fallback playback.
 _interrupted_proc: "subprocess.Popen | None" = None
+_winsound_slot = threading.BoundedSemaphore(1)
 
 _queue          = Queue(maxsize=64)
 # Serialize eviction and insertion so competing callers do not evict twice.
@@ -81,11 +82,11 @@ _KANJI = re.compile(r"[\u3005\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\
 _jp_neural: bool = False
 _jp_neural_voice: str = "jf_alpha"
 _kokoro = None
-_kokoro_failed = False   # sticky failed load marker, cleared when the model is re-downloaded
+_kokoro_failed = False   # Retry after model or venv setup.
 # Retry failed imports only after model setup.
 _kokoro_import_failed = False
 _kokoro_lock = threading.Lock()
-# Keep slow session construction separate from GUI settings locks.
+# Model loading must not block GUI setters.
 _kokoro_build_lock = threading.Lock()
 _kokoro_epoch: int = 0
 
@@ -1060,6 +1061,10 @@ def _wav_seconds(source) -> float:
 def _play_winsound(source, flags: int, gen: "int | None" = None) -> None:
     """Bound driver stalls and propagate completed playback errors."""
     import winsound
+    if not _winsound_slot.acquire(blocking=False):
+        record("tts_backend", gen=gen, backend="winsound", result="busy")
+        log_drop("tts-playback", "previous winsound playback is still running; callout dropped")
+        return
     box: dict = {}
     started = time.monotonic()
     record("tts_backend", gen=gen, backend="winsound", result="attempt")
@@ -1074,9 +1079,15 @@ def _play_winsound(source, flags: int, gen: "int | None" = None) -> None:
             winsound.PlaySound(source, flags)
         except Exception as exc:   # noqa: BLE001
             box["err"] = exc
+        finally:
+            _winsound_slot.release()
 
     t = threading.Thread(target=_run, daemon=True)
-    t.start()
+    try:
+        t.start()
+    except BaseException:
+        _winsound_slot.release()
+        raise
     t.join(max(60.0, _wav_seconds(source) * 1.5 + 5))
     if t.is_alive():
         record("tts_backend", gen=gen, backend="winsound", result="timed_out")

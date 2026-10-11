@@ -65,6 +65,14 @@ UNRELATED = {"id": "unrelated", "name": "unrelated", "enabled": True}
 # 21 is type|ts|sourceId|source|id|ability|targetId|target.
 SEQ_STEP_LINE = ["21", "ts", "40001234", "Boss", "8F01", "Some Ability",
                  "10FF0001", "Target"]
+_stamp_ns = 1_700_000_000_000_000_000
+
+
+def write_stamped(path, data):
+    global _stamp_ns
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    _stamp_ns += 1_000_000_000
+    os.utime(path, ns=(_stamp_ns, _stamp_ns))
 
 with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
     clock = stack.enter_context(patch("time.monotonic", return_value=0.0))
@@ -73,9 +81,8 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
                 "_REPO_TRIGGERS_FILE", "_REPO_RETIRED_FILE",
                 "_REPO_TRIGGERS_VERSION"):
         stack.enter_context(patch.object(ac, key, td / key))
-    ac.TRIGGERS_FILE.write_text("[]", encoding="utf-8")
-    ac.TRIGGERS_LOCAL_FILE.write_text(
-        json.dumps({"triggers": [WARNING, SEQ, UNRELATED]}), encoding="utf-8")
+    write_stamped(ac.TRIGGERS_FILE, [])
+    write_stamped(ac.TRIGGERS_LOCAL_FILE, {"triggers": [WARNING, SEQ, UNRELATED]})
 
     w = Win()
     w._load_triggers()
@@ -107,8 +114,11 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
     stale_runner = arm_status(w, unrelated, "ABE")
 
     data = json.loads(ac.TRIGGERS_LOCAL_FILE.read_text(encoding="utf-8"))
-    next(r for r in data["triggers"] if r["id"] == "unrelated")["name"] = "renamed"
-    ac.TRIGGERS_LOCAL_FILE.write_text(json.dumps(data), encoding="utf-8")
+    previous_size = ac.TRIGGERS_LOCAL_FILE.stat().st_size
+    next(r for r in data["triggers"] if r["id"] == "unrelated")["name"] = "renamed__"
+    write_stamped(ac.TRIGGERS_LOCAL_FILE, data)
+    check("external rename keeps the file size unchanged",
+          ac.TRIGGERS_LOCAL_FILE.stat().st_size == previous_size)
     w._maybe_reload_triggers()
 
     check("external edit keeps an unchanged trigger's object",
@@ -117,7 +127,7 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
           "old-source" in w._triggers[0]._last_fired)
     check("external edit swaps the changed trigger's object",
           w._triggers[2] is not unrelated
-          and w._triggers[2].name == "renamed")
+          and w._triggers[2].name == "renamed__")
 
     warn_runner2._fire()
     check("warning armed before an external reload still fires",
@@ -128,20 +138,18 @@ with tempfile.TemporaryDirectory() as td, ExitStack() as stack:
 
     warn_runner3 = arm_status(w, warning, "ABF")
     data = json.loads(ac.TRIGGERS_LOCAL_FILE.read_text(encoding="utf-8"))
-    next(r for r in data["triggers"] if r["id"] == "warning")["name"] = "edited"
-    ac.TRIGGERS_LOCAL_FILE.write_text(json.dumps(data), encoding="utf-8")
+    next(r for r in data["triggers"] if r["id"] == "warning")["name"] = "edited_"
+    write_stamped(ac.TRIGGERS_LOCAL_FILE, data)
     w._maybe_reload_triggers()
 
     check("editing the armed trigger swaps its object",
-          w._triggers[0] is not warning and w._triggers[0].name == "edited")
+          w._triggers[0] is not warning and w._triggers[0].name == "edited_")
     warn_runner3._fire()
     check("the edited trigger's pending warning is invalidated",
           w.fired == ["warning", "seq", "warning"])
 
     for path in (ac.TRIGGERS_FILE, ac._REPO_TRIGGERS_FILE):
-        path.write_text(json.dumps([
-            {"id": "official", "name": "changed outside the program"}]),
-            encoding="utf-8")
+        write_stamped(path, [{"id": "official", "name": "changed outside the program"}])
         local = next(t for t in w._triggers if t.id == "warning")
         local.name = "local edit while a reload is pending"
         w._save_triggers()

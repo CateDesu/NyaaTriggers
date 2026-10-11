@@ -260,7 +260,7 @@ class CactbotReader(QObject):
     tts     = pyqtSignal(str)        # exact spoken cactbotSay text
     status  = pyqtSignal(bool, str)  # active, message
     triggers_enumerated = pyqtSignal(str)  # JSON [{id, name, zone}] if the page exposes its triggers
-    phrase_seen = pyqtSignal(str)    # a callout phrase observed for the override UI
+    phrase_seen = pyqtSignal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -314,8 +314,7 @@ class CactbotReader(QObject):
 
         self._profile = QWebEngineProfile(self)
         self._page = QWebEnginePage(self._profile, self)
-        # The hosted HTTPS page needs mixed content enabled to reach IINACT over
-        # ws://127.0.0.1.
+        # HTTPS cactbot needs mixed content to reach IINACT at ws://127.0.0.1.
         self._page.settings().setAttribute(
             QWebEngineSettings.WebAttribute.AllowRunningInsecureContent, True)
 
@@ -433,7 +432,7 @@ class CactbotReader(QObject):
             self.status.emit(True, "Reading cactbot")
             self.set_disabled_triggers(self._disabled)
         else:
-            # Clear active state so the program can unmute callouts and retry.
+            # Clear active state to allow unmuting and retry.
             self._teardown()
             self.status.emit(False, "Failed to load cactbot (check the URL / connection)")
 

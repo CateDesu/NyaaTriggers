@@ -212,11 +212,23 @@ class CaptureRecovery(unittest.TestCase):
     def test_snapshot_is_not_undone_by_older_buffered_roster(self):
         self.capture.set_recording(True)
         self.state()
+        self.send(type="LogLine", rawLine="26|before roster change")
         self.send(type="PartyChanged", party=[{"id": "10000002", "job": 24}])
         self.cast()
         self.capture.close()
-        rosters = [frame["party"] for frame in self.read_capture() if frame["type"] == "PartyChanged"]
-        self.assertEqual(rosters, [[{"id": "10000002", "job": 24}]])
+        replay = WSClient()
+        rosters_at_logs = []
+
+        def roster():
+            return next(json.loads(frame)["party"] for frame in replay.state_snapshot()
+                        if json.loads(frame)["type"] == "PartyChanged")
+
+        replay.log_line.connect(lambda _line: rosters_at_logs.append(roster()))
+        for frame in self.read_capture():
+            replay._on_message(json.dumps(frame))
+        latest = [{"id": "10000002", "job": 24}]
+        self.assertEqual(rosters_at_logs, [[{"id": "10000001", "job": 24}], latest])
+        self.assertEqual(roster(), latest)
 
     def test_disconnect_and_zone_change_discard_old_prepull_lines(self):
         self.capture.set_recording(True)

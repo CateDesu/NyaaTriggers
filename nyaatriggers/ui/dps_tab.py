@@ -28,7 +28,7 @@ class DpsTabMixin:
             self._dps_idle_timeout = 120
         self._dps_meter.set_idle_timeout(self._dps_idle_timeout)
         self._dps_meter.on_encounter_end = self._on_meter_encounter_end
-        self._fflogs_last_title = ""           # last finalized encounter, for the FFLogs refresh button
+        self._fflogs_last_title = ""           # Final encounter for FFLogs refresh.
         self._fflogs_request_id = 0
         self._dps_history: list[dict] = []
         self._dps_selected_idx: "int | None" = None

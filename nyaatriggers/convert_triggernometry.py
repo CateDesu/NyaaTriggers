@@ -28,7 +28,7 @@ SOURCE_DIRS = [
 
 EXISTING_JSON = bundle_root() / 'assets' / 'triggers.json'
 
-# A shared UUID namespace preserves IDs across repeated imports.
+# A shared namespace keeps IDs stable across imports.
 _ID_NS = uuid.UUID('c6a2b8e4-9d31-4f75-a0b8-5e2c7d94f1a6')
 
 HEX = set('0123456789ABCDEF')
@@ -46,7 +46,6 @@ ULTIMATE_MAP = {
 }
 
 RAID_ABBREV = {
-    # Alexander, Heavensward
     'Gordias - The Fist Of The Father':    'A1',
     'Gordias - The Cuff Of The Father':    'A2',
     'Gordias - The Arm Of The Father':     'A3',
@@ -59,36 +58,31 @@ RAID_ABBREV = {
     'Alexander - The Breath Of The Creator':'A10',
     'Alexander - The Heart Of The Creator':'A11',
     'Alexander - The Soul Of The Creator': 'A12',
-    # Omega, Stormblood
     'Deltascape V1.0':   'O1', 'Deltascape V2.0':   'O2',
     'Deltascape V3.0':   'O3', 'Deltascape V4.0':   'O4',
     'Sigmascape V1.0':   'O5', 'Sigmascape V2.0':   'O6',
     'Sigmascape V3.0':   'O7', 'Sigmascape V4.0':   'O8',
     'Alphascape V1.0':   'O9', 'Alphascape V2.0':   'O10',
     'Alphascape V3.0':   'O11','Alphascape V4.0':   'O12',
-    # Eden, Shadowbringers
     "Eden's Gate: Resurrection":  'E1', "Eden's Gate: Descent":     'E2',
     "Eden's Gate: Inundation":    'E3', "Eden's Gate: Sepulture":   'E4',
     "Eden's Verse: Fulmination":  'E5', "Eden's Verse: Furor":      'E6',
     "Eden's Verse: Iconociasm":   'E7', "Eden's Verse: Refulgence": 'E8',
     "Eden's Promise: Umbra":      'E9', "Eden's Promise: Litany":   'E10',
     "Eden's Promise: Anamorphosis":'E11',"Eden's Promise: Eternity":'E12',
-    # Asphodelos, Endwalker. The "Asphodeols" typo appears in Aho-Triggers
+    # Aho-Triggers uses "Asphodeols" for Asphodelos and later circles.
     'Asphodelos: The First Circle':   'P1', 'Asphodeols: The First Circle':   'P1',
     'Asphodelos: The Second Circle':  'P2', 'Asphodeols: The Second Circle':  'P2',
     'Asphodelos: The Third Circle':   'P3', 'Asphodeols: The Third Circle':   'P3',
     'Asphodelos: The Fourth Circle':  'P4', 'Asphodeols: The Fourth Circle':  'P4',
-    # Abyssos. Also misfiled under the "Asphodeols" circle names in Aho-Triggers
     'Abyssos: The Fifth Circle':   'P5', 'Asphodeols: The Fifth Circle':   'P5',
     'Abyssos: The Sixth Circle':   'P6', 'Asphodeols: The Sixth Circle':   'P6',
     'Abyssos: The Seventh Circle': 'P7', 'Asphodeols: The Seventh Circle': 'P7',
     'Abyssos: The Eighth Circle':  'P8', 'Asphodeols: The Eighth Circle':  'P8',
-    # Anabaseios
     'Anabaseios: The Ninth Circle':   'P9',  'Asphodeols: The Ninth Circle':   'P9',
     'Anabaseios: The Tenth Circle':   'P10', 'Asphodeols: The Tenth Circle':   'P10',
     'Anabaseios: The Eleventh Circle':'P11', 'Asphodeols: The Eleventh Circle':'P11',
     'Anabaseios: The Twelfth Circle': 'P12', 'Asphodeols: The Twelfth Circle': 'P12',
-    # Dawntrail
     'AAC Light-heavyweight M1': 'M1', 'AAC Light-heavyweight M2': 'M2',
     'AAC Light-heavyweight M3': 'M3', 'AAC Light-heavyweight M4': 'M4',
     'AAC Cruiserweight M1':     'M5', 'AAC Cruiserweight M2':     'M6',
@@ -568,33 +562,80 @@ PIPE_STATUS = {'26', '30'}              # effect id at field index 1, after time
 # Preserve both log types 21 and 22 for ability alternatives.
 COLON_TYPES = {'14': ('20', 2), '15': ('21', 2), '16': ('22', 2),
                '1A': ('26', 0), '1E': ('30', 0), '1[56]': ('21|22', 2)}
+_ACT_TYPES = {'20': 'StartsCasting', '21': 'ActionEffect', '22': 'AOEActionEffect',
+              '26': 'StatusAdd', '30': 'StatusRemove'}
 
 
-def extract_ids(regex: str) -> list[tuple[str, str]]:
+def extract_ids(regex: str, *, simple_only: bool = False) -> list[tuple[str, str]]:
     """Return the log_type and ability_id pairs the regex pins to literal hex ids, empty list if none."""
     if not regex:
         return []
     # XML attributes are already unescaped. A second pass would alter literal entities.
     rx = _normalize_repeats(regex)
+    if simple_only:
+        for group in re.finditer(r"\(\?(P?<([^>]+)>|'([^']+)')", rx):
+            name = group[2] or group[3]
+            if group[1].startswith('P') or re.fullmatch(r'\w+', name) is None:
+                return []
+
+    def supported_fields(fields, id_index, separator):
+        if not simple_only:
+            return True
+        wildcards = {'.*', '[^' + separator + ']*'}
+        for index, field in enumerate(fields):
+            if index == id_index:
+                continue
+            if index == len(fields) - 1:
+                if field == '':
+                    continue
+                field = field.removesuffix('$')
+            for _ in range(20):
+                group = re.fullmatch(r"\((?:\?<\w+>|\?:|\?'\w+')?(.+)\)", field)
+                if group is None:
+                    break
+                field = group[1]
+            if field not in wildcards:
+                return False
+        return True
 
     m = re.match(r'^\^(\d+)\\\|(.*)$', rx, re.S)
     if m:
         lt, body = m.group(1), m.group(2)
         fields = _fields_pipe(body)
-        if lt in PIPE_CAST and len(fields) > 3:
+        if lt in PIPE_CAST and len(fields) > 3 and supported_fields(fields, 3, '|'):
             ids = expand_id_expr(fields[3])
             return [(lt, i) for i in ids] if ids else []
-        if lt in PIPE_STATUS and len(fields) > 1:
+        if lt in PIPE_STATUS and len(fields) > 1 and supported_fields(fields, 1, '|'):
             ids = expand_id_expr(fields[1])
             return [(lt, i) for i in ids] if ids else []
         return []
 
     # Colon syntax can include a skip group or an ACT type name before the hex type.
-    m = re.match(r'^(?:\\A|\^)(?:\.\{\d+(?:,\d+)?\})?(?:\(\?:\[\^:\]\*\)|\S+ )?(1[456AE]|1\[56\]):(.*)$', rx, re.S)
-    if m and m.group(1) in COLON_TYPES:
-        lt, idx = COLON_TYPES[m.group(1)]
-        fields = _fields_colon(m.group(2))
-        if len(fields) > idx:
+    m = re.match(r'^(?:\\A|\^)(?:\.\{(?P<low>\d+)(?:,(?P<high>\d+))?\})?'
+                 r'(?P<name>\(\?:\[\^:\]\*\)|\S+ )?(?P<type>1[456AE]|1\[56\]):(?P<body>.*)$', rx, re.S)
+    if m and m['type'] in COLON_TYPES:
+        lt, idx = COLON_TYPES[m['type']]
+        if simple_only:
+            name = m['name'] or ''
+            if name not in {'', r'\S+ ', r'(?:[^:]*)', '.* ', '.+ ',
+                            *(value + ' ' for value in _ACT_TYPES.values())}:
+                return []
+            try:
+                low = int(m['low'] or '0')
+                high = int(m['high'] or m['low'] or '0')
+            except ValueError:
+                return []
+            kinds = []
+            for kind in lt.split('|'):
+                header = f'[12:00:00.123] {_ACT_TYPES[kind]} '
+                if any(low <= offset <= high and re.fullmatch(name, header[offset:])
+                       for offset in range(len(header) + 1)):
+                    kinds.append(kind)
+            lt = '|'.join(kinds)
+            if not lt:
+                return []
+        fields = _fields_colon(m['body'])
+        if len(fields) > idx and supported_fields(fields, idx, ':'):
             ids = expand_id_expr(fields[idx])
             return [(lt, i) for i in ids] if ids else []
     return []
@@ -603,6 +644,9 @@ def extract_ids(regex: str) -> list[tuple[str, str]]:
 
 def walk_xml(elem: ET.Element, path: str = '', depth: int = 0) -> Iterator[tuple[str, ET.Element]]:
     if depth > 128:
+        return
+    if any(elem.get(key, '').strip().lower() == 'true' for key in (
+            'ZoneFilterEnabled', 'FFXIVZoneFilterEnabled', 'FFXIVJobFilterEnabled', 'EventFilterEnabled')):
         return
     name = elem.attrib.get('Name', '')
     fullpath = (path + '/' + name).strip('/') if name else path
@@ -614,13 +658,28 @@ def walk_xml(elem: ET.Element, path: str = '', depth: int = 0) -> Iterator[tuple
 
 
 def extract_tts(trigger_elem) -> str | None:
-    for action in trigger_elem.findall('.//Action[@ActionType="UseTTS"]'):
-        if action.attrib.get('Enabled', '').lower() == 'false':
-            continue
-        text = action.attrib.get('UseTTSTextExpression', '').strip()
-        if text and '{' not in text and not text.startswith('_'):
-            return text
-    return None
+    if trigger_elem.get('Source', 'Log') not in ('Log', 'FFXIVNetwork'):
+        return None
+    actions = [action for action in trigger_elem.findall('Actions/Action')
+               if action.get('Enabled', 'true').strip().lower() != 'false']
+    if len(actions) != 1 or actions[0].get('ActionType') != 'UseTTS':
+        return None
+    action = actions[0]
+    for owner in (trigger_elem, action):
+        legacy = owner.find('Conditions')
+        if legacy is not None and len(legacy):
+            return None
+        condition = owner.find('Condition')
+        if condition is not None and condition.get('Enabled', 'true').strip().lower() != 'false':
+            return None
+    # The local fallback cannot preserve action ordering, conditions or expressions.
+    try:
+        if float(action.get('ExecutionDelayExpression') or '0') != 0:
+            return None
+    except ValueError:
+        return None
+    text = action.get('UseTTSTextExpression', '').strip()
+    return text if text and '{' not in text and not text.startswith('_') else None
 
 
 _SKIP_PATH_RE = re.compile(r'(?i)(?:^|[/ ])(debug|regression|log ?lines?|hello ?world|sandbox|settings)(?:$|[/ ])')
@@ -682,7 +741,11 @@ def convert_xml(xml_path: Path, zone_map: dict[str, str], *,
     for folder_path, trigger in walk_xml(root):
         if _SKIP_PATH_RE.search(folder_path):
             continue
-        pairs = extract_ids(trigger.attrib.get('RegularExpression', ''))
+        regex = trigger.get('RegularExpression', '')
+        pipe_syntax = re.match(r'^\^\d+\\\|', regex) is not None
+        if pipe_syntax != (trigger.get('Source', 'Log') == 'FFXIVNetwork'):
+            continue
+        pairs = extract_ids(regex, simple_only=True)
         if not pairs:
             continue
 

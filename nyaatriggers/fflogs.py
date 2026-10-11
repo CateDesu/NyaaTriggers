@@ -18,7 +18,7 @@ TOKEN_URL = "https://www.fflogs.com/oauth/token"
 API_URL = "https://www.fflogs.com/api/v2/client"
 
 _MAX_RESPONSE_BYTES = 8 << 20
-# Socket timeouts reset on every byte, so enforce total and stall deadlines separately.
+# Per-byte socket timeouts need separate total and stall deadlines.
 _READ_STALL_S = 15
 _RESPONSE_DEADLINE_S = 60
 

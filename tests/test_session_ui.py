@@ -45,8 +45,12 @@ class SessionUiTests(unittest.TestCase):
         self.temp = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         self.stack.enter_context(patch("nyaatriggers.drop_log._LOG_FILE", self.temp / "nyaatriggers.log"))
         for key, value in {"_DATA_DIR": self.temp, "_SETTINGS_FILE": self.temp / "settings.json",
+                           "_TRIGGERNOMETRY_INVENTORY_CACHE": self.temp / "triggernometry_inventory.json",
                            "TRIGGERS_LOCAL_FILE": self.temp / "triggers.local.json"}.items():
             self.stack.enter_context(patch.object(ac, key, value))
+        packs = self.temp / "triggernometry-packs"
+        packs.mkdir()
+        self.stack.enter_context(patch("nyaatriggers.ui.engines._tn_packs_dir", return_value=packs))
         def settings(window):
             window._settings.update(tts_engine="system", auto_connect=False, auto_check_updates=False,
                                     local_enabled=False, ui_language="en")

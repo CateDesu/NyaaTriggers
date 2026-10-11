@@ -40,7 +40,7 @@ class ConnectionMixin:
         if edit is None:
             return
         raw = (edit.text() or "").strip()
-        port = parse_port(raw) if raw else DEFAULT_PORT   # an empty field means the default
+        port = parse_port(raw) if raw else DEFAULT_PORT
         if port is None:
             saved = parse_port(self._settings.get("plugin_port"))
             edit.setText(str(saved if saved is not None else DEFAULT_PORT))

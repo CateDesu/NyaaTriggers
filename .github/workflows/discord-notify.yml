@@ -6,17 +6,28 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   notify:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Notification regression tests
+        run: python3 .github/test_discord_notify.py
+
       - name: Post push to Discord
         env:
-          # Environment values keep commit text out of script code.
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           REPO: ${{ github.repository }}
           REF: ${{ github.ref_name }}
           ACTOR: ${{ github.actor }}
+          COMMIT_SHA: ${{ github.sha }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           COMMIT_URL: ${{ github.event.head_commit.url }}
         run: |
@@ -24,10 +35,15 @@ jobs:
             echo "DISCORD_WEBHOOK secret not set — skipping."
             exit 0
           fi
-          jq -nc --arg c "📦 Push to **${REPO}** (${REF}) by ${ACTOR}
-
-          ${COMMIT_MSG}
-          ${COMMIT_URL}" \
-            '{content:(if ($c|length) > 2000 then ($c[:1999] + "…") else $c end), username:"NyaaTriggers"}' \
-            | curl -sS --fail-with-body -w '\nDiscord HTTP %{http_code}\n' \
-                -X POST -H "Content-Type: application/json" -d @- "$DISCORD_WEBHOOK"
+          python3 .github/discord_notify.py
+          form=(--form "payload_json=<${RUNNER_TEMP}/discord-notification.json;type=application/json")
+          if [ -f "$RUNNER_TEMP/discord-preview.png" ]; then
+            form+=(--form "files[0]=@${RUNNER_TEMP}/discord-preview.png;type=image/png")
+          fi
+          case "$DISCORD_WEBHOOK" in
+            *\?*) webhook_url="${DISCORD_WEBHOOK}&wait=true" ;;
+            *) webhook_url="${DISCORD_WEBHOOK}?wait=true" ;;
+          esac
+          curl --silent --show-error --fail-with-body --connect-timeout 10 --max-time 60 \
+            -w '\nDiscord HTTP %{http_code}\n' -o "$RUNNER_TEMP/discord-response.json" \
+            -X POST "${form[@]}" "$webhook_url"

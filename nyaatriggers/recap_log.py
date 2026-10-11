@@ -8,6 +8,7 @@ import threading
 
 from nyaatriggers.death_recap import DeathRecap
 from nyaatriggers.dps_meter import DpsMeter
+from nyaatriggers.prog_session import COMPLETE_REASONS, LATE_DEATH_SECONDS
 
 LOG_KINDS = {b"01", b"02", b"03", b"04", b"21", b"22", b"24", b"25", b"26", b"30", b"33",
              b"37", b"38", b"39", b"42", b"43", b"260"}
@@ -61,14 +62,37 @@ def read_log(path, cancel=None, progress=None):
     observed = 0.0
     previous = None
     meter = DpsMeter(clock=lambda: observed)
+    active_pull = 0
+    recap_until = None
 
     def started(_snapshot):
+        nonlocal active_pull, recap_until
         result.pulls += 1
+        active_pull = result.pulls
+        recap_until = None
         recap.begin_pull()
 
+    def finished(snapshot):
+        nonlocal active_pull, recap_until
+        recap.end_pull()
+        encounter = snapshot["Encounter"]
+        reason = encounter["end_reason"]
+        if reason == "empty":
+            reason = encounter.get("boundary_reason")
+        if active_pull and reason in COMPLETE_REASONS:
+            if recap_until is None:
+                recap_until = observed + LATE_DEATH_SECONDS
+        else:
+            active_pull = 0
+            recap_until = None
+
+    def died(death):
+        pull = active_pull if recap_until is None or observed <= recap_until else 0
+        result.add(death, stamp, pull)
+
     meter.on_pull_start = started
-    meter.on_pull_finish = lambda _snapshot: recap.end_pull()
-    recap.on_death = lambda death: result.add(death, stamp, result.pulls)
+    meter.on_pull_finish = finished
+    recap.on_death = died
     try:
         with Path(path).open("rb") as source:
             source.seek(0, 2)
@@ -118,11 +142,16 @@ def read_log(path, cancel=None, progress=None):
                     result.skipped += 1
                     continue
                 if previous is not None and stamp < previous - 1:
+                    active_pull = 0
+                    recap_until = None
                     meter.feed_lost()
                     recap.reset()
                     previous = None
                 observed = max(stamp, previous) if previous is not None else stamp
                 previous = observed
+                if fields[0] == "01" and len(fields) > 3:
+                    active_pull = 0
+                    recap_until = None
                 if fields[0] == "260":
                     meter.set_in_combat(fields[2] == "1", fields[3] == "1")
                     if fields[2:4] == ["0", "0"]:

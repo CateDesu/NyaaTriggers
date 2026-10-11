@@ -27,7 +27,7 @@ class FakeWindow:
         self._telesto_client = object()
         self._current_fight_tag = fight
         self._umad_chain_enabled = chains_on
-        self._umad_gaze_enabled = False           # gaze pairing off for these cases
+        self._umad_gaze_enabled = False
         self._umad_gaze = CursedShriekPairs()
         self._automark_rules = rules if rules is not None else [
             {"fight": "UMAD", "status": "644+BBC", "marker": "attack1",

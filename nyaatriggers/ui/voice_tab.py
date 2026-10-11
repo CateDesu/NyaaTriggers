@@ -25,7 +25,7 @@ from nyaatriggers.app_common import _JP_NEURAL_VOICES, _sweep_stale_update_parts
 
 class VoiceTabMixin:
     def _scan_voices(self) -> list[tuple[str, Path]]:
-        # Complete user voices take precedence over bundled voices with the same stem.
+        # Prefer complete user voices over bundled voices.
         found: dict[str, Path] = {}
         for voices_dir in (ac._USER_VOICES_DIR, ac._BUNDLE_DIR / "voices"):
             if not voices_dir.exists():

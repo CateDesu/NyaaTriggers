@@ -218,7 +218,8 @@ def apply_replacements(s: str, rules: list) -> str:
         pat = find if rule.get("regex") else re.escape(find)
         rx = compile_user_regex(pat, re.IGNORECASE)
         if rx is not None:
-            out = _safe_sub(rx, repl, out)
+            replacement = repl if rule.get("regex") else (lambda _match, value=repl: value)
+            out = _safe_sub(rx, replacement, out)
     return out.strip()
 
 
@@ -297,7 +298,7 @@ class Trigger:
     count_min: int = 0
     count_max: int = 0
     status_scope: str = "self"
-    # StatusTimerRunner schedules expiry warnings and handles refreshes and losses.
+    # StatusTimerRunner owns expiry warnings.
     expiry_warn_s: float = 0.0
     sound_file: str = ""
     id: str = field(default_factory=lambda: str(uuid.uuid4()))

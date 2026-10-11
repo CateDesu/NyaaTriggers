@@ -110,15 +110,21 @@ class PersistenceRecoveryTests(unittest.TestCase):
     def test_deep_local_file_blocks_saves_and_repaired_file_reloads(self):
         self.patch_paths()
         ac.TRIGGERS_LOCAL_FILE.write_text(self.deep)
+        stamp = 1_700_000_000_000_000_000
+        os.utime(ac.TRIGGERS_LOCAL_FILE, ns=(stamp, stamp))
         host = TriggerHost()
         host._load_triggers()
+        original_stamp = host._trigger_files_stamp()
         self.assertTrue(host._local_corrupt)
         self.assertFalse(host._save_triggers())
         self.assertEqual(ac.TRIGGERS_LOCAL_FILE.read_text(), self.deep)
         self.assertEqual(Path(str(ac.TRIGGERS_LOCAL_FILE) + ".bad").read_text(), self.deep)
         host._maybe_reload_triggers()
         self.assertEqual(host._official_ids, {"official"})
-        ac.TRIGGERS_LOCAL_FILE.write_text('{"triggers": [{"id": "custom", "name": "Custom"}]}')
+        repaired = '{"triggers": [{"id": "custom", "name": "Custom"}]}'
+        ac.TRIGGERS_LOCAL_FILE.write_text(repaired.ljust(len(self.deep)))
+        os.utime(ac.TRIGGERS_LOCAL_FILE, ns=(stamp, stamp))
+        self.assertEqual(host._trigger_files_stamp(), original_stamp)
         host._maybe_reload_triggers()
         self.assertFalse(host._local_corrupt)
         self.assertIn("custom", {t.id for t in host._triggers})

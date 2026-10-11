@@ -3,7 +3,10 @@ import io
 import json
 import os
 import sys
+import tempfile
 import urllib.error
+from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nyaatriggers import http_fetch, updater
@@ -50,9 +53,15 @@ def fetch_stubbed(channel=None, payload=PAYLOAD):
     orig = http_fetch.open_response
     http_fetch.open_response = lambda req, timeout, deadline: fake_urlopen(req, timeout)
     try:
-        if channel is None:
-            return updater.fetch_latest_release(), urls, None
-        return updater.fetch_latest_release(channel=channel), urls, None
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory) / "latest_release.json"
+            with patch.object(updater, "_release_cache_path", return_value=cache):
+                release = (updater.fetch_latest_release() if channel is None else
+                           updater.fetch_latest_release(channel=channel))
+                saved = json.loads(cache.read_text(encoding="utf-8"))
+                check(f"{channel or 'default'} lookup caches the fetched release",
+                      saved["tag"] == release.tag and saved["assets"] == release.assets)
+                return release, urls, None
     except Exception as exc:
         return None, urls, exc
     finally:
@@ -62,6 +71,14 @@ def fetch_stubbed(channel=None, payload=PAYLOAD):
 rel_stable, urls_stable, err_stable = fetch_stubbed("stable")
 rel_master, urls_master, err_master = fetch_stubbed("master")
 rel_default, urls_default, err_default = fetch_stubbed()
+
+with tempfile.TemporaryDirectory() as directory:
+    installation_cache = Path(directory) / "latest_release.json"
+    installation_cache.write_bytes(b"existing installation cache")
+    with patch.object(updater, "_release_cache_path", return_value=installation_cache):
+        _, _, isolated_error = fetch_stubbed()
+    check("stubbed release lookup preserves the installation cache",
+          isolated_error is None and installation_cache.read_bytes() == b"existing installation cache")
 
 check("stable channel fetches releases/latest",
       urls_stable == [updater.API_LATEST_URL] and err_stable is None)
@@ -188,8 +205,6 @@ check("a non-version describe result is rejected",
       updater._describe_label("1.3.0", "deadbee") is None)
 
 import subprocess
-import tempfile
-from pathlib import Path
 
 
 def _git(repo, *args):
@@ -208,16 +223,18 @@ with tempfile.TemporaryDirectory() as td:
     clone = Path(td) / "clone"
     remote.mkdir()
     r = _git(remote, "init", "-q", "-b", "main")
-    _git(remote, "config", "user.email", "t@t")
-    _git(remote, "config", "user.name", "t")
+    _git(remote, "config", "user.email", "205492565+CateDesu@users.noreply.github.com")
+    _git(remote, "config", "user.name", "CateDesu")
+    _git(remote, "config", "commit.gpgsign", "false")
     check("seed repo for upstream-cover test created",
           r.returncode == 0 and _commit(remote, "one", "one").returncode == 0)
     r = subprocess.run(["git", "clone", "-q", str(remote), str(clone)],
                        capture_output=True, text=True, timeout=15)
     check("clone for upstream-cover test created", r.returncode == 0)
     # The clone needs its own identity too. CI runners have no global one.
-    _git(clone, "config", "user.email", "t@t")
-    _git(clone, "config", "user.name", "t")
+    _git(clone, "config", "user.email", "205492565+CateDesu@users.noreply.github.com")
+    _git(clone, "config", "user.name", "CateDesu")
+    _git(clone, "config", "commit.gpgsign", "false")
     if r.returncode == 0:
         check("checkout level with the upstream tip is covered",
               updater.git_covers_upstream(clone))

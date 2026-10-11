@@ -25,8 +25,10 @@ def main():
                    "gg.xp.nyaa.CustomTriggersVerification", str(path), str(cases)]
         if os.name != "nt":
             command = ["xvfb-run", "-a", *command]
+        environment = os.environ.copy()
+        environment["NYAA_AUTOMARK"] = "0"
         result = subprocess.run(command, cwd=temp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, timeout=60)
+                                text=True, timeout=60, env=environment)
         output = result.stdout
         if result.returncode or "RESULT PASS" not in output:
             print(output)

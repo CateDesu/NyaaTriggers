@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import QApplication
 from nyaatriggers import app_common as ac
 from nyaatriggers import triggernometry_bridge as bridge
 from nyaatriggers.dps_meter import DpsMeter
+from nyaatriggers.timeline_engine import TimelineEngine
 from nyaatriggers.triggernometry_editor import PackDocument
 from nyaatriggers.ui.connection import ConnectionMixin
 from nyaatriggers.ui.engines import EnginesMixin
@@ -45,6 +46,7 @@ class Host(QObject, EnginesMixin, InstanceTabMixin, VoiceTabMixin, ConnectionMix
         for name in ("_status_lbl", "_conn_btn", "_zone_lbl", "_plugin_link",
                      "_clear_status_timers", "_clear_seq_runners", "_clear_callout_dedup",
                      "_push_timeline_to_plugin", "_apply_engine_overrides",
+                     "_update_triggernometry_pack_inventory",
                      "_on_engine_sidecar_status", "_umad_chain_reset", "_umad_gaze_reset",
                      "_automark_pairs"):
             setattr(self, name, Mock())
@@ -182,6 +184,55 @@ class ConnectionTests(unittest.TestCase):
 
     def test_reimport_reloads_an_external_copy_matching_the_edited_managed_pack(self):
         self.check_external_pack_reimport(use_copy=True)
+
+    def check_pack_reload_after_combat(self, use_import):
+        self.connect()
+        self.enable()
+        self.host._triggers_enabled = True
+        self.host._local_ids = set()
+        self.host._cactbot_mode = False
+        self.host._local_enabled = False
+        self.host._in_game_combat = False
+        self.host._awaiting_zone_metadata = True
+        self.host._pending_timeline_events = []
+        self.host._timeline_reset_on_combat_end = False
+        self.host._timeline = TimelineEngine(self.host)
+        self.host._ws.in_combat.connect(self.host._on_in_combat)
+        self.send({"type": "InCombat", "inACTCombat": True, "inGameCombat": True})
+        self.wait(lambda: self.host._in_game_combat)
+        self.probe("before", combat=1)
+        generation = self.host._triggernometry.generation()
+        managed = bridge.packs_dir() / "delayed.xml"
+        original = managed.read_bytes()
+        source = managed.parent.parent / "updated.xml" if use_import else managed
+        updated = original.replace(b"armed ${label}", b"fresh ${label}")
+        source.write_bytes(updated)
+        with patch.object(ac.QFileDialog, "getOpenFileName", return_value=(str(source), "")), \
+                patch.object(ac.QMessageBox, "information") as information, \
+                patch.object(ac.QMessageBox, "question", return_value=ac.QMessageBox.StandardButton.Yes):
+            self.host._import_triggernometry()
+        self.wait(lambda: "late before" in self.speech)
+        self.assertEqual(managed.read_bytes(), updated)
+        if use_import:
+            self.assertEqual(managed.with_suffix(".xml.bak").read_bytes(), original)
+        self.assertEqual(self.host._triggernometry.generation(), generation)
+        self.assertTrue(self.host._triggernometry_reload_pending)
+        self.assertNotIn("is now running", information.call_args.args[-1])
+        self.send({"type": "InCombat", "inACTCombat": False, "inGameCombat": False})
+        self.wait(lambda: len(self.host.inventory) == 2)
+        self.assertFalse(self.host._triggernometry_reload_pending)
+        self.assertGreater(self.host._triggernometry.generation(), generation)
+        self.send({"type": "LogLine", "rawLine":
+                   "00|2026-09-26T12:00:00-05:00|0038|Tester|TEST after|checksum"})
+        self.wait(lambda: "fresh after 0" in self.speech)
+        self.wait(lambda: "late after" in self.speech)
+        self.assertNotIn("armed after 0", self.speech)
+
+    def test_changed_import_preserves_pending_actions_until_combat_ends(self):
+        self.check_pack_reload_after_combat(use_import=True)
+
+    def test_changed_managed_pack_preserves_pending_actions_until_combat_ends(self):
+        self.check_pack_reload_after_combat(use_import=False)
 
     def test_disconnect_cancels_pending_speech_and_reconnect_starts_fresh(self):
         self.connect()

@@ -24,7 +24,6 @@ _PRE_PULL_MAX_BYTES = 8 << 20
 _MAX_PULL_SECONDS = 45 * 60
 _MAX_PULL_BYTES = 64 << 20
 _KEEP_CAPTURES = 20
-_STATE_TYPES = frozenset({"changeprimaryplayer", "changezone", "partychanged", "incombat"})
 
 
 def _owner_only(path, flags):
@@ -44,7 +43,7 @@ class PullCapture(QObject):
         self._log_dir = Path(log_dir)
         self._recording = False
         self._in_pull = False
-        self._buffer: "deque[tuple[float, str]]" = deque()
+        self._buffer: "deque[tuple[float, str, tuple[str, ...]]]" = deque()
         self._buffer_bytes = 0
         self._fh = None
         self._path: "Path | None" = None
@@ -83,7 +82,8 @@ class PullCapture(QObject):
             self._write(line)
             return
         now = time.monotonic()
-        self._buffer.append((now, line))
+        # raw_message arrives before WSClient applies this frame to its state cache.
+        self._buffer.append((now, line, self._state_snapshot()))
         self._buffer_bytes += len(line.encode("utf-8"))
         cutoff = now - _PRE_PULL_SECONDS
         while self._buffer and (self._buffer[0][0] < cutoff
@@ -193,17 +193,10 @@ class PullCapture(QObject):
         self._bytes = 0
         self._started = time.monotonic()
         self._started_wall = datetime.now().isoformat(timespec="seconds")
-        state = self._state_snapshot()
+        state = self._buffer[0][2] if self._buffer else self._state_snapshot()
         for line in state:
             self._write(line.replace("\r", " ").replace("\n", " "))
-        for _ts, line in self._buffer:
-            if state:
-                try:
-                    data = json.loads(line)
-                except (ValueError, RecursionError):
-                    data = None
-                if isinstance(data, dict) and str(data.get("type", "")).lower() in _STATE_TYPES:
-                    continue
+        for _ts, line, _state in self._buffer:
             self._write(line)
         self._buffer.clear()
         self._buffer_bytes = 0

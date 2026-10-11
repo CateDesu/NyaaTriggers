@@ -255,7 +255,7 @@ class TriggeventRecovery(QObject):
                              "history_restore" if history else _FALLBACK_REASONS.get(reason, "unknown"))
             self._progress_timer.start()
         # State seeds go first. Later changes retain their original feed order.
-        initial = self.ws.state_snapshot() if history else self._initial_state or self.ws.state_snapshot()
+        initial = self.ws.state_snapshot() if history else self._initial_state
         frames = list(initial) + self._pending
         first_log = next((line for raw in frames if (line := self._log_line(raw))), None)
         try:

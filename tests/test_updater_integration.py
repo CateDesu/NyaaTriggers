@@ -36,8 +36,9 @@ class GitRepoCase(unittest.TestCase):
 
     def git(self, folder, *args):
         result = subprocess.run(
-            ["git", "-C", str(folder), "-c", "user.name=Test",
-             "-c", "user.email=test@example.invalid", *args],
+            ["git", "-C", str(folder), "-c", "user.name=CateDesu",
+             "-c", "user.email=205492565+CateDesu@users.noreply.github.com",
+             "-c", "commit.gpgsign=false", *args],
             capture_output=True, text=True, check=True, timeout=15)
         return result.stdout.strip()
 

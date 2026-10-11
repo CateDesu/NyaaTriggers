@@ -70,7 +70,7 @@ Engine callouts start enabled, including newly discovered ones. Local rows keep 
 - **TBD** for fights without a curated tree entry.
 - **Unsorted** for custom triggers without a zone restriction. A Zone Regex files a custom trigger under its fight, or TBD if the fight has no entry.
 
-Select a fight or folder to filter the table. Headers expand or collapse groups. The table's **General**, **DoT**, **Local**, **Triggevent**, and **Triggernometry** groups start collapsed. DoT contains reapply reminders. Search shows matching rows across all fights in one list.
+Select a fight or folder to filter the table. Headers expand or collapse groups. The table's **General**, **DoT**, **Local**, **Triggevent**, and **Triggernometry** groups start collapsed. Every fight shows **Triggernometry** directly below **Triggevent**, even before any packs are imported. DoT contains reapply reminders. Search shows matching rows across all fights in one list.
 
 **Toggles.** **Global - Local On/Off** and **Global - Triggevent On/Off** affect every fight. Global Local also controls local timelines. Selecting one fight shows **Local** and **Triggevent** checkboxes for its rows. A box is checked when all its rows are enabled. Enabling a group expands it; disabling it collapses it. Overlapping sources can produce duplicate calls.
 
@@ -151,7 +151,7 @@ Definitions are saved separately in `triggevent.custom.json` beside the program'
 
 Triggernometry runs conditions, shared variables, delayed actions, trigger chains, and C# `ExecuteScript` actions from imported XML packs. It starts when a pack is available and Cactbot is off. Live fight validation is still pending.
 
-**Import a pack** through **Settings - Data - Import Triggernometry**. Its triggers appear as editable Triggernometry rows. Without the engine, the importer converts only simple ability matches with plain speech to Local rows.
+**Import a pack** through **Settings - Data - Import Triggernometry**. Its speech rows appear immediately in the **Triggernometry** section, which expands after import. The pack's folder names determine their fight or Unsorted group. Without the engine, the importer also converts simple ability matches with plain speech to Local rows.
 
 **Create or edit a pack.** Choose **Triggers - Add - Triggernometry trigger** to create a native XML pack. **Add - Edit Triggernometry pack** opens an existing pack, including triggers without speech actions. A Triggernometry row's context menu also offers **Edit trigger and actions**. Double-clicking a row still edits only its spoken text.
 

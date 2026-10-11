@@ -182,9 +182,9 @@ def _download(url: str, dest: Path, timeout: int = 30) -> None:
 
 
 class _SetupWorker(QThread):
-    progress = pyqtSignal(int, str)   # percent, -1 means indeterminate, plus status message
+    progress = pyqtSignal(int, str)   # -1 means indeterminate progress.
     # Keep QThread.finished available for thread cleanup.
-    done = pyqtSignal(bool, str)      # success, error message
+    done = pyqtSignal(bool, str)      # success, error
 
     def _fill_to(self, target: int, msg: str) -> None:
         for v in range(self._cur, target + 1, 2):

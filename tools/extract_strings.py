@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if (new_keys or stale_keys) else 0
 
     cat_path.parent.mkdir(parents=True, exist_ok=True)
-    # A sibling temporary file preserves the previous output if interrupted.
+    # Stage beside the output to keep replacement atomic.
     tmp = cat_path.with_name(cat_path.name + ".tmp")
     tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n",
                    encoding="utf-8")

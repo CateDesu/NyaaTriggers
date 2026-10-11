@@ -30,7 +30,7 @@ def main() -> None:
 
     body = ",\n".join(f'  "{zid}": {json.dumps(zones[zid], ensure_ascii=False)}'
                       for zid in sorted(zones, key=int))
-    # A sibling temporary file preserves the previous output if interrupted.
+    # Stage beside the output to keep replacement atomic.
     tmp = OUT.with_name(OUT.name + ".tmp")
     tmp.write_text("{\n" + body + "\n}\n", encoding="utf-8")
     os.replace(tmp, OUT)

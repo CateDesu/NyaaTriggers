@@ -40,7 +40,6 @@ def _watched_trigger_files() -> tuple:
 # Update callout wording without rebuilding engines.
 CALLOUT_DEFAULTS_FILE = _ASSETS_DIR / "callout_defaults.json"
 TIMELINES_DIR       = _DATA_DIR   / "timelines"
-# Keep downloads separate from bundled timelines.
 _BUNDLE_TIMELINES_DIR = _BUNDLE_DIR / "timelines"
 _SETTINGS_FILE              = _DATA_DIR   / "nyaatriggers_settings.json"
 _TRIGGEVENT_INVENTORY_CACHE = _DATA_DIR   / "triggevent_inventory.json"
@@ -49,7 +48,7 @@ _TRIGGEVENT_AUTOMARK_INVENTORY_CACHE = _DATA_DIR / "triggevent_automarkers.json"
 _TRIGGEVENT_AUTOMARK_INVENTORY_SEED = _ASSETS_DIR / "triggevent_automarkers.seed.json"
 # Triggernometry inventory has no bundled seed because packs are imported by users.
 _TRIGGERNOMETRY_INVENTORY_CACHE = _DATA_DIR / "triggernometry_inventory.json"
-# Imported sounds live with user data so updates preserve them.
+# Keep imported sounds in user data to survive updates.
 _USER_SOUNDS_DIR = _DATA_DIR / "sounds"
 _USER_VOICES_DIR = _DATA_DIR / "voices"
 _CALLOUTS_JA_BUNDLE = _ASSETS_DIR / "callouts_ja.json"
@@ -405,9 +404,9 @@ _DOT_GREY  = "#585b70"
 _ABILITY_TYPES = {"20", "21", "22", "23"}
 _GENERAL_TAB   = "General"
 
-_ITEM_TYPE_ROLE   = Qt.ItemDataRole.UserRole + 1   # str, one of folder, custom_hdr, custom_group
-_ITEM_ID_ROLE     = Qt.ItemDataRole.UserRole + 2   # str, folder UUID
-_SECTION_ROLE     = Qt.ItemDataRole.UserRole + 4   # str, row's source group, general/dot/local/engine
+_ITEM_TYPE_ROLE   = Qt.ItemDataRole.UserRole + 1   # folder, custom_hdr or custom_group
+_ITEM_ID_ROLE     = Qt.ItemDataRole.UserRole + 2   # folder UUID
+_SECTION_ROLE     = Qt.ItemDataRole.UserRole + 4   # Row's source group.
 
 _GITHUB_URL  = "https://github.com/CateDesu/NyaaTriggers"
 _DISCORD_URL = "https://discord.com/invite/TQJrbZcgKF"

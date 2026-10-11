@@ -936,6 +936,7 @@
   "type number": "ログタイプ番号",
   "was imported, but the engine could not start": "インポートされましたが、エンジンを起動できませんでした",
   "whoever gets it": "受けた人",
+  "will run after combat ends": "戦闘終了後に実行されます",
   "will run once the Triggernometry engine is available": "Triggernometry エンジンが利用可能になると実行されます",
   "will run when you turn Cactbot off": "Cactbotをオフにすると実行されます",
   "you": "自分",

@@ -653,8 +653,9 @@ class TriggersTabMixin:
                                    if row.get("source") == "triggernometry" and not self._engine_fight_tag(row))
         matches = 0
         header_rows: list[tuple[int, str]] = []
+        fight_sections = fight is not None and not local_only
         section_has = {"general": False, "dot": False, "local": False,
-                       "engine": False, "triggernometry": False}
+                       "engine": fight_sections, "triggernometry": fight_sections}
         self._table.setUpdatesEnabled(False)
         for row in range(self._table.rowCount()):
             en  = self._table.item(row, _C_EN)

@@ -195,12 +195,12 @@ def is_available() -> bool:
 
 class TriggernometryBridge(QObject):
 
-    # Generation stamps let UI slots reject stale output after restarts.
-    callout   = pyqtSignal(str, str, int)   # on-screen text, severity in {info, alert, alarm}, generation
-    tts       = pyqtSignal(str, int)        # spoken text, generation
-    sound     = pyqtSignal(str, int, int)   # sound file path, volume 0-100, generation
-    status    = pyqtSignal(bool, str, int)  # active, message, generation
-    inventory = pyqtSignal(str, int)   # editable speech and engine generation
+    # Final int arguments tag the generation so UI slots can reject stale output.
+    callout   = pyqtSignal(str, str, int)   # text, severity in {info, alert, alarm}
+    tts       = pyqtSignal(str, int)
+    sound     = pyqtSignal(str, int, int)   # path, volume 0-100
+    status    = pyqtSignal(bool, str, int)  # active, message
+    inventory = pyqtSignal(str, int)   # editable speech JSON
     feed_overflow = pyqtSignal(int)
 
     def __init__(self, parent=None) -> None:
@@ -216,7 +216,6 @@ class TriggernometryBridge(QObject):
         self._wq: queue.Queue = _ByteQueue(maxsize=20000)
         self._active = False
         self._pack_stamps = {}
-        # An active flag alone cannot distinguish replaced readers.
         self._gen = 0
         self._overflow_gen = -1
         self._replacements: list = []

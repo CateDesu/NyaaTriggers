@@ -37,7 +37,7 @@ def _actor_int(actor_id) -> "int | None":
     """Normalize actor IDs without Telesto dependencies. Reject invalid IDs and no-target sentinels."""
     if actor_id is None:
         return None
-    if isinstance(actor_id, bool):          # bool is an int subclass
+    if isinstance(actor_id, bool):
         return None
     if isinstance(actor_id, int):
         v = actor_id
@@ -166,7 +166,7 @@ class DpsMeter:
         self._in_game = False
         self.current: "_Encounter | None" = None
         self._view: "_Encounter | None" = None  # Display segment resets when damage resumes after idle.
-        self._last_final: "dict | None" = None  # preserved pull, shown while idle
+        self._last_final: "dict | None" = None
         self._idle_timeout = DEFAULT_IDLE_TIMEOUT
         self.on_encounter_end = None
         self.on_pull_start = None
@@ -393,8 +393,7 @@ class DpsMeter:
     def _on_zone(self, fields: "list[str]") -> None:
         if len(fields) <= 3:
             return
-        # Every raw zone line ends the encounter and clears identity because IDs can
-        # change even when reentering the same instance.
+        # Actor IDs can change when reentering the same instance.
         self.finalize("duty-left")
         self._zone = fields[3].strip()
         self._awaiting_zone_metadata = False
@@ -432,6 +431,7 @@ class DpsMeter:
         if job and fields[2][:2] == "10":
             self._note(self._jobs, aid, job)
         owner = _actor_int(fields[6])
+        self._owners.pop(aid, None)
         if owner is not None and owner != aid:
             self._note(self._owners, aid, owner)
         for enc in (self.current, self._view):
@@ -473,8 +473,7 @@ class DpsMeter:
                 continue
             effects.append((*_unpack_effect(fields[i], fields[i + 1]), reflected,
                             bool(flags & 0x100)))
-        # Damage and misses can start encounters. Healing and buffs before a pull must
-        # not start the clock.
+        # Pre-pull healing and buffs must not start the clock.
         if self.current is None:
             if not any(e[0] in ("damage", "miss") for e in effects):
                 return
@@ -502,7 +501,7 @@ class DpsMeter:
             src = self._combatant(enc, src_key,
                                   fields[3] if src_key == sid else owner_name)
         if src is not None:
-            # Count all ability lines as swings. ACT counts only damaging lines.
+            # ACT counts only damaging ability lines as swings.
             src.swings += 1
             src.touch(now)
         reflector = None
@@ -523,7 +522,7 @@ class DpsMeter:
                     victim_key, victim_id, victim_name = src_key, sid, fields[3]
                 if dealer is not None:
                     dealer.damage += amount
-                    if amount > 0:     # misses/hallowed count as swings, not hits
+                    if amount > 0:
                         dealer.hits += 1
                         if crit:
                             dealer.crits += 1
@@ -636,8 +635,7 @@ class DpsMeter:
             c.deaths += 1
 
     def _snapshot(self, enc: _Encounter, now: float, active: bool, full=False) -> dict:
-        # Final duration stops at the last combat action. Apply idle limits only to the
-        # live display, using encounter start if no damage was recorded.
+        # Idle limits apply only to the live display.
         span_end = now if active or enc.last is None else enc.last
         if active and not full:
             idle_base = enc.last_damage if enc.last_damage is not None else enc.start
@@ -656,8 +654,8 @@ class DpsMeter:
         combatants = {}
         for c in players:
             active_secs = 0.0 if c.first is None else max(0.0, c.last - c.first)
-            per = max(1.0, active_secs)      # own-activity rate, ACT's "DPS"
-            enc_per = max(1.0, dur)          # encounter-length rate, "ENCDPS"
+            per = max(1.0, active_secs)      # ACT "DPS"
+            enc_per = max(1.0, dur)          # ACT "ENCDPS"
             name = c.name or f"{c.aid:X}"
             if name in dupes:
                 name = f"{name} ({c.aid:X})"

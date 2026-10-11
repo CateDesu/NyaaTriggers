@@ -9,7 +9,7 @@ OVERLAY0 = "#3a3a44"   # Muted hover colour
 
 ACCENT    = "#ff8399"
 ACCENT2   = "#e66c82"
-ON_ACCENT = "#2b1017"   # dark text on accent fills
+ON_ACCENT = "#2b1017"
 
 TEXT     = "#e8e8ec"
 SUBTEXT1 = "#8f8f9a"
@@ -558,14 +558,14 @@ def make_petals(seed: int, count: int) -> list:
     for _ in range(count):
         petals.append({
             "pm":      make_petal(rnd.randint(10, 22), rnd.choice(tints)),
-            "fx":      rnd.uniform(0.02, 0.98),       # x anchor, width fraction
-            "y0":      rnd.uniform(-0.1, 1.0),        # phase offset, height fraction
-            "fall":    rnd.uniform(0.014, 0.040),     # fall speed, heights/second
-            "sway":    rnd.uniform(8.0, 26.0),        # sway amplitude, px
-            "sway_T":  rnd.uniform(3.0, 6.5),         # sway period, seconds
+            "fx":      rnd.uniform(0.02, 0.98),       # width fraction
+            "y0":      rnd.uniform(-0.1, 1.0),        # height fraction
+            "fall":    rnd.uniform(0.014, 0.040),     # heights/s
+            "sway":    rnd.uniform(8.0, 26.0),        # pixels
+            "sway_T":  rnd.uniform(3.0, 6.5),         # seconds
             "phase":   rnd.uniform(0.0, 6.283),
             "rot0":    rnd.uniform(0.0, 360.0),
-            "rot_v":   rnd.uniform(-24.0, 24.0),      # spin, degrees/second
+            "rot_v":   rnd.uniform(-24.0, 24.0),      # degrees/s
             "op":      rnd.uniform(0.30, 0.52),
         })
     return petals

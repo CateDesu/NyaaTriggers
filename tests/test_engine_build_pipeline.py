@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -65,13 +66,15 @@ raise SystemExit(int(os.environ.get("NYAA_BUILD_TEST_FAIL", "0")))
             maven.write_text(f'@echo off\n"{sys.executable}" "%~dp0observe.py" %*\n', encoding="utf-8")
         else:
             maven = executables / "mvn"
-            maven.write_text(f'#!{sys.executable}\n' + observer.read_text(encoding="utf-8"), encoding="utf-8")
+            maven.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} '
+                             f'{shlex.quote(str(observer))} "$@"\n', encoding="utf-8")
             maven.chmod(0o700)
         self.environment["PATH"] = str(executables) + os.pathsep + self.environment.get("PATH", "")
         self.environment["NYAA_BUILD_TEST_CALLS"] = str(self.calls)
 
     def git(self, *arguments):
-        return subprocess.run(["git", *arguments], cwd=self.source, env=self.environment,
+        return subprocess.run(["git", "-c", "commit.gpgsign=false", *arguments],
+                              cwd=self.source, env=self.environment,
                               text=True, encoding="utf-8", capture_output=True, check=True)
 
     def run_build(self):
@@ -206,6 +209,120 @@ raise SystemExit(int(os.environ.get("NYAA_BUILD_TEST_FAIL", "0")))
         self.assertEqual(run.call_args.kwargs["executable"], interpreter)
         self.assertEqual(run.call_args.kwargs["env"]["NYAA_BUILD_MAVEN"], maven)
         self.assertEqual(run.call_args.kwargs["cwd"], self.source)
+
+    def test_windows_build_output_property_keeps_path_characters_literal(self):
+        maven = r"C:\Maven & tools\mvn.cmd"
+        output = r"C:\Program & files\50% ready\target"
+        with patch.object(engine_build.sys, "platform", "win32"), \
+                patch.dict(os.environ, {"COMSPEC": "cmd.exe"}), \
+                patch.object(engine_build.shutil, "which", return_value=maven), \
+                patch.object(engine_build.subprocess, "run") as run:
+            engine_build.run_maven(self.source, ["clean", "package"], {"nyaa.build.directory": output})
+        self.assertEqual(run.call_args.args[0],
+                         'cmd.exe /d /v:off /s /c ""%NYAA_BUILD_MAVEN%" clean package '
+                         '"-Dnyaa.build.directory=%NYAA_BUILD_PROPERTY_0%""')
+        self.assertEqual(run.call_args.kwargs["env"]["NYAA_BUILD_PROPERTY_0"], output)
+
+    def test_failed_publication_preserves_the_installed_engine(self):
+        target = self.directory / "target"
+        target.mkdir()
+        jar = target / "triggevent-core.jar"
+        jar.write_bytes(b"working engine")
+
+        def package(source, arguments, properties):
+            output = Path(properties["nyaa.build.directory"])
+            output.mkdir()
+            (output / jar.name).write_bytes(b"complete engine")
+
+        with patch.object(engine_build, "run_maven", side_effect=package), \
+                patch.object(engine_build.os, "replace", side_effect=PermissionError("locked")):
+            with self.assertRaises(PermissionError):
+                engine_build.package_wrapper(self.directory, self.before)
+        self.assertEqual(jar.read_bytes(), b"working engine")
+        self.assertEqual(list(target.iterdir()), [jar])
+
+    def wrapper_build(self, *, fail=False, existing=True):
+        wrapper = self.directory / "wrapper & tools"
+        wrapper.mkdir()
+        for name in ("build.sh", "build_engine.py", "pom.xml"):
+            shutil.copy2(ROOT / "triggevent-core" / name, wrapper / name)
+        (wrapper / "patches").mkdir()
+        shutil.copy2(self.patch, wrapper / "patches/same-zone-history.patch")
+        target = wrapper / "target"
+        target.mkdir()
+        jar = target / "triggevent-core.jar"
+        if existing:
+            jar.write_bytes(b"working engine")
+        binaries = self.directory / "bin & fixtures"
+        observer = binaries / "observe.py"
+        original = observer.read_text(encoding="utf-8")
+        observer.write_text('''import json
+import os
+from pathlib import Path
+import shutil
+import sys
+
+source = Path.cwd()
+if (source / "pom.xml").is_file():
+    arguments = sys.argv[1:]
+    output = source / "target"
+    for argument in arguments:
+        if argument.startswith("-Dnyaa.build.directory="):
+            output = Path(argument.split("=", 1)[1])
+    shutil.rmtree(output, ignore_errors=True)
+    output.mkdir(parents=True)
+    (output / "triggevent-core.jar").write_bytes(b"partial engine")
+    installed = source / "target/triggevent-core.jar"
+    with Path(os.environ["NYAA_BUILD_TEST_CALLS"]).open("a") as log:
+        log.write(json.dumps({"arguments": arguments, "output": str(output),
+                              "installed": installed.read_text() if installed.exists() else None}) + "\\n")
+    if os.environ.get("NYAA_WRAPPER_TEST_FAIL"):
+        raise SystemExit(9)
+    (output / "triggevent-core.jar").write_bytes(b"complete engine")
+    raise SystemExit(0)
+''' + original, encoding="utf-8")
+        (binaries / "python3").symlink_to(sys.executable)
+        java = binaries / "java"
+        java.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        java.chmod(0o700)
+        environment = self.environment | {"EVENT_TRIGGER_DIR": str(self.source),
+                                           "EVENT_TRIGGER_REPO": str(self.source),
+                                           "EVENT_TRIGGER_REF": self.before}
+        if fail:
+            environment["NYAA_WRAPPER_TEST_FAIL"] = "1"
+        result = subprocess.run(["bash", str(wrapper / "build.sh")], cwd=self.directory,
+                                env=environment, text=True, capture_output=True, timeout=30)
+        return result, jar
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("bash"),
+                         "Requires the POSIX build launcher")
+    def test_failed_wrapper_package_preserves_the_installed_engine(self):
+        result, jar = self.wrapper_build(fail=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.observations()[-1]["installed"], "working engine")
+        self.assertEqual(jar.read_bytes(), b"working engine", result.stderr)
+        self.assertEqual(list(jar.parent.iterdir()), [jar])
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("bash"),
+                         "Requires the POSIX build launcher")
+    def test_wrapper_package_is_published_only_after_success(self):
+        result, jar = self.wrapper_build()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        observed = self.observations()[-1]
+        self.assertEqual(observed["installed"], "working engine")
+        self.assertEqual(jar.read_bytes(), b"complete engine")
+        self.assertIn("-Dnyaa.engine.commit=" + self.before, observed["arguments"])
+        self.assertFalse(Path(observed["output"]).exists())
+        self.assertEqual(list(jar.parent.iterdir()), [jar])
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("bash"),
+                         "Requires the POSIX build launcher")
+    def test_failed_first_wrapper_package_leaves_no_partial_engine(self):
+        result, jar = self.wrapper_build(fail=True, existing=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIsNone(self.observations()[-1]["installed"])
+        self.assertFalse(jar.exists())
+        self.assertEqual(list(jar.parent.iterdir()), [])
 
 
 if __name__ == "__main__":
