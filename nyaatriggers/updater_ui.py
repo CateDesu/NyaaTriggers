@@ -16,6 +16,8 @@ from nyaatriggers.plugin_link import plugin_supports_dps
 from nyaatriggers import theme
 from nyaatriggers import updater
 
+from nyaatriggers.time_format import format_time
+
 from nyaatriggers import app_common as ac
 from nyaatriggers.app_common import (
     _ITEM_TYPE_ROLE, _REPO_JSON_MAX_BYTES, _REPO_TRIGGERS_BRANCH, _VERSION, _atomic_write_json,
@@ -56,7 +58,7 @@ class UpdaterUiMixin:
             enc = s["Encounter"]
             title_lbl.setText(
                 _("Reviewing: {title} ({dur}, {when})").format(
-                    title=enc["title"], dur=enc["duration"], when=entry["when"]))
+                    title=enc["title"], dur=enc["duration"], when=format_time(entry["when"])))
             self._dps_live_encdps.setText(
                 _("party DPS {dps}").format(dps=self._fmt_dps_num(enc["encdps"])))
             self._populate_dps_table(table, s)
@@ -140,15 +142,25 @@ class UpdaterUiMixin:
             lbl.setToolTip(full)
             lbl.setStyleSheet("color:#f38ba8; font-weight:bold;")
             lbl.setVisible(True)
+            self._update_engine_status_bar()
             return
         good = [src for src, (st, _msg) in self._engine_sidecar_state.items() if st == "good"]
         if good:
             lbl.setText(_("● {names} Engine").format(
                 names=", ".join(names.get(s, s) for s in good)))
+            lbl.setToolTip("")
             lbl.setStyleSheet("color:#a6e3a1; font-weight:bold;")
             lbl.setVisible(True)
+            self._update_engine_status_bar()
             return
         lbl.setVisible(False)
+        lbl.setToolTip("")
+        self._update_engine_status_bar()
+
+    def _update_engine_status_bar(self) -> None:
+        bar = getattr(self, "_engine_status_bar", None)
+        if bar is not None:
+            bar.setVisible(not self._engine_status_lbl.isHidden() or not self._engine_chain_lbl.isHidden())
 
     def _update_fight_controls(self) -> None:
         bar = getattr(self, "_fight_bar", None)
@@ -162,24 +174,20 @@ class UpdaterUiMixin:
             return
         fight = it.data(0, Qt.ItemDataRole.UserRole) or ""
         self._fight_cur = fight
-        locals_ = self._fight_local_triggers(fight)
-        tv_ids  = self._fight_tv_ids(fight)
-        if not locals_ and not tv_ids:
+        groups = ((self._cb_local, "local"), (self._cb_tv, "engine"),
+                  (self._cb_tn, "triggernometry"))
+        states = [(checkbox, self._group_trigger_states(section, fight))
+                  for checkbox, section in groups]
+        if not any(values for _checkbox, values in states):
             bar.setVisible(False)
             return
         bar.setVisible(True)
         self._fight_bar_lbl.setText(it.text(0).lstrip("▶▼ "))
-        tv_dis   = self._engine_disabled.get("triggevent", set())
-        local_on = bool(locals_) and all(t.enabled for t in locals_)
-        tv_on    = bool(tv_ids)  and all(tid not in tv_dis for tid in tv_ids)
-        for c in (self._cb_local, self._cb_tv):
-            c.blockSignals(True)
-        self._cb_local.setChecked(local_on)
-        self._cb_tv.setChecked(tv_on)
-        self._cb_local.setEnabled(bool(locals_))
-        self._cb_tv.setEnabled(bool(tv_ids))
-        for c in (self._cb_local, self._cb_tv):
-            c.blockSignals(False)
+        for checkbox, values in states:
+            blocked = checkbox.blockSignals(True)
+            checkbox.setChecked(bool(values) and all(values))
+            checkbox.setEnabled(bool(values))
+            checkbox.blockSignals(blocked)
 
     def _on_kokoro_download(self) -> None:
         # Concurrent voice installs share environment and model files.

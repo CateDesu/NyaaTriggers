@@ -136,8 +136,9 @@ class TriggernometryHostTests(unittest.TestCase):
             tree.write(pack, encoding="utf-8")
             original = pack.read_bytes()
             bridge = TriggernometryBridge()
-            spoken, inventories = [], []
+            spoken, inventories, displayed = [], [], []
             bridge.tts.connect(lambda text, gen: spoken.append((text, gen)))
+            bridge.callout.connect(lambda text, severity, gen: displayed.append(text))
             bridge.inventory.connect(lambda payload, gen: inventories.append(json.loads(payload)))
 
             def wait_for(predicate):
@@ -146,11 +147,14 @@ class TriggernometryHostTests(unittest.TestCase):
                     QTest.qWait(10)
                 self.assertTrue(predicate(), spoken)
 
-            def fire(number, expected):
+            def fire(number, expected, expected_display=None):
                 start = len(spoken)
+                display_start = len(displayed)
                 bridge.feed_log("00|2026-10-04T12:00:00Z|0038|Player|SPIKESCRIPT|test")
                 wait_for(lambda: (f"finished {number}", generation) in spoken[start:])
                 self.assertEqual(spoken[start:], [(text, generation) for text in expected])
+                self.assertEqual(displayed[display_start:],
+                                 expected if expected_display is None else expected_display)
 
             try:
                 bridge.start()
@@ -160,15 +164,27 @@ class TriggernometryHostTests(unittest.TestCase):
                                  {ident, trigger.get("Id") + "#1"})
                 fire(1, ["script computed 1", "finished 1"])
                 bridge.set_callout(ident, tts=override)
+                visual = 'Display ${var:spikevar} "猫"\nnext'
+                bridge.set_display_text(ident, visual)
                 bridge.set_callout(ident, enable=False)
                 fire(2, ["finished 2"])
                 bridge.set_callout(ident, enable=True)
-                fire(3, [override.replace("${var:spikevar}", "3"), "finished 3"])
+                fire(3, [override.replace("${var:spikevar}", "3"), "finished 3"],
+                     [visual.replace("${var:spikevar}", "3"), "finished 3"])
                 bridge.set_callout(ident, enable=False)
                 bridge.reset_callout(ident)
                 fire(4, ["finished 4"])
                 bridge.set_callout(ident, enable=True)
-                fire(5, ["script computed 5", "finished 5"])
+                fire(5, ["script computed 5", "finished 5"],
+                     [visual.replace("${var:spikevar}", "5"), "finished 5"])
+                bridge.set_display_text(ident, None)
+                fire(6, ["script computed 6", "finished 6"])
+                bridge.set_display_text(ident, visual)
+                bridge.set_callout(ident, tts="")
+                fire(7, ["finished 7"], [visual.replace("${var:spikevar}", "7"), "finished 7"])
+                bridge.set_callout(ident, tts="Speech ${var:spikevar}")
+                bridge.set_display_text(ident, "")
+                fire(8, ["Speech 8", "finished 8"], ["finished 8"])
                 self.assertEqual(bridge.generation(), generation)
                 self.assertTrue(bridge.is_active())
                 self.assertEqual(pack.read_bytes(), original)

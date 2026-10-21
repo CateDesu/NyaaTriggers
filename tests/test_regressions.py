@@ -500,6 +500,7 @@ class _TrigWin:
     _load_triggers = mw.MainWindow._load_triggers
     _load_retired_ids = mw.MainWindow._load_retired_ids
     _trigger_files_stamp = mw.MainWindow._trigger_files_stamp
+    _local_trigger_payload = mw.MainWindow._local_trigger_payload
     _save_triggers = mw.MainWindow._save_triggers
 
     def __init__(self):

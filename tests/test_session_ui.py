@@ -211,7 +211,7 @@ class SessionUiTests(unittest.TestCase):
             self.assertEqual(items[key].text(), name)
             self.assertEqual(window._table.item(row, ac._C_TTS).text(), callout)
             self.assertEqual(window._table.item(row, ac._C_EN).checkState(), state)
-            self.assertEqual(window._table.item(row, ac._C_FIGHT).data(Qt.ItemDataRole.UserRole), "UMAD")
+            self.assertEqual(window._table.item(row, ac._C_EN).data(ac._FIGHT_ROLE), "UMAD")
             self.assertFalse(window._table.isRowHidden(row))
         self.assertEqual((local.to_dict(), engine), saved)
 
@@ -1419,7 +1419,7 @@ class SessionUiTests(unittest.TestCase):
         self.assertEqual(table.item(0, 2).textAlignment(), right)
         self.assertEqual(table.item(2, 2).textAlignment(), right)
 
-        window._dps_history = [{"snapshot": deepcopy(saved), "when": "12:00:00"}]
+        window._dps_history = [{"snapshot": deepcopy(saved), "when": 1700000000}]
         window._refresh_dps_history_list()
         window._on_dps_history_click(window._dps_history_list.item(0))
         self.assertEqual(table.rowCount(), 2)
@@ -1826,6 +1826,115 @@ class SessionUiTests(unittest.TestCase):
         tab.refresh()
         self.assertEqual(tab.table.currentRow(), 0)
         self.assertIs(tab.pull, tab.session["pulls"][-1])
+
+    def test_recent_deaths_keep_the_latest_recap_selected_at_the_top(self):
+        self.connect()
+        window = self.window
+        self.start_session()
+        window._on_in_combat(True, True)
+        window._stack.setCurrentWidget(window._death_recap_tab)
+        window.show()
+        self.app.processEvents()
+        for index in range(32):
+            self.clock.value += 1.1
+            self.line(ability(pairs=[("03", f"{(index + 1) << 16:X}")]))
+            self.line(["25", "ts", PLAYER, f"Death {index + 1}"])
+        self.app.processEvents()
+        listing = window._recap_list
+        self.assertGreater(listing.verticalScrollBar().maximum(), 0)
+        self.assertEqual(listing.verticalScrollBar().value(), 0)
+        self.assertEqual(listing.currentRow(), 0)
+        self.assertEqual(window._recap_visible[0]["name"], "Death 32")
+        self.assertEqual(window._recap_table.item(0, 1).text(), "-32")
+
+        listing.setCurrentRow(listing.count() - 1)
+        listing.scrollToBottom()
+        for _ in range(30):
+            self.clock.value += 0.1
+            self.line(ability(pairs=[("03", "3E70000")]))
+        self.line(["25", "ts", PLAYER, "Newest death"])
+        self.app.processEvents()
+        self.assertEqual(listing.currentRow(), 0)
+        self.assertEqual(listing.verticalScrollBar().value(), 0)
+        table = window._recap_table
+        self.assertEqual(table.rowCount(), 30)
+        self.assertGreater(table.verticalScrollBar().maximum(), 0)
+        self.assertEqual(table.verticalScrollBar().value(), 0)
+        self.assertEqual(table.item(0, 1).text(), "-999")
+        self.assertEqual(table.item(0, 0).text(), "0.0s")
+
+    def test_recent_deaths_follow_the_latest_matching_player(self):
+        self.connect()
+        window = self.window
+        self.start_session()
+        window._on_in_combat(True, True)
+        self.line(ability())
+        self.line(["25", "ts", PLAYER, "Player"])
+        self.line(["25", "ts", "10FF0002", "Other"])
+        window._recap_player.setCurrentIndex(window._recap_player.findData(int(PLAYER, 16)))
+        self.clock.value += 2
+        self.line(ability(pairs=[("03", "7D00000")]))
+        self.line(["25", "ts", PLAYER, "Player"])
+        latest = window._death_recap.deaths[0]["id"]
+        self.clock.value += 2
+        self.line(["25", "ts", "10FF0002", "Other"])
+        self.assertEqual(window._recap_list.count(), 2)
+        self.assertEqual(window._recap_player.currentData(), int(PLAYER, 16))
+        self.assertEqual(window._recap_list.currentRow(), 0)
+        self.assertEqual(window._recap_list.currentItem().data(Qt.ItemDataRole.UserRole), latest)
+        self.assertEqual(window._recap_table.item(0, 1).text(), "-2,000")
+
+    def test_returning_to_recent_deaths_starts_at_the_top(self):
+        self.connect()
+        window = self.window
+        self.start_session()
+        window._on_in_combat(True, True)
+        for index in range(32):
+            self.clock.value += 1.1
+            self.line(ability(pairs=[("03", f"{(index + 1) << 16:X}")]))
+            self.line(["25", "ts", PLAYER, f"Death {index + 1}"])
+        window._prog_tab.open_recaps()
+        window.show()
+        self.app.processEvents()
+        listing = window._recap_list
+        listing.setCurrentRow(listing.count() - 1)
+        listing.scrollToBottom()
+        self.app.processEvents()
+        self.assertGreater(listing.verticalScrollBar().value(), 0)
+        window._recap_recent.click()
+        self.app.processEvents()
+        self.assertIsNone(window._recap_context)
+        self.assertEqual(listing.currentRow(), 0)
+        self.assertEqual(listing.verticalScrollBar().value(), 0)
+        self.assertEqual(window._recap_table.item(0, 1).text(), "-32")
+
+    def test_unnamed_attack_display_agrees_for_live_saved_and_imported_recaps(self):
+        from tests.test_recap_log import line as log_line
+
+        self.connect()
+        window = self.window
+        self.start_session()
+        window._on_in_combat(True, True)
+        hit = ability()
+        hit[4:6] = ["C252", "unknown_c252"]
+        self.line(hit)
+        self.line(["25", "ts", PLAYER, "Player"])
+        self.assertEqual(window._ability_buffer[-1]["ability_name"], "Attack")
+        self.assertEqual(window._recap_table.item(0, 2).text(), "Attack")
+        self.assertEqual(window._recap_records[0]["events"][0]["name"], "unknown_c252")
+
+        window._prog_sessions.poll_saves(wait=True)
+        window._prog_tab.open_recaps()
+        self.assertEqual(window._recap_table.item(0, 2).text(), "Attack")
+        self.assertEqual(window._recap_records[0]["events"][0]["name"], "unknown_c252")
+
+        path = self.temp / "Network.log"
+        path.write_text(log_line(hit, 1) + log_line(["25", "", PLAYER, "Player"], 2), encoding="utf-8")
+        window._show_imported_recaps(read_log(path))
+        self.addCleanup(window._stop_recap_import)
+        self.assertEqual(window._recap_table.item(0, 2).text(), "Attack")
+        imported = window._recap_import.read(window._recap_visible[0])
+        self.assertEqual(imported["events"][0]["name"], "unknown_c252")
 
     def test_recap_events_run_newest_first_and_details_resize(self):
         self.connect()

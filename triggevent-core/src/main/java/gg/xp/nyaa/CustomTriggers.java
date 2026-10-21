@@ -50,8 +50,8 @@ final class CustomTriggers implements TypedEventHandler<BaseEvent> {
     static final class Callout extends BasicCalloutEvent {
         final String id;
 
-        Callout(String id, String text) {
-            super(text, text, 5000);
+        Callout(String id, String speech, String display) {
+            super(speech, display, 5000);
             this.id = id;
         }
     }
@@ -81,6 +81,7 @@ final class CustomTriggers implements TypedEventHandler<BaseEvent> {
 
         Rule(JsonNode data) {
             definition = data.deepCopy();
+            String display = data.has("display_text") ? template(data, "display_text") : null;
             String id = data.path("id").asText();
             require(id.matches("nyaa:[0-9a-f-]{36}"), "Invalid callout ID");
             String name = text(data, "name", 200);
@@ -138,7 +139,8 @@ final class CustomTriggers implements TypedEventHandler<BaseEvent> {
                                     };
                                     String spoken = expand(yes ? step.text : step.otherwise, first, current);
                                     if (!strip(spoken).isEmpty()) {
-                                        controller.accept(new Callout(id, spoken));
+                                        controller.accept(new Callout(id, spoken,
+                                                display == null ? spoken : expand(display, first, current)));
                                     }
                                 }
                             }

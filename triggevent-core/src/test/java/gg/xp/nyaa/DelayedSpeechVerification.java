@@ -52,6 +52,7 @@ public final class DelayedSpeechVerification {
             var handles = TriggeventCore.class.getDeclaredField("CALLOUTS");
             handles.setAccessible(true);
             ((Map<String, ModifiedCalloutHandle>) handles.get(null)).put(ID, handle);
+            DisplayTextVerification.verify(pico, master, recovery, command, DelayedSpeechVerification::calls);
             start = Instant.now().plusSeconds(120);
             recovery.begin(start.toString());
             recovery.end();
@@ -219,6 +220,9 @@ public final class DelayedSpeechVerification {
 
             console.println("VERIFIED native speech delay immediate popup fallback zero delay and single delivery");
             console.println("VERIFIED wipe replacement visual expiry zone recovery settings and bounded pending speech");
+            console.println("VERIFIED independent native display with global overlay and same-text settings off and on");
+            console.println("VERIFIED native event and argument tokens display-only calls reset and unchanged window visibility");
+            console.println("VERIFIED delayed native speech survives display edits and display resets without duplicate popups");
             console.println("RESULT PASS");
             System.exit(0);
         }

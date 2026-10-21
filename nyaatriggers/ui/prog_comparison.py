@@ -1,11 +1,10 @@
-from datetime import datetime
-
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QHBoxLayout,
                              QHeaderView, QLabel, QPushButton, QSizePolicy, QTableWidget,
                              QTableWidgetItem, QVBoxLayout, QWidget)
 
 from nyaatriggers.locale_util import _
+from nyaatriggers.time_format import clock_format, format_datetime
 from nyaatriggers.prog_session import compare_sessions, summary
 
 
@@ -15,7 +14,7 @@ def duration(value):
 
 
 def session_label(session):
-    label = f"{datetime.fromtimestamp(session['started']):%Y-%m-%d %H:%M}  {session['name']}"
+    label = f"{format_datetime(session['started'], seconds=False)}  {session['name']}"
     return _("{session} · Archived").format(session=label) if session.get("archived") is True else label
 
 
@@ -119,7 +118,7 @@ class SessionComparison(QWidget):
                                  key=lambda s: s["started"], reverse=True)
         if self.compared_id not in {s["id"] for s in self.candidates}:
             self.compared_id = None
-        key = tuple((s["id"], s["name"], s["started"], s.get("archived") is True) for s in self.candidates)
+        key = tuple((clock_format(), s["id"], s["name"], s["started"], s.get("archived") is True) for s in self.candidates)
         if key != self._candidates_key:
             self._candidates_key = key
             self.picker.blockSignals(True)
@@ -231,6 +230,7 @@ class SessionComparison(QWidget):
         for index, values in enumerate(rows):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setToolTip(change_tooltips.get(index, value) if column == 3 else value)
                 self.table.setItem(index, column, item)
         self.table.setFixedHeight(self.table.horizontalHeader().height()

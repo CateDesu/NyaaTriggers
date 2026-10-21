@@ -90,7 +90,9 @@ class SequentialRunner(QObject):
         if len(fields) > src_idx:
             self._captured["source"] = fields[src_idx]
         tgt_idx = _TARGET_IDX.get(log_type, 7)
-        if len(fields) > tgt_idx:
+        if tgt_idx is None:
+            self._captured["target"] = ""
+        elif len(fields) > tgt_idx:
             self._captured["target"] = fields[tgt_idx]
         count_idx = _COUNT_IDX.get(log_type)
         if count_idx is not None:

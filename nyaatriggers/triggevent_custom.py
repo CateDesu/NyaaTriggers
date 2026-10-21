@@ -94,6 +94,8 @@ def _callout(text):
 def validate_trigger(data):
     if not isinstance(data, dict):
         raise ValueError(_("Invalid Triggevent callout"))
+    if "display_text" in data:
+        _callout(data["display_text"])
     ident = data.get("id", "")
     if not isinstance(ident, str) or not re.fullmatch(r"nyaa:[0-9a-f-]{36}", ident):
         raise ValueError(_("Invalid callout ID"))

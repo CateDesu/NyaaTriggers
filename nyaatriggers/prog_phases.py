@@ -257,7 +257,7 @@ class PhaseAttempt:
 
     def close(self, reason):
         self.closed = True
-        self.data["coverage"] = ("complete" if reason in ("wipe", "combat-ended")
+        self.data["coverage"] = ("complete" if reason in ("wipe", "combat-ended", "cleared")
                                  else "uncertain" if reason == "boundary-uncertain" else "interrupted")
         self.data["reason"] = "" if self.data["coverage"] == "complete" else reason
         self.data["transition"] = None

@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -134,6 +135,19 @@ def test_named_group_forms_strip_in_expand():
           and expand_id_expr("(8B5F)") == ["8B5F"])
 
 
+def test_character_ranges_keep_all_matching_hex_ids():
+    for bounds in ("0-a", "A-a", "9-b", "F-a", "0-F", "a-f", "A-f", "3-9"):
+        expression = "[" + bounds + "]123"
+        expected = [char + "123" for char in "0123456789ABCDEF"
+                    if re.fullmatch(expression, char + "123", re.IGNORECASE)]
+        for exact in (False, True):
+            check("character range preserves matching hex IDs: " + expression,
+                  expand_id_expr(expression, exact=exact) == expected)
+    for bounds in ("a-F", "F-A", "9-0"):
+        check("reversed character range is refused: " + bounds,
+              expand_id_expr("[" + bounds + "]123", exact=True) is None)
+
+
 def simple_pack():
     root = ET.Element("TriggernometryExport", Version="1")
     folder = ET.SubElement(root, "ExportedFolder", Name="Trials", Enabled="true")
@@ -267,6 +281,135 @@ def test_regex_balancing_groups_require_native_matching():
         root, trigger, action = simple_pack()
         trigger.set("RegularExpression", pattern)
         check("balancing capture conditions are not discarded: " + pattern, converted(root) == [])
+
+
+def test_cross_field_wildcards_require_native_matching():
+    for source, pattern in (
+            ("FFXIVNetwork", r"^21\|(?:.*\|){3}ABCD\|"),
+            ("FFXIVNetwork", r"^21\|[^|]*\|(?<source>.*)\|[^|]*\|ABCD\|"),
+            ("FFXIVNetwork", r"^26\|.*\|ABCD\|"),
+            ("Log", r"^.{15}ActionEffect 15:.*:[^:]*:ABCD:"),
+            ("Log", r"^.{15}StatusAdd 1A:(?:ABCD):(?<tail>.*):[^:]*:")):
+        root, trigger, action = simple_pack()
+        trigger.set("Source", source)
+        trigger.set("RegularExpression", pattern)
+        before = ET.tostring(root)
+        check("wildcards cannot pin an arbitrary field to the ID: " + pattern, converted(root) == [])
+        check("refused wildcards leave source XML intact", ET.tostring(root) == before)
+
+
+def test_anchored_final_fields_require_native_matching():
+    for source, pattern in (
+            ("FFXIVNetwork", r"^21\|(?:[^|]*\|){3}ABCD\|[^|]*$"),
+            ("FFXIVNetwork", r"^26\|[^|]*\|ABCD\|(?<tail>[^|]*)$"),
+            ("Log", r"^.{15}ActionEffect 15:[^:]*:[^:]*:ABCD:[^:]*$")):
+        root, trigger, action = simple_pack()
+        trigger.set("Source", source)
+        trigger.set("RegularExpression", pattern)
+        before = ET.tostring(root)
+        check("final-field anchors cannot become unrestricted suffixes: " + pattern, converted(root) == [])
+        check("refused final-field anchors leave source XML intact", ET.tostring(root) == before)
+
+
+def test_cancel_patterns_cannot_require_a_target_field():
+    root, trigger, action = simple_pack()
+    trigger.set("RegularExpression", r"^23\|(?:[^|]*\|){3}ABCD\|(?:[^|]*\|){3}")
+    check("cancel matches cannot require a nonexistent target field", converted(root) == [])
+    trigger.set("RegularExpression", r"^23\|(?:[^|]*\|){3}ABCD\|")
+    rows = converted(root)
+    check("plain cancel ID matches remain convertible",
+          len(rows) == 1 and rows[0]["log_type"] == "23" and rows[0]["ability_id"] == "ABCD")
+
+
+def test_required_suffix_columns_cannot_be_discarded():
+    for kind in ("20", "21", "22", "26", "30"):
+        prefix = r"[^|]*\|" * (1 if kind in ("26", "30") else 3)
+        root, trigger, action = simple_pack()
+        trigger.set("RegularExpression", "^" + kind + r"\|" + prefix + r"ABCD\|" + r"[^|]*\|" * 20)
+        before = ET.tostring(root)
+        check("required network suffix columns stay native: " + kind, converted(root) == [])
+        check("refusing suffix columns preserves source XML", ET.tostring(root) == before)
+    for kind, name in (("14", "StartsCasting"), ("15", "ActionEffect"),
+                       ("16", "AOEActionEffect"), ("1A", "StatusAdd"), ("1E", "StatusRemove")):
+        prefix = "" if kind in ("1A", "1E") else r"[^:]*:[^:]*:"
+        root, trigger, action = simple_pack()
+        trigger.set("Source", "Log")
+        trigger.set("RegularExpression", "^.{15}" + name + " " + kind + ":" + prefix + "ABCD:" + "[^:]*:" * 20)
+        check("required ACT suffix columns stay native: " + kind, converted(root) == [])
+
+
+def test_actor_fields_and_open_suffix_remain_convertible():
+    for source, kind, pattern in (
+            ("FFXIVNetwork", "20", r"^20\|(?:[^|]*\|){3}ABCD\|(?:[^|]*\|){3}.*$"),
+            ("FFXIVNetwork", "26", r"^26\|[^|]*\|ABCD\|(?:[^|]*\|){6}.*$"),
+            ("Log", "20", r"^.{15}StartsCasting 14:[^:]*:[^:]*:ABCD:(?:[^:]*:){3}.*$"),
+            ("Log", "26", r"^.{15}StatusAdd 1A:ABCD:(?:[^:]*:){6}.*$")):
+        root, trigger, action = simple_pack()
+        trigger.set("Source", source)
+        trigger.set("RegularExpression", pattern)
+        rows = converted(root)
+        check("actor fields with an open suffix remain supported: " + pattern,
+              len(rows) == 1 and rows[0]["log_type"] == kind and rows[0]["ability_id"] == "ABCD")
+
+
+def test_case_sensitive_id_patterns_cannot_be_uppercased():
+    for source, prefix, suffix in (
+            ("FFXIVNetwork", r"^21\|(?:[^|]*\|){3}", r"\|"),
+            ("FFXIVNetwork", r"^26\|[^|]*\|", r"\|"),
+            ("Log", r"^.{15}ActionEffect 15:[^:]*:[^:]*:", ":")):
+        for expression in ("abcd", "AbCd", "AB[C-e]", "(?:ABCD|abcd)", "(?<id>abcd)"):
+            root, trigger, action = simple_pack()
+            trigger.set("Source", source)
+            trigger.set("RegularExpression", prefix + expression + suffix)
+            check("case-sensitive ID literals are not changed: " + expression, converted(root) == [])
+        trigger.set("RegularExpression", prefix + "(?<id>ABCD)" + suffix)
+        check("lowercase capture names do not change uppercase ID matching", len(converted(root)) == 1)
+
+
+def test_unscoped_id_alternatives_require_native_matching():
+    for source, pattern in (
+            ("FFXIVNetwork", r"^21\|(?:[^|]*\|){3}ABCD|ABCE\|"),
+            ("FFXIVNetwork", r"^26\|[^|]*\|ABCD|ABCE\|"),
+            ("Log", r"^.{15}ActionEffect 15:[^:]*:[^:]*:ABCD|ABCE:")):
+        root, trigger, action = simple_pack()
+        trigger.set("Source", source)
+        trigger.set("RegularExpression", pattern)
+        before = ET.tostring(root)
+        check("unscoped ID alternatives are not rewritten: " + pattern, converted(root) == [])
+        check("refused alternatives leave source XML intact", ET.tostring(root) == before)
+
+
+def test_finite_id_alternatives_do_not_lose_short_or_long_matches():
+    for source, pattern in (
+            ("FFXIVNetwork", r"^21\|(?:[^|]*\|){3}(?:0[5-6]|ABCD|1234567[8-9])\|"),
+            ("FFXIVNetwork", r"^26\|[^|]*\|(?:0[5-6]|ABCD|1234567[8-9])\|"),
+            ("Log", r"^.{15}ActionEffect 15:[^:]*:[^:]*:(?:0[5-6]|ABCD|1234567[8-9]):")):
+        root, trigger, action = simple_pack()
+        trigger.set("Source", source)
+        trigger.set("RegularExpression", pattern)
+        check("finite ID alternatives remain complete: " + pattern,
+              {row["ability_id"] for row in converted(root)} == {"05", "06", "ABCD", "12345678", "12345679"})
+    root, trigger, action = simple_pack()
+    trigger.set("RegularExpression", r"^21\|(?:[^|]*\|){3}(?:ABCD|12345678[9])\|")
+    check("overlong alternatives refuse the whole fallback", converted(root) == [])
+
+
+def test_literal_id_whitespace_cannot_be_discarded():
+    for expression in (" ABCD ", "(?:ABCD| ABCE )"):
+        root, trigger, action = simple_pack()
+        trigger.set("RegularExpression", r"^21\|(?:[^|]*\|){3}" + expression + r"\|")
+        check("literal ID whitespace requires native matching: " + expression, converted(root) == [])
+
+
+def test_id_patterns_need_a_complete_field_boundary():
+    for source, pattern in (
+            ("FFXIVNetwork", r"^21\|(?:[^|]*\|){3}ABCD"),
+            ("FFXIVNetwork", r"^26\|[^|]*\|ABCD"),
+            ("Log", r"^.{15}ActionEffect 15:[^:]*:[^:]*:ABCD")):
+        root, trigger, action = simple_pack()
+        trigger.set("Source", source)
+        trigger.set("RegularExpression", pattern)
+        check("ID prefixes cannot become exact field matches: " + pattern, converted(root) == [])
 
 
 def test_source_and_formatted_log_prefixes_keep_native_meaning():

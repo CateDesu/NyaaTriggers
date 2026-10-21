@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parent.parent
 
 class GitRepoCase(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="nyaa-update-test-")
+        temporary = tempfile.TemporaryDirectory(prefix="nyaa update test ")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.origin = self.root / "origin"
@@ -170,7 +170,7 @@ class PipUpdateTests(GitRepoCase):
              "import json, sys; from pathlib import Path; from nyaatriggers import updater; "
              "print(json.dumps(updater.apply_git(Path(sys.argv[1]))))", str(self.clone)],
             cwd=REPO, env={**os.environ, "PYTHONPATH": str(REPO),
-                           "PIP_NO_INDEX": "1", "PIP_FIND_LINKS": str(self.wheels),
+                           "PIP_NO_INDEX": "1", "PIP_FIND_LINKS": self.wheels.as_uri(),
                            "PIP_CONFIG_FILE": os.devnull},
             capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)

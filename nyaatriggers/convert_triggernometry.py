@@ -409,17 +409,19 @@ def _split_top(s: str, sep: str) -> list[str]:
 
 
 def _expand_class(body: str) -> list[str] | None:
-    """Expand the inside of a [...] hex char class. None if not pure hex or negated."""
+    """Expand hex IDs matched by a character class, or return None."""
     if body.startswith('^'):
         return None
     chars, i = set(), 0
     while i < len(body):
         if i + 2 < len(body) and body[i + 1] == '-':
-            lo, hi = body[i].upper(), body[i + 2].upper()
-            if lo not in HEX or hi not in HEX or int(lo, 16) > int(hi, 16):
+            lo, hi = body[i], body[i + 2]
+            if lo.upper() not in HEX or hi.upper() not in HEX or lo > hi:
                 return None
-            for v in range(int(lo, 16), int(hi, 16) + 1):
-                chars.add(format(v, 'X'))
+            for value in range(ord(lo), ord(hi) + 1):
+                char = chr(value).upper()
+                if char in HEX:
+                    chars.add(char)
             i += 3
             continue
         c = body[i].upper()
@@ -430,15 +432,19 @@ def _expand_class(body: str) -> list[str] | None:
     return sorted(chars)
 
 
-def expand_id_expr(expr: str, cap: int = 32, level: int = 0) -> list[str] | None:
-    """Expand finite hex alternatives, or return None. Filter ID length after combining prefixes."""
+def expand_id_expr(expr: str, cap: int = 32, level: int = 0, *, exact: bool = False) -> list[str] | None:
+    """Expand finite hex alternatives. Exact mode refuses unsupported IDs instead of filtering."""
+    if exact and any(char.isspace() for char in expr):
+        return None
     expr = expr.strip()
     if not expr or level > 20:
         return None
 
     def _finish(ids: Iterable[str]) -> list[str] | None:
-        if level > 0:
+        if level > 0 or exact:
             out = sorted(set(ids))
+            if level == 0 and any(not 1 <= len(value) <= 8 for value in out):
+                return None
         else:
             out = sorted({r for r in ids if 3 <= len(r) <= 6 and all(ch in HEX for ch in r)})
         return out or None
@@ -465,7 +471,7 @@ def expand_id_expr(expr: str, cap: int = 32, level: int = 0) -> list[str] | None
     if len(alts) > 1:
         out: set[str] = set()
         for a in alts:
-            r = expand_id_expr(a, cap, level + 1)
+            r = expand_id_expr(a, cap, level + 1, exact=exact)
             if r is None:
                 return None
             out.update(r)
@@ -488,7 +494,7 @@ def expand_id_expr(expr: str, cap: int = 32, level: int = 0) -> list[str] | None
                 j += 1
             if j >= len(expr):
                 return None
-            sub = expand_id_expr(expr[i:j + 1], cap, level + 1)
+            sub = expand_id_expr(expr[i:j + 1], cap, level + 1, exact=exact)
             if sub is None:
                 return None
             results = [p + s for p in results for s in sub]
@@ -566,6 +572,17 @@ _ACT_TYPES = {'20': 'StartsCasting', '21': 'ActionEffect', '22': 'AOEActionEffec
               '26': 'StatusAdd', '30': 'StatusRemove'}
 
 
+def _simple_field_limit(log_type: str, separator: str) -> int:
+    """Local ID matching cannot preserve required columns beyond the actor prefix."""
+    kinds = log_type.split('|')
+    status = kinds[0] in PIPE_STATUS
+    if separator == '|':
+        if '23' in kinds:
+            return 7
+        return 9 if status else 8
+    return 8 if status else 7
+
+
 def extract_ids(regex: str, *, simple_only: bool = False) -> list[tuple[str, str]]:
     """Return the log_type and ability_id pairs the regex pins to literal hex ids, empty list if none."""
     if not regex:
@@ -578,14 +595,22 @@ def extract_ids(regex: str, *, simple_only: bool = False) -> list[tuple[str, str
             if group[1].startswith('P') or re.fullmatch(r'\w+', name) is None:
                 return []
 
-    def supported_fields(fields, id_index, separator):
+    def supported_fields(fields, id_index, separator, log_type):
         if not simple_only:
             return True
-        wildcards = {'.*', '[^' + separator + ']*'}
+        if (len(fields) <= id_index + 1 or len(fields) > _simple_field_limit(log_type, separator)
+                or len(_split_top(fields[id_index], '|')) != 1):
+            return False
+        expression = re.sub(r"\(\?(?:<\w+>|'\w+')", '(', fields[id_index])
+        if expression != expression.upper():
+            return False
+        wildcard = '[^' + separator + ']*'
         for index, field in enumerate(fields):
             if index == id_index:
                 continue
-            if index == len(fields) - 1:
+            final = index == len(fields) - 1
+            anchored = final and field.endswith('$')
+            if final:
                 if field == '':
                     continue
                 field = field.removesuffix('$')
@@ -594,7 +619,9 @@ def extract_ids(regex: str, *, simple_only: bool = False) -> list[tuple[str, str
                 if group is None:
                     break
                 field = group[1]
-            if field not in wildcards:
+            if field != wildcard and not (final and field == '.*'):
+                return False
+            if anchored and field != '.*':
                 return False
         return True
 
@@ -602,11 +629,11 @@ def extract_ids(regex: str, *, simple_only: bool = False) -> list[tuple[str, str
     if m:
         lt, body = m.group(1), m.group(2)
         fields = _fields_pipe(body)
-        if lt in PIPE_CAST and len(fields) > 3 and supported_fields(fields, 3, '|'):
-            ids = expand_id_expr(fields[3])
+        if lt in PIPE_CAST and len(fields) > 3 and supported_fields(fields, 3, '|', lt):
+            ids = expand_id_expr(fields[3], exact=simple_only)
             return [(lt, i) for i in ids] if ids else []
-        if lt in PIPE_STATUS and len(fields) > 1 and supported_fields(fields, 1, '|'):
-            ids = expand_id_expr(fields[1])
+        if lt in PIPE_STATUS and len(fields) > 1 and supported_fields(fields, 1, '|', lt):
+            ids = expand_id_expr(fields[1], exact=simple_only)
             return [(lt, i) for i in ids] if ids else []
         return []
 
@@ -635,8 +662,8 @@ def extract_ids(regex: str, *, simple_only: bool = False) -> list[tuple[str, str
             if not lt:
                 return []
         fields = _fields_colon(m['body'])
-        if len(fields) > idx and supported_fields(fields, idx, ':'):
-            ids = expand_id_expr(fields[idx])
+        if len(fields) > idx and supported_fields(fields, idx, ':', lt):
+            ids = expand_id_expr(fields[idx], exact=simple_only)
             return [(lt, i) for i in ids] if ids else []
     return []
 

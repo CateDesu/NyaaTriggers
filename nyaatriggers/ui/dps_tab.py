@@ -13,6 +13,8 @@ from nyaatriggers.dps_meter import DpsMeter
 from nyaatriggers import dps_store
 from nyaatriggers.fflogs import FflogsClient
 
+from nyaatriggers.time_format import format_time
+
 from nyaatriggers import app_common as ac
 
 
@@ -144,7 +146,9 @@ class DpsTabMixin:
                 title=enc.get("title", ""),
                 dur=enc.get("duration", ""),
                 dps=self._fmt_dps_num(enc.get("encdps", 0.0)),
-                when=entry["when"]))
+                when=format_time(entry["when"])))
+        if self._dps_selected_idx is not None:
+            lst.setCurrentRow(self._dps_selected_idx)
         lst.blockSignals(False)
 
     def _on_dps_history_click(self, item) -> None:
@@ -177,7 +181,7 @@ class DpsTabMixin:
         for t in self._triggers:
             t._last_fired.clear()
         self._dps_history.insert(0, {"snapshot": snapshot,
-                                     "when": datetime.now().strftime("%H:%M:%S")})
+                                     "when": time.time()})
         del self._dps_history[80:]
         self._dps_selected_idx = None
         self._refresh_dps_history_list()

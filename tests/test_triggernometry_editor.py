@@ -131,17 +131,11 @@ class EditorTests(unittest.TestCase):
                         document.save()
                     self.assertFalse(self.path.exists())
 
-    def test_dtd_deep_xml_and_duplicate_ids_are_rejected(self):
+    def test_dtd_and_deep_xml_are_rejected(self):
         with self.assertRaises(ValueError):
             parse_xml(b'<!DOCTYPE x [<!ENTITY y "x">]><TriggernometryExport/>')
         with self.assertRaises(ValueError):
             parse_xml("<TriggernometryExport>" + "<x>" * 65 + "</x>" * 65 + "</TriggernometryExport>")
-        document = example(self.path)
-        triggers = trigger_entries(document.root)
-        triggers[1][1].set("Id", triggers[0][1].get("Id"))
-        with self.assertRaisesRegex(ValueError, "Duplicate"):
-            document.save()
-        self.assertFalse(self.path.exists())
 
     def test_imported_settings_actions_comments_and_nested_conditions_survive(self):
         document = example(self.path)

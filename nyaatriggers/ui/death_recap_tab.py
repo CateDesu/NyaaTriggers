@@ -1,4 +1,3 @@
-from datetime import datetime
 from pathlib import Path
 import time
 
@@ -8,6 +7,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QF
                              QPushButton, QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from nyaatriggers.locale_util import _
+from nyaatriggers.time_format import format_datetime
 from nyaatriggers.game_locale import localized_metadata
 from nyaatriggers import theme, app_common as ac
 from nyaatriggers.recap_filters import DEFAULT_HIDDEN_STATUSES, hidden_statuses
@@ -167,7 +167,7 @@ class DeathRecapTabMixin:
             tab.refresh()
         if self._recap_context is None and self._recap_import is None:
             self._recap_records = list(self._death_recap.deaths)
-            self._refresh_recap_list()
+            self._refresh_recap_list(select_latest=True)
         elif saved is not None and self._recap_context is not None:
             session, pull, _number = self._recap_context
             if (saved["session_id"], saved["pull_id"]) == (session["id"], pull["id"]):
@@ -206,7 +206,7 @@ class DeathRecapTabMixin:
         self._recap_back.hide()
         self._recap_previous.hide()
         self._recap_next.hide()
-        self._refresh_recap_list()
+        self._refresh_recap_list(select_latest=True)
         self._update_recap_notice()
 
     def _browse_saved_recaps(self):
@@ -461,14 +461,15 @@ class DeathRecapTabMixin:
             age = max(0, int(time.time() - death["when"]))
             text = (_("{count} seconds ago").format(count=age) if age < 60 else
                     _("{count} minutes ago").format(count=age // 60) if age < 3600 else
-                    f"{datetime.fromtimestamp(death['when']):%m/%d %H:%M}")
+                    format_datetime(death["when"], seconds=False))
             item = self._recap_list.item(row)
             item.setText(f"{text}  {death['name']}")
-            item.setToolTip(f"{datetime.fromtimestamp(death['when']):%Y-%m-%d %H:%M:%S}\n{death['zone']}")
+            item.setToolTip(f"{format_datetime(death['when'])}\n{death['zone']}")
 
-    def _refresh_recap_list(self, update_players=True):
+    def _refresh_recap_list(self, update_players=True, *, select_latest=False):
         selected = self._recap_list.currentRow()
-        selected_id = self._recap_list.currentItem().data(Qt.ItemDataRole.UserRole) if selected >= 0 else None
+        selected_id = (self._recap_list.currentItem().data(Qt.ItemDataRole.UserRole)
+                       if selected >= 0 and not select_latest else None)
         actor = self._recap_player.currentData()
         if update_players:
             self._recap_player.blockSignals(True)
@@ -494,6 +495,8 @@ class DeathRecapTabMixin:
         self._recap_list.blockSignals(False)
         self._recap_list.setCurrentRow(row if self._recap_visible else -1)
         self._select_recap(self._recap_list.currentRow())
+        if select_latest:
+            self._recap_list.scrollToTop()
 
     def _select_recap(self, row):
         if not 0 <= row < len(self._recap_visible):
@@ -553,6 +556,7 @@ class DeathRecapTabMixin:
                 name = status_name({"name": event["name"] if kind in ("gained", "lost") else ""}, metadata) or name
             elif kind in ("damage", "heal") and event.get("action_id"):
                 name = localized_metadata("Action", event["action_id"], {"name": name})["name"]
+                name = ac._display_ability_name(name, event["action_id"])
             values = [f"{event['time']:.1f}s", amount, name, event["source"],
                       "" if event.get("hp") is not None and event.get("max_hp") else _("Not recorded"),
                       "" if "statuses" in event else _("Not recorded"),

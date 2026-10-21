@@ -1,10 +1,9 @@
-from datetime import datetime
-
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (QApplication, QComboBox, QDialog, QDialogButtonBox, QLabel,
                              QListWidget, QListWidgetItem, QProgressBar, QPushButton, QVBoxLayout)
 
 from nyaatriggers.locale_util import _
+from nyaatriggers.time_format import format_datetime, format_time
 from nyaatriggers.recap_log import LogImportJob
 
 
@@ -19,7 +18,7 @@ class SavedRecapDialog(QDialog):
         layout.addWidget(QLabel(_("Choose a session and pull.")))
         self.session = QComboBox()
         for session in self.sessions:
-            self.session.addItem(f"{datetime.fromtimestamp(session['started']):%Y-%m-%d %H:%M}  "
+            self.session.addItem(f"{format_datetime(session['started'], seconds=False)}  "
                                  f"{session['name']} · {session['zone']}")
         layout.addWidget(self.session)
         self.pulls = QListWidget()
@@ -43,7 +42,7 @@ class SavedRecapDialog(QDialog):
             for number, pull in reversed(list(enumerate(session["pulls"], 1))):
                 count = pull.get("recap_count")
                 text = _("Pull {number} · {time} · {count} deaths").format(
-                    number=number, time=f"{datetime.fromtimestamp(pull['started']):%H:%M:%S}",
+                    number=number, time=format_time(pull["started"]),
                     count=count if count is not None else "?")
                 item = QListWidgetItem(text, self.pulls)
                 item.setData(Qt.ItemDataRole.UserRole, number - 1)

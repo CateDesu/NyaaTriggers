@@ -399,6 +399,8 @@ class ProfilesMixin:
                     bridge.set_callout(ident, tts=defaults[ident], text=defaults[ident])
                 else:
                     bridge.reset_callout(ident)
+                if source + ":" + ident in self._trigger_display_edits:
+                    self._apply_engine_display_text(source, ident)
             if source == "triggevent":
                 changed = []
                 for ident, previous in previous_speech.items():

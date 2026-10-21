@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import QInputDialog, QLabel, QMenu, QMessageBox
 from nyaatriggers import triggevent_custom as custom
 from nyaatriggers.locale_util import _
 from nyaatriggers.triggevent_dialog import TriggeventDialog
-from nyaatriggers.app_common import _C_EN, _stale_gen
+from nyaatriggers.app_common import _C_EN, _stale_gen, log_drop
 
 
 class CustomTriggeventMixin:
@@ -77,8 +77,18 @@ class CustomTriggeventMixin:
             return
         enabled = getattr(self, "_triggevent_mode", False) and not getattr(self, "_cactbot_mode", False)
         disabled = self._engine_disabled.get("triggevent", set())
-        bridge.set_custom_triggers([row for row in self._custom_triggevent
-                                    if enabled and row["id"] not in disabled])
+        rows = []
+        for row in self._custom_triggevent:
+            if enabled and row["id"] not in disabled:
+                display = getattr(self, "_trigger_display_edits", {}).get("triggevent:" + row["id"])
+                candidate = {**row, "display_text": display} if display is not None else row
+                try:
+                    custom.validate_trigger(candidate)
+                except ValueError:
+                    log_drop("custom-triggevent", "invalid saved overlay text")
+                    candidate = row
+                rows.append(candidate)
+        bridge.set_custom_triggers(rows)
 
     def _on_custom_triggevent_status(self, ok, message, generation):
         if _stale_gen(self._triggevent, generation):
@@ -212,6 +222,7 @@ class CustomTriggeventMixin:
     def _custom_triggevent_menu(self, key, global_pos):
         original = self._custom_triggevent_for_key(key)
         menu = QMenu(self._table)
+        self._add_engine_move_menu(menu, key)
         edit = menu.addAction(_("Edit sequence..."))
         duplicate = menu.addAction(_("Duplicate"))
         preview = menu.addAction(_("Test speech"))

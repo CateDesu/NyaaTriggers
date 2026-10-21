@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -283,6 +284,10 @@ class TriggernometryBridge(QObject):
         if cid:
             self._send_command({"t": "set_callout", "id": cid, "text": None})
 
+    def set_display_text(self, cid: str, text: "str | None") -> None:
+        if cid:
+            self._send_command({"t": "set_display_text", "id": cid, "text": text})
+
     def _send_command(self, cmd: dict) -> None:
         self._enqueue(cmd)
 
@@ -314,11 +319,24 @@ class TriggernometryBridge(QObject):
         if os.name == "posix":
             _make_bundled_mono_executable()
 
+        runtime_packs = None
         try:
+            from nyaatriggers.triggernometry_editor import prepared_packs
             packs = _find_packs()
             pack_stamps = {Path(path).absolute(): _pack_stamp(path) for path in packs}
-            cmd = self._launch_cmd(exe, packs)
-        except OSError as e:
+            prepared = prepared_packs(packs, on_error=lambda path, exc: _log(f"Pack skipped {path}: {exc}"))
+            if packs and not prepared:
+                raise ValueError("No Triggernometry packs could be prepared")
+            runtime_packs = tempfile.TemporaryDirectory(prefix="nyaa-tn-packs-")
+            runtime_paths = []
+            for index, (_path, raw) in enumerate(prepared):
+                path = Path(runtime_packs.name) / f"{index}.xml"
+                path.write_bytes(raw)
+                runtime_paths.append(str(path))
+            cmd = self._launch_cmd(exe, runtime_paths)
+        except (OSError, ValueError, RecursionError) as e:
+            if runtime_packs is not None:
+                runtime_packs.cleanup()
             _log(f"launch failed: {e!r}")
             self.status.emit(False, f"Failed to launch sidecar: {e}", self._gen)
             self._proc = None
@@ -343,6 +361,7 @@ class TriggernometryBridge(QObject):
         try:
             relay.start()
         except OSError as exc:
+            runtime_packs.cleanup()
             _log(f"Telesto callback listener failed: {exc}")
             self.status.emit(False, f"Telesto callback listener failed: {exc}", self._gen)
             return
@@ -353,10 +372,12 @@ class TriggernometryBridge(QObject):
             proc = subprocess.Popen(cmd, **popen_kwargs)
         except OSError as e:
             relay.close()
+            runtime_packs.cleanup()
             _log(f"launch failed: {e!r}")
             self.status.emit(False, f"Failed to launch sidecar: {e}", self._gen)
             self._proc = None
             return
+        proc._nyaa_runtime_dir = runtime_packs
         _log(f"sidecar spawned pid={proc.pid}")
 
         wq: queue.Queue = _ByteQueue(maxsize=20000)
@@ -563,7 +584,7 @@ class TriggernometryBridge(QObject):
             return
         if kind == "callout":
             tts = apply_replacements((msg.get("tts") or "").strip(), self._replacements)
-            text = apply_replacements((msg.get("text") or msg.get("tts") or "").strip(), self._replacements)
+            text = apply_replacements((msg.get("text", msg.get("tts")) or "").strip(), self._replacements)
             sev = msg.get("severity", "info")
             if sev not in ("info", "alert", "alarm"):
                 sev = "info"

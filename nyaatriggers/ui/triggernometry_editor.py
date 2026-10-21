@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import QInputDialog, QMessageBox
 
 from nyaatriggers.locale_util import _
 from nyaatriggers.triggernometry_dialog import TriggernometryDialog
-from nyaatriggers.triggernometry_editor import PackDocument, normalized_id, parse_xml, trigger_entries
+from nyaatriggers.triggernometry_editor import PackDocument, normalized_id, parse_xml, prepared_packs, trigger_entries
 from nyaatriggers.triggernometry_bridge import packs_dir
 
 
@@ -34,15 +34,16 @@ def speech_rows(root):
 
 def pack_speech_rows(directory):
     rows = []
-    incomplete = False
-    for path in sorted(directory.iterdir()):
-        if path.is_file() and path.suffix.lower() == ".xml":
-            try:
-                rows.extend(speech_rows(PackDocument.load(path).root))
-            except (OSError, ValueError, RecursionError) as exc:
-                incomplete = True
-                print(f"[triggernometry] could not read pack rows: {exc}", file=sys.stderr)
-    return rows, incomplete
+    errors = []
+
+    def failed(path, exc):
+        errors.append(path)
+        print(f"[triggernometry] could not read pack rows: {exc}", file=sys.stderr)
+
+    paths = [path for path in directory.iterdir() if path.is_file() and path.suffix.lower() == ".xml"]
+    for _path, raw in prepared_packs(paths, on_error=failed):
+        rows.extend(speech_rows(parse_xml(raw)))
+    return rows, bool(errors)
 
 
 class TriggernometryEditorMixin:
@@ -137,15 +138,20 @@ class TriggernometryEditorMixin:
         # Keep disabled speech disabled if edited actions move to a new position.
         muted = {ident.split("#", 1)[0] for ident in self._triggernometry_disabled & old_ids} & changed
         edits = self._triggernometry_callout_edits
+        display_edits = getattr(self, "_trigger_display_edits", {})
         previous_edits = dict(edits)
+        previous_display = dict(display_edits)
         previous_disabled = set(self._triggernometry_disabled)
         for ident in old_ids | new_ids:
             if ident.split("#", 1)[0] in changed:
                 edits.pop(ident, None)
+                display_edits.pop("triggernometry:" + ident, None)
         self._triggernometry_disabled.difference_update(old_ids - new_ids)
         self._triggernometry_disabled.update(ident for ident in new_ids if ident.split("#", 1)[0] in muted)
-        if edits != previous_edits or self._triggernometry_disabled != previous_disabled:
+        if (edits != previous_edits or display_edits != previous_display
+                or self._triggernometry_disabled != previous_disabled):
             self._settings["triggernometry_callout_edits"] = edits
+            self._settings["trigger_display_edits"] = display_edits
             self._settings["triggernometry_disabled_triggers"] = sorted(self._triggernometry_disabled)
             self._save_settings()
 

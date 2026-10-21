@@ -6,7 +6,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from nyaatriggers.trigger_engine import Trigger
 from nyaatriggers.sequential import SequentialRunner
+from PyQt6.QtCore import QCoreApplication
 
+APP = QCoreApplication.instance() or QCoreApplication([])
 FAILS = []
 
 
@@ -16,9 +18,9 @@ def check(name, cond):
         FAILS.append(name)
 
 
-def make_runner(sequence):
+def make_runner(sequence, captured=None):
     done, expired = [], []
-    r = SequentialRunner(Trigger(sequence=sequence), {},
+    r = SequentialRunner(Trigger(sequence=sequence), captured or {},
                          lambda runner, cap: done.append(cap),
                          lambda runner: expired.append(runner))
     return r, done, expired
@@ -107,6 +109,16 @@ check("padded pipe parts strip per part",
 r, done, _expired = make_runner([{"log_type": " 21 | 22 "}])
 check("padded pipe still rejects a non member type",
       r.try_advance(ability_line("20", "9999")) is False and done == [])
+
+cancel = ["23", "ts", "40001234", "Boss", "A55B", "Ability", "Cancelled", "48816cb0ad2272d1"]
+check("cancel triggers do not capture the checksum as a target",
+      Trigger(log_type="23", ability_id="A55B", cooldown_s=0).matches(cancel)
+      == {"source": "Boss", "target": "", "count": ""})
+for kind in ("23", "20|23"):
+    r, done, _expired = make_runner([{"log_type": kind, "ability_id": "A55B"}],
+                                   {"source": "Earlier boss", "target": "Earlier player"})
+    check("cancel step clears an earlier target: " + kind,
+          r.try_advance(cancel) is True and done == [{"source": "Boss", "target": ""}])
 
 print()
 if FAILS:

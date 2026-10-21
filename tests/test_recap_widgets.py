@@ -174,6 +174,29 @@ class WidgetTests(unittest.TestCase):
         self.assertEqual(before, json.dumps(self.host._recap_records))
         self.assertEqual(self.host.saves, 1)
 
+    def test_unnamed_umad_attacks_display_as_attacks_without_rewriting_history(self):
+        for ident in (0xC250, 0xC252):
+            for name in ("", "  ", f"unknown_{ident:x}", f"Unknown_{ident:X}"):
+                with self.subTest(action_id=ident, name=name):
+                    death = record()
+                    death["events"] = [death["events"][0] | {"action_id": ident, "name": name}]
+                    original = json.dumps(death)
+                    self.host._recap_records = [death]
+                    self.host._refresh_recap_list()
+                    item = self.host._recap_table.item(0, 2)
+                    self.assertEqual(item.text(), "Attack")
+                    self.assertEqual(item.toolTip(), "Attack")
+                    self.assertEqual(json.dumps(death), original)
+
+    def test_attack_name_fallback_preserves_real_names_and_unrecognized_actions(self):
+        for ident, name in ((0xC252, "Named strike"), (0xC250, "攻撃"), (0xFFFF, "unknown_ffff")):
+            with self.subTest(action_id=ident, name=name):
+                death = record()
+                death["events"] = [death["events"][0] | {"action_id": ident, "name": name}]
+                self.host._recap_records = [death]
+                self.host._refresh_recap_list()
+                self.assertEqual(self.host._recap_table.item(0, 2).text(), name)
+
     def test_japanese_action_names_preserve_instant_death_label(self):
         set_locale("ja")
         self.addCleanup(set_locale, "en")

@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -20,24 +21,37 @@ def main():
         cases = Path(temp) / "validation.json"
         cases.write_text(json.dumps(validation_cases()), encoding="utf-8")
         subprocess.run(["javac", "-cp", str(jar), "-d", temp,
-                        str(CORE / "src/test/java/gg/xp/nyaa/CustomTriggersVerification.java")], check=True)
+                        str(CORE / "src/test/java/gg/xp/nyaa/CustomTriggersVerification.java")], check=True, timeout=60)
         command = ["java", f"-Duser.home={temp}", "-cp", os.pathsep.join([temp, str(jar)]),
                    "gg.xp.nyaa.CustomTriggersVerification", str(path), str(cases)]
         if os.name != "nt":
             command = ["xvfb-run", "-a", *command]
         environment = os.environ.copy()
         environment["NYAA_AUTOMARK"] = "0"
-        result = subprocess.run(command, cwd=temp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, timeout=60, env=environment)
-        output = result.stdout
-        if result.returncode or "RESULT PASS" not in output:
+        with subprocess.Popen(command, cwd=temp, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, env=environment, start_new_session=os.name != "nt") as process:
+            try:
+                output, _ = process.communicate(timeout=60)
+            except BaseException:
+                if os.name == "nt":
+                    process.kill()
+                else:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.communicate(timeout=5)
+                raise
+        if process.returncode or "RESULT PASS" not in output:
             print(output)
             raise SystemExit("FAIL custom Triggevent replay")
         messages = [json.loads(line) for line in output.splitlines() if line.startswith('{')]
         calls = [m for m in messages if m["t"] == "callout" and m.get("id") == definition["id"]]
         assert [m["tts"] for m in calls] == [
             "Player, go left", "Player, go right", "Player, changed",
-            "Player, go right", "Player, go left", "Player, go left", "Player, go right", "Player, go left"], calls
+            "Player, go right", "Player, go left", "Player, go left", "Player, go right", "Player, go left",
+            "Player, go left"], calls
+        assert calls[-1]["text"] == "Player, look at Boss", calls[-1]
         acknowledgements = [m for m in messages if m["t"] == "custom_triggers"]
         assert sum(not m["ok"] for m in acknowledgements) == 1, acknowledgements
         assert '"t":"callout"' in output.split("HISTORY_BOUNDARY", 1)[1]

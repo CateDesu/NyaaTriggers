@@ -8,6 +8,7 @@ import gg.xp.reevent.events.EventMaster;
 import gg.xp.reevent.events.InitEvent;
 import gg.xp.reevent.scan.AutoHandlerConfig;
 import gg.xp.xivsupport.callouts.CalloutGroup;
+import gg.xp.xivsupport.callouts.CalloutProcessor;
 import gg.xp.xivsupport.callouts.CalloutTrackingKey;
 import gg.xp.xivsupport.callouts.ModifiedCalloutHandle;
 import gg.xp.xivsupport.callouts.ModifiedCalloutRepository;
@@ -69,6 +70,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class TriggeventCore {
@@ -80,6 +82,8 @@ public final class TriggeventCore {
     private static final Map<String, AtomicLong> DIAG = new LinkedHashMap<>();
 
     private static final Map<String, ModifiedCalloutHandle> CALLOUTS = new HashMap<>();
+    private static final Map<String, String> DISPLAY_TEXT = new ConcurrentHashMap<>();
+    private static CalloutProcessor calloutProcessor;
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static final AtomicLong CALLOUT_SEQ = new AtomicLong();
@@ -236,6 +240,7 @@ public final class TriggeventCore {
         }
 
         dist.acceptEvent(new InitEvent());                 // Runs startup Groovy scripts.
+        calloutProcessor = pico.getComponent(CalloutProcessor.class);
         dist.registerHandler(BaseEvent.class, new CustomTriggers(pico.getComponent(XivState.class),
                 pico.getComponent(StatusEffectRepository.class)));
         pico.getComponent(EventMaster.class).start();
@@ -296,7 +301,7 @@ public final class TriggeventCore {
                 if (!RECOVERY.outputAllowed()) {
                     return;
                 }
-                String text = ev.getVisualText();
+                String text = displayText(ev);
                 if (delayed && (text == null || text.isBlank())) {
                     text = ev.getCallText();
                 }
@@ -307,6 +312,27 @@ public final class TriggeventCore {
             diag("emit error: " + t);
             diagnosticError("callout", t);
         }
+    }
+
+    private static String displayText(CalloutEvent event) {
+        String id = calloutId(event);
+        String template = id == null ? null : DISPLAY_TEXT.get(id);
+        RawModifiedCallout<?> raw = event.getThisOrParentOfType(RawModifiedCallout.class);
+        if (template != null && raw != null && raw.getHandle() != null
+                && id.equals(idForField(raw.getHandle().getField()))
+                && raw.getHandle().isEffectivelyEnabled()
+                && !Objects.equals(raw.getText(), template)) {
+            return displayText(raw, template);
+        }
+        return event.getVisualText();
+    }
+
+    private static <X> String displayText(RawModifiedCallout<X> raw, String template) {
+        // Nyaa display text uses native bindings without enabling a desktop overlay.
+        var visual = new RawModifiedCallout<>(raw.getDescription(), null, template, null,
+                raw.getEvent(), raw.getArguments(), raw.getGuiProvider(),
+                ignored -> raw.getExpiry().getAsBoolean(), raw.getColorOverride(), raw.getHandle(), 0);
+        return calloutProcessor.processCallout(visual).getVisualText();
     }
 
     private static void onTtsRequest(EventContext ctx, TtsRequest request) {
@@ -521,7 +547,9 @@ public final class TriggeventCore {
                     trySet(() -> h.getEnableTts().set(true));
                 }
                 if (n.hasNonNull("text")) {
-                    trySet(() -> h.getTextSetting().set(n.get("text").asText("")));
+                    String text = n.get("text").asText("");
+                    DISPLAY_TEXT.put(id, text);
+                    trySet(() -> h.getTextSetting().set(text));
                     trySet(() -> h.getEnableText().set(true));
                 }
                 if (n.hasNonNull("enable")) {
@@ -529,6 +557,7 @@ public final class TriggeventCore {
                 }
                 diag("set_callout applied: " + id);
             } else if ("reset_callout".equals(cmd)) {
+                DISPLAY_TEXT.remove(id);
                 trySet(() -> h.getTtsSetting().delete());
                 trySet(() -> h.getTextSetting().delete());
                 diag("reset_callout applied: " + id);

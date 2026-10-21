@@ -18,12 +18,8 @@ from nyaatriggers.timeline_engine import SYNC_LOG_TYPES, TimelineEngine
 
 from nyaatriggers import app_common as ac
 from nyaatriggers.app_common import (
-    _ABILITY_TYPES, _AbilityData, _C_EN, _C_ZONE, _DISPATCH_BUDGET_S, _DOT_GREEN, _DOT_GREY, _DOT_RED, _hex_id, _prefill_name_tts, canonical_zone_name,
+    _ABILITY_TYPES, _AbilityData, _DISPATCH_BUDGET_S, _hex_id, _prefill_name_tts, canonical_zone_name,
 )
-
-
-# These Dancing Mad basic attacks have no name in the game data.
-_ABILITY_NAME_FALLBACKS = {0xC250: "Attack", 0xC252: "Attack"}
 
 
 @lru_cache(maxsize=4096)
@@ -33,34 +29,6 @@ def _zone_pattern_matches(pattern: str, aliases: tuple[str, ...]) -> bool:
 
 
 class InstanceTabMixin:
-    def _zone_dot(self, t: "Trigger") -> tuple[str, str]:
-        if not self._current_zone:
-            return "", _DOT_GREY
-        # Whitespace-only counts as unlocked, matching the sort grouping.
-        if not t.zone_regex.strip():
-            return "●", _DOT_GREEN
-        rx = compile_user_regex(t.zone_regex, re.IGNORECASE)
-        if rx is None:
-            return "●", _DOT_GREY
-        return "●", (_DOT_GREEN if self._zone_matches(rx) else _DOT_RED)
-
-    def _refresh_zone_column(self) -> None:
-        trigger_map = {t.id: t for t in self._triggers}
-        prev = self._table.blockSignals(True)
-        for row in range(self._table.rowCount()):
-            en_item = self._table.item(row, _C_EN)
-            if en_item is None:
-                continue
-            t = trigger_map.get(en_item.data(Qt.ItemDataRole.UserRole))
-            if t is None:
-                continue
-            dot, color = self._zone_dot(t)
-            zone_item = self._table.item(row, _C_ZONE)
-            if zone_item:
-                zone_item.setText(dot)
-                zone_item.setForeground(QBrush(QColor(color)))
-        self._table.blockSignals(prev)
-
     def _clear_player(self, actor_id: str, name: str = "", force: bool = False, *, delivery=None) -> bool:
         tc = self._telesto_client
         if tc is None:
@@ -185,7 +153,6 @@ class InstanceTabMixin:
             self._set_zone_aliases(self._current_zone, self._current_zone_id)
             if first_metadata or updated or self._current_zone_id != prev_zone_id:
                 self._zone_lbl.setText(self._zone_banner_text())
-                self._refresh_zone_column()
                 self._redetect_zone_fight()
             if first_metadata:
                 self._push_timeline_to_plugin()
@@ -213,7 +180,6 @@ class InstanceTabMixin:
         self._current_fight_tag, _unused = self._fight_tag_for_zone(self._match_zone)
         self._zone_lbl.setText(self._zone_banner_text())
         self._append_zone_to_ability_log(self._current_zone)
-        self._refresh_zone_column()
         self._load_timeline_for_zone(self._match_zone)
         self._refresh_telesto_party()
         if self._mute_until_zone:
@@ -677,9 +643,7 @@ class InstanceTabMixin:
         ts         = fields[1][11:19] if len(fields[1]) >= 19 else "??:??:??"
         src        = fields[3]
         ability_id = fields[4] if len(fields) > 4 else ""
-        ability    = fields[5]
-        if not ability.strip() or ac._UNKNOWN_NAME_RE.fullmatch(ability):
-            ability = _ABILITY_NAME_FALLBACKS.get(_hex_id(ability_id), ability)
+        ability    = ac._display_ability_name(fields[5], _hex_id(ability_id))
 
         if log_type == "20":
             raw_ct = fields[8] if len(fields) > 8 else ""

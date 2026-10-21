@@ -8,6 +8,7 @@ echo
 
 
 SUDO=()
+RUN_PYTHON=python3
 if [ "$(id -u)" -ne 0 ]; then
     SUDO=(sudo)
 fi
@@ -21,6 +22,10 @@ elif command -v apt &>/dev/null; then
     ${SUDO[@]+"${SUDO[@]}"} apt update
     # Debian packages the Qt WebSockets binding separately.
     ${SUDO[@]+"${SUDO[@]}"} apt install -y python3-pyqt6 python3-pyqt6.qtwebsockets python3-websockets python3-regex python3-packaging python3-venv alsa-utils
+    # Older distro WebSocket packages lack the overlay client's sync API.
+    python3 -m venv .venv
+    .venv/bin/python -m pip install -r requirements.txt
+    RUN_PYTHON=.venv/bin/python
 else
     echo "Could not detect pacman or apt. Install these manually:"
     echo "  PyQt6 with Qt WebSockets support   python-websockets (or python3-websockets)"
@@ -30,5 +35,5 @@ else
 fi
 
 echo
-echo "Run the app with:  python3 main.py"
+echo "Run the program with:  $RUN_PYTHON main.py"
 echo "On first launch it will download the voice model and set up TTS automatically."

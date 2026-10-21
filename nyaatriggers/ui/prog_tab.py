@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRectF
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout,
@@ -10,17 +8,20 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboB
 from nyaatriggers.locale_util import _
 from nyaatriggers.prog_session import phase_summary, summary
 from nyaatriggers.prog_phases import definition_for, read_tracking
+from nyaatriggers.prog_progress import observed_time, pull_progress
+from nyaatriggers.time_format import clock_format, format_datetime, format_time
 from nyaatriggers.ui.prog_comparison import SessionComparison, duration, progress_text, session_label
 from nyaatriggers import theme
 
 PHASE_COLUMN = 3
-ENDING_COLUMN = 4
-DEATHS_COLUMN = 5
-BOOKMARK_COLUMN = 6
+PHASE_PERCENT_COLUMN = 4
+ENDING_COLUMN = 5
+DEATHS_COLUMN = 6
+BOOKMARK_COLUMN = 7
 
 
 def ending_label(value):
-    return {"active": _("In progress"), "combat-ended": _("Combat ended"),
+    return {"active": _("In progress"), "combat-ended": _("Combat ended"), "cleared": _("Cleared"),
             "wipe": _("Wipe"), "feed-lost": _("Connection lost"),
             "duty-left": _("Duty left"), "program-closed": _("Program closed"),
             "session-ended": _("Session ended")}.get(value, _("Interrupted"))
@@ -49,9 +50,11 @@ def phase_details(pull, zone_id, definitions):
     rows = []
     for index, phase in enumerate(definition.phases):
         observation = observations.get(phase)
-        reached = _("Established by a later phase. Confirmation time unavailable.") if index < furthest else _("No confirmation")
+        reached = _("Established later") if index < furthest else _("No confirmation")
+        captured = observed_time(pull, observation, definition) if observation else None
         rows.append([_("P{number}").format(number=index + 1), duration(observation["at"]) if observation else "—",
-                     _("Confirmed") if observation else reached])
+                     _("Confirmed") if observation else reached,
+                     format_datetime(captured) if captured is not None else _("Not recorded")])
     return label, notice, rows
 
 
@@ -172,6 +175,8 @@ class ProgTab(QWidget):
         self.milestone_table.verticalHeader().hide()
         self.milestone_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.milestone_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.milestone_table.horizontalScrollBar().rangeChanged.connect(
+            lambda: self._fit_phase_table(self.milestone_table))
         self.milestone_table.setToolTip(_("First observed phase date and lowest observed boss HP across saved pulls in this duty."))
         layout.addWidget(self.milestone_table)
         self._milestone_view = None
@@ -184,17 +189,22 @@ class ProgTab(QWidget):
         scroll.setFixedHeight(125)
         scroll.setWidget(self.chart)
         layout.addWidget(scroll)
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 8)
         self.table.setMinimumHeight(150)
         self.table.setHorizontalHeaderLabels([_("Pull"), _("Started"), _("Duration"),
-                                              _("Furthest phase"), _("Ending"), _("Deaths"), _("Bookmark")])
+                                              _("Furthest phase"), _("Furthest phase %"), _("Ending"),
+                                              _("Deaths"), _("Bookmark")])
+        self.table.horizontalHeaderItem(PHASE_PERCENT_COLUMN).setToolTip(
+            _("Lowest observed boss HP remaining in the furthest confirmed phase of this pull."))
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(ENDING_COLUMN, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setMinimumSectionSize(60)
+        for column in (1, 2):
+            self.table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            self.table.setColumnWidth(column, max(190, 2 * self.table.fontMetrics().horizontalAdvance("00:00:00") + 24))
         layout.addWidget(self.table, 1)
         self.phase_heading = QLabel(_("Phase confirmations"))
         layout.addWidget(self.phase_heading)
@@ -202,12 +212,19 @@ class ProgTab(QWidget):
         self.phase_notice.setWordWrap(True)
         self.phase_notice.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.phase_notice)
-        self.phase_table = QTableWidget(0, 3)
-        self.phase_table.setHorizontalHeaderLabels([_("Phase"), _("Confirmed at"), _("Observation")])
+        self.phase_table = QTableWidget(0, 4)
+        self.phase_table.setHorizontalHeaderLabels(
+            [_("Phase"), _("Confirmed at"), _("Observation"), _("Phase Reached On")])
         self.phase_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.phase_table.verticalHeader().hide()
         self.phase_table.verticalHeader().setDefaultSectionSize(23)
-        self.phase_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.phase_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        for column in (1, 2):
+            self.phase_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            self.phase_table.setColumnWidth(column, max(200,
+                self.phase_table.fontMetrics().horizontalAdvance(self.phase_table.horizontalHeaderItem(column).text()) + 32))
+        self.phase_table.horizontalScrollBar().rangeChanged.connect(
+            lambda: self._fit_phase_table(self.phase_table))
         layout.addWidget(self.phase_table)
         self._phase_view = None
         self.bookmark = QCheckBox(_("Bookmark this pull"))
@@ -298,11 +315,14 @@ class ProgTab(QWidget):
         pulls = self.session["pulls"] if self.session else []
         self.table.setRowCount(len(pulls))
         for index, pull in enumerate(reversed(pulls)):
-            values = [str(len(pulls) - index), f"{datetime.fromtimestamp(pull['started']):%H:%M:%S}",
-                      duration(pull["duration"]), self.phase_values(pull)[0], ending_label(pull["ending"]), str(pull["deaths"]),
+            values = [str(len(pulls) - index), format_time(pull["started"]),
+                      duration(pull["duration"]), self.phase_values(pull)[0], self.phase_percent(pull),
+                      ending_label(pull["ending"]), str(pull["deaths"]),
                       "★" if pull["bookmark"] else ""]
             for column, value in enumerate(values):
-                self.table.setItem(index, column, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.table.setItem(index, column, item)
         self.table.blockSignals(False)
         self.chart.set_pulls(pulls)
         if pulls:
@@ -364,7 +384,7 @@ class ProgTab(QWidget):
         lines = [_("Session: {session}").format(session=session_label(self.session)),
                  _("Duty: {zone}").format(zone=self.session["zone"]),
                  _("Pull {number} · {started}").format(number=number,
-                     started=f"{datetime.fromtimestamp(pull['started']):%Y-%m-%d %H:%M:%S}"),
+                     started=format_datetime(pull["started"])),
                  _("Duration: {duration} · Ending: {ending}").format(
                      duration=duration(pull["duration"]), ending=ending_label(pull["ending"])),
                  _("Deaths: {deaths}").format(deaths=pull["deaths"])]
@@ -373,8 +393,9 @@ class ProgTab(QWidget):
         if pull["bookmark"]:
             lines.append(_("Bookmarked"))
         lines.extend([_("Phase: {phase}").format(phase=phase), notice])
+        lines.append(_("Furthest phase %: {percent}").format(percent=self.phase_percent(pull)))
         if rows:
-            lines.append("\t".join([_("Phase"), _("Confirmed at"), _("Observation")]))
+            lines.append("\t".join([_("Phase"), _("Confirmed at"), _("Observation"), _("Phase Reached On")]))
             lines.extend("\t".join(row) for row in rows)
         if pull["note"]:
             lines.extend([_("Notes:"), pull["note"]])
@@ -382,6 +403,15 @@ class ProgTab(QWidget):
 
     def phase_values(self, pull):
         return phase_details(pull, self.session["zone_id"] if self.session else 0, self.sessions.definitions)
+
+    def phase_percent(self, pull):
+        data, _definition, error = read_tracking(pull, self.session["zone_id"], self.sessions.definitions)
+        if error or data is None or not data["observations"]:
+            return _("Not recorded")
+        phase = data["observations"][-1]["phase"]
+        row = next(row for row in pull_progress(pull, self.session["zone_id"], self.sessions.definitions)
+                   if row.phase == phase)
+        return f"{row.best_hp_percent:.2f}%" if row.best_hp_percent is not None else _("Not recorded")
 
     def refresh_phase_details(self):
         view = self.phase_values(self.pull)
@@ -397,11 +427,17 @@ class ProgTab(QWidget):
         for row, values in enumerate(rows):
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setToolTip(value)
                 self.phase_table.setItem(row, column, item)
-        self.phase_table.setFixedHeight(self.phase_table.horizontalHeader().height()
-                                        + len(rows) * self.phase_table.verticalHeader().defaultSectionSize()
-                                        + 2 * self.phase_table.frameWidth())
+        self._fit_phase_table(self.phase_table)
+
+    @staticmethod
+    def _fit_phase_table(table):
+        scrollbar = table.horizontalScrollBar()
+        table.setFixedHeight(table.horizontalHeader().height()
+                             + table.verticalHeader().length() + 2 * table.frameWidth()
+                             + (scrollbar.sizeHint().height() if scrollbar.maximum() else 0))
 
     def open_recaps(self):
         self.flush()
@@ -432,7 +468,7 @@ class ProgTab(QWidget):
         self.save_timer.start()
         row = self.table.currentRow()
         if row >= 0:
-            self.table.setItem(row, BOOKMARK_COLUMN, QTableWidgetItem("★" if self.pull["bookmark"] else ""))
+            self.table.item(row, BOOKMARK_COLUMN).setText("★" if self.pull["bookmark"] else "")
         self.refresh_bookmark_buttons()
 
     def edit_name(self, text):
@@ -542,20 +578,22 @@ class ProgTab(QWidget):
 
     def refresh_milestones(self):
         rows = self.sessions.phase_progress(self.session["zone_id"]) if self.session else ()
-        if rows == self._milestone_view:
+        view = (clock_format(), rows)
+        if view == self._milestone_view:
             return
-        self._milestone_view = rows
+        self._milestone_view = view
         self.milestone_heading.setVisible(bool(rows))
         self.milestone_table.setVisible(bool(rows))
         self.milestone_table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             values = [_("P{number}").format(number=index + 1),
-                      f"{datetime.fromtimestamp(row.first_reached):%Y-%m-%d %H:%M:%S}" if row.first_reached is not None else _("Not recorded"),
+                      format_datetime(row.first_reached) if row.first_reached is not None else _("Not recorded"),
                       f"{row.best_hp_percent:.2f}%" if row.best_hp_percent is not None else _("Not recorded")]
             for column, value in enumerate(values):
-                self.milestone_table.setItem(index, column, QTableWidgetItem(value))
-        self.milestone_table.setFixedHeight(self.milestone_table.horizontalHeader().height()
-                                          + self.milestone_table.verticalHeader().defaultSectionSize() * len(rows) + 4)
+                item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.milestone_table.setItem(index, column, item)
+        self._fit_phase_table(self.milestone_table)
 
     def tick(self):
         self.sessions.poll_saves()
@@ -572,6 +610,7 @@ class ProgTab(QWidget):
                 phase, notice, _rows = self.phase_values(pull)
                 for column, value in ((DEATHS_COLUMN, str(pull["deaths"])),
                                       (PHASE_COLUMN, phase), (ENDING_COLUMN, ending_label(pull["ending"])),
+                                      (PHASE_PERCENT_COLUMN, self.phase_percent(pull)),
                                       (2, duration(pull["duration"]))):
                     item = self.table.item(row, column)
                     if item is not None and item.text() != value:

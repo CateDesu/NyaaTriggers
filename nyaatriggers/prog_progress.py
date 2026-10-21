@@ -56,6 +56,45 @@ def player_damage_target(fields):
     return None
 
 
+def observed_time(pull, observation, definition):
+    reached = observation.get("observed_at")
+    if "observed_at" not in observation and definition.continuous_combat and not definition.transitions:
+        reached = pull["started"] + observation["at"]
+    return reached if seconds(reached) else None
+
+
+def pull_progress(pull, zone_id, definitions):
+    data, definition, error = read_tracking(pull, zone_id, definitions)
+    if error or data is None:
+        return ()
+    observed = {o["phase"]: o for o in data["observations"]}
+    dates = {phase: observed_time(pull, observation, definition) for phase, observation in observed.items()}
+    health = {}
+    saved_hp = data.get("boss_hp", {})
+    if not isinstance(saved_hp, dict):
+        saved_hp = {}
+    for phase, sample in saved_hp.items():
+        if phase not in observed or not isinstance(sample, dict):
+            continue
+        current, maximum = sample.get("current"), sample.get("maximum")
+        npc_id = sample.get("npc_id")
+        caster_name = dict(definition.caster_bosses).get(phase)
+        actor = sample.get("actor")
+        caster_confirmed = (caster_name is not None
+                            and type(actor) is int and 0x40000000 <= actor < 0x50000000
+                            and actor == observed[phase].get("actor")
+                            and sample.get("npc_name_id") == caster_name
+                            and sample.get("target_confirmed") is True)
+        if (type(current) is not int or type(maximum) is not int
+                or not 0 <= current <= maximum <= 0xFFFFFFFF or maximum == 0
+                or type(npc_id) is not int or not 0 < npc_id <= 0xFFFFFFFF
+                or not (npc_id in dict(definition.bosses).get(phase, ()) or caster_confirmed)):
+            continue
+        percent = 100 * current / maximum
+        health[phase] = min(health.get(phase, percent), percent)
+    return tuple(PhaseProgress(phase, dates.get(phase), health.get(phase)) for phase in definition.phases)
+
+
 def phase_progress(sessions, zone_id, definitions):
     definition = definition_for(zone_id, definitions)
     if definition is None:
@@ -66,37 +105,12 @@ def phase_progress(sessions, zone_id, definitions):
         if session["zone_id"] != zone_id:
             continue
         for pull in session["pulls"]:
-            data, saved_definition, error = read_tracking(pull, zone_id, definitions)
+            _, saved_definition, error = read_tracking(pull, zone_id, definitions)
             if error or saved_definition is not definition:
                 continue
-            observed = {o["phase"]: o for o in data["observations"]}
-            for observation in data["observations"]:
-                phase = observation["phase"]
-                reached = observation.get("observed_at")
-                if "observed_at" not in observation and definition.continuous_combat and not definition.transitions:
-                    reached = pull["started"] + observation["at"]
-                if seconds(reached):
-                    dates[phase] = min(dates.get(phase, reached), reached)
-            saved_hp = data.get("boss_hp", {})
-            if not isinstance(saved_hp, dict):
-                continue
-            for phase, sample in saved_hp.items():
-                if phase not in observed or not isinstance(sample, dict):
-                    continue
-                current, maximum = sample.get("current"), sample.get("maximum")
-                npc_id = sample.get("npc_id")
-                caster_name = dict(definition.caster_bosses).get(phase)
-                actor = sample.get("actor")
-                caster_confirmed = (caster_name is not None
-                                    and type(actor) is int and 0x40000000 <= actor < 0x50000000
-                                    and actor == observed[phase].get("actor")
-                                    and sample.get("npc_name_id") == caster_name
-                                    and sample.get("target_confirmed") is True)
-                if (type(current) is not int or type(maximum) is not int
-                        or not 0 <= current <= maximum <= 0xFFFFFFFF or maximum == 0
-                        or type(npc_id) is not int or not 0 < npc_id <= 0xFFFFFFFF
-                        or not (npc_id in dict(definition.bosses).get(phase, ()) or caster_confirmed)):
-                    continue
-                percent = 100 * current / maximum
-                health[phase] = min(health.get(phase, percent), percent)
+            for row in pull_progress(pull, zone_id, definitions):
+                if row.first_reached is not None:
+                    dates[row.phase] = min(dates.get(row.phase, row.first_reached), row.first_reached)
+                if row.best_hp_percent is not None:
+                    health[row.phase] = min(health.get(row.phase, row.best_hp_percent), row.best_hp_percent)
     return tuple(PhaseProgress(phase, dates.get(phase), health.get(phase)) for phase in definition.phases)

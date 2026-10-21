@@ -65,10 +65,11 @@ Release builds and tests use Python 3.14. Source runs support Python 3.11 or new
 git clone https://github.com/CateDesu/NyaaTriggers
 cd NyaaTriggers
 bash setup.sh
-python3 main.py
 ```
 
-`setup.sh` installs PyQt6, WebSocket support, regex, and `aplay` through pacman or apt. First launch downloads the English voice and installs Piper into `~/.venv/ffxiv`.
+Run `python3 main.py` on Arch / CachyOS, or `.venv/bin/python main.py` on Debian / Ubuntu. Use the same command for source shortcuts.
+
+`setup.sh` installs system dependencies through pacman or apt. On Debian / Ubuntu it also creates `.venv` and installs `requirements.txt` there because older distribution WebSocket packages cannot connect to the overlay. Arch / CachyOS uses the system Python packages. First launch downloads the English voice and installs Piper into the separate `~/.venv/ffxiv` voice environment.
 
 Optional engines need their own dependencies:
 
@@ -100,7 +101,9 @@ The **Triggers** tab groups fights by content type and expansion. Search spans a
 | Triggernometry | Native XML packs with conditions and scripts | Create and edit packs, toggle speech, and change wording. See [pack support](#triggernometry-packs). |
 | Cactbot | Raidboss callouts and timelines | Enable in **Settings - Cactbot** and mute individual callouts. |
 
-Engine callouts start enabled, including newly discovered ones. Local rows retain their saved choices. **Global - Local On/Off** and **Global - Triggevent On/Off** affect all fights. Global Local also controls local timelines. The **Local** and **Triggevent** checkboxes above the table affect only the selected fight's rows. Overlapping sources can produce duplicate calls.
+Engine callouts start enabled, including newly discovered ones. Local rows retain their saved choices. **Global - Local On/Off**, **Global - Triggevent On/Off**, and **Global - Triggernometry On/Off** affect all fights. Global Local also controls local timelines. The **Local**, **Triggevent**, and **Triggernometry** checkboxes above the table affect only the selected fight's rows. Triggernometry switches mute speech while scripts and other actions continue. Overlapping sources can produce duplicate calls.
+
+Right-click a trigger and choose **Move to engine** to convert a compatible static callout into Local, Triggevent, or Triggernometry. Changes to cooldown behavior or when zone information is required need confirmation. Unsupported behavior leaves the original intact. See the [conversion guide](docs/GUIDE.md#triggers).
 
 Enabling Cactbot switches off Local, Triggevent, and Triggernometry callouts and selects cactbot timelines. Dungeon timelines are bundled; others download and cache as needed. Turning Cactbot off restores editable callouts and local timelines.
 
@@ -114,7 +117,7 @@ Choose **Settings - Data - Import Triggernometry** to load an XML export, such a
 
 Use **Triggers - Add - Triggernometry trigger** to create a pack, or **Add - Edit Triggernometry pack** to edit one. The editor supports nested conditions, variables, delays, trigger chains, and C# scripts. Saves validate native XML and regex syntax, keep a backup, and wait until combat ends before reloading the engine. See the [editor guide](docs/GUIDE.md#triggernometry-engine-wip).
 
-Importing an updated export of the same pack asks to replace its existing copy when the engine is available. The previous XML is saved beside it with a `.bak` suffix. Identical imports reuse the existing copy. Separate packs with the same filename get separate files, while overlapping trigger IDs are rejected. To remove a pack, close the program, move its XML out of the [pack folder](#updating-and-saved-data), then restart.
+Importing an updated export of the same pack asks to replace its existing copy when the engine is available. The previous XML is saved beside it with a `.bak` suffix. Identical imports reuse the existing copy. Separate packs with the same filename get separate files. Duplicate trigger IDs keep independent controls and folder-local chains. Ambiguous references must be resolved before import, and references embedded in scripts need unique source IDs. To remove a pack, close the program, move its XML out of the [pack folder](#updating-and-saved-data), then restart.
 
 The engine supports conditions, shared variables, delayed actions, trigger chains, and C# scripts. Without the engine, only simple ability matches with plain speech convert to Local rows.
 
@@ -130,11 +133,13 @@ Packs can use Telesto memory notifications and drawings through the **Telesto UR
 
 The meter runs whenever the combat feed is connected and automatically saves full pull summaries to `dps_logs/`, retaining five completed logs plus the active log. **Reset display after** affects only the live display.
 
-Prog sessions start automatically with combat once the duty is known. Joining during combat waits for the next full pull. Leaving the duty ends the session; wipes and breaks stay in it. Interrupted attempts are listed separately. **Combat ended** does not mean a clear.
+Prog sessions start automatically with combat once the duty is known. Joining during combat waits for the next full pull. Leaving the duty ends the session; wipes and breaks stay in it. Interrupted attempts are listed separately. **Cleared** requires an observed victory signal. **Combat ended** means no clear or wipe was confirmed.
 
 Notes and death recaps save automatically, independently of DPS log rotation. Saved Prog sessions remain until deleted and can be compared, archived, restored, or deleted before the game opens. Select a pull and choose **View death recaps** to review it, including after restart. Recaps retain observed HP and rounded shield percentages. Events missed before connection cannot be recovered. UMAD phases are confirmed by boss casts and ability events. Older pulls without phase data remain **Not recorded**. See the [Prog guide](docs/GUIDE.md#prog-tab) for recording and recovery details.
 
 Duty progress shows each phase's first recorded date and lowest observed boss HP across saved sessions. Missing historical HP remains **Not recorded**.
+
+Each pull shows **Furthest phase %**, the lowest observed boss HP remaining in its furthest confirmed phase. **Phase Reached On** shows the captured date and time for each phase. Times use a 12 hour clock by default. Change **Settings - Program - Clock format** to **24 hour** to update displayed timestamps immediately.
 
 Search saved sessions by name or duty, and use star arrow buttons to move between bookmarked pulls. **Copy pull summary** shares the selected pull's observed details and notes through the clipboard.
 

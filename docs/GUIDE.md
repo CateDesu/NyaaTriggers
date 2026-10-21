@@ -30,10 +30,11 @@ Windows and Linux release builds bundle the Python dependencies and English Pipe
 | Requirement | Notes |
 |---|---|
 | [IINACT](https://github.com/marzent/IINACT) | Running and connected to the game |
-| Python 3.11+ | Release builds and tests use Python 3.14. System Python is fine. |
+| Python 3.11+ | Release builds and tests use Python 3.14. `setup.sh` uses system Python on Arch / CachyOS and creates `.venv` on Debian / Ubuntu. Launch with the command shown at the end of setup. |
 | PyQt6 with Qt WebSockets | `sudo pacman -S python-pyqt6 qt6-websockets` / `sudo apt install python3-pyqt6 python3-pyqt6.qtwebsockets` / `pip install PyQt6`. The program needs Qt WebSockets for the game feed. |
 | piper-tts | Installed automatically on first launch into `~/.venv/ffxiv` |
 | Audio backend | `aplay` via `alsa-utils` |
+| websockets | The overlay needs the synchronous client API. Debian / Ubuntu setup installs the pinned version from `requirements.txt` into `.venv` because older distribution packages lack it. |
 | PyQt6-WebEngine | Optional for cactbot in source runs. Use `sudo pacman -S python-pyqt6-webengine` or `pip install PyQt6-WebEngine`. Releases bundle it. |
 | packaging | Checks dependency versions during source updates. Installed by `setup.sh`; manually use `sudo pacman -S python-packaging` / `sudo apt install python3-packaging` / `pip install packaging`. |
 
@@ -72,11 +73,17 @@ Engine callouts start enabled, including newly discovered ones. Local rows keep 
 
 Select a fight or folder to filter the table. Headers expand or collapse groups. The table's **General**, **DoT**, **Local**, **Triggevent**, and **Triggernometry** groups start collapsed. Every fight shows **Triggernometry** directly below **Triggevent**, even before any packs are imported. DoT contains reapply reminders. Search shows matching rows across all fights in one list.
 
-**Toggles.** **Global - Local On/Off** and **Global - Triggevent On/Off** affect every fight. Global Local also controls local timelines. Selecting one fight shows **Local** and **Triggevent** checkboxes for its rows. A box is checked when all its rows are enabled. Enabling a group expands it; disabling it collapses it. Overlapping sources can produce duplicate calls.
+**Toggles.** **Global - Local On/Off**, **Global - Triggevent On/Off**, and **Global - Triggernometry On/Off** affect every fight. Global Local also controls local timelines. Selecting one fight shows **Local**, **Triggevent**, and **Triggernometry** checkboxes for its rows. A box is checked when all its rows are enabled. Enabling a group expands it; disabling it collapses it. Triggernometry switches mute speech while its scripts, variables, and other actions continue. Overlapping sources can produce duplicate calls.
 
-**Zone column.** A green dot means the trigger matches your current zone, red means it is excluded, and no dot means the zone is unknown or disconnected.
+**Table layout.** Checkboxes sit at the left, followed by Name, TTS, and Text. Expandable source groups share the Name column. Drag the header dividers to give columns more room. Long values shorten with an ellipsis, and column widths are saved. Double-click Text on Local, Triggevent, or Triggernometry rows to edit the message sent to the overlay plugin independently of speech. Existing engine tokens still resolve when the mechanic fires. Leave the editor blank to restore the default wording. Search also matches overlay text, fight names, trigger types, and ability IDs.
 
 **Row menu.** Right-click for Edit, Duplicate, Test Fire, Enable / Disable, Delete, Move to Folder, and Reset to Default. Moving changes the fight tag. Reset restores a modified bundled trigger's values.
+
+**Move to engine.** Right-click a row and choose **Move to engine - Local**, **Triggevent**, or **Triggernometry** to convert a compatible static callout and move it into that engine's section. The move keeps its fight, wording, and enabled choice. Changes to cooldown behavior or when zone information is required need confirmation. Scripts, sequences, conditional actions, and other behavior that the destination cannot preserve leave the original trigger in place with an explanation. Bundled Triggevent rows without an editable definition cannot be converted. Move triggers after combat ends.
+
+Cancel ability logs have no target. Their callouts can move to Triggernometry with static text or `{source}`. Conversion refuses `{target}` for these logs.
+
+Patterns that require columns beyond the supported source and target fields stay in Triggernometry.
 
 **Callout delay.** The editor can wait before speaking, starting from the matching event or the final follow-up step. Wipes, zone changes, disconnects, and disabling the trigger or local callouts cancel pending delays. Reapply warnings use their own expiry timer instead.
 
@@ -163,7 +170,9 @@ Saving checks the pack with the bundled engine's XML types and .NET regular expr
 
 **Silent live check.** From a source checkout, run `python3 tools/validate_triggernometry_live.py` while the game and IINACT are connected. This starts a temporary engine with its own probe pack and checks live raw and formatted logs, player identity, HP, position, and zone. It produces a report without speaking or changing installed packs. This checks the feed and engine integration; encounter mechanics still require their own validation.
 
-**Update a pack** by importing its updated export. When the engine is available, matching packs ask for confirmation before replacement and save the previous XML with a `.bak` suffix. Identical imports reuse the existing copy. Separate packs can share a filename and receive separate files, but overlapping trigger IDs are rejected. **Remove a pack** by closing the program, moving its XML out of the [pack folder](../README.md#updating-and-saved-data), then restarting.
+**Update a pack** by importing its updated export. When the engine is available, matching packs ask for confirmation before replacement and save the previous XML with a `.bak` suffix. Identical imports reuse the existing copy. Separate packs can share a filename and receive separate files. Duplicate trigger IDs keep independent controls, and trigger chains use the matching target in their containing folder. Ambiguous references must be resolved before import. References embedded in scripts need unique source IDs. **Remove a pack** by closing the program, moving its XML out of the [pack folder](../README.md#updating-and-saved-data), then restarting.
+
+Keep the private `.nyaatriggers-identities.json` file with the XML when backing up or moving the pack folder. It preserves controls for duplicate IDs. Corrupt or unwritable identity history blocks pack loading until repaired.
 
 **Compatibility.** FFXIVNetwork triggers receive raw network logs; Log triggers receive formatted ACT logs. Combat-state and encounter-duration hooks use the IINACT feed. Replays cover TOP player markers and wipe resets, Zelenia's Bloom sequence from the [Paissa packs](https://github.com/paissaheavyindustries/Triggernometry-Triggers/tree/main/Repositories), and a delayed callout's C# calculation. These checks cover selected mechanics. Legacy auras and direct game-memory reads from scripts are unsupported.
 
@@ -197,6 +206,8 @@ The meter updates every second from the combat log. It shows per-player DPS, dam
 Choose a player and death to review up to 60 seconds of observed damage, incoming healing, HP, shields, and the buffs and debuffs active at each event. Self-heals and reflected damage follow their actual recipient. Instant-death effects have a separate label.
 
 Deaths and their events appear newest first. Times such as `-2.6s` are relative to death. Damage is blue, healing is green, and `!` marks a critical hit or heal. HP bars show health before the event, with confirmed healing in light green and shields in yellow. Standalone HP and shield updates show their current values. Hover a bar for its values or a status icon for its name, source, remaining duration, and stacks.
+
+Recent deaths selects the newest death matching the player filter and scrolls to the top when a death arrives or you return from a saved pull or imported log.
 
 **Targeted mitigation** shows single-target player defenses such as Intervention, Oblation, Blackest Night, Nascent Glint, Heart of Corundum, Aquaveil, Taurochole, and Exaltation, including their shields and follow-up effects. It also shows Addle, Feint, Reprisal, Dismantled, Malodorous, Conked, and Candy Cane observed on the attacker, following [Death Recap's capture behavior](https://github.com/Kouzukii/ffxiv-deathrecap/blob/658ec3a19614f225e354b207ebba87aaf64943c7/Events/CombatEventCapture.cs). Other buffs and debuffs remain in **Status effects**. Tooltips distinguish effects on the player from effects on the attacker and identify who applied them. These are the statuses observed at each event, not estimates of prevented damage. Saved recaps and imported logs use the same columns and filters.
 
@@ -246,6 +257,8 @@ The star arrow buttons move to the previous or next bookmarked pull in its origi
 
 **Duty progress across saved sessions** shows **First reached** and **Best boss HP** for each phase in the selected duty. The date is the earliest recorded phase confirmation, shown in local time. Boss HP is the lowest observed percentage for that phase. Matching verified records contribute, including active and interrupted pulls and archived sessions. Deleting pulls or sessions updates these values. Earlier phases inferred from later evidence have no invented confirmation date, and missing historical dates or HP show **Not recorded**.
 
+The pull list's **Furthest phase %** shows the lowest observed boss HP remaining in that pull's furthest confirmed phase. **Phase Reached On** adds the captured date and local time to the phase confirmations. **Confirmed at** remains elapsed time after pull start. Dates appear as month/day/year, such as **10/7/2026 9:28:14 PM**. **Settings - Program - Clock format** switches displayed timestamps between **12 hour**, the default, and **24 hour** immediately. Durations keep their elapsed time format.
+
 **Compare with…** opens a comparison area for another saved, finished session in the same duty. An interrupted session can still contain eligible complete pulls. The first opening chooses the most recent earlier compatible session when available. The table shows finished pull counts, eligible phase pull counts, furthest confirmed phases, longest finished pulls, and each phase's confirmed reach. Rates include sample sizes, and changes use percentage points calculated before rounding. For example, 6/20 and 3/15 show 30% and 20%, with a change of +10 percentage points.
 
 Phase comparisons require identical tracking definitions and revisions. Mixed or unknown revisions cannot silently contribute a subset of their pulls. Longest pulls require matching duration conventions. Older sessions can compare ordinary counts and compatible durations without phase data. Comparison choices stay selected as sessions arrive, and changing duties clears an incompatible choice. Closing the comparison keeps the selected pull and notes. The Prog details scroll when they need more room, while the search, picker, and session controls stay visible.
@@ -254,9 +267,9 @@ Phase comparisons require identical tracking definitions and revisions. Mixed or
 
 **View death recaps** opens the selected attempt in Death Recap. Deaths save as they arrive, including during interrupted pulls. Late deaths can attach for two seconds after combat ends or a wipe. A new pull, disconnect, duty change, or session end closes that window. Starting midcombat skips the partial attempt and its recaps. An empty meter encounter with observed deaths remains reviewable as interrupted.
 
-Leaving the duty ends the session. Wipes and breaks stay in the session. A disconnect preserves the observed pull as interrupted and waits for a fresh pull after reconnecting. Interrupted attempts do not count toward longest complete pull. **Combat ended** does not establish a clear.
+Leaving the duty ends the session. Wipes and breaks stay in the session. A disconnect preserves the observed pull as interrupted and waits for a fresh pull after reconnecting. Interrupted attempts do not count toward longest complete pull. **Cleared** requires an observed victory signal. **Combat ended** means neither a clear nor a wipe was confirmed. Older pulls without recorded victory evidence keep their existing ending.
 
-A wipe signal received within five seconds of combat ending updates that pull's ending. This does not extend the two-second allowance for late deaths.
+A wipe or victory signal received within five seconds of combat ending updates that pull's ending. This does not extend the two-second allowance for late deaths.
 
 Sessions save in `prog_sessions/`, independently of DPS log rotation, and remain until deleted. Notes save after a typing pause and flush on shutdown. Active progress and elapsed time also save every 15 seconds. The session picker opens previous sessions after restart. Crash recovery retains the last successful save and marks unfinished sessions interrupted. Unreadable files are preserved and errors are shown.
 

@@ -29,6 +29,8 @@ static class Program
     static readonly Dictionary<string, Triggernometry.Action> _calloutActions = new Dictionary<string, Triggernometry.Action>();
     static readonly Dictionary<string, string> _calloutOriginal = new Dictionary<string, string>();
     static readonly Dictionary<string, string> _calloutOverride = new Dictionary<string, string>();
+    static readonly Dictionary<string, string> _displayOverride = new Dictionary<string, string>();
+    static readonly string displaySeparator = "\u001e" + Guid.NewGuid().ToString("N") + "\u001f";
     static readonly HashSet<string> _calloutDisabled = new HashSet<string>();
     static readonly object _coLock = new object();
 
@@ -80,7 +82,7 @@ static class Program
         plug.ActiveEncounterHook   = () => "";
         plug.LastEncounterHook     = () => "";
         plug.EncounterDurationHook  = EncounterDuration;
-        plug.TtsPlaybackHook       = (text) => { if (string.IsNullOrWhiteSpace(text)) return; Interlocked.Increment(ref calloutCount); Out("{\"t\":\"callout\",\"tts\":" + J(text) + "}"); };
+        plug.TtsPlaybackHook       = EmitCallout;
         plug.SoundPlaybackHook     = (file, vol) => Out("{\"t\":\"sound\",\"file\":" + J(file) + ",\"volume\":" + vol + "}");
         plug.SetCombatStateHook    = SetCombatState;
         plug.LogAllNetworkHook     = b => { };
@@ -209,12 +211,17 @@ static class Program
                         plug.EndpointReceive(el.GetString());
                     break;
                 case "set_callout":   // Null text restores the default.
+                case "set_display_text":
                     {
                         string id = root.TryGetProperty("id", out el) ? el.GetString() : null;
                         if (id != null)
                         {
                             string txt = root.TryGetProperty("text", out var te2) && te2.ValueKind == JsonValueKind.String ? te2.GetString() : null;
-                            lock (_coLock) { if (txt == null) _calloutOverride.Remove(id); else _calloutOverride[id] = txt; }
+                            lock (_coLock)
+                            {
+                                var edits = t == "set_display_text" ? _displayOverride : _calloutOverride;
+                                if (txt == null) edits.Remove(id); else edits[id] = txt;
+                            }
                             ApplyCallout(id);
                         }
                     }
@@ -314,8 +321,28 @@ static class Program
             if (_calloutDisabled.Contains(id)) val = "";
             else if (!_calloutOverride.TryGetValue(id, out val))
                 val = _calloutOriginal.TryGetValue(id, out var o) ? o : null;
+            // Evaluate both templates in the same native action context before splitting playback.
+            if (!_calloutDisabled.Contains(id) && _displayOverride.TryGetValue(id, out var display))
+                val = displaySeparator + val + displaySeparator + display;
         }
         try { a.UseTTSTextExpression = val ?? ""; } catch (Exception ex) { Err("[host] ApplyCallout: " + ex.Message); }
+    }
+
+    static void EmitCallout(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return;
+        string speech = value, display = value;
+        if (value.StartsWith(displaySeparator, StringComparison.Ordinal))
+        {
+            int end = value.IndexOf(displaySeparator, displaySeparator.Length, StringComparison.Ordinal);
+            if (end >= 0)
+            {
+                speech = value.Substring(displaySeparator.Length, end - displaySeparator.Length);
+                display = value.Substring(end + displaySeparator.Length);
+            }
+        }
+        Interlocked.Increment(ref calloutCount);
+        Out(JsonSerializer.Serialize(new { t = "callout", tts = speech, text = display }, jsonOptions));
     }
 
     static FakeCombatant ParseCombatant(JsonElement c)

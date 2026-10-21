@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLineEdit, QLabel
 from nyaatriggers.trigger_engine import Trigger
 from nyaatriggers.locale_util import _, active_locale
 from nyaatriggers.plugin_link import DEFAULT_PORT, parse_port
+from nyaatriggers.time_format import set_clock_format
 
 from nyaatriggers import app_common as ac
 from nyaatriggers.app_common import _AbilityData, _atomic_write_json, _next_bad_name
@@ -18,6 +19,16 @@ _MAX_SETTINGS_BYTES = 4 << 20
 
 
 class SettingsTabMixin:
+    def _on_clock_format_changed(self):
+        value = self._clock_format_combo.currentData()
+        self._settings["clock_format"] = value
+        set_clock_format(value)
+        self._save_settings()
+        self._prog_tab.refresh()
+        self._update_recap_ages()
+        self._refresh_dps_history_list()
+        self._update_live_dps()
+
     def _load_settings(self) -> None:
         self._settings_backup_pending = False
         if ac._SETTINGS_FILE.exists():

@@ -36,8 +36,8 @@ _SOURCE_IDX: dict[str, int] = {
     "20": 3, "21": 3, "22": 3, "23": 3,
     "26": 6, "30": 6,
 }
-_TARGET_IDX: dict[str, int] = {
-    "20": 7, "21": 7, "22": 7, "23": 7,
+_TARGET_IDX: dict[str, int | None] = {
+    "20": 7, "21": 7, "22": 7, "23": None,
     "26": 8, "30": 8,
 }
 
@@ -499,6 +499,6 @@ class Trigger:
                 count_str = ""
         return {
             "source": fields[src_idx] if len(fields) > src_idx else "",
-            "target": fields[tgt_idx] if len(fields) > tgt_idx else "",
+            "target": fields[tgt_idx] if tgt_idx is not None and len(fields) > tgt_idx else "",
             "count": count_str,
         }

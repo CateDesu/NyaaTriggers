@@ -146,9 +146,9 @@ def main():
             events.append(result)
         return result
 
-    with tempfile.TemporaryDirectory(prefix="nyaa-automark-bridge-") as temp, Endpoint(PARTY) as endpoint:
+    with tempfile.TemporaryDirectory(prefix="nyaa automark bridge ") as temp, Endpoint(PARTY) as endpoint:
         host = InventoryHost(bridge, endpoint)
-        with patch.dict(os.environ, {"JAVA_TOOL_OPTIONS": f"-Duser.home={temp}",
+        with patch.dict(os.environ, {"JAVA_TOOL_OPTIONS": f'-Duser.home="{temp}"',
                                      "NYAA_AUTOMARK": "0", "NYAA_TELESTO_URI": endpoint.url}), \
                 patch.object(triggevent_bridge, "_log", side_effect=diagnostics.append), \
                 patch.object(triggevent_bridge, "record_engine", side_effect=capture), \

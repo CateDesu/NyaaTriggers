@@ -12,7 +12,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QTableWidget
 
 from nyaatriggers import game_locale
-from nyaatriggers.app_common import _compile_phrase_patterns, _phrase_template, _C_EN, _C_NAME, _C_FIGHT
+from nyaatriggers.app_common import _compile_phrase_patterns, _phrase_template, _C_EN, _C_NAME, _FIGHT_ROLE, _HEADERS
 from nyaatriggers.fight_catalog import FightPickerDialog
 from nyaatriggers.locale_util import _, engine_status, set_locale
 from nyaatriggers.plugin_link import timeline_frame
@@ -105,18 +105,19 @@ class JapaneseDisplayTests(unittest.TestCase):
 
     def test_engine_table_uses_name_translations_and_keeps_identifiers(self):
         owner = SimpleNamespace(
-            _table=QTableWidget(0, 7), _settings={}, _engine_disabled={},
+            _table=QTableWidget(0, len(_HEADERS)), _settings={}, _engine_disabled={},
             _engine_text_overrides={}, _callouts_names_ja={},
             _callouts_names_text_ja={"Test Buster": "テスト強攻撃"},
             _callouts_phrases_ja={}, _callouts_phrases_ja_patterns=[],
             _callout_edits_for=lambda source: {}, _engine_fight_tag=lambda row: row["fight"])
         owner._localized_name = lambda trigger: SettingsTabMixin._localized_name(owner, trigger)
         owner._localize_text = lambda text: SettingsTabMixin._localize_text(owner, text)
+        owner._trigger_display_text = lambda key, inventory=None: ""
         EnginesMixin._append_engine_row(owner, {"source": "triggevent", "id": "example",
                                                 "name": "Test Buster", "fight": "DSR", "text": ""})
         self.assertEqual(owner._table.item(0, _C_NAME).text(), "テスト強攻撃")
         self.assertEqual(owner._table.item(0, _C_EN).data(Qt.ItemDataRole.UserRole), "triggevent:example")
-        self.assertEqual(owner._table.item(0, _C_FIGHT).data(Qt.ItemDataRole.UserRole), "DSR")
+        self.assertEqual(owner._table.item(0, _C_EN).data(_FIGHT_ROLE), "DSR")
 
     def test_callout_catalog_preserves_mechanic_details(self):
         catalog = json.loads((ROOT / "tools/callout_phrases_ja.json").read_text())

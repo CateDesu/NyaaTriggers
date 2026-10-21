@@ -103,7 +103,7 @@ def replay(recording, expected, temp, *, drop=None, removed=0):
     cut = next(index for index, line in enumerate(lines) if line.startswith("20|"))
     with ExitStack() as stack:
         stack.enter_context(patch.dict(os.environ, {
-            "JAVA_TOOL_OPTIONS": f"-Duser.home={temp}", "NYAA_AUTOMARK": "0"}))
+            "JAVA_TOOL_OPTIONS": f'-Duser.home="{temp}"', "NYAA_AUTOMARK": "0"}))
         stack.enter_context(patch.object(triggevent_bridge, "_log", side_effect=diagnostics.append))
         stack.enter_context(patch.object(tts.subprocess, "Popen", side_effect=audio_process))
         stack.enter_context(patch.multiple(tts, _engine="piper", _jp_auto=False,
@@ -181,7 +181,7 @@ def main():
                           "Stack In Ice (with Player 117, Player 120)", "Real Gaze",
                           "Donut, Fake Ice, Real Thunder", "Stay In Ice"],
     }
-    with tempfile.TemporaryDirectory(prefix="nyaa-pipeline-test-") as directory:
+    with tempfile.TemporaryDirectory(prefix="nyaa pipeline test ") as directory:
         temp = Path(directory)
         for name, expected in cases.items():
             replay(resources / name, expected, temp)

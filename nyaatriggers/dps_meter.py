@@ -13,6 +13,17 @@ METER_LOG_TYPES = frozenset(("01", "02", "03", "21", "22", "24", "25", "33"))
 # ActorControl command for a wipe or reset.
 _WIPE_COMMAND = "4000000F"
 
+
+def encounter_ending(fields):
+    if len(fields) > 3 and fields[0] == "33":
+        command = fields[3].upper()
+        if command == _WIPE_COMMAND:
+            return "wipe"
+        if command in ("40000003", "40000002"):
+            return "cleared"
+    return ""
+
+
 MAX_OVERLAY_ROWS = 24
 
 JOB_ACRONYMS = {
@@ -308,6 +319,7 @@ class DpsMeter:
     def feed_lost(self) -> None:
         """Finalize feed loss and reset combat flags for subscription replay."""
         self.finalize("feed-lost")
+        self._last_end_time = float("-inf")
         self._in_act = False
         self._in_game = False
         self._jobs.clear()
@@ -334,6 +346,7 @@ class DpsMeter:
             return
         if not first_metadata:
             self.finalize("duty-left")
+            self._last_end_time = float("-inf")
         self._zone = name
         # Preserve roster data before initial metadata, then clear it on zone changes.
         if not first_metadata:
@@ -379,13 +392,14 @@ class DpsMeter:
             elif t == "25":
                 self._on_death(fields, now)
             elif t == "33":
-                if len(fields) > 3 and fields[3].upper() == _WIPE_COMMAND:
+                reason = encounter_ending(fields)
+                if reason:
                     if self.current is not None:
-                        self.finalize("wipe")
+                        self.finalize(reason)
                     elif (self._last_final is not None
                           and self._last_final["Encounter"].get("end_reason") == "combat-ended"
-                          and self._clock() - self._last_end_time <= 2):
-                        self._last_final["Encounter"]["end_reason"] = "wipe"
+                          and self._clock() - self._last_end_time <= (5 if reason == "cleared" else 2)):
+                        self._last_final["Encounter"]["end_reason"] = reason
                         self._notify_pull(self.on_pull_finish, self._last_final)
         except Exception:  # noqa: BLE001
             log_drop("dps-meter", f"skipped malformed {t} line: {str(raw)[:140]}")
@@ -395,6 +409,7 @@ class DpsMeter:
             return
         # Actor IDs can change when reentering the same instance.
         self.finalize("duty-left")
+        self._last_end_time = float("-inf")
         self._zone = fields[3].strip()
         self._awaiting_zone_metadata = False
         self._jobs.clear()

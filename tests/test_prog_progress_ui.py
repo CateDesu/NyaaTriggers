@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime
+from nyaatriggers.time_format import format_datetime
 import unittest
 from unittest.mock import patch
 
@@ -54,11 +54,11 @@ class ProgressUiTests(unittest.TestCase):
         self.assertFalse(self.window._connected)
         self.assertFalse(table.isHidden())
         self.assertEqual(table.rowCount(), 5)
-        self.assertEqual(table.item(0, 1).text(), f"{datetime.fromtimestamp(1700000005):%Y-%m-%d %H:%M:%S}")
+        self.assertEqual(table.item(0, 1).text(), format_datetime(1700000005))
         self.assertEqual(table.item(0, 2).text(), "35.00%")
         self.assertEqual(table.item(1, 1).text(), "Not recorded")
         self.assertEqual(table.item(1, 2).text(), "Not recorded")
-        self.assertEqual(table.item(2, 1).text(), f"{datetime.fromtimestamp(1700200005):%Y-%m-%d %H:%M:%S}")
+        self.assertEqual(table.item(2, 1).text(), format_datetime(1700200005))
         self.assertEqual(table.item(2, 2).text(), "Not recorded")
 
     def test_deleting_first_reach_updates_the_selected_duty_milestone(self):
@@ -68,7 +68,7 @@ class ProgressUiTests(unittest.TestCase):
             self.assertTrue(self.tab.delete_pull(archived, archived["pulls"][0]))
         self.assertIs(self.tab.session, selected)
         self.assertEqual(self.tab.milestone_table.item(0, 1).text(),
-                         f"{datetime.fromtimestamp(1700100007):%Y-%m-%d %H:%M:%S}")
+                         format_datetime(1700100007))
         self.assertEqual(self.tab.milestone_table.item(0, 2).text(), "60.00%")
 
     def test_unchanged_progress_does_not_rebuild_the_table_on_ticks_or_note_edits(self):

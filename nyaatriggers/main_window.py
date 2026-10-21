@@ -6,12 +6,12 @@ from collections import deque
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QFrame, QListWidget, QMainWindow, QScrollArea, QSlider, QButtonGroup,
+    QCheckBox, QComboBox, QFrame, QLayout, QListWidget, QMainWindow, QScrollArea, QSlider, QButtonGroup,
     QStackedWidget, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLineEdit, QLabel, QPlainTextEdit, QSplitter, QTreeWidget,
     QAbstractItemView, QStyle, QStyleOptionButton, QStylePainter,
 )
-from PyQt6.QtCore import Qt, QSize, QTimer, QUrl, QRectF, QEvent, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QRect, QSize, QTimer, QUrl, QRectF, QEvent, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import (
     QBrush, QColor, QDesktopServices, QFont, QIcon, QPainter,
     QFontMetricsF, QPainterPath, QPen,
@@ -35,6 +35,7 @@ from nyaatriggers.telesto_client import _actor_int
 from nyaatriggers.plugin_link import DEFAULT_PORT, PluginLink, parse_port
 from nyaatriggers.umad_chains import parse_compound as _parse_compound
 from nyaatriggers import theme
+from nyaatriggers.time_format import set_clock_format
 from nyaatriggers.ui.ambient_fx import AmbientFxMixin
 from nyaatriggers import app_common as ac
 from nyaatriggers.ui.dps_tab import DpsTabMixin
@@ -55,12 +56,77 @@ from nyaatriggers.ui.engines import EnginesMixin
 from nyaatriggers.ui.triggers_tab import TriggersTabMixin
 
 from nyaatriggers.app_common import (
-    MAX_ABILITY_LINES, MAX_RAW_CAPTURE, _CALLOUT_CLAIM_S, _C_EN, _C_FIGHT, _C_NAME, _C_RE,
-    _C_TTS, _C_TYPE, _C_ZONE, _DATA_DIR, _DISCORD_URL, _DISPLAY_VERSION, _GITHUB_URL, _HEADERS,
+    MAX_ABILITY_LINES, MAX_RAW_CAPTURE, _CALLOUT_CLAIM_S, _C_EN, _C_NAME,
+    _C_TTS, _C_TEXT, _DATA_DIR, _DISCORD_URL, _DISPLAY_VERSION, _GITHUB_URL, _HEADERS,
     _PIPER_VOICES_URL, _UMAD_AUTOMARK_PRESET, _VERSION, _as_strdict, _as_strset,
     _as_text_overrides, _compile_phrase_patterns, _next_bad_name, _sweep_stale_update_parts,
     canonical_zone_name,
 )
+
+class _WrappingLayout(QLayout):
+    def __init__(self):
+        super().__init__()
+        self._items = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(6)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._arrange(QRect(0, 0, width, 0), False)
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        left, top, right, bottom = self.getContentsMargins()
+        return size + QSize(left + right, top + bottom)
+
+    def sizeHint(self):
+        size = self.minimumSize()
+        if self._items:
+            left, _top, right, _bottom = self.getContentsMargins()
+            size.setWidth(sum(item.sizeHint().width() for item in self._items)
+                          + self.spacing() * (len(self._items) - 1) + left + right)
+        return size
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._arrange(rect, True)
+
+    def _arrange(self, rect, apply):
+        left, top, right, bottom = self.getContentsMargins()
+        start = rect.x() + left
+        x, y, row_height = start, rect.y() + top, 0
+        edge = rect.right() - right
+        for item in self._items:
+            size = item.sizeHint()
+            if x > start and x + size.width() - 1 > edge:
+                x = start
+                y += row_height + self.spacing()
+                row_height = 0
+            if apply:
+                item.setGeometry(QRect(x, y, size.width(), size.height()))
+            x += size.width() + self.spacing()
+            row_height = max(row_height, size.height())
+        return y + row_height - rect.y() + bottom
+
 
 class _SidebarFrame(QFrame):
     """Park scenery animation while the main window is unfocused."""
@@ -283,6 +349,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._settings: dict = {}
         self._settings_load_warning = None
         self._load_settings()
+        set_clock_format(self._settings.get("clock_format", "12"))
         self._pull_capture = PullCapture(_DATA_DIR / "pull_logs", self,
                                          state_snapshot=self._ws.state_snapshot)
         self._pull_capture.context = lambda: (self._current_fight_tag, self._current_zone)
@@ -335,6 +402,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._fight_cur: str = ""
         self._global_local_on_flag: bool = bool(self._settings.get("global_local_on", True))
         self._global_tv_on_flag: bool = bool(self._settings.get("global_tv_on", False))
+        self._global_tn_on_flag: bool = bool(self._settings.get("global_tn_on", False))
         self._load_cached_triggevent_inventory()
         self._load_cached_triggernometry_inventory()
 
@@ -533,16 +601,22 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._status_lbl = QLabel(_("● Disconnected"))
         self._status_lbl.setStyleSheet("color:#f38ba8; font-weight:bold;")
         conn.addWidget(self._status_lbl)
+        conn.addStretch()
+        content_col.addLayout(conn)
+
+        self._engine_status_bar = QWidget()
+        status_layout = _WrappingLayout()
+        self._engine_status_bar.setLayout(status_layout)
         self._engine_status_lbl = QLabel("")
         self._engine_status_lbl.setStyleSheet("color:#8f8f9a; font-weight:bold;")
         self._engine_status_lbl.setVisible(False)
-        conn.addWidget(self._engine_status_lbl)
+        status_layout.addWidget(self._engine_status_lbl)
         self._engine_chain_lbl = QLabel("")
         self._engine_chain_lbl.setStyleSheet("color:#f9e2af; font-weight:bold;")
         self._engine_chain_lbl.setVisible(False)
-        conn.addWidget(self._engine_chain_lbl)
-        conn.addStretch()
-        content_col.addLayout(conn)
+        status_layout.addWidget(self._engine_chain_lbl)
+        self._engine_status_bar.hide()
+        content_col.addWidget(self._engine_status_bar)
 
         self._build_update_banner(content_col)
 
@@ -598,6 +672,18 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         lang_row.addWidget(self._ui_lang_combo)
         lang_row.addStretch()
         settings_layout.addLayout(lang_row)
+
+        clock_row = QHBoxLayout()
+        clock_row.addWidget(QLabel(_("Clock format:")))
+        self._clock_format_combo = QComboBox()
+        self._clock_format_combo.addItem(_("12 hour"), "12")
+        self._clock_format_combo.addItem(_("24 hour"), "24")
+        self._clock_format_combo.setCurrentIndex(
+            1 if self._settings.get("clock_format") == "24" else 0)
+        self._clock_format_combo.currentIndexChanged.connect(self._on_clock_format_changed)
+        clock_row.addWidget(self._clock_format_combo)
+        clock_row.addStretch()
+        settings_layout.addLayout(clock_row)
 
         self._callouts_ja_cb = QCheckBox(_("Speak and show callouts in Japanese"))
         self._callouts_ja_cb.setChecked(bool(self._settings.get(
@@ -831,8 +917,9 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._test_btn = QPushButton(_("Test Fire"))
         theme.apply_primary(self._add_btn)
         for b in (self._add_btn, self._edit_btn, self._dup_btn, self._del_btn, self._test_btn):
-            b.setMinimumWidth(80)
-            b.setMaximumWidth(120)
+            b.ensurePolished()
+            b.setMinimumWidth(max(80, b.sizeHint().width()))
+            b.setMaximumWidth(max(120, b.minimumWidth()))
             btn_bar.addWidget(b)
         btn_bar.addStretch()
         self._edit_btn.clicked.connect(self._edit_trigger)
@@ -840,21 +927,22 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._del_btn.clicked.connect(self._delete_trigger)
         self._test_btn.clicked.connect(self._test_trigger)
 
-        bulk_bar = QHBoxLayout()
+        bulk_bar = _WrappingLayout()
         self._enable_btn  = QPushButton(_("Global - Triggevent On/Off"))
         self._disable_btn = QPushButton(_("Global - Local On/Off"))
-        for b in (self._disable_btn, self._enable_btn):
-            b.setMinimumWidth(170)
+        self._global_tn_btn = QPushButton(_("Global - Triggernometry On/Off"))
+        for b in (self._disable_btn, self._enable_btn, self._global_tn_btn):
+            b.setProperty("compact", True)
+            b.setMaximumHeight(28)
             bulk_bar.addWidget(b)
-        bulk_bar.addStretch()
         self._reset_all_btn = QPushButton(_("Reset to Default"))
         self._reset_all_btn.setMinimumWidth(130)
         self._reset_all_btn.setMaximumWidth(160)
         self._reset_all_btn.setStyleSheet("color: #f38ba8;")
         self._reset_all_btn.clicked.connect(self._reset_all_to_default)
-        bulk_bar.addWidget(self._reset_all_btn)
         self._enable_btn.clicked.connect(self._toggle_global_tv)
         self._disable_btn.clicked.connect(self._toggle_global_local)
+        self._global_tn_btn.clicked.connect(self._toggle_global_tn)
         trig_layout.addLayout(btn_bar)
         self._setup_custom_triggevent_controls(trig_layout)
         trig_layout.addLayout(bulk_bar)
@@ -872,6 +960,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._search_count_lbl = QLabel("")
         self._search_count_lbl.setStyleSheet("color: #8f8f9a;")
         search_bar.addWidget(self._search_count_lbl)
+        search_bar.addWidget(self._reset_all_btn)
         trig_layout.addLayout(search_bar)
 
         self._table = QTableWidget(0, len(_HEADERS))
@@ -880,16 +969,25 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
-        self._table.doubleClicked.connect(lambda _: self._edit_trigger())
+        self._table.doubleClicked.connect(self._on_trigger_double_clicked)
+        self._table.setWordWrap(False)
+        self._table.setTextElideMode(Qt.TextElideMode.ElideRight)
 
         hdr = self._table.horizontalHeader()
-        hdr.setSectionResizeMode(_C_EN,    QHeaderView.ResizeMode.Fixed); self._table.setColumnWidth(_C_EN,    28)
-        hdr.setSectionResizeMode(_C_ZONE,  QHeaderView.ResizeMode.Fixed); self._table.setColumnWidth(_C_ZONE,  44)
-        hdr.setSectionResizeMode(_C_FIGHT, QHeaderView.ResizeMode.Interactive)
-        self._table.setColumnWidth(_C_FIGHT, 180 if active_locale() == "ja" else 60)
-        hdr.setSectionResizeMode(_C_TYPE,  QHeaderView.ResizeMode.Fixed); self._table.setColumnWidth(_C_TYPE,  44)
-        for col in (_C_NAME, _C_RE, _C_TTS):
-            hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+        hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        hdr.setSectionResizeMode(_C_EN, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(_C_EN, 28)
+        for col in (_C_NAME, _C_TTS, _C_TEXT):
+            hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+        hdr.setStretchLastSection(True)
+        hdr.setStyleSheet("QHeaderView::section { border-right: 1px solid #292932; }")
+        widths = self._settings.get("trigger_column_widths", [340, 260])
+        if not isinstance(widths, list) or len(widths) != 2:
+            widths = [340, 260]
+        for col, width, default in zip((_C_NAME, _C_TTS), widths, (340, 260)):
+            self._table.setColumnWidth(col, width if type(width) is int and hdr.minimumSectionSize() <= width <= 4000 else default)
+        hdr.sectionResized.connect(self._save_trigger_column_widths)
+        hdr.setToolTip(_("Drag column dividers to resize. Double-click Text to edit the overlay message."))
 
         self._table.itemChanged.connect(self._on_item_changed)
         self._table.cellClicked.connect(self._on_table_cell_clicked)
@@ -897,21 +995,28 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
         self._table.customContextMenuRequested.connect(self._on_table_context_menu)
 
         self._fight_bar = QWidget()
-        _fb = QHBoxLayout(self._fight_bar)
+        _fb = QVBoxLayout(self._fight_bar)
         _fb.setContentsMargins(2, 4, 2, 4)
+        _fight_title = QHBoxLayout()
         self._fight_bar_lbl = QLabel("")
         self._fight_bar_lbl.setStyleSheet("color:#ff8399; font-weight:bold;")
-        _fb.addWidget(self._fight_bar_lbl)
-        _fb.addStretch(1)
+        _fight_title.addWidget(self._fight_bar_lbl)
+        _fight_title.addStretch(1)
         _scope_note = QLabel(_("these apply to this fight only:"))
         _scope_note.setStyleSheet("color:#8f8f9a; font-size:8pt; padding-right:4px;")
-        _fb.addWidget(_scope_note)
+        _scope_note.setWordWrap(True)
+        _fight_title.addWidget(_scope_note)
+        _fb.addLayout(_fight_title)
+        _fight_checks = _WrappingLayout()
         self._cb_local = QCheckBox(_("Local"))
         self._cb_tv    = QCheckBox(_("Triggevent"))
-        for _c in (self._cb_local, self._cb_tv):
-            _fb.addWidget(_c)
+        self._cb_tn    = QCheckBox(_("Triggernometry"))
+        for _c in (self._cb_local, self._cb_tv, self._cb_tn):
+            _fight_checks.addWidget(_c)
+        _fb.addLayout(_fight_checks)
         self._cb_local.toggled.connect(self._on_fight_local_only_toggled)
         self._cb_tv.toggled.connect(self._on_fight_tv_only_toggled)
+        self._cb_tn.toggled.connect(self._on_fight_tn_only_toggled)
         self._fight_bar.setVisible(False)
         trig_layout.addWidget(self._fight_bar)
         trig_layout.addWidget(self._table, 1)
@@ -1186,27 +1291,29 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
 
 
     def _fire(self, t: Trigger, fields: dict | None = None) -> None:
-        if not t.tts_text and not t.sound_file:
+        display_template = self._trigger_display_text(t.id, trigger=t)
+        if not t.tts_text and not t.sound_file and not display_template:
             return
         if t.interrupt:
             tts_interrupt()
+        values = fields or {}
+        def expand(template):
+            return (template.replace("{source}", values.get("source", ""))
+                    .replace("{target}", values.get("target", ""))
+                    .replace("{count}", values.get("count", "")))
         if t.tts_text:
             # Localize before substituting tokens. Test calls use sample fields.
             template = self._localized_callout(t)
             reading = self._reading_for(template)
-            src = fields.get("source", "") if fields else ""
-            tgt = fields.get("target", "") if fields else ""
-            cnt = fields.get("count", "") if fields else ""
-            text = (template.replace("{source}", src)
-                    .replace("{target}", tgt)
-                    .replace("{count}", cnt))
-            spoken = (reading.replace("{source}", src)
-                      .replace("{target}", tgt)
-                      .replace("{count}", cnt))
+            text = expand(template)
+            spoken = expand(reading)
             # Display kanji and provide a kana reading for speech engines that need it.
             speak(text, speed=t.speed, reading=spoken)
             self._claim_callout(text)
-            self._emit_alert(text, "alarm" if t.interrupt else "info")
+        if display_template:
+            display = expand(display_template)
+            self._claim_callout(display)
+            self._emit_alert(display, "alarm" if t.interrupt else "info")
         if t.sound_file:
             play_sound(t.sound_file)
 

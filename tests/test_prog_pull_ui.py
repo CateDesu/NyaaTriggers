@@ -115,7 +115,7 @@ class PullUiTests(unittest.TestCase):
         self.assertIn("Duration: 00:00:10 · Ending: Wipe", copied)
         self.assertIn("Deaths: 0\nDeath recaps: 0\nBookmarked", copied)
         self.assertIn("P3\t00:00:05\tConfirmed", copied)
-        self.assertIn("P1\t—\tEstablished by a later phase. Confirmation time unavailable.", copied)
+        self.assertIn("P1\t—\tEstablished later", copied)
         self.assertIn("first observed confirmation", copied)
         self.assertIn("Notes:\nTowers\nReview positioning", copied)
         self.assertIs(tab.pull, selected)

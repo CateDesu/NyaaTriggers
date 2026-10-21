@@ -352,15 +352,34 @@ class DataSafetyTests(unittest.TestCase):
             for name in ("TRIGGERS_FILE", "TRIGGERS_LOCAL_FILE", "RETIRED_FILE",
                          "_REPO_TRIGGERS_FILE", "_REPO_RETIRED_FILE", "_REPO_TRIGGERS_VERSION"):
                 stack.enter_context(patch.object(ac, name, root / name))
-            ac.TRIGGERS_FILE.write_text('[]')
-            ac.TRIGGERS_LOCAL_FILE.write_text('{"triggers": []}')
-            ac._REPO_TRIGGERS_VERSION.write_text(json.dumps(ac._VERSION))
+            stamp = 1_700_000_000_000_000_000
+
+            def write(path, text):
+                path.write_text(text, encoding="utf-8")
+                os.utime(path, ns=(stamp, stamp))
+
+            write(ac.TRIGGERS_FILE, '[{"id": "old", "name": "Bundled before"}]')
+            write(ac.TRIGGERS_LOCAL_FILE, '{"triggers": []}')
+            write(ac._REPO_TRIGGERS_VERSION, json.dumps(ac._VERSION))
+            bundled_stat = ac.TRIGGERS_FILE.stat()
             host = TriggerHost()
             host._load_triggers()
-            ac._REPO_TRIGGERS_FILE.write_text('corrupt')
-            ac.TRIGGERS_FILE.write_text('[{"id": "new", "name": "Bundled update"}]')
+            self.assertEqual([t.id for t in host._triggers], ["old"])
+            repaired = '[{"id": "downloaded", "name": "Recovered"}]'
+            write(ac._REPO_TRIGGERS_FILE, 'corrupt'.ljust(len(repaired)))
+            write(ac.TRIGGERS_FILE, '[{"id": "new", "name": "Bundled update"}]')
+            self.assertEqual(ac.TRIGGERS_FILE.stat().st_size, bundled_stat.st_size)
+            self.assertEqual(ac.TRIGGERS_FILE.stat().st_mtime_ns, bundled_stat.st_mtime_ns)
             host._maybe_reload_triggers()
             self.assertEqual([t.id for t in host._triggers], ["new"])
+            self.assertEqual(host._triggers_mtime, ())
+            self.assertTrue(ac._REPO_TRIGGERS_FILE.exists())
+            failed_stat = ac._REPO_TRIGGERS_FILE.stat()
+            write(ac._REPO_TRIGGERS_FILE, repaired)
+            self.assertEqual(ac._REPO_TRIGGERS_FILE.stat().st_size, failed_stat.st_size)
+            self.assertEqual(ac._REPO_TRIGGERS_FILE.stat().st_mtime_ns, failed_stat.st_mtime_ns)
+            host._maybe_reload_triggers()
+            self.assertEqual([t.id for t in host._triggers], ["downloaded"])
             self.assertEqual(host._triggers_mtime, host._trigger_files_stamp())
 
     def test_unreadable_catalog_is_never_rewritten(self):

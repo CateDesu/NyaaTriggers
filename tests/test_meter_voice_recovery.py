@@ -171,6 +171,8 @@ class CalloutWordingTests(unittest.TestCase):
                                _callouts_readings=overlay["readings"],
                                _claim_callout=Mock(), _emit_alert=Mock())
         host._localized_callout = MethodType(TriggersTabMixin._localized_callout, host)
+        host._is_engine_key = lambda key: False
+        host._trigger_display_text = MethodType(TriggersTabMixin._trigger_display_text, host)
         host._reading_for = MethodType(SettingsTabMixin._reading_for, host)
         fields = {"source": "Caster", "target": "Target", "count": "2"}
 

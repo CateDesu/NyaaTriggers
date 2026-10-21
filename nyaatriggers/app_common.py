@@ -387,19 +387,11 @@ _CACTBOT_DATA_RAW = (
     "https://raw.githubusercontent.com/OverlayPlugin/cactbot/main/ui/raidboss/data"
 )
 
-_C_EN    = 0
-_C_ZONE  = 1
-_C_NAME  = 2
-_C_FIGHT = 3
-_C_TYPE  = 4
-_C_RE    = 5
-_C_TTS   = 6
-_HEADERS = ("", N_("Zone"), N_("Name"), N_("Fight"), N_("Type"),
-            N_("Ability / ID"), N_("TTS Text"))
-
-_DOT_GREEN = "#a6e3a1"
-_DOT_RED   = "#f38ba8"
-_DOT_GREY  = "#585b70"
+_C_EN     = 0
+_C_NAME   = 1
+_C_TTS    = 2
+_C_TEXT   = 3
+_HEADERS = ("", N_("Name"), N_("TTS"), N_("Text"))
 
 _ABILITY_TYPES = {"20", "21", "22", "23"}
 _GENERAL_TAB   = "General"
@@ -407,6 +399,8 @@ _GENERAL_TAB   = "General"
 _ITEM_TYPE_ROLE   = Qt.ItemDataRole.UserRole + 1   # folder, custom_hdr or custom_group
 _ITEM_ID_ROLE     = Qt.ItemDataRole.UserRole + 2   # folder UUID
 _SECTION_ROLE     = Qt.ItemDataRole.UserRole + 4   # Row's source group.
+_FIGHT_ROLE       = Qt.ItemDataRole.UserRole + 5
+_SEARCH_ROLE      = Qt.ItemDataRole.UserRole + 6
 
 _GITHUB_URL  = "https://github.com/CateDesu/NyaaTriggers"
 _DISCORD_URL = "https://discord.com/invite/TQJrbZcgKF"
@@ -512,6 +506,14 @@ _TREE_FIGHTS = {fight for _cat, _exps in _FIGHT_TREE
 # Keep real names such as Dead or Face. Hex placeholders need a digit and four characters.
 _UNKNOWN_NAME_RE = re.compile(r"^\s*unknown_[0-9a-f]+\s*$", re.IGNORECASE)
 _BARE_HEX_RE     = re.compile(r"^\s*(0x[0-9a-f]+|(?=[0-9a-f]*[0-9])[0-9a-f]{4,})\s*$", re.IGNORECASE)
+# These Dancing Mad basic attacks have no name in the game data.
+_ABILITY_NAME_FALLBACKS = {0xC250: "Attack", 0xC252: "Attack"}
+
+
+def _display_ability_name(raw: str, ident: int) -> str:
+    if not raw.strip() or _UNKNOWN_NAME_RE.fullmatch(raw):
+        return _ABILITY_NAME_FALLBACKS.get(ident, raw)
+    return raw
 
 
 def _clean_ability_name(raw: str, fallback: str = "New Trigger") -> str:

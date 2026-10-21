@@ -18,6 +18,7 @@ from nyaatriggers.convert_triggernometry import convert_xml
 from nyaatriggers.sequential import SequentialRunner
 from nyaatriggers.trigger_engine import Trigger
 from nyaatriggers import triggernometry_bridge
+from nyaatriggers import triggernometry_editor
 from nyaatriggers.ui import engines
 from nyaatriggers.ui.dps_tab import DpsTabMixin
 from nyaatriggers.ui.voice_tab import VoiceTabMixin
@@ -320,14 +321,18 @@ with patch.object(ac.QFileDialog, "getOpenFileName", return_value=(str(source), 
             failure.assert_not_called()
             warning.assert_not_called()
             success.assert_called_once()
-        imports = list(packs.iterdir())
+        entries = set(packs.iterdir())
+        history = packs / triggernometry_editor._IDENTITY_FILE
+        self.assertTrue(history.is_file())
+        self.assertEqual(json.loads(history.read_text())["version"], 1)
+        imports = sorted(entries - {history})
         self.assertEqual(len(imports), 12)
         self.assertEqual({path.read_bytes() for path in imports}, contents)
         failure, success, warning = self.import_pack(imports[0], packs)
         failure.assert_not_called()
         warning.assert_not_called()
         success.assert_called_once()
-        self.assertEqual(set(packs.iterdir()), set(imports))
+        self.assertEqual(set(packs.iterdir()), entries)
 
     def test_xml_input_limits_apply_to_the_validated_snapshot(self):
         source = self.root / "pack.xml"

@@ -384,9 +384,9 @@ class NativeRecoveryExitTests(unittest.TestCase):
         from PyQt6.QtWebSockets import QWebSocketServer
 
         with ExitStack() as stack:
-            home = stack.enter_context(tempfile.TemporaryDirectory())
+            home = stack.enter_context(tempfile.TemporaryDirectory(prefix="nyaa engine home "))
             stack.enter_context(patch.dict(os.environ, {
-                "JAVA_TOOL_OPTIONS": f"-Duser.home={home}", "NYAA_AUTOMARK": "0"}))
+                "JAVA_TOOL_OPTIONS": f'-Duser.home="{home}"', "NYAA_AUTOMARK": "0"}))
             stack.enter_context(patch("nyaatriggers.diagnostics._LOG_FILE", Path(home) / "diagnostics.log"))
             stack.enter_context(patch("nyaatriggers.triggevent_bridge._log"))
             stack.enter_context(patch("nyaatriggers.triggevent_recovery._log"))

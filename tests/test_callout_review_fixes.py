@@ -55,6 +55,7 @@ class Host(QObject, InstanceTabMixin, TimelineTabMixin, TriggersTabMixin, DpsTab
         self._save_settings = lambda: True
         self._save_triggers = lambda: True
         self._localized_callout = lambda t: t.tts_text
+        self._is_engine_key = lambda key: False
         self._reading_for = lambda text: text
         self._claim_callout = lambda text: None
         self._emit_alert = lambda *args: None

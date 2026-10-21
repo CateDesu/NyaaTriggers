@@ -55,8 +55,10 @@ class TriggernometryPendingControlTests(unittest.TestCase):
         self.window._cactbot_mode = False
         self.window._engine_inventory = []
         self.spoken = []
+        self.displayed = []
         self.inventories = []
         self.bridge.tts.connect(lambda text, generation: self.spoken.append(text))
+        self.bridge.callout.connect(lambda text, severity, generation: self.displayed.append(text))
         self.bridge.inventory.connect(self.window._on_triggernometry_inventory)
         self.bridge.inventory.connect(lambda payload, generation: self.inventories.append(json.loads(payload)))
         self.addCleanup(self.stop_bridge)
@@ -127,6 +129,7 @@ class TriggernometryPendingControlTests(unittest.TestCase):
         self.window._save_triggernometry_document(document)
         self.assertTrue(self.window._triggernometry_reload_pending)
         self.window._set_triggernometry_callout_edit(identifiers["EDIT"], "Staged edit")
+        self.window._set_display_text("triggernometry:" + identifiers["EDIT"], "Staged visual")
         self.window._reset_triggernometry_callout_edit(identifiers["RESET"])
         self.window._triggernometry_callout_edits[identifiers["REPLAY"]] = "Staged replay"
         self.window._replay_triggernometry_callout_edits()
@@ -137,9 +140,13 @@ class TriggernometryPendingControlTests(unittest.TestCase):
         for label in labels:
             with self.subTest(active_pack=label):
                 text = "Active old reset" if label == "RESET" else "Old " + label
+                display_start = len(self.displayed)
                 self.assertEqual(self.fire(label), [text, "Done " + label])
+                self.assertEqual(self.displayed[display_start:], [text, "Done " + label])
         settings = json.loads((self.case.temp / "settings.json").read_text())
         self.assertEqual(settings["triggernometry_callout_edits"][identifiers["EDIT"]], "Staged edit")
+        self.assertEqual(settings["trigger_display_edits"]["triggernometry:" + identifiers["EDIT"]],
+                         "Staged visual")
         self.assertIn(identifiers["TOGGLE"], settings["triggernometry_disabled_triggers"])
         self.assertIn(identifiers["DISABLED"], settings["triggernometry_disabled_triggers"])
         inventory_count = len(self.inventories)
@@ -153,7 +160,10 @@ class TriggernometryPendingControlTests(unittest.TestCase):
                 expected = ["Old " + label, "Done " + label]
                 if label not in ("TOGGLE", "DISABLED"):
                     expected.insert(0, first)
+                display_start = len(self.displayed)
                 self.assertEqual(self.fire(label), expected)
+                visual = ["Staged visual", *expected[1:]] if label == "EDIT" else expected
+                self.assertEqual(self.displayed[display_start:], visual)
 
     def test_native_rejected_pack_retains_controls_until_repair(self):
         path, identifiers = self.pack(("REPAIR",))
@@ -199,6 +209,7 @@ class TriggernometryPendingControlTests(unittest.TestCase):
         self.window._in_game_combat = True
         self.window._save_triggernometry_document(document)
         self.window._set_triggernometry_callout_edit(identifiers["RESTART_EDIT"], "Custom staged restart")
+        self.window._set_display_text("triggernometry:" + identifiers["RESTART_EDIT"], "Restart visual")
         self.window._toggle_engine_row("triggernometry:" + identifiers["RESTART_MUTE"], False)
         generation = self.bridge.generation()
         self.window._set_triggernometry_enabled(True)
@@ -206,7 +217,9 @@ class TriggernometryPendingControlTests(unittest.TestCase):
         self.assertEqual(self.bridge.generation(), generation)
         self.assertFalse(self.bridge.pack_is_current(path))
         for label in labels:
+            display_start = len(self.displayed)
             self.assertEqual(self.fire(label), ["Old " + label, "Done " + label])
+            self.assertEqual(self.displayed[display_start:], ["Old " + label, "Done " + label])
         self.window._on_status_changed(False, "Disconnected")
         self.window._on_triggernometry_connection(False, "Disconnected")
         self.assertFalse(self.bridge.is_active())
@@ -219,6 +232,7 @@ class TriggernometryPendingControlTests(unittest.TestCase):
         count = len(self.inventories)
         self.window._on_triggernometry_connection(True, "Connected")
         early_spoken = []
+        early_displayed = []
         finished = set()
         done = threading.Event()
 
@@ -230,6 +244,9 @@ class TriggernometryPendingControlTests(unittest.TestCase):
                     done.set()
 
         self.bridge.tts.connect(capture, Qt.ConnectionType.DirectConnection)
+        def capture_display(text, severity, generation):
+            early_displayed.append(text)
+        self.bridge.callout.connect(capture_display, Qt.ConnectionType.DirectConnection)
         try:
             for label in labels:
                 self.bridge.feed_log("00|2026-10-04T12:00:00Z|0038|Player|PENDING_" + label + "|test")
@@ -237,6 +254,7 @@ class TriggernometryPendingControlTests(unittest.TestCase):
             self.assertTrue(done.wait(timeout=20), early_spoken)
         finally:
             self.bridge.tts.disconnect(capture)
+            self.bridge.callout.disconnect(capture_display)
         self.wait_for(lambda: len(self.inventories) > count)
         with self.subTest(restart="pending status"):
             self.assertFalse(self.window._triggernometry_reload_pending)
@@ -252,6 +270,9 @@ class TriggernometryPendingControlTests(unittest.TestCase):
                 if label == "RESTART_EDIT":
                     possible.add("Custom staged restart")
                 self.assertEqual([text for text in early_spoken if text in possible], expected)
+        self.assertEqual(sorted(early_displayed), sorted([
+            "Restart visual", "Old RESTART_EDIT", "Done RESTART_EDIT",
+            "Old RESTART_MUTE", "Done RESTART_MUTE"]))
 
 
 if __name__ == "__main__":

@@ -49,6 +49,20 @@ class PackImportRecoveryTests(unittest.TestCase):
     def import_pack(self):
         engines.EnginesMixin._import_triggernometry(self.host)
 
+    def assert_directory_with_identity_history(self, *names):
+        history = self.packs / ".nyaatriggers-identities.json"
+        self.assertEqual(set(self.packs.iterdir()), {history, *(self.packs / name for name in names)})
+        data = json.loads(history.read_text(encoding="utf-8"))
+        self.assertEqual(set(data), {"version", "packs"})
+        self.assertEqual(data["version"], 1)
+        self.assertEqual(set(data["packs"]), set(names))
+        for name, snapshot in data["packs"].items():
+            root = ET.fromstring(snapshot)
+            self.assertEqual(root.tag, "TriggernometryExport")
+            self.assertEqual([trigger.get("Id") for trigger in root.iter("Trigger")],
+                             [trigger.get("Id") for trigger in ET.fromstring((self.packs / name).read_bytes()).iter("Trigger")])
+            self.assertFalse(root.findall(".//Action"))
+
     def test_updated_export_replaces_one_active_pack_and_keeps_backup(self):
         self.import_pack()
         self.source.write_bytes(self.updated)
@@ -69,7 +83,7 @@ class PackImportRecoveryTests(unittest.TestCase):
         self.success.assert_not_called()
         self.host._update_triggernometry_pack_inventory.assert_not_called()
 
-    def test_duplicate_trigger_ids_within_one_export_are_rejected(self):
+    def test_duplicate_trigger_ids_within_one_export_keep_independent_speech(self):
         document = PackDocument(self.source, self.original)
         first = document.root.find(".//Trigger")
         duplicate = ET.fromstring(ET.tostring(first))
@@ -79,9 +93,14 @@ class PackImportRecoveryTests(unittest.TestCase):
         self.source.write_bytes(xml_bytes(document.root))
         self.validate.side_effect = validate_native
         self.import_pack()
-        self.assertEqual(list(self.packs.iterdir()), [])
-        self.error.assert_called_once()
-        self.success.assert_not_called()
+        self.assertEqual(list(self.packs.iterdir()), [self.packs / "callouts.xml"])
+        saved = ET.fromstring((self.packs / "callouts.xml").read_bytes()).findall(".//Trigger")
+        self.assertEqual(len(saved), 2)
+        self.assertEqual(len({trigger.get("Id") for trigger in saved}), 2)
+        self.assertEqual({trigger.find("Actions/Action").get("UseTTSTextExpression") for trigger in saved},
+                         {"Original ${label}", "Different speech"})
+        self.error.assert_not_called()
+        self.success.assert_called_once()
 
     def test_multiple_exported_folders_cannot_silently_lose_the_second_folders_triggers(self):
         document = PackDocument(self.source, self.original)
@@ -125,7 +144,7 @@ class PackImportRecoveryTests(unittest.TestCase):
             is_active=lambda: True, pack_is_current=lambda _path: True)
         self.host._set_triggernometry_enabled = Mock()
         self.import_pack()
-        self.assertEqual(list(self.packs.iterdir()), [self.packs / "callouts.xml"])
+        self.assert_directory_with_identity_history("callouts.xml")
         self.host._set_triggernometry_enabled.assert_not_called()
         self.confirm.assert_not_called()
 
@@ -154,7 +173,7 @@ class PackImportRecoveryTests(unittest.TestCase):
         self.assertEqual([trigger.ability_id for trigger in self.host._triggers], ["ABCD", "ABCE"])
         self.assertTrue(all(not trigger.enabled for trigger in self.host._triggers))
         self.assertEqual((self.packs / "callouts.xml").read_bytes(), staged)
-        self.assertEqual(list(self.packs.iterdir()), [self.packs / "callouts.xml"])
+        self.assert_directory_with_identity_history("callouts.xml")
         self.error.assert_not_called()
         self.confirm.assert_not_called()
         self.validate.assert_not_called()
@@ -253,7 +272,7 @@ class PackImportRecoveryTests(unittest.TestCase):
         self.source.write_bytes(self.updated)
         self.confirm.return_value = ac.QMessageBox.StandardButton.No
         self.import_pack()
-        self.assertEqual(list(self.packs.iterdir()), [self.packs / "callouts.xml"])
+        self.assert_directory_with_identity_history("callouts.xml")
         self.assertEqual((self.packs / "callouts.xml").read_bytes(), self.original)
         self.assertEqual(self.source.read_bytes(), self.updated)
 
@@ -267,7 +286,7 @@ class PackImportRecoveryTests(unittest.TestCase):
         self.confirm.side_effect = answer
         self.import_pack()
         self.assertEqual((self.packs / "callouts.xml").read_bytes(), external)
-        self.assertEqual(list(self.packs.iterdir()), [self.packs / "callouts.xml"])
+        self.assert_directory_with_identity_history("callouts.xml")
         self.error.assert_called_once()
 
     def test_backup_failure_aborts_replacement(self):
@@ -288,22 +307,27 @@ class PackImportRecoveryTests(unittest.TestCase):
         self.assertTrue(all(p.read_bytes() == self.original for p in self.packs.iterdir()))
         self.error.assert_called_once()
 
-    def test_overlapping_trigger_ids_under_another_folder_are_not_loaded_twice(self):
+    def test_overlapping_trigger_ids_under_another_folder_keep_both_packs(self):
         self.import_pack()
         root = ET.fromstring(self.updated)
         root.find("ExportedFolder").set("Id", str(uuid.uuid4()))
         self.source.write_bytes(xml_bytes(root))
         self.import_pack()
-        self.assertEqual(list(self.packs.iterdir()), [self.packs / "callouts.xml"])
+        files = list(self.packs.glob("*.xml"))
+        self.assertEqual(len(files), 2)
         self.assertEqual((self.packs / "callouts.xml").read_bytes(), self.original)
-        self.error.assert_called_once()
+        triggers = [ET.fromstring(path.read_bytes()).find(".//Trigger") for path in files]
+        self.assertEqual(len({trigger.get("Id") for trigger in triggers}), 2)
+        self.assertEqual({trigger.find("Actions/Action").get("UseTTSTextExpression") for trigger in triggers},
+                         {"Original ${label}", "Updated ${label}"})
+        self.error.assert_not_called()
 
     def test_native_rejection_preserves_the_working_pack(self):
         self.import_pack()
         self.source.write_bytes(self.updated)
         self.validate.side_effect = ValueError("Invalid native regular expression")
         self.import_pack()
-        self.assertEqual(list(self.packs.iterdir()), [self.packs / "callouts.xml"])
+        self.assert_directory_with_identity_history("callouts.xml")
         self.assertEqual((self.packs / "callouts.xml").read_bytes(), self.original)
         self.error.assert_called_once()
 

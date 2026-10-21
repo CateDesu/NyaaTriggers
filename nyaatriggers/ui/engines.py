@@ -25,7 +25,6 @@ except Exception:  # noqa: BLE001
     _tn_zone_map = None
 from nyaatriggers.tts import interrupt as tts_interrupt, speak
 from nyaatriggers.locale_util import _, engine_status
-from nyaatriggers.game_locale import fight_label
 from nyaatriggers.cactbot_reader import CactbotReader, DEFAULT_CACTBOT_URL
 from nyaatriggers.triggevent_bridge import (
     TriggeventBridge, _log as _te_log, has_java as _te_has_java, has_jar as _te_has_jar,
@@ -33,6 +32,7 @@ from nyaatriggers.triggevent_bridge import (
 from nyaatriggers.triggevent_recovery import TriggeventRecovery
 from nyaatriggers.ui.custom_triggevent import CustomTriggeventMixin
 from nyaatriggers.ui.triggernometry_editor import TriggernometryEditorMixin, pack_speech_rows, speech_rows
+from nyaatriggers.ui.trigger_conversion import TriggerConversionMixin
 try:
     from nyaatriggers.triggernometry_bridge import TriggernometryBridge, has_packs as _tn_has_packs, \
         packs_dir as _tn_packs_dir, _log as _tn_log
@@ -44,7 +44,7 @@ except Exception:  # noqa: BLE001
 
 from nyaatriggers import app_common as ac
 from nyaatriggers.app_common import (
-    _C_EN, _C_FIGHT, _C_NAME, _C_RE, _C_TTS, _C_TYPE, _C_ZONE, _SECTION_ROLE, _as_str,
+    _C_EN, _C_NAME, _C_TTS, _C_TEXT, _FIGHT_ROLE, _SEARCH_ROLE, _SECTION_ROLE, _as_str,
     _as_strdict, _as_strset, _as_text_overrides, _atomic_write_json, _engine_preview_text,
     _stale_gen, cactbot_timeline_for_zone,
 )
@@ -69,9 +69,10 @@ def _inventory_rows(items: list, source: str) -> list[dict]:
     return rows
 
 
-class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
+class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin, TriggerConversionMixin):
     def _init_engines(self) -> None:
         self._engine_inventory: list[dict] = []
+        self._trigger_display_edits = _as_strdict(self._settings.get("trigger_display_edits", {}))
         self._engine_text_overrides: dict = _as_text_overrides(self._settings.get("engine_text_overrides", {}))
         self._triggevent_callout_edits: dict = _as_strdict(self._settings.get("triggevent_callout_edits", {}))
         # Keep shipped wording separate so new defaults can take effect.
@@ -384,12 +385,14 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         count = getattr(self, "_engine_chain_failure_count", 0)
         if not count:
             lbl.setVisible(False)
+            self._update_engine_status_label()
             return
         lbl.setText(_("● {n} chain failures").format(n=count))
         failures = getattr(self, "_engine_chain_failures", [])
         # Escape trigger names because Qt tooltips interpret markup.
         lbl.setToolTip("\n".join(html.escape(line) for line in list(failures)[-5:]))
         lbl.setVisible(True)
+        self._update_engine_status_label()
 
     def _note_triggevent_unavailable(self) -> None:
         if TriggeventBridge.is_available():
@@ -624,6 +627,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             return
         for tid, text in (self._callout_edits_for("triggernometry") or {}).items():
             bridge.set_callout(tid, tts=text, text=text)
+        self._replay_engine_display_text("triggernometry")
 
     def _set_triggernometry_callout_edit(self, tid: str, text: str) -> None:
         self._triggernometry_callout_edits[tid] = text
@@ -859,6 +863,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
 
         def _ro(text: str) -> QTableWidgetItem:
             it = QTableWidgetItem(text)
+            it.setToolTip(text)
             it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             return it
 
@@ -866,20 +871,15 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         cb.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
         cb.setCheckState(Qt.CheckState.Unchecked if disabled else Qt.CheckState.Checked)
         cb.setData(Qt.ItemDataRole.UserRole, key)
+        cb.setData(_FIGHT_ROLE, self._engine_fight_tag(e))
+        cb.setData(_SEARCH_ROLE, src)
         cb.setData(_SECTION_ROLE, "triggernometry" if src == "triggernometry" else "engine")
         self._table.setItem(row, _C_EN, cb)
-        self._table.setItem(row, _C_ZONE, _ro(""))
         name = self._localized_name(SimpleNamespace(id=tid, name=e.get("name") or tid))
         self._table.setItem(row, _C_NAME, _ro(self._localize_text(name)))
-        fight = self._engine_fight_tag(e)
-        fight_item = _ro(fight_label(fight))
-        fight_item.setToolTip(fight_item.text())
-        fight_item.setData(Qt.ItemDataRole.UserRole, fight)
-        self._table.setItem(row, _C_FIGHT, fight_item)
-        self._table.setItem(row, _C_TYPE, _ro({"cactbot": "Cactbot", "triggevent": "Triggevent",
-                                               "triggernometry": "Triggernometry"}.get(src, src)))
-        self._table.setItem(row, _C_RE, _ro(_("(engine)")))
         txt = e.get("text") or ""
+        if src == "triggevent":
+            txt = e.get("tts", txt)
         _ce = self._callout_edits_for(src)
         edit = _ce.get(tid) if _ce is not None else None
         if edit is not None:
@@ -891,6 +891,8 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
                 txt = rep if rep else _("(silenced)")
         tts_item = _ro(self._localize_text(txt))
         self._table.setItem(row, _C_TTS, tts_item)
+        display = _ro(self._trigger_display_text(key, inventory=e))
+        self._table.setItem(row, _C_TEXT, display)
         brush = QBrush(QColor("#1f2a3a"))
         for col in range(self._table.columnCount()):
             cell = self._table.item(row, col)
@@ -916,11 +918,10 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             self._edit_custom_triggevent(custom)
             return
         src, tid = key.split(":", 1)
-        inv = self._engine_entry_for_key(key) or {}
         edits = self._callout_edits_for(src)
         if edits is None:
             return
-        cur = edits.get(tid, inv.get("text") or inv.get("name") or "")
+        cur = self._engine_text_for_key(key)
         label = _("Triggernometry") if src == "triggernometry" else _("Triggevent")
         tokhint = (_("Triggernometry ${...} expressions still substitute")
                    if src == "triggernometry"
@@ -937,6 +938,7 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
             return
         src, tid = key.split(":", 1)
         menu = QMenu(self._table)
+        self._add_engine_move_menu(menu, key)
         definition_edit = None
         if src == "triggernometry":
             definition_edit = menu.addAction(_("Edit trigger and actions..."))
@@ -979,6 +981,8 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         over = self._engine_text_overrides.get(key)
         if over is not None:
             return over.get("replace", "")
+        if src == "triggevent" and "tts" in inv:
+            return inv["tts"]
         return inv.get("text") or inv.get("name") or ""
 
     def _test_engine_callout(self, key: str) -> None:
@@ -1081,7 +1085,8 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         self._triggevent_callout_edits[tid] = text
         self._settings["triggevent_callout_edits"] = self._triggevent_callout_edits
         if getattr(self, "_triggevent", None) is not None:
-            self._triggevent.set_callout(tid, tts=text, text=text)
+            self._triggevent.set_callout(
+                tid, tts=text, text=self._trigger_display_edits.get("triggevent:" + tid, text))
             if previous is None or previous != text:
                 self._triggevent.cancel_speech([tid])
         self._save_settings()
@@ -1098,6 +1103,8 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
                 bridge.set_callout(tid, tts=shipped, text=shipped)
             else:
                 bridge.reset_callout(tid)
+            if "triggevent:" + tid in self._trigger_display_edits:
+                self._apply_engine_display_text("triggevent", tid)
             current = self._triggevent_effective_tts(tid)
             if previous is None or current is None or previous != current:
                 bridge.cancel_speech([tid])
@@ -1109,7 +1116,36 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         if bridge is None:
             return
         for tid, text in (self._callout_edits_for("triggevent") or {}).items():
-            bridge.set_callout(tid, tts=text, text=text)
+            bridge.set_callout(tid, tts=text, text=self._trigger_display_edits.get("triggevent:" + tid, text))
+        self._replay_engine_display_text("triggevent")
+
+    def _engine_default_display_text(self, key: str, inventory: dict | None = None) -> str:
+        src, tid = key.split(":", 1)
+        edits = self._callout_edits_for(src) or {}
+        if tid in edits:
+            return edits[tid]
+        override = self._engine_text_overrides.get(key)
+        if override is not None:
+            return override.get("replace", "")
+        inv = inventory if inventory is not None else self._engine_entry_for_key(key) or {}
+        return inv.get("text") or inv.get("tts") or ""
+
+    def _apply_engine_display_text(self, src: str, tid: str) -> None:
+        bridge = getattr(self, "_" + src, None)
+        if bridge is None:
+            return
+        key = src + ":" + tid
+        if src == "triggernometry":
+            if not getattr(self, "_triggernometry_reload_pending", False):
+                bridge.set_display_text(tid, self._trigger_display_edits.get(key))
+        elif src == "triggevent":
+            bridge.set_callout(tid, text=self._trigger_display_edits.get(
+                key, self._engine_default_display_text(key)))
+
+    def _replay_engine_display_text(self, src: str) -> None:
+        for key in getattr(self, "_trigger_display_edits", {}):
+            if key.startswith(src + ":") and self._custom_triggevent_for_key(key) is None:
+                self._apply_engine_display_text(src, key.split(":", 1)[1])
 
     def _apply_engine_overrides(self, src: str) -> None:
         # Only cactbot and Triggevent support manual replacement tables.
@@ -1157,14 +1193,16 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
         engine_available = (TriggernometryBridge is not None
                             and TriggernometryBridge.is_available())
         if TriggernometryBridge is not None and _tn_packs_dir is not None:
-            from nyaatriggers.triggernometry_editor import matching_import, pack_backup_path, parse_xml, prepare_import, validate_native
+            from nyaatriggers.triggernometry_editor import matching_import, occupied_import_ids, pack_backup_path, parse_xml, prepare_import, validate_native
             existing = None
             try:
                 try:
                     packs = _tn_packs_dir()
                     src = Path(path)
-                    xml_bytes = prepare_import(xml_bytes)
                     existing = matching_import(packs, src, xml_bytes)
+                    xml_bytes = prepare_import(
+                        xml_bytes, occupied_ids=occupied_import_ids(packs, existing),
+                        previous=existing[1] if existing is not None else None)
                     old_rows = speech_rows(parse_xml(existing[1])) if existing is not None else []
                     new_rows = speech_rows(parse_xml(xml_bytes))
                     if engine_available and (existing is None or existing[1] != xml_bytes):
@@ -1226,12 +1264,9 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin):
                 except Exception:  # noqa: BLE001
                     continue
             converted = rows
-            # Check IDs as well as matchers, including repeats within this import.
             seen_ids = {x.id for x in self._triggers}
             for t in converted:
                 if t.id in seen_ids:
-                    continue
-                if self._is_duplicate(t) is not None:
                     continue
                 self._triggers.append(t)
                 self._local_ids.add(t.id)

@@ -24,6 +24,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public final class CustomTriggersVerification {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final List<String> calls = new CopyOnWriteArrayList<>();
+    private static final List<String> displays = new CopyOnWriteArrayList<>();
     private static EventMaster master;
     private static PullRecovery recovery;
     private static XivState state;
@@ -51,7 +52,10 @@ public final class CustomTriggersVerification {
             command = TriggeventCore.class.getDeclaredMethod("handleCommand", tools.jackson.databind.JsonNode.class);
             command.setAccessible(true);
             pico.getComponent(EventDistributor.class).registerHandler(CustomTriggers.Callout.class,
-                    (context, event) -> calls.add(event.getCallText()));
+                    (context, event) -> {
+                        calls.add(event.getCallText());
+                        displays.add(event.getVisualText());
+                    });
             feed(Map.of("type", "ChangeZone", "zoneID", 123, "zoneName", "Test"));
             feed(Map.of("type", "ChangePrimaryPlayer", "charID", 0x10000001, "charName", "Player"));
             feed(Map.of("rseq", "allCombatants", "combatants", List.of(
@@ -141,6 +145,14 @@ public final class CustomTriggersVerification {
                     + "|40000001|Boss|B123|Cast|10000001|Player|3|100|100|0|0|0"));
             check(calls.size() == 8 && calls.get(7).equals("Player, go left"),
                     "Raw log events did not match IDs with pasted spacing");
+            var edited = (tools.jackson.databind.node.ObjectNode) MAPPER.readTree(definition);
+            edited.put("display_text", "{target}, look at {source}");
+            configure(MAPPER.writeValueAsString(edited));
+            buff(0xA123);
+            cast();
+            check(calls.get(8).equals("Player, go left")
+                            && displays.get(8).equals("Player, look at Boss"),
+                    "Display edit changed speech or lost event tokens");
             System.out.println("RESULT PASS");
             System.exit(0);
         }

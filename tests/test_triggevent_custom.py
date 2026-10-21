@@ -48,6 +48,15 @@ def validation_cases():
     for length, valid in ((1000, True), (1001, False)):
         add(f"Emoji speech length {length}", valid,
             lambda row, length=length: row["steps"][1].update(text="🐈" * length))
+        add(f"Emoji display length {length}", valid,
+            lambda row, length=length: row.update(display_text="🐈" * length))
+    for label, display, valid in (("Known display tokens", "{start.target}, watch {source}", True),
+                                  ("Empty display", "", True),
+                                  ("Unknown display token", "Dodge {boss}", False),
+                                  ("Unclosed display token", "Dodge {target", False),
+                                  ("Null display", None, False),
+                                  ("Nontext display", 123, False)):
+        add(label, valid, lambda row, display=display: row.update(display_text=display))
     for value in (None, {}, [], 123, "x" * 513):
         add(f"Unused IDs {type(value).__name__}", False,
             lambda row, value=value: row["steps"][1].update(condition="always", ids=value))
@@ -98,9 +107,10 @@ class CustomTriggerTests(unittest.TestCase):
             with self.subTest(case=case["label"]):
                 if case["valid"]:
                     custom.validate_trigger(case["definition"])
-                    dialog = TriggeventDialog(trigger=case["definition"])
-                    self.addCleanup(dialog.deleteLater)
-                    self.assertEqual(dialog.get_trigger(), case["definition"])
+                    if "display_text" not in case["definition"]:
+                        dialog = TriggeventDialog(trigger=case["definition"])
+                        self.addCleanup(dialog.deleteLater)
+                        self.assertEqual(dialog.get_trigger(), case["definition"])
                 else:
                     with self.assertRaises(ValueError):
                         custom.validate_trigger(case["definition"])

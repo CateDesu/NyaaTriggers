@@ -368,7 +368,8 @@ class ModeSwitchTests(unittest.TestCase):
         session_ui.SessionUiTests.setUpClass()
 
     def setUp(self):
-        session_ui.SessionUiTests.setUp(self)
+        with patch("nyaatriggers.ui.engines.CactbotReader.is_available", return_value=True):
+            session_ui.SessionUiTests.setUp(self)
 
     def check_switch(self, *, enabled, failed_start=False):
         window = self.window

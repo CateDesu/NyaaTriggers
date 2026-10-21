@@ -117,7 +117,7 @@ QPushButton {{
     background-color: {MANTLE};
     color: {TEXT};
     border: 1px solid {EDGE};
-    border-radius: {PILL}px;
+    border-radius: 0;
     padding: 5px 14px;
 }}
 QPushButton:hover {{
@@ -131,6 +131,10 @@ QPushButton:disabled {{
     background-color: {PANEL};
     color: {OVERLAY0};
     border-color: {PANEL};
+}}
+QPushButton[compact="true"] {{
+    padding: 3px 8px;
+    font-size: 8pt;
 }}
 
 QPushButton#primary {{
@@ -215,6 +219,7 @@ QComboBox QAbstractItemView {{
 
 
 QTableWidget {{
+    qproperty-showGrid: false;
     background-color: {PANEL};
     alternate-background-color: {MANTLE};
     color: {TEXT};
@@ -229,7 +234,6 @@ QTableWidget::item {{
 QTableWidget::item:selected {{
     background-color: {MANTLE};
     color: {ACCENT};
-    border-left: 2px solid {ACCENT};
 }}
 QTableWidget::item:hover {{
     background-color: {MANTLE};
@@ -238,7 +242,6 @@ QHeaderView::section {{
     background-color: {MANTLE};
     color: {SUBTEXT1};
     border: none;
-    border-right: 1px solid {EDGE};
     border-bottom: 1px solid {EDGE};
     padding: 6px 8px;
     font-weight: bold;

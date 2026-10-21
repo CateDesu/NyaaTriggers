@@ -9,10 +9,11 @@ from nyaatriggers.recap_store import RecapStore
 from nyaatriggers.record_store import load_records, record_id, write_record
 from nyaatriggers.prog_phases import DEFINITIONS, PhaseAttempt, definition_for, match_event, new_tracking, read_tracking
 from nyaatriggers.prog_progress import hp_samples, phase_progress, player_damage_target, wire_number
+from nyaatriggers.dps_meter import encounter_ending
 
-COMPLETE_REASONS = {"combat-ended", "wipe"}
+COMPLETE_REASONS = {"combat-ended", "wipe", "cleared"}
 LATE_DEATH_SECONDS = 2
-LATE_WIPE_SECONDS = 5
+LATE_ENDING_SECONDS = 5
 CHECKPOINT_SECONDS = 15
 
 
@@ -195,7 +196,7 @@ class ProgSessions:
         self.attempt = None
         self.last_attempt = None
         self._awaiting_snapshot = None
-        self._wipe_candidate = None
+        self._ending_candidate = None
         self._phase_progress = {}
         self._boss_actors = OrderedDict()
         self._boss_ids = {ident for definition in self.definitions
@@ -304,7 +305,7 @@ class ProgSessions:
         self.attempt = None
         self.last_attempt = None
         self._awaiting_snapshot = None
-        self._wipe_candidate = None
+        self._ending_candidate = None
         return session
 
     def elapsed(self, session):
@@ -444,8 +445,8 @@ class ProgSessions:
                 self._empty_pull = None
             if self.last_attempt is not None and self.last_attempt.pull is pull:
                 self.last_attempt = None
-            if self._wipe_candidate is not None and self._wipe_candidate[0] is pull:
-                self._wipe_candidate = None
+            if self._ending_candidate is not None and self._ending_candidate[0] is pull:
+                self._ending_candidate = None
         for recap_id, data in list(self.recaps.unsaved.items()):
             if (data["session_id"], data["pull_id"]) == (session_id, pull_id):
                 self.recaps.unsaved.pop(recap_id)
@@ -480,7 +481,7 @@ class ProgSessions:
             self.ready = True
 
     def pull_started(self, snapshot):
-        self._wipe_candidate = None
+        self._ending_candidate = None
         self._empty_pull = None
         if self.current is None or not self.ready:
             self._recap_pull = None
@@ -538,7 +539,7 @@ class ProgSessions:
         if self.pending == ident:
             self.pending = None
             if reason == "combat-ended":
-                self._wipe_candidate = (pull, self.clock())
+                self._ending_candidate = (pull, self.clock())
             if late_deaths:
                 self._recap_until = self.clock() + LATE_DEATH_SECONDS
             else:
@@ -554,7 +555,7 @@ class ProgSessions:
         self._recap_pull = None
         self._empty_pull = None
         self._awaiting_snapshot = None
-        self._wipe_candidate = None
+        self._ending_candidate = None
 
     def record_death(self, death):
         if self.current is None or self._recap_pull is None:
@@ -622,7 +623,7 @@ class ProgSessions:
         self.attempt = None
         self.last_attempt = None
         self._awaiting_snapshot = None
-        self._wipe_candidate = None
+        self._ending_candidate = None
 
     def process_event(self, fields, notifications, now=None, snapshot=None):
         """Resolve meter notifications and evidence before the page updates."""
@@ -630,7 +631,7 @@ class ProgSessions:
         self.check_phase_timeout(now)
         before = self.pending
         started = False
-        wipe = len(fields) > 3 and fields[0] == "33" and fields[3].upper() == "4000000F"
+        ending = encounter_ending(fields)
         # Combat flag changes can finish and begin in the same message.
         if not fields:
             for kind, snapshot in notifications:
@@ -650,19 +651,19 @@ class ProgSessions:
             self.observe_hp(fields)
             for kind, notification in notifications:
                 if kind == "finish":
-                    if wipe and self.attempt is not None:
+                    if ending and self.attempt is not None:
                         notification = deepcopy(notification)
-                        notification["Encounter"]["end_reason"] = "wipe"
+                        notification["Encounter"]["end_reason"] = ending
                     self.pull_finished(notification)
-        if wipe:
+        if ending:
             if self.attempt is not None:
-                self._close_attempt(self.attempt, "wipe")
-            elif self._wipe_candidate is not None:
-                pull, ended_at = self._wipe_candidate
-                if now - ended_at <= LATE_WIPE_SECONDS and pull["ending"] == "combat-ended":
-                    pull["ending"] = "wipe"
+                self._close_attempt(self.attempt, ending)
+            elif self._ending_candidate is not None:
+                pull, ended_at = self._ending_candidate
+                if now - ended_at <= LATE_ENDING_SECONDS and pull["ending"] == "combat-ended":
+                    pull["ending"] = ending
                     self.save(self.current)
-                self._wipe_candidate = None
+                self._ending_candidate = None
             if self.definition is not None:
                 self.ready = True
         return started, before is not None and self.pending != before
@@ -709,13 +710,13 @@ class ProgSessions:
     def _finish_phase_segment(self, attempt, encounter):
         reason = encounter["end_reason"]
         if reason == "empty" and encounter.get("boundary_reason") in (
-                "wipe", "feed-lost", "duty-left", "program-closed", "session-ended"):
+                "wipe", "cleared", "feed-lost", "duty-left", "program-closed", "session-ended"):
             reason = encounter["boundary_reason"]
         if attempt.closed:
-            if (reason == "wipe" and attempt.pull["ending"] == "combat-ended"
-                    and self._wipe_candidate is not None and self._wipe_candidate[0] is attempt.pull
-                    and self.clock() - self._wipe_candidate[1] <= LATE_WIPE_SECONDS):
-                attempt.pull["ending"] = "wipe"
+            if (reason in ("wipe", "cleared") and attempt.pull["ending"] == "combat-ended"
+                    and self._ending_candidate is not None and self._ending_candidate[0] is attempt.pull
+                    and self.clock() - self._ending_candidate[1] <= LATE_ENDING_SECONDS):
+                attempt.pull["ending"] = reason
                 self.save(self.current)
             return
         ident = encounter["pull_id"]
@@ -748,7 +749,7 @@ class ProgSessions:
         late_deaths = reason in COMPLETE_REASONS or (reason == "empty" and late_deaths)
         self.ready = reason == "wipe" or (attempt.definition.continuous_combat and late_deaths)
         if reason == "combat-ended":
-            self._wipe_candidate = (attempt.pull, self.clock())
+            self._ending_candidate = (attempt.pull, self.clock())
         if late_deaths:
             self._recap_until = self.clock() + LATE_DEATH_SECONDS
         else:
