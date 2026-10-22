@@ -57,7 +57,19 @@ is treated as diagnostics.
 
 ## Build (from source, developers only)
 
-Releases bundle the engine jar and Temurin JRE 17. Source users can install Java 17 and download the jar through **Settings - Program - Update Triggevent Engine**.
+Releases bundle the engine jar and Liberica JRE 17. Source users can install Java 17 and download the jar through **Settings - Program - Update Triggevent Engine**.
+
+Release packaging pins Liberica `17.0.21+11`, which includes the
+[October runtime security fixes](https://bell-sw.com/blog/liberica-jdk-8u512-11-0-33-17-0-21-21-0-13-25-0-5-and-27-0-1-builds-are-generally-available/).
+It also applies the [official certificate mitigation](https://ops.java/emudhra)
+for [CVE-2026-91403](https://www.oracle.com/security-alerts/alert-cve-2026-91403.html)
+using the pinned list of all 16 compromised eMudhra certificate variants.
+Existing distrust entries are preserved. The packaged Java process must load
+all 16 entries before release.
+
+Existing users need a full program package update to replace their bundled Java.
+**Update Triggevent Engine** replaces only the jar. Source users must update the
+Java runtime they use and apply the certificate mitigation when needed.
 
 To rebuild, install JDK 17, Maven and Python 3:
 

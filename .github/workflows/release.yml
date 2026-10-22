@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  LIBERICA_JRE_VERSION: '17.0.21+11'
+  JAVA_RUNTIME_VERSION: '17.0.21+11-LTS'
+
 # Serialize per ref so main pushes supersede rolling builds while milestone tags finish.
 concurrency:
   group: release-${{ github.ref }}
@@ -139,11 +143,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Set up JDK 17 (Temurin)
+      - name: Set up JDK 17 (Liberica)
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: '17'
+          distribution: liberica
+          java-version: ${{ env.LIBERICA_JRE_VERSION }}
           cache: maven
 
       - uses: actions/setup-python@v6
@@ -298,7 +302,7 @@ jobs:
       # Keep dependency versions in sync with requirements.txt and the voice installers.
       - name: Install dependencies
         run: |
-          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 piper-tts==1.6.0 pyinstaller==6.21.0 pillow==12.3.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1 packaging==26.3
+          pip install PyQt6==6.11.0 PyQt6-WebEngine==6.11.0 piper-tts==1.6.0 pyinstaller==6.21.0 pillow==13.0.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1 packaging==26.3
 
       - name: Verify source updates on Windows
         run: python -m tests test_updater_integration
@@ -343,19 +347,27 @@ jobs:
           name: triggevent-seed
           path: .
 
-      - name: Bundle Temurin JRE 17
+      - name: Bundle Liberica JRE 17
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          curl.exe -fL --retry 3 --retry-all-errors -o jre.zip "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jre/hotspot/normal/eclipse"
+          curl.exe -fL --retry 3 --retry-all-errors -o jre.zip "https://github.com/bell-sw/Liberica/releases/download/${LIBERICA_JRE_VERSION/+/%2B}/bellsoft-jre${LIBERICA_JRE_VERSION/+/%2B}-windows-amd64.zip"
           python - <<'PY'
-          import json, urllib.request, hashlib, sys
-          url = ("https://api.adoptium.net/v3/assets/feature_releases/17/ga"
-                 "?architecture=x64&image_type=jre&jvm_impl=hotspot&os=windows"
-                 "&page=0&page_size=1&vendor=eclipse")
-          # Adoptium requires an explicit User-Agent for this request.
-          req = urllib.request.Request(url, headers={"User-Agent": "NyaaTriggers-CI/1.0"})
+          import json, urllib.request, urllib.parse, hashlib, sys, os
+          version = urllib.parse.quote(os.environ["LIBERICA_JRE_VERSION"], safe="")
+          url = f"https://api.github.com/repos/bell-sw/Liberica/releases/tags/{version}"
+          req = urllib.request.Request(url, headers={
+              "User-Agent": "NyaaTriggers-CI/1.0",
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+          })
           meta = json.load(urllib.request.urlopen(req, timeout=30))
-          expected = meta[0]["binaries"][0]["package"]["checksum"].lower()
+          assert meta["tag_name"] == os.environ["LIBERICA_JRE_VERSION"], "Unexpected JRE release"
+          name = f"bellsoft-jre{os.environ['LIBERICA_JRE_VERSION']}-windows-amd64.zip"
+          asset, = [asset for asset in meta["assets"] if asset["name"] == name]
+          digest = asset["digest"]
+          assert digest.startswith("sha256:"), "Missing JRE checksum"
+          expected = digest.removeprefix("sha256:").lower()
           h = hashlib.sha256()
           with open("jre.zip", "rb") as f:
               for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -366,11 +378,15 @@ jobs:
           print(f"JRE checksum OK ({actual})")
           PY
 
-      - name: Extract Temurin JRE
+      - name: Extract Liberica JRE
         run: |
           Expand-Archive -Path jre.zip -DestinationPath jre-tmp
           $inner = (Get-ChildItem jre-tmp -Directory)[0].FullName
           Move-Item $inner jre
+
+      - name: Apply Java certificate mitigation
+        shell: bash
+        run: python tools/java_runtime.py mitigate jre
 
       - name: Build with PyInstaller
         run: pyinstaller NyaaTriggers.spec
@@ -401,6 +417,13 @@ jobs:
           if (-not (Test-Path $tn -PathType Leaf)) { throw "Triggernometry missing from the build: $tn" }
           if ((Get-Item $jar).Length -lt 1MB) { throw "engine jar is too small to be the fat jar" }
 
+      - name: Verify packaged Java version and certificate protection
+        shell: bash
+        run: >-
+          python tools/java_runtime.py verify dist/NyaaTriggers/_internal/jre
+          dist/NyaaTriggers/_internal/triggevent-core/target/triggevent-core.jar
+          --version "$JAVA_RUNTIME_VERSION"
+
       - name: Verify the bundled timelines shipped
         run: |
           $src = 'dist\NyaaTriggers\_internal\timelines'
@@ -416,7 +439,7 @@ jobs:
         env:
           VERSION: ${{ needs.meta.outputs.version }}
           QT_QPA_PLATFORM: offscreen
-        run: python tools/check_packaged_update.py NyaaTriggers-windows.zip --version $env:VERSION
+        run: python tools/check_packaged_update.py NyaaTriggers-windows.zip --version $env:VERSION --java-version $env:JAVA_RUNTIME_VERSION
 
       - name: Write SHA-256 sidecar
         shell: bash
@@ -490,19 +513,27 @@ jobs:
           name: triggevent-seed
           path: .
 
-      - name: Bundle Temurin JRE 17
+      - name: Bundle Liberica JRE 17
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           curl -fL --retry 3 --retry-all-errors -o jre.tar.gz \
-            "https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jre/hotspot/normal/eclipse"
+            "https://github.com/bell-sw/Liberica/releases/download/${LIBERICA_JRE_VERSION/+/%2B}/bellsoft-jre${LIBERICA_JRE_VERSION/+/%2B}-linux-amd64.tar.gz"
           python3 - <<'PY'
-          import json, urllib.request, hashlib, sys
-          url = ("https://api.adoptium.net/v3/assets/feature_releases/17/ga"
-                 "?architecture=x64&image_type=jre&jvm_impl=hotspot&os=linux"
-                 "&page=0&page_size=1&vendor=eclipse")
-          # Adoptium requires an explicit User-Agent for this request.
-          req = urllib.request.Request(url, headers={"User-Agent": "NyaaTriggers-CI/1.0"})
+          import json, urllib.request, urllib.parse, hashlib, sys, os
+          version = urllib.parse.quote(os.environ["LIBERICA_JRE_VERSION"], safe="")
+          url = f"https://api.github.com/repos/bell-sw/Liberica/releases/tags/{version}"
+          req = urllib.request.Request(url, headers={
+              "User-Agent": "NyaaTriggers-CI/1.0",
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+          })
           meta = json.load(urllib.request.urlopen(req, timeout=30))
-          expected = meta[0]["binaries"][0]["package"]["checksum"].lower()
+          assert meta["tag_name"] == os.environ["LIBERICA_JRE_VERSION"], "Unexpected JRE release"
+          name = f"bellsoft-jre{os.environ['LIBERICA_JRE_VERSION']}-linux-amd64.tar.gz"
+          asset, = [asset for asset in meta["assets"] if asset["name"] == name]
+          digest = asset["digest"]
+          assert digest.startswith("sha256:"), "Missing JRE checksum"
+          expected = digest.removeprefix("sha256:").lower()
           h = hashlib.sha256()
           with open("jre.tar.gz", "rb") as f:
               for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -515,6 +546,9 @@ jobs:
           mkdir -p jre-tmp
           tar -xzf jre.tar.gz -C jre-tmp
           mv "$(find jre-tmp -mindepth 1 -maxdepth 1 -type d | head -1)" jre
+
+      - name: Apply Java certificate mitigation
+        run: python tools/java_runtime.py mitigate jre
 
       - name: Build with PyInstaller
         run: pyinstaller NyaaTriggers.spec
@@ -550,6 +584,13 @@ jobs:
           cp NyaaTriggers.sh dist/NyaaTriggers/NyaaTriggers.sh
           chmod +x dist/NyaaTriggers/NyaaTriggers.sh
 
+      - name: Verify packaged Java version and certificate protection
+        shell: bash
+        run: >-
+          python tools/java_runtime.py verify dist/NyaaTriggers/_internal/jre
+          dist/NyaaTriggers/_internal/triggevent-core/target/triggevent-core.jar
+          --version "$JAVA_RUNTIME_VERSION"
+
       - name: Verify the bundled timelines shipped
         run: |
           test -f dist/NyaaTriggers/_internal/timelines/UMAD.txt || { echo "bundled timeline missing from the build"; exit 1; }
@@ -564,7 +605,7 @@ jobs:
         env:
           VERSION: ${{ needs.meta.outputs.version }}
           QT_QPA_PLATFORM: offscreen
-        run: python tools/check_packaged_update.py NyaaTriggers-linux.tar.gz --version "$VERSION"
+        run: python tools/check_packaged_update.py NyaaTriggers-linux.tar.gz --version "$VERSION" --java-version "$JAVA_RUNTIME_VERSION"
 
       - name: Write SHA-256 sidecar
         run: sha256sum NyaaTriggers-linux.tar.gz > NyaaTriggers-linux.tar.gz.sha256

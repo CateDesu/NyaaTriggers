@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from nyaatriggers import updater
+from tools.java_runtime import verify as verify_java_runtime
 
 
 def wait_for_boot(folder, process=None, previous_pid=None, timeout=60):
@@ -48,7 +49,7 @@ def stop_program(pid, process=None):
             process.wait(timeout=5)
 
 
-def check_archive(archive, version, previous_archive=None):
+def check_archive(archive, version, previous_archive=None, java_version=None):
     with tempfile.TemporaryDirectory(prefix="nyaa packaged update ") as directory:
         root = Path(directory)
         extracted = root / "installed"
@@ -130,6 +131,10 @@ def check_archive(archive, version, previous_archive=None):
                 stamp = (folder / "_internal" / "nyaatriggers.version").read_text(encoding="utf-8")
                 if stamp != version:
                     raise RuntimeError(f"Expected installed version {version}, got {stamp!r}")
+                if java_version is not None:
+                    verify_java_runtime(folder / "_internal/jre",
+                                        folder / "_internal/triggevent-core/target/triggevent-core.jar",
+                                        java_version)
                 if saved.read_bytes() != b"saved user data\n":
                     raise RuntimeError("The update changed saved user data")
                 if (folder / updater._REJECTED_NAME).exists():
@@ -156,6 +161,8 @@ if __name__ == "__main__":
     parser.add_argument("archive", type=Path)
     parser.add_argument("--version", required=True)
     parser.add_argument("--previous-archive", type=Path)
+    parser.add_argument("--java-version")
     args = parser.parse_args()
     check_archive(args.archive.resolve(), args.version,
-                  args.previous_archive.resolve() if args.previous_archive else None)
+                  args.previous_archive.resolve() if args.previous_archive else None,
+                  args.java_version)

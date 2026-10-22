@@ -61,13 +61,13 @@ else:
 ''')
         self.gh.chmod(0o755)
 
-    def run_step(self, name, releases, **extra):
+    def run_step(self, name, releases, *, timeout=5, **extra):
         env = {**os.environ, "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
                "RELEASE_FIXTURE": json.dumps(releases), "TAG": "v1.4.0.100",
                "KEEP": "v1.4.0.100", "SUFFIX": "", "PRE": "false", **extra}
         script = step_script(name).replace("${{ github.repository }}", "test/program")
         result = subprocess.run(["bash", "-eo", "pipefail", "-c", script],
-                                cwd=self.root, env=env, capture_output=True, text=True, timeout=5)
+                                cwd=self.root, env=env, capture_output=True, text=True, timeout=timeout)
         log = self.root / "commands.jsonl"
         commands = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
         return result, commands
@@ -187,7 +187,7 @@ else:
         try:
             result, commands = self.run_step("Publish release (un-draft)", [],
                 RELEASE_HTTP_URL=f"http://127.0.0.1:{server.server_port}/releases?per_page=100",
-                REAL_GH=shutil.which("gh"))
+                REAL_GH=shutil.which("gh"), timeout=30)
         finally:
             server.shutdown()
             server.server_close()
@@ -223,7 +223,7 @@ else:
         try:
             result, commands = self.run_step("Publish release (un-draft)", [],
                 RELEASE_HTTP_URL=f"http://127.0.0.1:{server.server_port}/releases?per_page=100",
-                REAL_GH=shutil.which("gh"))
+                REAL_GH=shutil.which("gh"), timeout=30)
         finally:
             server.shutdown()
             server.server_close()

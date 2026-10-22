@@ -19,6 +19,19 @@
         <nyaa.build.directory>${project.basedir}/target</nyaa.build.directory>
     </properties>
 
+    <dependencyManagement>
+        <dependencies>
+            <!-- Keep transitive versions aligned with the engine. -->
+            <dependency>
+                <groupId>gg.xp</groupId>
+                <artifactId>triggevent</artifactId>
+                <version>${tv.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <dependencies>
         <dependency>
             <groupId>gg.xp</groupId>
