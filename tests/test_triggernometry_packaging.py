@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -31,17 +32,27 @@ class PackagingTests(unittest.TestCase):
             engine_bin = source / "Triggernometry" / "bin" / "Release"
             shutil.copytree(CORE / "bin", engine_bin)
             (source / "Triggernometry" / "TriggernometryPlugin.csproj").write_text("<Project />")
+            shutil.copy2(CORE / "bin" / "packages.config", source / "Triggernometry" / "packages.config")
             commands = root / "commands"
             commands.mkdir()
             for name in ("git", "xbuild", "curl"):
                 command = commands / name
                 command.write_text("#!/bin/sh\nexit 0\n")
                 command.chmod(0o755)
+            restore_args = root / "restore.args"
+            mono = commands / "mono"
+            mono.write_text('#!/bin/sh\ncase "$1" in\n'
+                            '*/nuget.exe) printf "%s\\n" "$@" > ' + shlex.quote(str(restore_args)) + ' ;;\n'
+                            '*) exec ' + shlex.quote(shutil.which("mono")) + ' "$@" ;;\nesac\n')
+            mono.chmod(0o755)
             result = subprocess.run(["bash", str(root / "build-all.sh")],
                                     env={**os.environ, "PATH": str(commands) + os.pathsep + os.environ["PATH"],
                                          "ENGINE_DIR": str(engine)},
                                     capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(str(source / "Triggernometry" / "packages.config"), restore_args.read_text())
+            self.assertEqual((root / "bin" / "packages.config").read_bytes(),
+                             (CORE / "bin" / "packages.config").read_bytes())
             document = PackDocument(root / "saved.xml")
             document.add_trigger().set("RegularExpression", "^TEST$")
             with patch.object(bridge, "_find_exe", return_value=root / "bin" / "triggernometry-core.exe"):

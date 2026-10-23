@@ -41,11 +41,9 @@ mkdir -p "$SRC/shims"
 mcs -target:library -out:"$SRC/shims/System.Speech.dll"  "$HERE/shims/src/SystemSpeechStub.cs"
 mcs -target:library -out:"$SRC/shims/Interop.WMPLib.dll" "$HERE/shims/src/WMPLibStub.cs"
 
-if [ ! -d "$SRC/packages" ]; then
-  mkdir -p "$(dirname "$NUGET")"
-  [ -f "$NUGET" ] || curl -sL https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -o "$NUGET"
-  mono "$NUGET" restore "$SRC/Triggernometry.sln" -PackagesDirectory "$SRC/packages" -NonInteractive
-fi
+mkdir -p "$(dirname "$NUGET")"
+[ -f "$NUGET" ] || curl -fsSL https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -o "$NUGET"
+mono "$NUGET" restore "$SRC/Triggernometry/packages.config" -PackagesDirectory "$SRC/packages" -NonInteractive
 
 # Build the engine only. The separate ACT Proxy requires ACT.exe.
 "$BUILDTOOL" /p:Configuration=Release /verbosity:minimal "$SRC/Triggernometry/TriggernometryPlugin.csproj"

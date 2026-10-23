@@ -146,6 +146,7 @@ class RecapIcons(QObject):
             key, (url, metadata) = self.waiting.popitem(last=False)
             self.active.add(key)
             request = QNetworkRequest(QUrl(url))
+            request.setAttribute(QNetworkRequest.Attribute.Http2AllowedAttribute, False)
             request.setTransferTimeout(15000)
             request.setRawHeader(b"User-Agent", b"NyaaTriggers death recap")
             reply = self.manager.get(request)

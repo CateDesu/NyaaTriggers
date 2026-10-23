@@ -1,0 +1,52 @@
+name: Dependency security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Audit Python dependencies
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements.txt
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Audit bundled Triggernometry packages
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import xml.etree.ElementTree as ET
+          root = ET.Element('Project', Sdk='Microsoft.NET.Sdk')
+          props = ET.SubElement(root, 'PropertyGroup')
+          for name, value in {
+              'TargetFramework': 'net462',
+              'NuGetAudit': 'true',
+              'NuGetAuditMode': 'all',
+              'WarningsAsErrors': 'NU1901;NU1902;NU1903;NU1904',
+          }.items():
+              ET.SubElement(props, name).text = value
+          refs = ET.SubElement(root, 'ItemGroup')
+          for row in ET.parse('triggernometry-core/bin/packages.config').getroot():
+              ET.SubElement(refs, 'PackageReference', Include=row.get('id'), Version=row.get('version'))
+          destination = Path(os.environ['RUNNER_TEMP']) / 'sidecar-audit'
+          destination.mkdir()
+          ET.ElementTree(root).write(destination / 'Security.csproj', encoding='unicode')
+          PY
+          dotnet restore "$RUNNER_TEMP/sidecar-audit/Security.csproj" --verbosity minimal

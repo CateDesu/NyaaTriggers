@@ -481,6 +481,32 @@ class TriggernometryHostTests(unittest.TestCase):
             host.log("00", "0038", "Spike Player", "SPIKESCRIPT")
             self.assertEqual(host.call(), "script computed 42")
 
+    def test_bundled_json_assembly_matches_safe_package_pin(self):
+        if not shutil.which("mcs"):
+            self.skipTest("Requires the Mono compiler")
+        packages = ET.parse(CORE / "bin" / "packages.config").getroot()
+        package = next(row for row in packages if row.get("id") == "System.Text.Json")
+        self.assertEqual(package.get("version"), "8.0.6")
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "Version.cs"
+            source.write_text('''using System;
+using System.IO;
+using System.Reflection;
+class Check {
+    static void Main(string[] args) {
+        Console.WriteLine(AssemblyName.GetAssemblyName(Path.Combine(args[0], "System.Text.Json.dll")).Version);
+        foreach (string name in new[] { "TriggernometryPlugin.dll", "triggernometry-core.exe" })
+            foreach (AssemblyName reference in Assembly.ReflectionOnlyLoadFrom(Path.Combine(args[0], name)).GetReferencedAssemblies())
+                if (reference.Name == "System.Text.Json") Console.WriteLine(reference.Version);
+    }
+}
+''')
+            helper = source.with_suffix(".exe")
+            subprocess.run(["mcs", f"-out:{helper}", str(source)], check=True, capture_output=True)
+            result = subprocess.run(["mono", str(helper), str(CORE / "bin")],
+                                    check=True, capture_output=True, text=True)
+            self.assertEqual(result.stdout.splitlines(), ["8.0.0.6"] * 3)
+
     def test_mixed_case_extensions_load_the_same_inventory(self):
         source = (CORE / "test" / "packs" / "spike-me-pack.xml").read_bytes()
         inventories = []

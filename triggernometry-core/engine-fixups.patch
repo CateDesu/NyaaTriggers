@@ -1,5 +1,5 @@
 diff --git a/Source/Triggernometry/TriggernometryPlugin.csproj b/Source/Triggernometry/TriggernometryPlugin.csproj
-index 8641cca..5761b3f 100644
+index 8641cca..07a74e9 100644
 --- a/Source/Triggernometry/TriggernometryPlugin.csproj
 +++ b/Source/Triggernometry/TriggernometryPlugin.csproj
 @@ -110,7 +110,13 @@
@@ -17,6 +17,17 @@ index 8641cca..5761b3f 100644
      <Reference Include="System.Text.Encoding.CodePages, Version=4.1.1.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a, processorArchitecture=MSIL">
        <HintPath>..\packages\System.Text.Encoding.CodePages.4.5.1\lib\net461\System.Text.Encoding.CodePages.dll</HintPath>
      </Reference>
+@@ -118,8 +124,8 @@
+       <HintPath>..\packages\System.Text.Encodings.Web.8.0.0\lib\net462\System.Text.Encodings.Web.dll</HintPath>
+       <Private>True</Private>
+     </Reference>
+-    <Reference Include="System.Text.Json, Version=8.0.0.4, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51">
+-      <HintPath>..\packages\System.Text.Json.8.0.4\lib\net462\System.Text.Json.dll</HintPath>
++    <Reference Include="System.Text.Json, Version=8.0.0.6, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51">
++      <HintPath>..\packages\System.Text.Json.8.0.6\lib\net462\System.Text.Json.dll</HintPath>
+       <Private>True</Private>
+     </Reference>
+     <Reference Include="System.Threading.Tasks.Extensions, Version=4.2.0.1, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51, processorArchitecture=MSIL">
 @@ -669,15 +675,9 @@
      </EmbeddedResource>
    </ItemGroup>
@@ -125,3 +136,17 @@ index 4332e43..ead3011 100644
                      {
                          tempStr = "\"" + tempStr.Replace("\"", "\"\"") + "\"";
                      }
+diff --git a/Source/Triggernometry/packages.config b/Source/Triggernometry/packages.config
+index 41551ee..7dd67ac 100644
+--- a/Source/Triggernometry/packages.config
++++ b/Source/Triggernometry/packages.config
+@@ -20,7 +20,7 @@
+   <package id="System.Runtime.CompilerServices.Unsafe" version="6.0.0" targetFramework="net462" />
+   <package id="System.Text.Encoding.CodePages" version="4.5.1" targetFramework="net462" />
+   <package id="System.Text.Encodings.Web" version="8.0.0" targetFramework="net462" />
+-  <package id="System.Text.Json" version="8.0.4" targetFramework="net462" />
++  <package id="System.Text.Json" version="8.0.6" targetFramework="net462" />
+   <package id="System.Threading.Tasks.Extensions" version="4.5.4" targetFramework="net462" />
+   <package id="System.ValueTuple" version="4.5.0" targetFramework="net462" />
+ </packages>
+\ No newline at end of file

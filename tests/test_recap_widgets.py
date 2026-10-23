@@ -10,7 +10,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 from PyQt6.QtCore import QByteArray, QEvent, QObject, QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QHelpEvent
-from PyQt6.QtNetwork import QNetworkReply
+from PyQt6.QtNetwork import QNetworkReply, QNetworkRequest
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QLineEdit, QListWidget, QPushButton, QStyleOptionViewItem, QWidget, QVBoxLayout
 
@@ -88,8 +88,10 @@ class FakeNetwork:
     def __init__(self, parent):
         self.parent = parent
         self.requests = []
+        self.http2 = []
 
     def get(self, request):
+        self.http2.append(request.attribute(QNetworkRequest.Attribute.Http2AllowedAttribute))
         reply = FakeReply(self.parent)
         self.requests.append((request.url().toString(), reply))
         return reply
@@ -686,6 +688,7 @@ class WidgetTests(unittest.TestCase):
         self.assertEqual(metadata["name"], "New status")
         self.assertFalse(pixmap.isNull())
         self.assertEqual(len(manager.requests), 2)
+        self.assertEqual(manager.http2, [False, False])
         self.assertEqual(cache.active, set())
 
     def test_downloaded_status_metadata_refreshes_names_and_event_filters(self):

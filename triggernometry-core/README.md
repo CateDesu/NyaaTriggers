@@ -39,6 +39,7 @@ bash build-all.sh
 ```
 
 Output goes to `bin/` and targets .NET Framework 4.6.2.
+The engine patch pins System.Text.Json 8.0.6. Packaging includes its NuGet package manifest for dependency alerts and the scheduled security check.
 
 The pack editor uses `bin/triggernometry-validate.exe` to check XML types and .NET regular expressions without starting the engine or running actions. Packaging builds it automatically. To rebuild only this helper, run `bash triggernometry-core/build-validator.sh` from the program root. This leaves the running engine's executable and DLLs alone.
 
