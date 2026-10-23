@@ -13,6 +13,8 @@
 - **Trigger profiles.** Save named trigger choices and callout wording, then apply a setup between pulls without replacing trigger definitions.
 
 ### Fixed
+- **Stalled audio cannot replay stale instructions.** Queued speech and alert sounds expire after three seconds, including during synthesis and immediately before playback. Cold voice loading can still finish for subsequent callouts, and expired speech does not disable a healthy voice.
+- **Delayed Linux callouts after audio updates.** Speech and alert sounds prefer ALSA's PulseAudio device and fall back to the system default when unavailable. Playback stalls now time out according to the sound's duration instead of blocking short callouts for a full minute.
 - **Repeated zone announcements preserve pull history.** Recovery keeps actor state and earlier mechanics when the local log repeats the current zone. Real zone changes and wipes still start a new history boundary.
 - **Unsupported native settings preserve supported edits.** Current engine capabilities filter outgoing preferences while retaining saved choices for newer engines.
 - **Combat log import reports worker startup failures.** A worker that cannot start uses the existing error display and leaves the current recaps available.

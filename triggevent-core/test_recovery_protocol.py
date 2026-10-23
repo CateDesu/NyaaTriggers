@@ -138,6 +138,57 @@ def queue_pressure():
     print("PASS production queue overflow restarts recovery and delivers the next live callout")
 
 
+def midpull_startup():
+    app = QApplication.instance() or QApplication([])
+    with tempfile.TemporaryDirectory(prefix="nyaa-midpull-startup-") as temp:
+        stamp = datetime.now(timezone.utc) - timedelta(seconds=30)
+        zone = f"01|{stamp.isoformat()}|553|Raid|0"
+        player = (f"03|{stamp.isoformat()}|10000001|Player|15|64|0|0|World|0|0|"
+                  "10000|10000|10000|10000|0|0|100|100|0|0|0")
+        historical = (f"20|{(stamp + timedelta(seconds=1)).isoformat()}|40000001|Boss|C622|"
+                      "Light of Judgment|10000001|Player|5|100|100|0|0|0")
+        anchor = f"00|{(stamp + timedelta(seconds=15)).isoformat()}|0038|Player|Mid-pull anchor|0"
+        (Path(temp) / "Network_test.log").write_text("\n".join([zone, player, historical, anchor]) + "\n")
+        bridge, ws = TriggeventBridge(), WSClient()
+        recovery = TriggeventRecovery(bridge, ws, lambda: temp)
+        displays, speech, diagnostics, progress = [], [], [], []
+        bridge.callout.connect(lambda text, severity, generation: displays.append(text))
+        bridge.tts.connect(lambda text, generation: speech.append(text))
+        bridge.recovery_progress.connect(lambda message, generation: progress.append(message))
+        with patch.dict(os.environ, {"NYAA_AUTOMARK": "0"}), \
+                patch("nyaatriggers.triggevent_bridge._log", side_effect=diagnostics.append), \
+                patch("nyaatriggers.triggevent_recovery._log", side_effect=diagnostics.append):
+            try:
+                bridge.start()
+                ws._on_message(json.dumps({"type": "ChangeZone", "zoneID": 0x553, "zoneName": "Raid"}))
+                ws._on_message(json.dumps({"type": "ChangePrimaryPlayer", "charID": 0x10000001, "charName": "Player"}))
+                ws._on_message(json.dumps({"type": "InCombat", "inACTCombat": True, "inGameCombat": True}))
+                ws._on_message(json.dumps({"type": "LogLine", "rawLine": anchor}))
+                for _ in range(1200):
+                    if recovery._live:
+                        break
+                    QTest.qWait(25)
+                assert recovery._live, "Mid-pull startup did not catch up"
+                assert progress[-1]["status"] == "complete", progress
+                assert not displays and not speech, (displays, speech)
+                current = historical.replace((stamp + timedelta(seconds=1)).isoformat(),
+                                             datetime.now(timezone.utc).isoformat())
+                ws._on_message(json.dumps({"type": "LogLine", "rawLine": current}))
+                for _ in range(200):
+                    if speech:
+                        break
+                    QTest.qWait(25)
+                assert len(speech) == 1, speech
+                assert len(displays) == 1, displays
+            except BaseException:
+                print("\n".join(diagnostics))
+                raise
+            finally:
+                bridge.stop(wait=True)
+    print("PASS mid-pull startup skips historical speech and resumes the next live callout")
+
+
 if __name__ == "__main__":
     slow_history()
     queue_pressure()
+    midpull_startup()

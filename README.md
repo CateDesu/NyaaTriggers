@@ -32,7 +32,7 @@ Use `NyaaTriggers.sh` for shortcuts too. The launcher can recover a missing runt
 
 ### Linux system dependencies
 
-Neural voices and alert sounds need `aplay` from `alsa-utils`, including in the packaged build. Install it in the same environment where you launch NyaaTriggers. The commands below include it alongside the engine dependencies.
+Neural voices and alert sounds need `aplay` from `alsa-utils`, including in the packaged build. Playback prefers ALSA's PulseAudio device when available and falls back to the system default if that device fails. Install `alsa-utils` in the same environment where you launch NyaaTriggers. The commands below include it alongside the engine dependencies.
 
 Triggernometry needs a system Mono installation, including Windows Forms, for both packaged and source runs. Xvfb lets both engines run their hidden interfaces on a virtual display. Without Xvfb they use your session's X display.
 
@@ -111,6 +111,8 @@ Right-click a **Current Instance** log line to create a trigger, or a fight tree
 
 **Add - Triggevent callout** opens a visual builder for event waits, delays, and conditional speech. Search for a fight to fill its zone automatically, or leave it unassigned to save under Unsorted. It can remember an earlier debuff and use it to choose a later callout. See [custom Triggevent callouts](docs/GUIDE.md#custom-triggevent-callouts).
 
+Starting mid-pull does not require waiting for the next wipe. Triggevent silently restores the current pull from readable IINACT logs, catches up with incoming events, then resumes live callouts. Missed instructions stay silent. Without those logs, it uses current actor state and future events, so mechanics that depend on earlier events may remain unavailable until the next pull. Cactbot timelines resume when their configured sync events match.
+
 ## Triggernometry packs
 
 Choose **Settings - Data - Import Triggernometry** to load an XML export, such as a [Paissa pack](https://github.com/paissaheavyindustries/Triggernometry-Triggers/tree/main/Repositories). Imported triggers appear under **Triggernometry** in the fight list.
@@ -164,6 +166,8 @@ Choose **System** or **Piper** in **Settings - Voice** and check playback with *
 **Settings - Program - Language** offers Automatic, English, and 日本語 and applies after restart. Japanese callout translations fall back to English where unavailable. **Settings - Alert Sound** has built-in sounds, volume controls, and **Import SFX** for `.wav` files.
 
 The sidebar slider controls audio from 0% to 200%. Click its speaker to mute, or right-click for timed and zone-based mute options. Recordings and visual callouts continue while muted. See the [voice guide](docs/GUIDE.md#voice).
+
+Queued speech and alert sounds expire after three seconds. A stalled player or slow synthesis cannot replay old instructions when it recovers. Speech that has already started can finish normally.
 
 ## In-game display and automarkers
 

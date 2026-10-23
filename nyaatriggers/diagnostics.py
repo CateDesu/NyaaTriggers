@@ -54,7 +54,7 @@ fflogs-api fflogs-token fight-catalog plugin-drop plugin-link plugin-tx
 plugin-tx-dps plugin-tx-tick pull-capture pull-observer redos save session-tracking
 te-inventory telesto-http telesto-mark telesto-queue telesto-send timeline
 timeline-sync tn-inventory trigger-load trigger-sequence triggers tts-aplay
-tts-backend tts-backlog tts-error tts-interrupt tts-jp tts-kokoro tts-notify
+tts-backend tts-backlog tts-error tts-expired tts-interrupt tts-jp tts-kokoro tts-notify
 tts-overflow tts-piper tts-playback tts-shutdown tts-sound umad update
 """.split())
 
@@ -116,9 +116,10 @@ _SCHEMAS.update({
                                    "empty", "duplicate", "queued")},
     "tts_queue": {"gen": "int", "depth": "int", "duration_ms": "number",
                   "result": _enum("muted", "suspended", "queued", "evicted",
-                                  "dequeued", "finished", "interrupted", "failed"),
+                                  "dequeued", "finished", "interrupted", "failed", "expired"),
                   "kind": _enum("tts", "wav")},
     "tts_backend": {"backend": _enum("piper", "system", "kokoro", "aplay", "winsound"),
+                    "device": _enum("pulse", "default"),
                     "result": _enum("attempt", "unavailable", "superseded", "timed_out",
                                     "interrupted", "failed", "finished", "early_exit", "muted", "stale", "busy"),
                     "gen": "int", "returncode": "signed", "duration_ms": "number", "elapsed_ms": "number"},

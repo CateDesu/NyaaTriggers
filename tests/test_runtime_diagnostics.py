@@ -76,7 +76,7 @@ class RuntimeDiagnosticsTests(unittest.TestCase):
                 patch.object(tts, "_wav_seconds", return_value=1.0):
             tts._play_wav("/home/PrivateUser/voice.wav")
         self.assertEqual(self.rows("tts_backend")[-1],
-                         {"backend": "aplay", "result": "failed", "returncode": 17})
+                         {"backend": "aplay", "device": "default", "result": "failed", "returncode": 17})
         self.assertTrue(process.stderr.closed)
         self.assertIsNone(tts._current_proc)
 

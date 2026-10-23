@@ -15,6 +15,22 @@ CAST = ["20", "", "40000001", "Boss", "ABCD", "Cast"]
 
 
 class TimelineRecoveryTests(unittest.TestCase):
+    def test_midpull_sync_skips_past_cues_and_speaks_the_next_instruction(self):
+        engine = TimelineEngine()
+        engine.load(parse('1 "Missed cue"\n100 "--sync--" StartsUsing { id: "ABCD" } '
+                          'window 1000,1000\n105 "Next mechanic"'))
+        self.addCleanup(engine.reset)
+        spoken = []
+        engine.tts.connect(spoken.append)
+        now = [1000.0]
+        with patch("time.monotonic", side_effect=lambda: now[0]):
+            engine.process_line(CAST)
+            self.assertAlmostEqual(engine.current_time(), 100)
+            self.assertEqual(spoken, [])
+            now[0] += 5.1
+            engine._tick()
+            self.assertEqual(spoken, ["Next mechanic"])
+
     def test_recovery_matches_uninterrupted_clocks_and_future_calls(self):
         schedules = (
             '0 "First"\n3 "Second"\n8 "Third"',

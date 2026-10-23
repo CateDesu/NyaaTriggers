@@ -69,6 +69,8 @@ _worker_lock    = threading.Lock()
 _master_volume: float = 1.0
 _speech_suspended = False
 _generation: int = 0
+_MAX_CALLOUT_AGE_S = 3.0
+_speech_context = threading.local()
 
 _engine: str = "system" if platform.system() == "Windows" else "piper"
 
@@ -358,20 +360,22 @@ def _kokoro_synth(text: str, speed: float = 1.0, gen: "int | None" = None) -> "b
         record("tts_backend", gen=gen, backend="kokoro", result="stale")
         return None
     k = _load_kokoro(gen)
-    if k is None or (gen is not None and gen != _generation):
+    if k is None or (gen is not None and gen != _generation) or _callout_expired():
         record("tts_backend", gen=gen, backend="kokoro",
                result="unavailable" if k is None else "superseded")
         return None
     try:
         import numpy as np
         ok, out = _synth_call(lambda: k.create(text, voice=_jp_neural_voice,
-                                               speed=min(2.0, max(0.5, speed)), lang="ja"), gen)
-        if gen is not None and gen != _generation:
+                                               speed=min(2.0, max(0.5, speed)), lang="ja"),
+                              gen, expire=True)
+        if (gen is not None and gen != _generation) or _callout_expired():
             if not ok:
                 with _kokoro_lock:
                     if _kokoro is k:
                         _kokoro = None
-            record("tts_backend", gen=gen, backend="kokoro", result="interrupted")
+            record("tts_backend", gen=gen, backend="kokoro",
+                   result="interrupted" if gen is not None and gen != _generation else "stale")
             return None
         if not ok:
             record("tts_backend", gen=gen, backend="kokoro", result="timed_out")
@@ -420,12 +424,26 @@ def reading_for(text: str) -> "str | None":
 
 
 class _StampedItem(tuple):
-    """Carry the enqueue generation while preserving tuple equality."""
+    """Carry queue timing and generation while preserving tuple equality."""
 
     def __new__(cls, item, gen):
         self = super().__new__(cls, item)
         self.gen = gen
+        self.queued_at = time.monotonic()
         return self
+
+
+def _callout_expired() -> bool:
+    deadline = getattr(_speech_context, "deadline", None)
+    if deadline is None or time.monotonic() < deadline:
+        return False
+    if not getattr(_speech_context, "expired", False):
+        _speech_context.expired = True
+        record("tts_queue", gen=getattr(_speech_context, "gen", None),
+               depth=_queue.qsize(), result="expired")
+        log_drop("tts-expired",
+                 f"Callout at least {_MAX_CALLOUT_AGE_S:g}s old; discarded instead of speaking late")
+    return True
 
 
 def _enqueue(item) -> None:
@@ -661,10 +679,12 @@ class _SynthesisBusy(RuntimeError):
     pass
 
 
-def _synth_call(fn, gen: "int | None" = None):
+def _synth_call(fn, gen: "int | None" = None, *, expire: bool = False):
     """Bound abandoned synthesis while letting a fresh pull continue."""
     slots = _synthesis_slots if gen is not None else None
     if gen is not None and gen != _generation:
+        return False, None
+    if expire and _callout_expired():
         return False, None
     if slots is not None and not slots.acquire(blocking=False):
         raise _SynthesisBusy("previous synthesis calls are still running")
@@ -690,10 +710,12 @@ def _synth_call(fn, gen: "int | None" = None):
     while t.is_alive():
         if gen is not None and gen != _generation:
             return False, None
+        if expire and _callout_expired():
+            return False, None
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
-        t.join(min(0.05, remaining) if gen is not None else remaining)
+        t.join(min(0.05, remaining) if gen is not None or expire else remaining)
     if t.is_alive():
         return False, None
     if gen is not None and gen != _generation:
@@ -719,7 +741,12 @@ def _worker_loop() -> None:
         item = _queue.get()
         gen = getattr(item, "gen", None)
         started = time.monotonic()
+        _speech_context.deadline = getattr(item, "queued_at", started) + _MAX_CALLOUT_AGE_S
+        _speech_context.gen = gen
+        _speech_context.expired = False
         try:
+            if _callout_expired():
+                continue
             record("tts_queue", gen=gen, depth=_queue.qsize(), kind=item[0], result="dequeued")
             if item[0] == "wav":
                 _, path, volume = item
@@ -734,6 +761,8 @@ def _worker_loop() -> None:
             record("tts_queue", gen=gen, depth=_queue.qsize(), result="failed")
             traceback.print_exc()
             log_drop("tts-error", f"{type(exc).__name__} in the TTS worker: {exc}")
+        finally:
+            _speech_context.deadline = None
 
 
 def _system_speak(text: str, volume: float = 1.0, speed: float = 1.0,
@@ -823,7 +852,7 @@ def _run_speak_proc(cmd: list[str], text: str, stdin_text: bool, no_window: bool
         cmd = cmd + ["--", text]
         kwargs["stdin"] = subprocess.DEVNULL
     with _proc_lock:
-        if gen is not None and gen != _generation:
+        if (gen is not None and gen != _generation) or _callout_expired():
             return True
         if _current_proc is not None and _current_proc.poll() is None:
             log_drop("tts-backend", "previous speech process has not exited; callout dropped")
@@ -1061,6 +1090,9 @@ def _wav_seconds(source) -> float:
 def _play_winsound(source, flags: int, gen: "int | None" = None) -> None:
     """Bound driver stalls and propagate completed playback errors."""
     import winsound
+    if _callout_expired():
+        return
+    deadline = getattr(_speech_context, "deadline", None)
     if not _winsound_slot.acquire(blocking=False):
         record("tts_backend", gen=gen, backend="winsound", result="busy")
         log_drop("tts-playback", "previous winsound playback is still running; callout dropped")
@@ -1073,7 +1105,8 @@ def _play_winsound(source, flags: int, gen: "int | None" = None) -> None:
         try:
             # Recheck the generation when playback starts, then release the lock for interrupt.
             with _proc_lock:
-                if gen is not None and gen != _generation:
+                if (gen is not None and gen != _generation) \
+                        or (deadline is not None and time.monotonic() >= deadline):
                     box["stale"] = True
                     return
             winsound.PlaySound(source, flags)
@@ -1097,9 +1130,18 @@ def _play_winsound(source, flags: int, gen: "int | None" = None) -> None:
     if "err" in box:
         record("tts_backend", gen=gen, backend="winsound", result="failed")
         raise box["err"]
+    if box.get("stale"):
+        _callout_expired()
     record("tts_backend", gen=gen, backend="winsound",
            result="stale" if box.get("stale") else "finished",
            elapsed_ms=(time.monotonic() - started) * 1000)
+
+
+def _aplay_commands(wav_path: str):
+    return (
+        ("pulse", ["aplay", "-q", "-D", "pulse", "--", wav_path]),
+        ("default", ["aplay", "-q", "--", wav_path]),
+    )
 
 
 def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
@@ -1110,79 +1152,82 @@ def _play_wav(wav_path: str, gen: "int | None" = None) -> None:
         import winsound
         _play_winsound(wav_path, winsound.SND_FILENAME | winsound.SND_NODEFAULT, gen)
         return
-    player = ["aplay", "-q", "--", wav_path]
-    record("tts_backend", gen=gen, backend="aplay", result="attempt")
-    with _proc_lock:
-        if gen is not None and gen != _generation:
-            record("tts_backend", gen=gen, backend="aplay", result="stale")
-            log_drop("tts-interrupt",
-                     "callout cut off by a newer interrupt before playback started")
-            return
-        if _current_proc is not None and _current_proc.poll() is None:
-            log_drop("tts-playback", "previous speech process has not exited; callout dropped")
-            return
-        try:
-            proc = subprocess.Popen(player, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.PIPE,
-                                    env=proc_env.child_env())
-        except FileNotFoundError:
-            record("tts_backend", gen=gen, backend="aplay", result="unavailable")
-            _aplay_missing()
-            return
-        _current_proc = proc
-    err = b""
-    timed_out = False
-    started = time.monotonic()
     duration = _wav_seconds(wav_path)
-    play_timeout = max(60.0, duration * 1.5 + 5)
-    try:
-        _, err = proc.communicate(timeout=play_timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        proc.kill()
+    play_timeout = duration * 1.5 + 5
+    for device, player in _aplay_commands(wav_path):
+        record("tts_backend", gen=gen, backend="aplay", device=device, result="attempt")
+        with _proc_lock:
+            if (gen is not None and gen != _generation) or _callout_expired():
+                record("tts_backend", gen=gen, backend="aplay", device=device, result="stale")
+                log_drop("tts-interrupt",
+                         "callout cut off by a newer interrupt before playback started")
+                return
+            if _current_proc is not None and _current_proc.poll() is None:
+                log_drop("tts-playback", "previous speech process has not exited; callout dropped")
+                return
+            try:
+                proc = subprocess.Popen(player, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.PIPE,
+                                        env=proc_env.child_env())
+            except FileNotFoundError:
+                record("tts_backend", gen=gen, backend="aplay", device=device, result="unavailable")
+                _aplay_missing()
+                return
+            _current_proc = proc
+        err = b""
+        timed_out = False
+        started = time.monotonic()
         try:
-            err = proc.communicate(timeout=5)[1]
+            _, err = proc.communicate(timeout=play_timeout)
         except subprocess.TimeoutExpired:
-            pass
-    finally:
-        try:
-            if proc.returncode is None:
-                proc.kill()
-            proc.wait(timeout=5)
+            timed_out = True
+            proc.kill()
+            try:
+                err = proc.communicate(timeout=5)[1]
+            except subprocess.TimeoutExpired:
+                pass
         finally:
-            with _proc_lock:
-                was_interrupted = _interrupted_proc is proc
-                if was_interrupted:
-                    _interrupted_proc = None
-                if proc.returncode is not None:
-                    _current_proc = None
-            if proc.stderr is not None:
-                proc.stderr.close()
-    # Intentional interruption is not a playback failure.
-    if was_interrupted:
-        record("tts_backend", gen=gen, backend="aplay", result="interrupted")
+            try:
+                if proc.returncode is None:
+                    proc.kill()
+                proc.wait(timeout=5)
+            finally:
+                with _proc_lock:
+                    was_interrupted = _interrupted_proc is proc
+                    if was_interrupted:
+                        _interrupted_proc = None
+                    if proc.returncode is not None:
+                        _current_proc = None
+                if proc.stderr is not None:
+                    proc.stderr.close()
+        # Intentional interruption must not replay speech through the fallback.
+        if was_interrupted:
+            record("tts_backend", gen=gen, backend="aplay", device=device, result="interrupted")
+            return
+        if timed_out:
+            record("tts_backend", gen=gen, backend="aplay", device=device, result="timed_out")
+            log_drop("tts-playback",
+                     f"aplay hung {play_timeout:.1f}s on the audio device; killed, callout had no audio")
+            return
+        if proc.returncode != 0:
+            record("tts_backend", gen=gen, backend="aplay", device=device,
+                   result="failed", returncode=proc.returncode)
+            if device == "default":
+                lines = (err or b"").decode(errors="replace").strip().splitlines()
+                detail = lines[-1][:160] if lines else f"exit {proc.returncode}"
+                log_drop("tts-playback",
+                         f"aplay exit {proc.returncode}; callout had no audio: {detail}")
+            continue
+        # An early successful exit may mean discarded audio.
+        elapsed = time.monotonic() - started
+        record("tts_backend", gen=gen, backend="aplay", device=device,
+               result="early_exit" if duration and elapsed < duration * 0.5 else "finished",
+               elapsed_ms=elapsed * 1000, duration_ms=duration * 1000)
+        if duration and elapsed < duration * 0.5:
+            log_drop("tts-playback",
+                     f"aplay exited 0 after {elapsed:.2f}s for a {duration:.2f}s wav; "
+                     "the device likely discarded the audio")
         return
-    if timed_out:
-        record("tts_backend", gen=gen, backend="aplay", result="timed_out")
-        log_drop("tts-playback",
-                 f"aplay hung {play_timeout:.0f}s on the audio device; killed, callout had no audio")
-        return
-    if proc.returncode != 0:
-        record("tts_backend", gen=gen, backend="aplay", result="failed", returncode=proc.returncode)
-        lines = (err or b"").decode(errors="replace").strip().splitlines()
-        detail = lines[-1][:160] if lines else f"exit {proc.returncode}"
-        log_drop("tts-playback",
-                 f"aplay exit {proc.returncode}; callout had no audio: {detail}")
-        return
-    # An early successful exit may mean discarded audio.
-    elapsed = time.monotonic() - started
-    record("tts_backend", gen=gen, backend="aplay",
-           result="early_exit" if duration and elapsed < duration * 0.5 else "finished",
-           elapsed_ms=elapsed * 1000, duration_ms=duration * 1000)
-    if duration and elapsed < duration * 0.5:
-        log_drop("tts-playback",
-                 f"aplay exited 0 after {elapsed:.2f}s for a {duration:.2f}s wav; "
-                 "the device likely discarded the audio")
 
 
 _MAX_SOUND_BYTES = 32 << 20
@@ -1309,39 +1354,43 @@ def _log_notification_result(result) -> None:
 def _play_wav_detached(wav_path: str, epoch: "int | None" = None) -> None:
     if epoch is None:
         epoch = _notification_epoch
-    command = ["aplay", "-q", "--", wav_path]
-    try:
-        with _proc_lock:
-            if epoch != _notification_epoch or _master_volume <= 0 or _speech_suspended:
-                return
-            process = subprocess.Popen(command, stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.PIPE, env=proc_env.child_env())
-            _notification_procs.add(process)
-    except FileNotFoundError:
-        _aplay_missing()
-        return
-    timed_out = False
-    try:
-        _, error = process.communicate(timeout=max(60.0, _wav_seconds(wav_path) * 1.5 + 5))
-        if epoch == _notification_epoch:
-            _log_notification_result(subprocess.CompletedProcess(
-                command, process.returncode, stderr=error))
-    except subprocess.TimeoutExpired:
-        timed_out = True
-    finally:
+    play_timeout = _wav_seconds(wav_path) * 1.5 + 5
+    for device, command in _aplay_commands(wav_path):
         try:
-            if process.poll() is None:
-                process.kill()
-            process.wait(timeout=5)
-        finally:
             with _proc_lock:
-                if process.poll() is not None:
-                    _notification_procs.discard(process)
-            if process.stderr is not None:
-                process.stderr.close()
-    if timed_out:
-        print("[tts] notification playback timed out; killed aplay",
-              file=sys.stderr)
+                if epoch != _notification_epoch or _master_volume <= 0 or _speech_suspended:
+                    return
+                process = subprocess.Popen(command, stdout=subprocess.DEVNULL,
+                                           stderr=subprocess.PIPE, env=proc_env.child_env())
+                _notification_procs.add(process)
+        except FileNotFoundError:
+            _aplay_missing()
+            return
+        timed_out = False
+        try:
+            _, error = process.communicate(timeout=play_timeout)
+            if epoch == _notification_epoch and (not process.returncode or device == "default"):
+                _log_notification_result(subprocess.CompletedProcess(
+                    command, process.returncode, stderr=error))
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        finally:
+            try:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=5)
+            finally:
+                with _proc_lock:
+                    if process.poll() is not None:
+                        _notification_procs.discard(process)
+                if process.stderr is not None:
+                    process.stderr.close()
+        if timed_out:
+            print("[tts] notification playback timed out; killed aplay",
+                  file=sys.stderr)
+            return
+        if process.returncode == 0 or epoch != _notification_epoch:
+            return
 
 
 def _play_wav_bytes(wav: "bytes | None", volume: float = 1.0,
@@ -1371,7 +1420,7 @@ def _play_wav_bytes(wav: "bytes | None", volume: float = 1.0,
 def _kokoro_speak(text: str, volume: float = 1.0, speed: float = 1.0,
                   gen: "int | None" = None) -> bool:
     wav = _kokoro_synth(text, speed, gen)
-    if gen is not None and gen != _generation:
+    if (gen is not None and gen != _generation) or _callout_expired():
         return True
     return _play_wav_bytes(wav, volume, gen)
 
@@ -1385,7 +1434,7 @@ def _pipeline(text: str, volume: float = 1.0, speed: float = 1.0,
         return
     if gen is None:
         gen = _generation
-    if gen != _generation:
+    if gen != _generation or _callout_expired():
         record("tts_backend", gen=gen, backend=_engine, result="stale")
         return
     if reading is None:
@@ -1393,6 +1442,8 @@ def _pipeline(text: str, volume: float = 1.0, speed: float = 1.0,
         if readings:
             reading = readings.get(text)
     if has_japanese(text) and _jp_neural and _kokoro_speak(reading or text, volume, speed, gen):
+        return
+    if _callout_expired():
         return
     # Japanese text must never fall back to English Piper.
     if (_engine == "system" or (_jp_auto and has_japanese(text))) \
@@ -1403,7 +1454,7 @@ def _pipeline(text: str, volume: float = 1.0, speed: float = 1.0,
     try:
         record("tts_backend", gen=gen, backend="piper", result="attempt")
         voice = _load_piper(gen)
-        if gen != _generation:
+        if gen != _generation or _callout_expired():
             record("tts_backend", gen=gen, backend="piper", result="superseded")
             return
         if voice is None:
@@ -1433,17 +1484,18 @@ def _pipeline(text: str, volume: float = 1.0, speed: float = 1.0,
             return buf.getvalue()
 
         try:
-            ok, wav = _synth_call(_synth, gen)
+            ok, wav = _synth_call(_synth, gen, expire=True)
         except _SynthesisBusy:
             record("tts_backend", gen=gen, backend="piper", result="busy")
             log_drop("tts-piper", "previous synthesis calls still running; callout dropped")
             return
-        if gen != _generation:
+        if gen != _generation or _callout_expired():
             if not ok:
                 with _piper_lock:
                     if _piper_voice is voice:
                         _piper_voice = None
-            record("tts_backend", gen=gen, backend="piper", result="interrupted")
+            record("tts_backend", gen=gen, backend="piper",
+                   result="interrupted" if gen != _generation else "stale")
             return
         if not ok:
             record("tts_backend", gen=gen, backend="piper", result="timed_out")
@@ -1462,7 +1514,7 @@ def _pipeline(text: str, volume: float = 1.0, speed: float = 1.0,
         if abs(effective_volume - 1.0) > 0.01:
             _apply_volume(wav_path, effective_volume)
 
-        if gen != _generation:
+        if gen != _generation or _callout_expired():
             log_drop("tts-interrupt",
                      f"callout cut off by a newer interrupt: {text[:60]!r}")
             return
