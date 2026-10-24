@@ -1,8 +1,10 @@
 # NyaaTriggers Guide
 
-The full reference for NyaaTriggers. Install steps are in the [README](../README.md).
+Setup, controls, and troubleshooting for NyaaTriggers. See the [README](../README.md) for an overview.
 
+- [Installation](#installation)
 - [Requirements](#requirements)
+- [Connecting to IINACT](#connecting-to-iinact)
 - [Voice](#voice)
 - [Triggers tab](#triggers-tab)
 - [Engine triggers](#engine-triggers)
@@ -20,12 +22,87 @@ The full reference for NyaaTriggers. Install steps are in the [README](../README
 - [Settings](#settings)
 - [Personal triggers](#personal-triggers)
 - [Updating](#updating)
+- [Saved data](#saved-data)
+- [Troubleshooting callouts](#troubleshooting-callouts)
+
+---
+
+## Installation
+
+### Windows
+
+Download `NyaaTriggers-windows.zip` from the [latest release](https://github.com/CateDesu/NyaaTriggers/releases/latest), extract the whole folder somewhere writable, and run `NyaaTriggers.exe` inside it. Keep the `_internal` folder beside the executable.
+
+Release builds include Python, the English Piper voice, cactbot's browser runtime, and the Triggevent and Triggernometry engines. Java is bundled for Triggevent. Triggernometry uses Windows' .NET Framework, so it needs no Mono installation.
+
+### Linux packaged build
+
+Download `NyaaTriggers-linux.tar.gz` from the [latest release](https://github.com/CateDesu/NyaaTriggers/releases/latest) and extract it somewhere writable:
+
+```bash
+tar -xzf NyaaTriggers-linux.tar.gz
+cd NyaaTriggers
+./NyaaTriggers.sh
+```
+
+Use `NyaaTriggers.sh` for shortcuts too. The launcher can recover a missing runtime folder after an interrupted update. Python, the English Piper voice, cactbot's browser runtime, and Triggevent's Java runtime are bundled.
+
+### Linux system dependencies
+
+Neural voices and alert sounds need `aplay` from `alsa-utils`, including in the packaged build. Playback prefers ALSA's PulseAudio device when available and falls back to the system default if that device fails. Install `alsa-utils` in the same environment where you launch NyaaTriggers. The commands below include it alongside the engine dependencies.
+
+Triggernometry needs a system Mono installation, including Windows Forms, for both packaged and source runs. Xvfb lets both engines run their hidden interfaces on a virtual display. Without Xvfb they use your session's X display.
+
+Arch / CachyOS, using the distribution's [Mono package](https://archlinux.org/packages/extra/x86_64/mono/):
+
+```bash
+sudo pacman -S --needed alsa-utils mono xorg-server-xvfb xorg-xauth
+```
+
+Debian / Ubuntu, using [Mono development packages](https://packages.ubuntu.com/noble/mono-devel):
+
+```bash
+sudo apt update
+sudo apt install alsa-utils mono-devel libmono-system-windows-forms4.0-cil libgdiplus xvfb xauth
+```
+
+Fedora, using [alsa-utils](https://packages.fedoraproject.org/pkgs/alsa-utils/alsa-utils/) for audio and [mono-complete](https://packages.fedoraproject.org/pkgs/mono/mono-complete/) to include Windows Forms:
+
+```bash
+sudo dnf install alsa-utils mono-complete xorg-x11-server-Xvfb xorg-x11-xauth
+```
+
+On Bazzite, install those Fedora packages inside a `distrobox` or `toolbox` and launch NyaaTriggers there, or layer them with `rpm-ostree install` and reboot.
+
+### Linux from source
+
+Release builds and tests use Python 3.14. Source runs support Python 3.11 or newer. On Arch, CachyOS, Debian, or Ubuntu:
+
+```bash
+git clone https://github.com/CateDesu/NyaaTriggers
+cd NyaaTriggers
+bash setup.sh
+```
+
+Run `python3 main.py` on Arch / CachyOS, or `.venv/bin/python main.py` on Debian / Ubuntu. Use the same command for source shortcuts.
+
+`setup.sh` installs system dependencies through pacman or apt. On Debian / Ubuntu it also creates `.venv` and installs `requirements.txt` there because older distribution WebSocket packages cannot connect to the overlay. Arch / CachyOS uses the system Python packages. First launch downloads the English voice and installs Piper into the separate `~/.venv/ffxiv` voice environment.
+
+Optional engines need their own dependencies:
+
+| Engine | Source setup |
+|---|---|
+| Triggevent | Install Java 17, then use **Settings - Program - Update Triggevent Engine** to download the prebuilt engine on a fresh checkout. Building it yourself needs JDK 17 and Maven. See the [engine instructions](../triggevent-core/README.md#build-from-source-developers-only). |
+| Triggernometry | Install the [Linux system dependencies](#linux-system-dependencies). The prebuilt engine is already included in the checkout. |
+| Cactbot | Install PyQt6-WebEngine and restart. On Arch / CachyOS: `sudo pacman -S python-pyqt6-webengine`. For a pip environment: `python3 -m pip install -r requirements.txt`. |
+
+Source runs can use the prebuilt engines. Program code is in `nyaatriggers/`, interface code in `nyaatriggers/ui/`, and the entry point is `main.py`.
 
 ---
 
 ## Requirements
 
-Windows and Linux release builds bundle the Python dependencies and English Piper voice. IINACT is installed separately, and Linux audio and engines also use the [system dependencies listed in the README](../README.md#linux-system-dependencies). This table covers the base requirements for running from source on Linux.
+Windows and Linux release builds bundle the Python dependencies and English Piper voice. IINACT is installed separately, and Linux audio and engines also use the [system dependencies](#linux-system-dependencies). This table covers the base requirements for running from source on Linux.
 
 | Requirement | Notes |
 |---|---|
@@ -37,6 +114,17 @@ Windows and Linux release builds bundle the Python dependencies and English Pipe
 | websockets | The overlay needs the synchronous client API. Debian / Ubuntu setup installs the pinned version from `requirements.txt` into `.venv` because older distribution packages lack it. |
 | PyQt6-WebEngine | Optional for cactbot in source runs. Use `sudo pacman -S python-pyqt6-webengine` or `pip install PyQt6-WebEngine`. Releases bundle it. |
 | packaging | Checks dependency versions during source updates. Installed by `setup.sh`; manually use `sudo pacman -S python-packaging` / `sudo apt install python3-packaging` / `pip install packaging`. |
+
+---
+
+## Connecting to IINACT
+
+1. Install and enable IINACT in Dalamud using its [installation guide](https://www.iinact.com/installation/), then log into your character.
+2. In NyaaTriggers, set **WebSocket** to `ws://127.0.0.1:10501/ws`, or your configured IINACT address, and press **Connect**.
+3. Open **Current Instance** to check that the zone and combat log are arriving. **My character** in **Settings - Connection** fills automatically and can be corrected there.
+4. Enable **Auto-connect on startup** in that same section if wanted. After connecting, the program retries a lost connection automatically.
+
+The IINACT connection supplies the combat feed. [Telesto](#automarkers-tab) and the [companion overlay](#in-game-display) have their own connections.
 
 ---
 
@@ -54,6 +142,8 @@ The Japanese voices **Alpha** and **Kumo** also appear under **Model**. First se
 **Test TTS** previews the selected voice. On Linux source installs, **Piper venv** points to the piper-tts environment, normally `~/.venv/ffxiv`.
 
 The sidebar volume slider controls audio from 0% to 200%. Click the speaker to mute or unmute. Its right-click menu offers **Mute for 5 minutes**, **Mute for 15 minutes**, **Mute until next zone**, and **Unmute**. The combat feed, recordings, and visual callouts continue while muted.
+
+Queued speech and alert sounds expire after three seconds. A stalled player or slow synthesis cannot replay old instructions when it recovers. Speech that has already started can finish normally.
 
 ---
 
@@ -124,7 +214,9 @@ Release builds bundle the engine and Java 17. For source runs, install Java 17 a
 
 NyaaTriggers detects `triggevent-core/target/triggevent-core.jar` and uses bundled or system Java. See the [engine README](../triggevent-core/README.md) for build details.
 
-Some engine components construct Swing windows. On Linux, Xvfb supplies a hidden display; otherwise the engine uses your session's X display. Install the [Linux dependencies](../README.md#linux-system-dependencies) for headless or pure Wayland sessions. The companion overlay handles the in-game display.
+Some engine components construct Swing windows. On Linux, Xvfb supplies a hidden display; otherwise the engine uses your session's X display. Install the [Linux dependencies](#linux-system-dependencies) for headless or pure Wayland sessions. The companion overlay handles the in-game display.
+
+Starting mid-pull does not require waiting for the next wipe. Triggevent silently restores the current pull from readable IINACT logs, catches up with incoming events, then resumes live callouts. Missed instructions stay silent. Without those logs, it uses current actor state and future events, so mechanics that depend on earlier events may remain unavailable until the next pull. Cactbot timelines resume when their configured sync events match.
 
 ---
 
@@ -170,7 +262,7 @@ Saving checks the pack with the bundled engine's XML types and .NET regular expr
 
 **Silent live check.** From a source checkout, run `python3 tools/validate_triggernometry_live.py` while the game and IINACT are connected. This starts a temporary engine with its own probe pack and checks live raw and formatted logs, player identity, HP, position, and zone. It produces a report without speaking or changing installed packs. This checks the feed and engine integration; encounter mechanics still require their own validation.
 
-**Update a pack** by importing its updated export. When the engine is available, matching packs ask for confirmation before replacement and save the previous XML with a `.bak` suffix. Identical imports reuse the existing copy. Separate packs can share a filename and receive separate files. Duplicate trigger IDs keep independent controls, and trigger chains use the matching target in their containing folder. Ambiguous references must be resolved before import. References embedded in scripts need unique source IDs. **Remove a pack** by closing the program, moving its XML out of the [pack folder](../README.md#updating-and-saved-data), then restarting.
+**Update a pack** by importing its updated export. When the engine is available, matching packs ask for confirmation before replacement and save the previous XML with a `.bak` suffix. Identical imports reuse the existing copy. Separate packs can share a filename and receive separate files. Duplicate trigger IDs keep independent controls, and trigger chains use the matching target in their containing folder. Ambiguous references must be resolved before import. References embedded in scripts need unique source IDs. **Remove a pack** by closing the program, moving its XML out of the [pack folder](#saved-data), then restarting.
 
 Keep the private `.nyaatriggers-identities.json` file with the XML when backing up or moving the pack folder. It preserves controls for duplicate IDs. Corrupt or unwritable identity history blocks pack loading until repaired.
 
@@ -178,7 +270,7 @@ Keep the private `.nyaatriggers-identities.json` file with the XML when backing 
 
 **Telesto.** Set **Telesto URL** in Automarkers to use pack memory subscriptions and drawings. Callback setup is automatic for local connections. These features run with Triggernometry; game commands and macros additionally require **Enable automarkers**. Stopping the engine removes its subscriptions and drawings, and stale callbacks are ignored. TOP Party Synergy and Pantokrator are covered by replays. Telesto performs the memory reads and drawing, so pack offsets must match the game version.
 
-**Runtime and builds.** The prebuilt .NET Framework 4.6.2 host is included in releases and source checkouts. Windows runs it natively; Linux needs [Mono and its system dependencies](../README.md#linux-system-dependencies). Rebuild only after changing the host or engine pin: run `triggernometry-core/build-all.sh` with Mono 6.12+. See the [engine README](../triggernometry-core/README.md).
+**Runtime and builds.** The prebuilt .NET Framework 4.6.2 host is included in releases and source checkouts. Windows runs it natively; Linux needs [Mono and its system dependencies](#linux-system-dependencies). Rebuild only after changing the host or engine pin: run `triggernometry-core/build-all.sh` with Mono 6.12+. See the [engine README](../triggernometry-core/README.md).
 
 ---
 
@@ -198,6 +290,8 @@ The meter updates every second from the combat log. It shows per-player DPS, dam
 - Finished pulls stay visible until the next starts. **Recent pulls** lists this run's attempts newest first. Select one to review it, then use **<- Back to live** or wait for the next pull.
 - Every encounter automatically saves one JSONL record per pull in `dps_logs/`. Logs roll over after 25 pulls of one fight or 5 distinct fights. The newest five completed logs and the active log are retained.
 - The companion overlay receives live DPS once a second for up to 24 players. Its settings control appearance and whether the last encounter remains visible.
+
+**Settings - FFLogs** can show your best recorded rDPS after a fight using your personal API client details, server, and region. **IINACT Logs** opens the raw logs for an FFLogs uploader. DPS summaries are separate files.
 
 ---
 
@@ -292,6 +386,8 @@ The active profile and separate Default setup survive restarts. Applying preserv
 ## Automarkers tab
 
 Place party signs through [Telesto](https://github.com/paissaheavyindustries/Telesto). Select the encounter controls and markers for each mechanic. Marking another player requires a known party slot.
+
+Native encounter controls cover UWU Titan Gaols, DSR Thunderstruck and Wroth Flames, TOP's eight marker mechanics with separate Omega sets, and UMAD P4 debuffs.
 
 **Enable automarkers** and **Telesto URL** also configure Triggevent's native
 markers after an engine restart. **Triggevent encounter automarkers** exposes all
@@ -417,3 +513,41 @@ The optional startup check and **Settings - Program - Check for Updates** look f
 | Windows `.zip` | A staged copy replaces files after exit, with a backup and automatic rollback if startup fails. |
 
 Git clones and source copies are notified of each rolling release. Installing, choosing Download, or dismissing a banner snoozes that release until a newer one appears.
+
+---
+
+## Saved data
+
+Most writable data lives beside `main.py` for source runs or beside the executable for packaged builds:
+
+| File or folder | Contents |
+|---|---|
+| `nyaatriggers_settings.json` | Connection, voice, language, engine callout choices, and other settings |
+| `triggers.local.json` | Custom triggers, edited bundled triggers, folders, and saved overrides |
+| `triggevent.custom.json` | Definitions created with the Triggevent callout builder |
+| `trigger_profiles/` | Named profiles and the separate Default setup |
+| `dps_logs/` | Recorded DPS pull summaries |
+| `prog_sessions/` | Saved sessions, notes, and per-pull deaths under `recaps/` |
+| `pull_logs/` | Optional raw captures for engine replay |
+| `nyaatriggers.log` | Program diagnostics, including dropped-callout and crash entries |
+| `diagnostics.log` | Structured support records, with two retained rotations |
+| `nyaatriggers-update.log` | Windows update and rollback diagnostics when an update runs |
+| `voices/`, `sounds/`, `timelines/` | User voices, imported sounds, and local timelines |
+
+Imported Triggernometry packs and engine diagnostics use the per-user configuration folder instead: `~/.config/nyaatriggers/` on Linux, or `%APPDATA%\nyaatriggers\` on Windows. Linux respects `XDG_CONFIG_HOME`. Packs live under `triggernometry-packs/`; logs are `triggevent.log` and `triggernometry-core/triggernometry.log`. Include this folder as well as the program's writable data when moving your setup.
+
+If you use existing Triggevent EasyTriggers or Groovy scripts, keep your Triggevent user folder too, normally `~/.triggevent/`.
+
+---
+
+## Troubleshooting callouts
+
+Check the connection, selected fight's row checkboxes, Cactbot mode, and sidebar mute first. **Test TTS** checks the voice path, while **Test Fire** previews a row without validating that a mechanic will match it.
+
+The engine indicator beside the connection turns red if an engine fails to start or stops unexpectedly. Hover it for the full message. An amber **chain failures** count means Triggevent reported failed callout sequences, even if the engine is still running. Its tooltip shows recent errors.
+
+**Settings - Data - Save diagnostics…** saves a support file you can attach to an [issue](https://github.com/CateDesu/NyaaTriggers/issues) or share in [Discord](https://discord.com/invite/TQJrbZcgKF). Include the fight, missing callout, and approximate time. Nothing uploads automatically.
+
+Support records cover connections, engine state, mechanic event IDs and timing, callout delivery, speech queues, and safe error locations. They include runtime versions and selected on/off settings. Actors use temporary session numbers. Character and computer names, chat, spoken text, network addresses, paths, credentials, and custom trigger content are excluded. Records are collected automatically with three files capped at 8 MiB each. The export reads only validated support records; it does not include older program or engine logs.
+
+**Save combat log…** separately exports the raw combat feed. **Settings - Connection - Record pulls to pull_logs for engine replay** captures raw attempts for replay. These files and the older program and engine logs can contain personal information. Review them before sharing; they are not part of the diagnostic export.

@@ -50,7 +50,7 @@ For an existing engine checkout, run `build-engine.sh` then `build-host.sh`, whi
 `NyaaTriggers.spec` bundles the committed `triggernometry-core/bin/` directly. CI does not rebuild it.
 
 - **Windows:** run the executable with native .NET Framework. No Mono or Xvfb is needed.
-- **Linux:** use system Mono and the [Linux dependencies](../README.md#linux-system-dependencies). A bundled Mono runtime remains future work.
+- **Linux:** use system Mono and the [Linux dependencies](../docs/GUIDE.md#linux-system-dependencies). A bundled Mono runtime remains future work.
 
 Standalone debug test:
 
@@ -64,7 +64,7 @@ Server mode:
 xvfb-run -a mono bin/triggernometry-core.exe <cfgDir> --serve <pack1.xml> <pack2.xml> ...
 ```
 
-Send log and combatant JSON on stdin; callouts appear on stdout. The bridge finds `bin/triggernometry-core.exe` or `$NYAA_TRIGGERNOMETRY_EXE`. Packs use `$NYAA_TRIGGERNOMETRY_PACKS` or the [default pack folder](../README.md#updating-and-saved-data). Availability requires the executable and, on Linux, Mono.
+Send log and combatant JSON on stdin; callouts appear on stdout. The bridge finds `bin/triggernometry-core.exe` or `$NYAA_TRIGGERNOMETRY_EXE`. Packs use `$NYAA_TRIGGERNOMETRY_PACKS` or the [default pack folder](../docs/GUIDE.md#saved-data). Availability requires the executable and, on Linux, Mono.
 
 ---
 
