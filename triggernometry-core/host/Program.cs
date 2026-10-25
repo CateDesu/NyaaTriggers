@@ -25,6 +25,8 @@ static class Program
     static readonly object combatLock = new object();
     static readonly Stopwatch encounterClock = new Stopwatch();
     static bool inCombat;
+    static readonly object temporaryConfigCleanupLock = new object();
+    static bool temporaryConfigCleanupStarted;
 
     static readonly Dictionary<string, Triggernometry.Action> _calloutActions = new Dictionary<string, Triggernometry.Action>();
     static readonly Dictionary<string, string> _calloutOriginal = new Dictionary<string, string>();
@@ -43,9 +45,47 @@ static class Program
         catch (Exception ex) { Err("[host] set UTF-8 console: " + ex.Message); }
         try { Application.EnableVisualStyles(); } catch (Exception ex) { Err("[host] EnableVisualStyles: " + ex.Message); }
 
+        if (args.Length > 0 && args[0].Length > 0)
+        {
+            Run(args, args[0]);
+            return;
+        }
+
+        string cfgDir = TemporaryConfigPath();
+        // Environment.Exit skips Main's finally block.
+        AppDomain.CurrentDomain.ProcessExit += (s, e) => RemoveTemporaryConfig(cfgDir);
+        try { Run(args, cfgDir); }
+        finally { RemoveTemporaryConfig(cfgDir); }
+    }
+
+    static string TemporaryConfigPath()
+    {
         // A shared fallback lets another user preseed the configuration file.
-        string cfgDir = (args.Length > 0 && args[0].Length > 0) ? args[0]
-            : Path.Combine(Path.GetTempPath(), "nyaa-triggernometry-" + Guid.NewGuid().ToString("N"));
+        string tempRoot = Path.GetFullPath(Path.GetTempPath());
+        string candidate = Path.GetFullPath(Path.Combine(tempRoot, "nyaa-triggernometry-" + Guid.NewGuid().ToString("N")));
+        if (!string.Equals(
+            Path.GetDirectoryName(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            tempRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+            StringComparison.Ordinal))
+            throw new IOException("Temporary configuration must stay inside the temporary directory.");
+        return candidate;
+    }
+
+    static void RemoveTemporaryConfig(string directory)
+    {
+        // Wait for cleanup before exit without reclaiming a recreated path.
+        lock (temporaryConfigCleanupLock)
+        {
+            if (temporaryConfigCleanupStarted) return;
+            temporaryConfigCleanupStarted = true;
+            try { Directory.Delete(directory, true); }
+            catch (DirectoryNotFoundException) { }
+            catch (Exception ex) { Err("[host] temporary config cleanup: " + ex.Message); }
+        }
+    }
+
+    static void Run(string[] args, string cfgDir)
+    {
         bool serve = Array.IndexOf(args, "--serve") >= 0;
         var packPaths = new List<string>();
         string testLine = "00|2026-06-27T12:00:00.0000000+00:00|0839|Spike|SPIKETEST please call|0000abcd";

@@ -70,8 +70,10 @@ tmp.cleanup()
 with tempfile.TemporaryDirectory() as td:
     repo = Path(td)
     (repo / "requirements.txt").write_text(
-        "required-example==1.2.3\nPyQt6-WebEngine==6.11.0\n", encoding="utf-8")
+        "required-example==1.2.3\nPyQt6-WebEngine==6.11.0\n"
+        "PyQt6-WebEngine-Qt6==6.11.2\n", encoding="utf-8")
     with patch.object(updater, "_externally_managed_python", return_value=True), \
+            patch.dict(sys.modules, {"PyQt6.QtWebEngineCore": None}), \
             patch.object(updater.metadata, "version", return_value="1.3.0"), \
             patch.object(updater.subprocess, "run", side_effect=AssertionError("pip ran")):
         managed_result = updater._install_requirements(repo)
@@ -101,6 +103,39 @@ with tempfile.TemporaryDirectory() as td:
           not managed_ok and "distribution's package manager" in managed_message
           and "checking the Python dependencies failed" in managed_message
           and "pip install -r" not in managed_message)
+
+for runtime, expected in (("6.11.0", False), ("6.11.2", True), ("6.12.0", True)):
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td)
+        (repo / "requirements.txt").write_text("PyQt6-Qt6==6.11.2\n", encoding="utf-8")
+        with patch.object(updater, "_externally_managed_python", return_value=True), \
+                patch("PyQt6.QtCore.qVersion", return_value=runtime), \
+                patch.object(updater.metadata, "version",
+                             side_effect=AssertionError("Qt wheel metadata checked")), \
+                patch.object(updater.subprocess, "run", side_effect=AssertionError("pip ran")):
+            runtime_result = updater._install_requirements(repo)
+        check(f"managed Python checks the actual Qt runtime {runtime}",
+              runtime_result is not None and runtime_result[0] == expected)
+        if not expected:
+            check("outdated system Qt names the runtime requirement",
+                  "PyQt6-Qt6 6.11.0 is older than the required 6.11.2" in runtime_result[1])
+
+for runtime, expected in ((None, True), ("6.11.0", False), ("6.11.2", True), ("6.12.0", True)):
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td)
+        (repo / "requirements.txt").write_text("PyQt6-WebEngine-Qt6==6.11.2\n", encoding="utf-8")
+        runtime_module = None if runtime is None else SimpleNamespace(qWebEngineVersion=lambda: runtime)
+        with patch.object(updater, "_externally_managed_python", return_value=True), \
+                patch.dict(sys.modules, {"PyQt6.QtWebEngineCore": runtime_module}), \
+                patch.object(updater.metadata, "version",
+                             side_effect=AssertionError("WebEngine wheel metadata checked")), \
+                patch.object(updater.subprocess, "run", side_effect=AssertionError("pip ran")):
+            runtime_result = updater._install_requirements(repo)
+        check(f"managed Python checks optional WebEngine runtime {runtime}",
+              runtime_result is not None and runtime_result[0] == expected)
+        if not expected:
+            check("outdated system WebEngine names the runtime requirement",
+                  "PyQt6-WebEngine-Qt6 6.11.0 is older than the required 6.11.2" in runtime_result[1])
 
 for installed, expected in (
         ("6.11.0", True), ("6.11", True), ("6.11.0.0", True),

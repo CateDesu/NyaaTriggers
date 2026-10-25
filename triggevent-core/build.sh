@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ET_DIR="${EVENT_TRIGGER_DIR:-$HERE/event-trigger}"
 ET_REPO="${EVENT_TRIGGER_REPO:-https://github.com/CateDesu/event-trigger.git}"
 # Keep the engine commit pin in sync with build.bat.
-ET_REF="${EVENT_TRIGGER_REF:-d71b2557c3356f5c2fa4340e5a1b0a48c9a951a1}"
+ET_REF="${EVENT_TRIGGER_REF:-b023d4b2da1dfcd3c2df3d5c1cf0dedcf1fe371a}"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 

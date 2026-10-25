@@ -1,11 +1,13 @@
 # Linux playback requires alsa-utils. Install PyQt6 through the package manager or pip.
 PyQt6==6.11.0
+PyQt6-Qt6==6.11.2
 
 # Synchronous WebSocket client for the overlay link worker. IINACT uses Qt WebSockets.
 websockets==16.1.1
 
 # Cactbot controls need this optional WebEngine dependency.
 PyQt6-WebEngine==6.11.0
+PyQt6-WebEngine-Qt6==6.11.2
 
 # Voice dependencies install separately on demand. Pins live in the installers and workflow.
 

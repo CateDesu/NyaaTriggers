@@ -5,7 +5,7 @@ set "HERE=%~dp0"
 if not defined EVENT_TRIGGER_DIR set "EVENT_TRIGGER_DIR=%HERE%event-trigger"
 if not defined EVENT_TRIGGER_REPO set "EVENT_TRIGGER_REPO=https://github.com/CateDesu/event-trigger.git"
 REM Keep the engine commit pin in sync with build.sh.
-if not defined EVENT_TRIGGER_REF set "EVENT_TRIGGER_REF=d71b2557c3356f5c2fa4340e5a1b0a48c9a951a1"
+if not defined EVENT_TRIGGER_REF set "EVENT_TRIGGER_REF=b023d4b2da1dfcd3c2df3d5c1cf0dedcf1fe371a"
 
 where java >nul 2>nul || (echo ERROR: JDK 17 not found - run: winget install EclipseAdoptium.Temurin.17.JDK & exit /b 1)
 where mvn  >nul 2>nul || (echo ERROR: Maven not found - run: winget install Apache.Maven & exit /b 1)

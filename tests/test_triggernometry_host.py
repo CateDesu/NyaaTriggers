@@ -1,4 +1,4 @@
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import json
 import os
 from pathlib import Path
@@ -124,15 +124,77 @@ class TriggernometryHostTests(unittest.TestCase):
             sentinel = root / "sentinel.txt"
             sentinel.write_text("preserve this file")
             (legacy / "Triggernometry.config.xml").symlink_to(sentinel)
-            with patch.dict(os.environ, {"TMPDIR": directory}):
+            with patch.dict(os.environ, {"TMPDIR": directory}), ExitStack() as launches:
                 for _ in range(2):
-                    with replay(PACKS / "log-sources.xml", config_dir="") as host:
-                        self.assertTrue(host.inventory)
+                    host = launches.enter_context(replay(PACKS / "log-sources.xml", config_dir=""))
+                    self.assertTrue(host.inventory)
+                configurations = list(root.glob("nyaa-triggernometry-*"))
+                self.assertEqual(len(configurations), 2)
+                for configuration in configurations:
+                    self.assertTrue((configuration / "Triggernometry.config.xml").is_file())
             self.assertEqual(sentinel.read_text(), "preserve this file")
-            configurations = [path for path in root.iterdir() if path.is_dir() and path != legacy]
-            self.assertEqual(len(configurations), 2)
-            for configuration in configurations:
-                self.assertTrue((configuration / "Triggernometry.config.xml").is_file())
+            self.assertEqual(list(root.glob("nyaa-triggernometry-*")), [])
+
+    def test_default_configuration_is_removed_after_startup_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {**os.environ, "TMPDIR": directory}
+            environment.pop("DISPLAY", None)
+            environment.pop("WAYLAND_DISPLAY", None)
+            result = subprocess.run(
+                ["mono", str(CORE / "bin" / "triggernometry-core.exe"), "", "--serve",
+                 str(PACKS / "log-sources.xml")],
+                input="", capture_output=True, text=True, env=environment, timeout=20)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("cfgDir=", result.stderr)
+            self.assertEqual(list(Path(directory).glob("nyaa-triggernometry-*")), [])
+
+    def test_explicit_configuration_survives_host_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            configuration = Path(directory) / "nyaa-triggernometry-explicit"
+            configuration.mkdir()
+            sentinel = configuration / "keep.txt"
+            sentinel.write_text("preserve this file")
+            with replay(PACKS / "log-sources.xml", config_dir=str(configuration)) as host:
+                self.assertTrue(host.inventory)
+            self.assertEqual(sentinel.read_text(), "preserve this file")
+            self.assertTrue((configuration / "Triggernometry.config.xml").is_file())
+
+    @unittest.skipUnless(shutil.which("mcs"), "Requires the Mono C# compiler")
+    def test_cleanup_does_not_remove_a_recreated_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "CleanupTwice.cs"
+            executable = root / "CleanupTwice.exe"
+            source.write_text('''using System;
+using System.IO;
+using System.Reflection;
+
+class CleanupTwice
+{
+    static void Main(string[] args)
+    {
+        var program = Assembly.LoadFrom(args[0]).GetType("Program", true);
+        var cleanup = program.GetMethod("RemoveTemporaryConfig", BindingFlags.NonPublic | BindingFlags.Static);
+        Directory.CreateDirectory(args[1]);
+        cleanup.Invoke(null, new object[] { args[1] });
+        if (Directory.Exists(args[1])) throw new Exception("Owned directory was not removed");
+        Directory.CreateDirectory(args[1]);
+        string sentinel = Path.Combine(args[1], "keep.txt");
+        File.WriteAllText(sentinel, "preserve this file");
+        cleanup.Invoke(null, new object[] { args[1] });
+        if (!File.Exists(sentinel) || File.ReadAllText(sentinel) != "preserve this file")
+            throw new Exception("Cleanup removed a recreated directory");
+    }
+}
+''')
+            compiled = subprocess.run(["mcs", "-out:" + str(executable), str(source)],
+                                      capture_output=True, text=True, timeout=20)
+            self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+            result = subprocess.run(
+                ["mono", str(executable), str(CORE / "bin" / "triggernometry-core.exe"),
+                 str(root / "nyaa-triggernometry-recreated")],
+                capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_bridge_speech_controls_preserve_scripts_templates_and_defaults(self):
         app = QApplication.instance() or QApplication([])

@@ -452,11 +452,23 @@ def _system_requirement_issue(req: Path) -> str | None:
         if match is None:
             return f"Could not check requirement {line!r} with the system Python."
         name, required = match.groups()
-        if re.sub(r"[-_.]+", "-", name).lower() == "pyqt6-webengine":
+        normalized = re.sub(r"[-_.]+", "-", name).lower()
+        if normalized == "pyqt6-webengine":
             continue
         try:
-            installed = metadata.version(name)
-        except metadata.PackageNotFoundError:
+            if normalized == "pyqt6-qt6":
+                from PyQt6.QtCore import qVersion
+
+                installed = qVersion()
+            elif normalized == "pyqt6-webengine-qt6":
+                try:
+                    from PyQt6.QtWebEngineCore import qWebEngineVersion
+                except ImportError:
+                    continue
+                installed = qWebEngineVersion()
+            else:
+                installed = metadata.version(name)
+        except (metadata.PackageNotFoundError, ImportError):
             return f"{name} {required} is not installed in the system Python."
         try:
             if Version(installed) < Version(required):
