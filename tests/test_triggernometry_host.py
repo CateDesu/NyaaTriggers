@@ -76,7 +76,7 @@ class HostReplay:
 
 
 @contextmanager
-def replay(pack, relay=None, extra_packs=()):
+def replay(pack, relay=None, extra_packs=(), config_dir=None):
     with tempfile.TemporaryDirectory() as temp:
         environment = os.environ.copy()
         if relay:
@@ -85,7 +85,7 @@ def replay(pack, relay=None, extra_packs=()):
         # Ubuntu xvfb-run merges stderr into stdout, so collect diagnostics from both.
         proc = subprocess.Popen(
             ["xvfb-run", "-a", "mono", str(CORE / "bin" / "triggernometry-core.exe"),
-             temp, "--serve", str(pack), *map(str, extra_packs)],
+             temp if config_dir is None else config_dir, "--serve", str(pack), *map(str, extra_packs)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, start_new_session=True, env=environment)
         host = HostReplay(proc)
@@ -115,6 +115,24 @@ class TriggernometryHostTests(unittest.TestCase):
             if os.environ.get("GITHUB_ACTIONS") == "true":
                 raise RuntimeError(message)
             raise unittest.SkipTest(message)
+
+    def test_default_configuration_ignores_preplanted_files_and_isolates_launches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "tnc"
+            legacy.mkdir()
+            sentinel = root / "sentinel.txt"
+            sentinel.write_text("preserve this file")
+            (legacy / "Triggernometry.config.xml").symlink_to(sentinel)
+            with patch.dict(os.environ, {"TMPDIR": directory}):
+                for _ in range(2):
+                    with replay(PACKS / "log-sources.xml", config_dir="") as host:
+                        self.assertTrue(host.inventory)
+            self.assertEqual(sentinel.read_text(), "preserve this file")
+            configurations = [path for path in root.iterdir() if path.is_dir() and path != legacy]
+            self.assertEqual(len(configurations), 2)
+            for configuration in configurations:
+                self.assertTrue((configuration / "Triggernometry.config.xml").is_file())
 
     def test_bridge_speech_controls_preserve_scripts_templates_and_defaults(self):
         app = QApplication.instance() or QApplication([])

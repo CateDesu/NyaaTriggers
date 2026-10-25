@@ -8,9 +8,12 @@ import threading
 import unittest
 from email.parser import BytesParser
 from email.policy import default
+from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import urlsplit
+from urllib.request import HTTPSHandler, ProxyHandler, build_opener
 
 
 spec = importlib.util.spec_from_file_location("discord_notify", Path(__file__).with_name("discord_notify.py"))
@@ -25,6 +28,8 @@ PNG = bytes.fromhex(
 class NotificationTests(unittest.TestCase):
     def setUp(self):
         self.requests = []
+        self.hosts = []
+        self.redirects = {}
         self.image_failures = 0
         self.image = PNG
         self.post_status = 200
@@ -34,6 +39,13 @@ class NotificationTests(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 test.requests.append(self.path)
+                test.hosts.append(self.headers["Host"])
+                if self.path in test.redirects:
+                    self.send_response(302)
+                    self.send_header("Location", test.redirects[self.path])
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if self.path.startswith("/image.png"):
                     if test.image_failures:
                         test.image_failures -= 1
@@ -64,11 +76,28 @@ class NotificationTests(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.serve_forever)
         self.thread.start()
         self.url = f"http://127.0.0.1:{self.server.server_port}"
+
+        class FixtureConnection(HTTPConnection):
+            def __init__(self, _host, **kwargs):
+                super().__init__("127.0.0.1", test.server.server_port, **kwargs)
+
+        class FixtureHTTPSHandler(HTTPSHandler):
+            def https_open(self, request):
+                return self.do_open(FixtureConnection, request)
+
+        # Keep production URL and redirect checks while routing fixture requests locally.
+        opener = build_opener(ProxyHandler({}), notify.PreviewRedirectHandler(), FixtureHTTPSHandler())
+        self.opener_patch = patch.object(notify, "preview_opener", opener)
+        self.opener_patch.start()
+        self.addCleanup(self.opener_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.output = Path(self.temp.name)
+        self.local_image = self.output / "local-preview.png"
+        self.local_image.write_bytes(PNG)
+        self.commit_url = "https://github.com/CateDesu/NyaaTriggers/commit/" + "a" * 40
         self.env = {
-            "REPO": "CateDesu/Kurisu", "REF": "main", "ACTOR": "CateDesu",
-            "COMMIT_SHA": "a" * 40, "COMMIT_URL": self.url + "/commit/large",
+            "REPO": "CateDesu/NyaaTriggers", "REF": "main", "ACTOR": "CateDesu",
+            "COMMIT_SHA": "a" * 40, "COMMIT_URL": self.commit_url,
             "COMMIT_MSG": "Update 11,161 lines\n\n- Keep the original GitHub card",
         }
 
@@ -82,6 +111,11 @@ class NotificationTests(unittest.TestCase):
         workflow = Path(__file__).with_name("workflows") / "discord-notify.yml"
         post = workflow.read_text().split("      - name: Post push to Discord\n", 1)[1]
         script = textwrap.dedent(post.split("        run: |\n", 1)[1])
+        prepare_command = "python3 .github/discord_notify.py\n"
+        self.assertIn(prepare_command, script)
+        if webhook != "":
+            notify.prepare(self.env, self.output)
+        script = script.replace(prepare_command, "", 1)
         return subprocess.run(
             ["bash", "-euo", "pipefail", "-c", script],
             cwd=Path(__file__).resolve().parent.parent,
@@ -117,7 +151,7 @@ class NotificationTests(unittest.TestCase):
     def test_preview_generation_can_recover_before_posting(self):
         self.image_failures = 1
         with patch.object(notify.time, "sleep") as sleep:
-            self.assertEqual(notify.fetch_preview(self.url + "/commit/large"), PNG)
+            self.assertEqual(notify.fetch_preview(self.commit_url), PNG)
         sleep.assert_called_once_with(2)
         self.assertEqual(sum(path.startswith("/image.png") for path in self.requests), 2)
 
@@ -138,7 +172,51 @@ class NotificationTests(unittest.TestCase):
         for body in [b"<html>Not ready</html>", PNG[:-12], PNG[:-12] + b"x" * (5 * 1024 * 1024) + PNG[-12:]]:
             with self.subTest(size=len(body)), patch("builtins.print"):
                 self.image = body
-                self.assertIsNone(notify.fetch_preview(self.url + "/commit/large", attempts=1))
+                self.assertIsNone(notify.fetch_preview(self.commit_url, attempts=1))
+
+    def test_untrusted_commit_urls_are_rejected_before_requests(self):
+        for url in (
+            self.url + "/commit/large", "http://github.com/commit/large",
+            "https://github.com.evil.test/commit/large", "https://github.com@127.0.0.1/commit/large",
+            "https://github.com:8443/commit/large", self.local_image.as_uri(),
+        ):
+            with self.subTest(url=url), patch("builtins.print"):
+                self.assertIsNone(notify.fetch_preview(url, attempts=1))
+        self.assertEqual(self.requests, [])
+
+    def test_untrusted_metadata_urls_are_rejected_before_image_requests(self):
+        for url in (
+            self.url + "/image.png", "//127.0.0.1/image.png", "http://github.com/image.png",
+            "https://opengraph.githubassets.com.evil.test/image.png",
+            "https://github.com@127.0.0.1/image.png", "https://github.com:8443/image.png",
+            self.local_image.as_uri(),
+        ):
+            with self.subTest(url=url), patch("builtins.print"):
+                self.requests.clear()
+                self.metadata = f'<meta property="og:image" content="{url}">'
+                self.assertIsNone(notify.fetch_preview(self.commit_url, attempts=1))
+                self.assertEqual(self.requests, [urlsplit(self.commit_url).path])
+
+    def test_untrusted_redirects_are_rejected_before_following_them(self):
+        for path in (urlsplit(self.commit_url).path, "/image.png?a=1&b=2"):
+            for target in (self.url + "/private", "http://github.com/private",
+                           "https://github.com.evil.test/private", self.local_image.as_uri()):
+                with self.subTest(path=path, target=target), patch("builtins.print"):
+                    self.requests.clear()
+                    self.redirects = {path: target}
+                    self.assertIsNone(notify.fetch_preview(self.commit_url, attempts=1))
+                    self.assertEqual(self.requests[-1], path)
+                    self.assertNotIn("/private", self.requests)
+
+    def test_github_redirects_and_opengraph_images_are_preserved(self):
+        self.redirects = {
+            urlsplit(self.commit_url).path: "https://github.com/redirected-commit",
+            "/image.png?a=1&b=2": "https://opengraph.githubassets.com/image.png?final=1",
+        }
+        self.assertEqual(notify.fetch_preview(self.commit_url, attempts=1), PNG)
+        self.assertEqual(self.requests, [urlsplit(self.commit_url).path, "/redirected-commit",
+                                        "/image.png?a=1&b=2", "/image.png?final=1"])
+        self.assertEqual(self.hosts, ["github.com"] * 3 + ["opengraph.githubassets.com"])
 
     def test_long_commit_messages_keep_the_link_and_embed_within_limits(self):
         message = 'Large change "quoted" `$(touch nope)`\n' + "日本語\n" * 3000

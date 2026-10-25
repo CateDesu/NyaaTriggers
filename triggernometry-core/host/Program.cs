@@ -43,7 +43,9 @@ static class Program
         catch (Exception ex) { Err("[host] set UTF-8 console: " + ex.Message); }
         try { Application.EnableVisualStyles(); } catch (Exception ex) { Err("[host] EnableVisualStyles: " + ex.Message); }
 
-        string cfgDir = (args.Length > 0 && args[0].Length > 0) ? args[0] : Path.Combine(Path.GetTempPath(), "tnc");
+        // A shared fallback lets another user preseed the configuration file.
+        string cfgDir = (args.Length > 0 && args[0].Length > 0) ? args[0]
+            : Path.Combine(Path.GetTempPath(), "nyaa-triggernometry-" + Guid.NewGuid().ToString("N"));
         bool serve = Array.IndexOf(args, "--serve") >= 0;
         var packPaths = new List<string>();
         string testLine = "00|2026-06-27T12:00:00.0000000+00:00|0839|Spike|SPIKETEST please call|0000abcd";

@@ -6,8 +6,34 @@ from html.parser import HTMLParser
 from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.parse import urljoin
-from urllib.request import Request, urlopen
+from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+
+PREVIEW_ORIGINS = {
+    "github.com": "https://github.com",
+    "opengraph.githubassets.com": "https://opengraph.githubassets.com",
+}
+
+
+def preview_url(url):
+    parsed = urlsplit(url)
+    origin = PREVIEW_ORIGINS.get(parsed.netloc)
+    if parsed.scheme != "https" or origin is None:
+        raise ValueError("Preview URL must use a GitHub HTTPS host")
+    return origin + urlunsplit(("", "", parsed.path, parsed.query, ""))
+
+
+class PreviewRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            newurl = preview_url(newurl)
+        except ValueError:
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+preview_opener = build_opener(PreviewRedirectHandler())
 
 
 class PreviewMetadata(HTMLParser):
@@ -24,13 +50,14 @@ class PreviewMetadata(HTMLParser):
 def fetch_preview(commit_url, attempts=4):
     for attempt in range(attempts):
         try:
-            request = Request(commit_url, headers={"User-Agent": "GitHub-push-preview"})
-            with urlopen(request, timeout=10) as response:
+            request = Request(preview_url(commit_url), headers={"User-Agent": "GitHub-push-preview"})
+            with preview_opener.open(request, timeout=10) as response:
                 metadata = PreviewMetadata()
                 metadata.feed(response.read(512 * 1024).decode("utf-8", errors="replace"))
             if not metadata.image_url:
                 raise ValueError("Missing preview metadata")
-            with urlopen(urljoin(commit_url, metadata.image_url), timeout=10) as response:
+            image_url = preview_url(urljoin(commit_url, metadata.image_url))
+            with preview_opener.open(image_url, timeout=10) as response:
                 image = response.read(5 * 1024 * 1024 + 1)
             if (
                 not image.startswith(b"\x89PNG\r\n\x1a\n")
