@@ -10,6 +10,7 @@ permissions:
   contents: read
 
 env:
+  PYTHON_VERSION: '3.14.9'
   LIBERICA_JRE_VERSION: '17.0.21+11'
   JAVA_RUNTIME_VERSION: '17.0.21+11-LTS'
 
@@ -86,7 +87,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          python-version: ${{ env.PYTHON_VERSION }}
       - name: Install system deps for tests
         run: |
           sudo apt-get update
@@ -95,7 +96,8 @@ jobs:
             libgl1 libnss3 libasound2 mono-devel xvfb
       - name: Install Python dependencies
         run: |
-          pip install PyQt6==6.11.0 PyQt6-Qt6==6.11.2 PyQt6-WebEngine==6.11.0 PyQt6-WebEngine-Qt6==6.11.2 websockets==16.1.1 regex==2026.7.19 packaging==26.3 numpy==2.3.5
+          python -m pip install --upgrade pip==26.2.2
+          python -m pip install PyQt6==6.11.0 PyQt6-Qt6==6.11.2 PyQt6-WebEngine==6.11.0 PyQt6-WebEngine-Qt6==6.11.2 websockets==16.1.1 regex==2026.7.19 packaging==26.3 numpy==2.3.5
       - name: Run test suite
         env:
           QT_QPA_PLATFORM: offscreen
@@ -152,7 +154,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Build triggevent-core.jar
         run: bash triggevent-core/build.sh
@@ -160,7 +162,8 @@ jobs:
       - name: Verify engine recovery
         run: |
           sudo apt-get update && sudo apt-get install -y xvfb libegl1 libxkbcommon0 libgl1 mono-devel
-          pip install PyQt6==6.11.0 PyQt6-Qt6==6.11.2 websockets==16.1.1 regex==2026.7.19 packaging==26.3
+          python -m pip install --upgrade pip==26.2.2
+          python -m pip install PyQt6==6.11.0 PyQt6-Qt6==6.11.2 websockets==16.1.1 regex==2026.7.19 packaging==26.3
           python3 - <<'PY'
           import importlib.util
           from pathlib import Path
@@ -297,12 +300,13 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       # Keep dependency versions in sync with requirements.txt and the voice installers.
       - name: Install dependencies
         run: |
-          pip install PyQt6==6.11.0 PyQt6-Qt6==6.11.2 PyQt6-WebEngine==6.11.0 PyQt6-WebEngine-Qt6==6.11.2 piper-tts==1.6.0 pyinstaller==6.21.0 pillow==13.0.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1 packaging==26.3
+          python -m pip install --upgrade pip==26.2.2
+          python -m pip install PyQt6==6.11.0 PyQt6-Qt6==6.11.2 PyQt6-WebEngine==6.11.0 PyQt6-WebEngine-Qt6==6.11.2 piper-tts==1.6.0 pyinstaller==6.21.0 pillow==13.0.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1 packaging==26.3
 
       - name: Verify source updates on Windows
         run: python -m tests test_updater_integration
@@ -462,7 +466,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.14'
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install system deps for PyQt6 runtime
         run: |
@@ -473,7 +477,8 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install PyQt6==6.11.0 PyQt6-Qt6==6.11.2 PyQt6-WebEngine==6.11.0 PyQt6-WebEngine-Qt6==6.11.2 piper-tts==1.6.0 pyinstaller==6.21.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1 packaging==26.3
+          python -m pip install --upgrade pip==26.2.2
+          python -m pip install PyQt6==6.11.0 PyQt6-Qt6==6.11.2 PyQt6-WebEngine==6.11.0 PyQt6-WebEngine-Qt6==6.11.2 piper-tts==1.6.0 pyinstaller==6.21.0 kokoro-onnx==0.4.7 regex==2026.7.19 websockets==16.1.1 packaging==26.3
 
       - name: Stamp rolling version into _VERSION
         if: needs.meta.outputs.rolling == 'true'

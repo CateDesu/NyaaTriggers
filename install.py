@@ -438,12 +438,13 @@ def prepare_voice_venv(directory: Path, run=None) -> None:
         pip = scripts / ("pip.exe" if platform.system() == "Windows" else "pip")
         if not pip.exists():
             run([creator, "-m", "venv", str(directory)], timeout=120)
+        python = scripts / ("python.exe" if platform.system() == "Windows" else "python")
+        run([str(python), "-m", "pip", "install", "--upgrade", "--no-input", "pip==26.2.2"], timeout=120)
         packages = ["piper-tts==1.4.2"]
         if kokoro:
             packages.append("kokoro-onnx==0.4.7")
         retry = ["--force-reinstall"] if incomplete else []
         run([str(pip), "install", "--upgrade", "--no-input", *retry, *packages], timeout=600)
-        python = scripts / ("python.exe" if platform.system() == "Windows" else "python")
         imports = "import piper.voice, onnxruntime" + (", kokoro_onnx" if kokoro else "")
         run([str(python), "-c", imports], timeout=30)
         if backup is not None:

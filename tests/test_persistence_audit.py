@@ -196,7 +196,7 @@ class VoiceEnvironmentRecoveryTests(unittest.TestCase):
                 root.mkdir()
                 (root / "pyvenv.cfg").write_text(
                     f"version = {sys.version_info.major}.{sys.version_info.minor}.0\n")
-            elif args[1] == "install":
+            elif args[1] == "install" and any(arg.startswith("piper-tts==") for arg in args):
                 packages = Path(sysconfig.get_path("purelib", scheme="venv",
                                 vars={"base": str(root), "platbase": str(root)}))
                 (packages / "piper").mkdir(parents=True)
@@ -211,7 +211,8 @@ class VoiceEnvironmentRecoveryTests(unittest.TestCase):
                 original = self.old_environment(root, kokoro)
                 run = Mock(side_effect=self.fake_installer(root))
                 install.prepare_voice_venv(root, run)
-                packages = run.call_args_list[1].args[0]
+                packages = next(call.args[0] for call in run.call_args_list
+                                if "piper-tts==1.4.2" in call.args[0])
                 self.assertIn("piper-tts==1.4.2", packages)
                 self.assertEqual("kokoro-onnx==0.4.7" in packages, kokoro)
                 backup, = root.parent.glob("voice.backup-*")
@@ -249,8 +250,9 @@ class VoiceEnvironmentRecoveryTests(unittest.TestCase):
             self.assertEqual(sentinel.read_bytes(), b"keep the shared runtime")
             self.assertEqual(list(root.parent.glob("runtime.backup-*")), [])
             self.assertFalse(install.voice_setup_pending(root))
-            self.assertEqual(run.call_count, 2)
-            self.assertEqual(run.call_args_list[0].args[0][0], str(pip))
+            self.assertEqual(run.call_count, 3)
+            python = scripts / ("python.exe" if os.name == "nt" else "python")
+            self.assertEqual(run.call_args_list[0].args[0][:3], [str(python), "-m", "pip"])
             self.assertFalse(any(call.args[0][1:3] == ["-m", "venv"]
                                  for call in run.call_args_list))
 
@@ -450,15 +452,15 @@ def run(args, timeout):
     if calls == 1:
         root.mkdir()
         (root / "pyvenv.cfg").write_text(f"version = {sys.version_info.major}.{sys.version_info.minor}.0\\n")
-    elif calls == 2:
+    elif calls == 3:
         packages = Path(sysconfig.get_path("purelib", scheme="venv",
                         vars={"base": str(root), "platbase": str(root)}))
         (packages / "piper").mkdir(parents=True)
-    if phase == {1:"created", 2:"installed", 3:"validated"}[calls]:
+    if phase == {1:"created", 2:"pip-refreshed", 3:"installed", 4:"validated"}[calls]:
         os._exit(23)
 install.prepare_voice_venv(root, run)
 '''
-        for phase in ("before-marker", "after-marker", "after-backup", "created",
+        for phase in ("before-marker", "after-marker", "after-backup", "created", "pip-refreshed",
                       "installed", "validated", "committed"):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary) / "voice"
@@ -553,7 +555,9 @@ class VoiceInstallCompletionTests(unittest.TestCase):
             self.assertFalse(main._piper_installed(root))
             retry = Mock(side_effect=fake)
             install.prepare_voice_venv(root, retry)
-            self.assertIn("--force-reinstall", retry.call_args_list[0].args[0])
+            packages = next(call.args[0] for call in retry.call_args_list
+                            if "piper-tts==1.4.2" in call.args[0])
+            self.assertIn("--force-reinstall", packages)
             self.assertTrue(main._piper_installed(root))
             self.assertFalse(install.voice_setup_pending(root))
             self.assertEqual((root / "user-notes.txt").read_text(), "keep my notes")
@@ -629,11 +633,11 @@ def run(args, timeout):
     global calls
     calls += 1
     fake(args, timeout)
-    if phase == {1: "created", 2: "installed", 3: "validated"}[calls]:
+    if phase == {1: "created", 2: "pip-refreshed", 3: "installed", 4: "validated"}[calls]:
         os._exit(23)
 install.prepare_voice_venv(root, run)
 '''
-        for phase in ("marked", "created", "installed", "validated", "committed"):
+        for phase in ("marked", "created", "pip-refreshed", "installed", "validated", "committed"):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary) / "voice"
                 result = subprocess.run([sys.executable, "-c", script, str(root), phase],

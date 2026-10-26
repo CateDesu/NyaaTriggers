@@ -24,6 +24,7 @@ elif command -v apt &>/dev/null; then
     ${SUDO[@]+"${SUDO[@]}"} apt install -y python3-pyqt6 python3-pyqt6.qtwebsockets python3-websockets python3-regex python3-packaging python3-venv alsa-utils
     # Older distro WebSocket packages lack the overlay client's sync API.
     python3 -m venv .venv
+    .venv/bin/python -m pip install --upgrade pip==26.2.2
     .venv/bin/python -m pip install -r requirements.txt
     RUN_PYTHON=.venv/bin/python
 else

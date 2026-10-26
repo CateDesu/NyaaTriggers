@@ -53,6 +53,8 @@ with open(os.environ['SETUP_CALLS'], 'a') as log:
     log.write(json.dumps(['pip', *sys.argv[1:]]) + '\\\\n')
 if os.environ.get('SETUP_PIP_FAIL'):
     raise SystemExit(1)
+if sys.argv[1:] == ['install', '--upgrade', 'pip==26.2.2']:
+    raise SystemExit(0)
 assert sys.argv[1:] == ['install', '-r', 'requirements.txt'], sys.argv
 dependency = pathlib.Path(__file__).with_name('websockets')
 if not dependency.exists():
@@ -122,6 +124,8 @@ print(json.dumps({"prefix": sys.prefix, "version": version}))
             self.assertEqual(Path(output["prefix"]), self.program / ".venv")
             self.assertEqual(output["version"], "0.2.0")
             self.assertIn(["pip", "install", "-r", "requirements.txt"], calls)
+            self.assertLess(calls.index(["pip", "install", "--upgrade", "pip==26.2.2"]),
+                            calls.index(["pip", "install", "-r", "requirements.txt"]))
             self.assertTrue(any(call[0] == "apt" and "python3-venv" in call for call in calls))
             server.shutdown()
             thread.join(5)

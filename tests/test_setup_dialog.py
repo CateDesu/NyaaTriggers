@@ -107,8 +107,8 @@ finally:
      main.install.run_setup_command, main.time.sleep, main.install.setup_lock,
      main._startup_settings) = _saved
 
-check("first run setup created the venv then installed and validated Piper",
-      len(_pip_calls) == 3)
+check("first run setup created the venv then refreshed pip and installed and validated Piper",
+      len(_pip_calls) == 4)
 check("setup subprocess calls capture diagnostics through the owned runner",
       all(k.get("capture_output") for k in _pip_calls))
 check("first run setup reports success", _done0 == [(True, "")])

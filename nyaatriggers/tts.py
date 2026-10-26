@@ -161,8 +161,12 @@ def install_kokoro_deps(timeout: int = 1200) -> tuple[bool, str]:
 
         # Kokoro uses the voice environment, outside requirements.txt.
         with setup_lock():
+            python = _venv_python()
+            run_setup_command(
+                [python, "-m", "pip", "install", "--no-input", "--upgrade", "pip==26.2.2"],
+                timeout=min(timeout, 120), capture_output=True, env=proc_env.child_env())
             r = run_setup_command(
-                [_venv_python(), "-m", "pip", "install", "--no-input", "--upgrade", "kokoro-onnx==0.4.7"],
+                [python, "-m", "pip", "install", "--no-input", "--upgrade", "kokoro-onnx==0.4.7"],
                 timeout=timeout, capture_output=True, env=proc_env.child_env())
         tail = (r.stderr or r.stdout or "").strip().splitlines()[-3:]
         return r.returncode == 0, "\n".join(tail)
