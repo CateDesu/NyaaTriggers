@@ -921,15 +921,21 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin, TriggerConv
         edits = self._callout_edits_for(src)
         if edits is None:
             return
+        original = self._callout_edit_state(key)
         cur = self._engine_text_for_key(key)
         label = _("Triggernometry") if src == "triggernometry" else _("Triggevent")
         tokhint = (_("Triggernometry ${...} expressions still substitute")
                    if src == "triggernometry"
                    else _("Triggevent tokens such as {event.target} still work"))
+        title = _("Edit {engine} callout").format(engine=label)
         text, ok = self._edit_engine_text_dialog(
-            _("Edit {engine} callout").format(engine=label),
+            title,
             _("Spoken text ({hint}). The ▶ button speaks a sample with placeholder values.").format(hint=tokhint), cur)
         if ok:
+            if original != self._callout_edit_state(key) or cur != self._engine_text_for_key(key):
+                ac.QMessageBox.warning(self, title, _(
+                    "This callout changed outside the editor. Reopen it before saving."))
+                return
             self._apply_callout_edit(src, tid, text)
 
     def _engine_row_context_menu(self, key: str, global_pos) -> None:

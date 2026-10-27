@@ -603,7 +603,10 @@ class TriggerDialog(QDialog):
                       "it.").format(n=n))
                 return
             step_pattern = row._regex.text().strip()
-            if (step_pattern and not step_aid
+            step_type = row._type.currentData().strip() or "20"
+            step_types = {part.strip() for part in step_type.split("|") if part.strip()}
+            uses_regex = not step_aid or not step_types <= _ID_IDX.keys()
+            if (step_pattern and uses_regex
                     and compile_user_regex(step_pattern) is None):
                 if _regex_syntax_error(step_pattern):
                     title = _("Invalid regex")

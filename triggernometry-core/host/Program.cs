@@ -483,7 +483,7 @@ static class Program
                 if (tex == null || tex.Corrupted || tex.ExportedFolder == null) { Err("[host] WARN pack failed: " + packPath); continue; }
                 if (c.Root.Folders == null) c.Root.Folders = new List<Folder>();
                 c.Root.Folders.Add(tex.ExportedFolder);
-                int n = FixupExecuteScriptAssemblies(tex.ExportedFolder);
+                int n = PrepareActions(tex.ExportedFolder);
                 if (relayUri != null) RouteTelestoRequests(tex.ExportedFolder, relay);
                 Err("[host] grafted '" + tex.ExportedFolder.Name + "' (" + (tex.ExportedFolder.Triggers != null ? tex.ExportedFolder.Triggers.Count : 0) + " triggers)" + (n > 0 ? " [fixed " + n + " empty-asm script(s)]" : ""));
             }
@@ -514,19 +514,33 @@ static class Program
             foreach (var child in folder.Folders) RouteTelestoRequests(child, relay);
     }
 
-    // Empty script references need an assembly because the interpreter rejects an empty string.
-    static int FixupExecuteScriptAssemblies(Folder f)
+    static int PrepareActions(Folder f)
     {
         if (f == null) return 0;
         int n = 0;
         if (f.Triggers != null)
             foreach (var t in f.Triggers)
                 if (t != null && t.Actions != null)
+                {
+                    RouteAudioActions(t.Actions);
+                    // The interpreter rejects an empty script reference list.
                     foreach (var a in t.Actions)
                         if (a != null && a.ActionType == "ExecuteScript" && string.IsNullOrWhiteSpace(a.ExecScriptAssembliesExpression))
                         { a.ExecScriptAssembliesExpression = "TriggernometryPlugin"; n++; }
-        if (f.Folders != null) foreach (var sub in f.Folders) n += FixupExecuteScriptAssemblies(sub);
+                }
+        if (f.Folders != null) foreach (var sub in f.Folders) n += PrepareActions(sub);
         return n;
+    }
+
+    static void RouteAudioActions(List<Triggernometry.Action> actions)
+    {
+        foreach (var action in actions)
+        {
+            if (action == null) continue;
+            action.TTSRouting = Configuration.AudioRoutingMethodEnum.ACT;
+            action.SoundRouting = Configuration.AudioRoutingMethodEnum.ACT;
+            if (action.LoopActions != null) RouteAudioActions(action.LoopActions);
+        }
     }
 
     static readonly object _ol = new object();

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from nyaatriggers.paths import bundle_bases as _bundle_bases
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, QUrl, pyqtSignal
 
 from nyaatriggers import proc_env
 from nyaatriggers.drop_log import log_drop, open_private_log, rotate_one_generation
@@ -595,6 +595,13 @@ class TriggernometryBridge(QObject):
         elif kind == "sound":
             f = msg.get("file") or ""
             if f:
+                url = QUrl(f)
+                if url.isLocalFile():
+                    if url.host() == "localhost":
+                        url.setHost("")
+                    f = url.toLocalFile()
+                    if not f:
+                        return
                 if not os.path.isabs(f):
                     f = str(_packs_dir() / f)
                 try:

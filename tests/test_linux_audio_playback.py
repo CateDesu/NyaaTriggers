@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 from queue import Queue
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -22,13 +23,17 @@ class LinuxAudioPlaybackTests(unittest.TestCase):
         self.calls = self.root / "calls.jsonl"
         self.sound = str(self.root / "sound with spaces.wav")
         program = self.root / "aplay"
-        program.write_text(
-            f"#!{sys.executable}\n"
+        script = self.root / "aplay.py"
+        script.write_text(
             "import json, os, sys\n"
             "device = 'pulse' if '-D' in sys.argv else 'default'\n"
             "with open(os.environ['NYAA_TEST_AUDIO_CALLS'], 'a') as output:\n"
             "    output.write(json.dumps({'device': device, 'args': sys.argv[1:]}) + '\\n')\n"
             "sys.exit(int(os.environ['NYAA_TEST_' + device.upper() + '_EXIT']))\n"
+        )
+        program.write_text(
+            "#!/bin/sh\n"
+            f'exec {shlex.quote(sys.executable)} {shlex.quote(str(script))} "$@"\n'
         )
         program.chmod(0o700)
         self.stack.enter_context(patch.dict(os.environ, {

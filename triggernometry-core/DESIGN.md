@@ -41,7 +41,7 @@ and `SoundRouting` to ACT too. Remote sounds require a writable configuration fo
 - Set `BridgeFFXIV.ZoneID` as well as raising `ZoneChanged`, since the first event
   can precede subscription.
 - Empty `ExecScriptAssembliesExpression` makes Roslyn call `AddReferences("")`.
-  `FixupExecuteScriptAssemblies` supplies a loaded assembly name. First compilation
+  `PrepareActions` supplies a loaded assembly name. First compilation
   can exceed 2.5 seconds, so wait for results before testing dependent speech.
 - At the reviewed commit, `Action.Execute` is the live dispatcher. The parallel
   `Actions/Action*.cs` refactor is unused.

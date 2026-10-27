@@ -814,14 +814,31 @@ class TriggersTabMixin:
             trigger = next((t for t in self._triggers if t.id == key), None)
         return self._localized_callout(trigger) if trigger is not None else ""
 
+    def _callout_edit_state(self, key: str):
+        definition = self._custom_triggevent_for_key(key)
+        if definition is None:
+            if self._is_engine_key(key):
+                definition = self._engine_entry_for_key(key)
+            else:
+                definition = next((trigger.to_dict() for trigger in self._triggers
+                                   if trigger.id == key), None)
+        return deepcopy(definition)
+
     def _edit_display_text(self, key: str) -> None:
         if key.startswith("cactbot:"):
             return
+        original = self._callout_edit_state(key)
+        initial = self._trigger_display_edits.get(key, self._trigger_display_text(key))
         text, accepted = QInputDialog.getMultiLineText(
             self, _("Edit overlay text"),
             _("Text shown by the overlay plugin. Existing tokens still work. Leave blank to restore the default."),
-            self._trigger_display_edits.get(key, self._trigger_display_text(key)))
+            initial)
         if accepted:
+            if (original != self._callout_edit_state(key)
+                    or initial != self._trigger_display_edits.get(key, self._trigger_display_text(key))):
+                ac.QMessageBox.warning(self, _("Edit overlay text"), _(
+                    "This callout changed outside the editor. Reopen it before saving."))
+                return
             self._set_display_text(key, text)
 
     def _set_display_text(self, key: str, text: str) -> None:
