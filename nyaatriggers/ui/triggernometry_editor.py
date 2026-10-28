@@ -15,20 +15,27 @@ def pack_paths():
 
 def speech_rows(root):
     rows = []
+
+    def speech_actions(actions, path=()):
+        index = 0
+        for position, action in enumerate(actions):
+            text = action.get("UseTTSTextExpression", "")
+            if action.get("ActionType") == "UseTTS" and text:
+                # Keep the existing top-level speech indexes.
+                suffix = "loop:" + ".".join(map(str, (*path, position))) if path else str(index)
+                yield suffix, text
+                index += 1
+            yield from speech_actions(action.findall("LoopActions/Action"), (*path, position))
+
     fights = {id(folder.find("Triggers")): folder.get("Name", "") for folder in root.iter()
               if folder.tag in ("ExportedFolder", "Folder")}
     for _path, trigger, parent in trigger_entries(root):
         ident = normalized_id(trigger.get("Id"))
         if not ident:
             continue
-        index = 0
-        for action in trigger.findall("Actions/Action"):
-            text = action.get("UseTTSTextExpression", "")
-            if action.get("ActionType") != "UseTTS" or not text:
-                continue
-            rows.append({"source": "triggernometry", "id": ident + "#" + str(index),
+        for suffix, text in speech_actions(trigger.findall("Actions/Action")):
+            rows.append({"source": "triggernometry", "id": ident + "#" + suffix,
                          "name": trigger.get("Name", ""), "fight": fights[id(parent)], "group": "", "text": text})
-            index += 1
     return rows
 
 

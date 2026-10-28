@@ -127,10 +127,10 @@ class RecapStore:
             self.unsaved[ident] = data
             self.errors[ident] = str(error)
             while len(self.unsaved) > MAX_PENDING_RECAPS:
-                oldest = next((key for key in self.unsaved if key not in self._saving), None)
-                if oldest is None:
-                    break
+                oldest = next(iter(self.unsaved))
                 del self.unsaved[oldest]
+                # Late completions must not requeue an evicted recap.
+                self._saving.pop(oldest, None)
                 self.errors.pop(oldest, None)
                 self.dropped += 1
             return False

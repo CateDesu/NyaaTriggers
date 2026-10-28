@@ -337,21 +337,34 @@ static class Program
                     if (t == null || t.Actions == null) continue;
                     string fight = "";
                     try { var fo = parentProp != null ? parentProp.GetValue(t) as Triggernometry.Folder : null; if (fo != null) fight = fo.Name ?? ""; } catch { }
-                    int idx = 0;
-                    foreach (var a in t.Actions)
-                    {
-                        if (a == null || a.ActionType != "UseTTS") continue;
-                        string text = a.UseTTSTextExpression;
-                        if (string.IsNullOrEmpty(text)) continue;
-                        string id = t.Id.ToString() + "#" + idx;
-                        lock (_coLock) { _calloutActions[id] = a; if (!_calloutOriginal.ContainsKey(id)) _calloutOriginal[id] = text; }
-                        entries.Add(new {id = id, name = t.Name ?? "", fight = fight, text = text});
-                        idx++;
-                    }
+                    AddSpeechInventory(t, t.Actions, fight, "", entries);
                 }
         }
         catch (Exception ex) { Err("[host] inventory build error: " + ex.Message); }
         Out(JsonSerializer.Serialize(new {t = "inventory", triggers = entries}, jsonOptions));
+    }
+
+    static void AddSpeechInventory(Triggernometry.Trigger trigger, List<Triggernometry.Action> actions,
+                                   string fight, string path, List<object> entries)
+    {
+        int index = 0;
+        for (int position = 0; position < actions.Count; position++)
+        {
+            var action = actions[position];
+            if (action == null) continue;
+            string text = action.UseTTSTextExpression;
+            if (action.ActionType == "UseTTS" && !string.IsNullOrEmpty(text))
+            {
+                // Keep the existing top-level speech indexes.
+                string suffix = path.Length == 0 ? index.ToString() : "loop:" + path + position;
+                string id = trigger.Id.ToString() + "#" + suffix;
+                lock (_coLock) { _calloutActions[id] = action; if (!_calloutOriginal.ContainsKey(id)) _calloutOriginal[id] = text; }
+                entries.Add(new {id = id, name = trigger.Name ?? "", fight = fight, text = text});
+                index++;
+            }
+            if (action.LoopActions != null)
+                AddSpeechInventory(trigger, action.LoopActions, fight, path + position + ".", entries);
+        }
     }
 
     static void ApplyCallout(string id)
@@ -500,18 +513,27 @@ static class Program
         if (folder.Triggers != null)
             foreach (var trigger in folder.Triggers)
                 if (trigger.Actions != null)
-                    foreach (var action in trigger.Actions)
-                    {
-                        if (action.ActionType != "GenericJson") continue;
-                        Uri endpoint;
-                        string expression = action.JsonEndpointExpression ?? "";
-                        if (expression.Contains("TelestoEndpoint")
-                            || (Uri.TryCreate(expression, UriKind.Absolute, out endpoint)
-                                && endpoint.IsLoopback && endpoint.Port == 45678))
-                            action.JsonEndpointExpression = relay;
-                    }
+                    RouteTelestoRequests(trigger.Actions, relay);
         if (folder.Folders != null)
             foreach (var child in folder.Folders) RouteTelestoRequests(child, relay);
+    }
+
+    static void RouteTelestoRequests(List<Triggernometry.Action> actions, string relay)
+    {
+        foreach (var action in actions)
+        {
+            if (action == null) continue;
+            if (action.ActionType == "GenericJson")
+            {
+                Uri endpoint;
+                string expression = action.JsonEndpointExpression ?? "";
+                if (expression.Contains("TelestoEndpoint")
+                    || (Uri.TryCreate(expression, UriKind.Absolute, out endpoint)
+                        && endpoint.IsLoopback && endpoint.Port == 45678))
+                    action.JsonEndpointExpression = relay;
+            }
+            if (action.LoopActions != null) RouteTelestoRequests(action.LoopActions, relay);
+        }
     }
 
     static int PrepareActions(Folder f)
@@ -522,25 +544,26 @@ static class Program
             foreach (var t in f.Triggers)
                 if (t != null && t.Actions != null)
                 {
-                    RouteAudioActions(t.Actions);
-                    // The interpreter rejects an empty script reference list.
-                    foreach (var a in t.Actions)
-                        if (a != null && a.ActionType == "ExecuteScript" && string.IsNullOrWhiteSpace(a.ExecScriptAssembliesExpression))
-                        { a.ExecScriptAssembliesExpression = "TriggernometryPlugin"; n++; }
+                    n += PrepareActions(t.Actions);
                 }
         if (f.Folders != null) foreach (var sub in f.Folders) n += PrepareActions(sub);
         return n;
     }
 
-    static void RouteAudioActions(List<Triggernometry.Action> actions)
+    static int PrepareActions(List<Triggernometry.Action> actions)
     {
+        int n = 0;
         foreach (var action in actions)
         {
             if (action == null) continue;
             action.TTSRouting = Configuration.AudioRoutingMethodEnum.ACT;
             action.SoundRouting = Configuration.AudioRoutingMethodEnum.ACT;
-            if (action.LoopActions != null) RouteAudioActions(action.LoopActions);
+            // The interpreter rejects an empty script reference list.
+            if (action.ActionType == "ExecuteScript" && string.IsNullOrWhiteSpace(action.ExecScriptAssembliesExpression))
+            { action.ExecScriptAssembliesExpression = "TriggernometryPlugin"; n++; }
+            if (action.LoopActions != null) n += PrepareActions(action.LoopActions);
         }
+        return n;
     }
 
     static readonly object _ol = new object();

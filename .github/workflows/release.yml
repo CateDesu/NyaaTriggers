@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 env:
-  PYTHON_VERSION: '3.14.9'
+  PYTHON_VERSION: '3.14.10'
   LIBERICA_JRE_VERSION: '17.0.21+11'
   JAVA_RUNTIME_VERSION: '17.0.21+11-LTS'
 
