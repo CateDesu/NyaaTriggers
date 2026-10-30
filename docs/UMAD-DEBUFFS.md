@@ -4,7 +4,7 @@ Reference for the UMAD mechanic tabs and native Triggevent P4 controls. IDs use 
 
 The original checks used cactbot `0.37.3`, its generated 7.51 status data, FFLogs zone 76 and encounter 1085, XIVAPI/datamining CSVs, and Icy Veins and Materia guides. Evidence details are below.
 
-Bomb and Lightning assignments start **unassigned**. One sign can mark only one player. P3 black-hole chains use attack1 and attack2 by default; the separate Accretion controller uses ignore1 and ignore2. Saved debuff rules from older versions are inactive.
+Bomb assignments start **unassigned**. The Forked Lightning tab marks spreads with ignore1 and ignore2 by default. One sign can mark only one player. P3 black-hole chains use attack1 and attack2 by default; the separate Accretion controller uses ignore1 and ignore2. Saved debuff rules from older versions are inactive.
 
 ## Encounter statuses (verified, P3-P4)
 
@@ -15,8 +15,8 @@ The Accretion controller identifies carriers by Accretion and their line order, 
 | 644+BBC | Accretion (1st in Line) | P3    | First carrier, ignore1 until third tether hit |
 | 644+BBD | Accretion (2nd in Line) | P3    | Second carrier, ignore2 after first completes |
 | 15A7 | Cursed Shriek              | P4    | 2 pairs, one per Grand Cross wave; real: look away / fake: look at, identified by Neo Exdeath's status VFX |
-| 15A8 | Forked Lightning           | P4    | 1 Sup+1 DPS; real: spread / fake: stack |
-| 15A9 | Compressed Water           | P4    | Stack marker |
+| 15A8 | Forked Lightning           | P4    | 1 Sup+1 DPS per wave; real: spread / fake: stack |
+| 15A9 | Compressed Water           | P4    | 1 Sup+1 DPS per wave; real: stack / fake: spread |
 | 15AA | Acceleration Bomb          | P4    | Real: stay still / fake: keep moving when it expires |
 | 15A5 | White Wound                | P4    | Real: lethal in White Antilight / fake: lethal in Black |
 | 15A6 | Black Wound                | P4    | Real: lethal in Black Antilight / fake: lethal in White |
@@ -103,16 +103,23 @@ The pair is numbered by party slot, with actor ID as fallback. Marking begins wh
 
 ## P4 Acceleration Bomb and Forked Lightning
 
-The **Acceleration Bomb** and **Forked Lightning** tabs provide separate real and fake marker assignments. They read the same Neo Exdeath status `808` tell as Cursed Shriek: `461` is fake and `462` is real. A missing tell or incomplete wave leaves players unmarked.
+The **Acceleration Bomb** tab provides separate real and fake assignments. The **Forked Lightning** tab marks only the players who must spread. Both read Neo Exdeath status `808`: `461` is fake and `462` is real. A missing tell or incomplete pair leaves players unmarked.
 
 | Debuff | Real | Fake | Carriers per wave |
 |---|---|---|---|
 | Acceleration Bomb `15AA` | Stay still on expiry | Keep moving on expiry | Four, two short and two long |
 | Forked Lightning `15A8` | Spread | Stack | Two |
+| Compressed Water `15A9` | Stack | Spread | Two |
 
-Bomb wave one has two 51-second and two 76-second timers. Wave two has two 36-second and two 61-second timers. Bomb signs are numbered within the short and long pairs by party slot, with actor ID as fallback. Lightning signs use party order. The real or fake tell applies to the entire wave and does not depend on duration. These mechanics and the tell mapping are recorded in [cactbot's encounter implementation](https://github.com/OverlayPlugin/cactbot/blob/main/ui/raidboss/data/07-dt/ultimate/dancing_mad.ts).
+Bomb wave one has two 51-second and two 76-second timers. Wave two has two 36-second and two 61-second timers. Bomb signs are numbered within the short and long pairs by party slot, with actor ID as fallback. The real or fake tell applies to its own wave and does not depend on duration. These mechanics and the tell mapping are recorded in [cactbot's encounter implementation](https://github.com/OverlayPlugin/cactbot/blob/main/ui/raidboss/data/07-dt/ultimate/dancing_mad.ts).
 
-New Bomb and Lightning assignments start unassigned. Choose distinct signs for the players you want marked and enable the mechanic. Unassigned players receive no sign. When both waves use the same signs, the earlier carriers retain them until loss or expiry. Later carriers then receive the available signs.
+The spread controller selects real Forked Lightning or fake Compressed Water from each wave. This produces two spread pairs. The 51-second or 36-second pair resolves first and receives ignore1 and ignore2 in party order. After both statuses end, those signs move to the 76-second or 61-second pair. The longer pair can be applied first and remains unmarked until the short pair resolves. Stack targets receive no spread sign. Both pairs can be real, both fake, or mixed.
+
+Status loss drives the handoff, with expiry as a fallback. Losing one short status clears only that sign. The long pair waits for both short statuses to end. Missing the short pair prevents promotion of the long pair. Wipes, new Kefka Says casts, disabling the mechanic, zone changes and feed loss discard waiting pairs. The controller tracks status and actor together so an old Lightning loss cannot clear a later Water spread on the same player.
+
+The spread signs can be changed or left unassigned. Old Lightning real and fake assignments are inactive. Bomb assignments still start unassigned. When Bomb carriers share a sign, its current holder retains it until loss or expiry.
+
+Real Cursed Shriek and spreads both default to ignore1 and ignore2. Choose different gaze signs when enabling both controls, because one sign cannot mark both carriers at once.
 
 Local chain queues, Accretion and Grand Cross controllers retain ownership of their signs. An older mechanic's loss or expiry cannot clear a newer local mark on the same actor. Grand Cross pending marks expire with their debuff before any roster retry. Accretion pending marks are cancelled on Crust completion. Wipes clear owned local signs and cancel queued marks. Zone changes and feed loss discard actors and pending actions because party slots may have changed.
 

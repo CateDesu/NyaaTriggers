@@ -205,18 +205,31 @@ class AutomarkSettingsTests(unittest.TestCase):
         self.assertFalse(restored._umad_chain_enabled)
         self.assertFalse(json.loads(ac._SETTINGS_FILE.read_text())["umad_accretion_enabled"])
 
-    def test_bomb_and_lightning_assignments_allow_unassigned_and_reject_invalid_values(self):
-        for name, count in (("bomb", 4), ("lightning", 2)):
-            expected = {f"{kind}{number}": "" for kind in ("real", "fake")
-                        for number in range(1, count + 1)}
-            window = SimpleNamespace(_settings={})
-            self.assertEqual(AutomarkersTabMixin._umad_pair_markers_from_settings(window, name, count), expected)
-            for invalid in (None, [], {}, True, "unknown"):
-                window._settings[f"umad_{name}_marker_real1"] = invalid
-                self.assertEqual(AutomarkersTabMixin._umad_pair_markers_from_settings(window, name, count), expected)
-            window._settings[f"umad_{name}_marker_real1"] = "attack1"
-            self.assertEqual(AutomarkersTabMixin._umad_pair_markers_from_settings(window, name, count),
-                             {**expected, "real1": "attack1"})
+    def test_bomb_assignments_allow_unassigned_and_reject_invalid_values(self):
+        expected = {f"{kind}{number}": "" for kind in ("real", "fake") for number in range(1, 5)}
+        window = SimpleNamespace(_settings={})
+        self.assertEqual(AutomarkersTabMixin._umad_pair_markers_from_settings(window, "bomb", 4), expected)
+        for invalid in (None, [], {}, True, "unknown"):
+            window._settings["umad_bomb_marker_real1"] = invalid
+            self.assertEqual(AutomarkersTabMixin._umad_pair_markers_from_settings(window, "bomb", 4), expected)
+        window._settings["umad_bomb_marker_real1"] = "attack1"
+        self.assertEqual(AutomarkersTabMixin._umad_pair_markers_from_settings(window, "bomb", 4),
+                         {**expected, "real1": "attack1"})
+
+    def test_spread_defaults_ignore_old_real_fake_choices_and_allow_custom_signs(self):
+        expected = {"spread1": "ignore1", "spread2": "ignore2"}
+        window = SimpleNamespace(_settings={"umad_lightning_marker_real1": "attack1",
+                                            "umad_lightning_marker_fake1": "bind1"})
+        for invalid in (None, [], {}, True, "unknown"):
+            window._settings["umad_lightning_marker_spread1"] = invalid
+            self.assertEqual(AutomarkersTabMixin._umad_pair_markers_from_settings(window, "lightning", 2), expected)
+        window._settings["umad_lightning_marker_spread1"] = ""
+        window._settings["umad_lightning_marker_spread2"] = "square"
+        self.assertEqual(AutomarkersTabMixin._umad_pair_markers_from_settings(window, "lightning", 2),
+                         {"spread1": "", "spread2": "square"})
+        case = self.create_case()
+        self.assertEqual({key: combo.currentData() for key, combo
+                          in case.window._umad_pair_combos["lightning"].items()}, expected)
 
     def test_enabling_local_controllers_cancels_overlapping_queued_rules(self):
         case = self.create_case()
@@ -254,6 +267,7 @@ class AutomarkSettingsTests(unittest.TestCase):
         for status, checkbox in (
                 ("15AA", window._umad_pair_checkboxes["bomb"]),
                 ("15A8", window._umad_pair_checkboxes["lightning"]),
+                ("15A9", window._umad_pair_checkboxes["lightning"]),
                 ("15A7", window._umad_gaze_cb),
                 ("644", window._umad_chain_cb),
                 ("644", window._umad_accretion_cb)):

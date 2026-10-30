@@ -18,7 +18,8 @@ from nyaatriggers.telesto_client import (
 from nyaatriggers.umad_chains import (
     BlackHoleChains, AccretionQueue, RELEVANT_IDS as _UMAD_CHAIN_IDS, role_for_job, StatusPairs,
     parse_compound as _parse_compound, canon_status_key as _canon_status,
-    CursedShriekPairs, GAZE_VFX_STATUS, GrandCrossPairs, ACCELERATION_BOMB, FORKED_LIGHTNING,
+    CursedShriekPairs, GAZE_VFX_STATUS, GrandCrossPairs, GrandCrossSpreads, ACCELERATION_BOMB,
+    DEFAULT_SPREAD_MARKERS,
     status_expires_at,
 )
 
@@ -108,9 +109,8 @@ class AutomarkersTabMixin:
             "bomb": GrandCrossPairs(ACCELERATION_BOMB, carriers_per_wave=4,
                                    markers=self._umad_pair_markers_from_settings("bomb", 4),
                                    slot_of=self._gaze_slot_of),
-            "lightning": GrandCrossPairs(FORKED_LIGHTNING, carriers_per_wave=2,
-                                        markers=self._umad_pair_markers_from_settings("lightning", 2),
-                                        slot_of=self._gaze_slot_of),
+            "lightning": GrandCrossSpreads(markers=self._umad_pair_markers_from_settings("lightning", 2),
+                                           slot_of=self._gaze_slot_of),
         }
         self._umad_grand_cross_pending = {name: [] for name in self._umad_grand_cross}
         self._umad_grand_cross_pending_since = {name: {} for name in self._umad_grand_cross}
@@ -239,26 +239,29 @@ class AutomarkersTabMixin:
         self._umad_pair_checkboxes = {}
         for name, title, real, fake, count in (
                 ("bomb", _("Acceleration Bomb"), _("Real: stay still"), _("Fake: keep moving"), 4),
-                ("lightning", _("Forked Lightning"), _("Real: spread"), _("Fake: stack"), 2)):
+                ("lightning", _("Forked Lightning"), "", "", 2)):
             page = QWidget()
             page_layout = QVBoxLayout(page)
             self._umad_automarker_tabs.addTab(page, title)
-            checkbox = QCheckBox(_("Enable real and fake markers"))
+            checkbox = QCheckBox(_("Enable spread markers") if name == "lightning"
+                                else _("Enable real and fake markers"))
             checkbox.setChecked(bool(self._settings.get(f"umad_{name}_enabled", False)))
             checkbox.toggled.connect(lambda checked, name=name: self._on_umad_pair_toggled(name, checked))
             self._umad_pair_checkboxes[name] = checkbox
             page_layout.addWidget(checkbox)
             grid = QGridLayout()
             page_layout.addLayout(grid)
-            grid.addWidget(QLabel(real), 0, 1)
-            grid.addWidget(QLabel(fake), 0, 2)
+            grid.addWidget(QLabel(_("Spread") if name == "lightning" else real), 0, 1)
+            if name != "lightning":
+                grid.addWidget(QLabel(fake), 0, 2)
             markers = self._umad_pair_markers_from_settings(name, count)
             self._umad_pair_combos[name] = {}
             for number in range(1, count + 1):
                 label = (_("Short {number}") if number <= 2 else _("Long {number}")) \
                     if name == "bomb" else _("Player {number}")
                 grid.addWidget(QLabel(label.format(number=(number - 1) % 2 + 1)), number, 0)
-                for column, polarity in ((1, "real"), (2, "fake")):
+                columns = ((1, "spread"),) if name == "lightning" else ((1, "real"), (2, "fake"))
+                for column, polarity in columns:
                     key = f"{polarity}{number}"
                     combo = self._make_marker_combo(markers[key], width=150, unassigned=True)
                     combo.currentIndexChanged.connect(
@@ -266,7 +269,9 @@ class AutomarkersTabMixin:
                     self._umad_pair_combos[name][key] = combo
                     grid.addWidget(combo, number, column)
             grid.setColumnStretch(3, 1)
-            note = QLabel(_("Choose separate marks for each player. Unassigned players receive no mark."))
+            note = QLabel(_("Marks real Forked Lightning or fake Compressed Water. The signs move to the next pair after both spreads resolve.")
+                          if name == "lightning" else
+                          _("Choose separate marks for each player. Unassigned players receive no mark."))
             note.setWordWrap(True)
             page_layout.addWidget(note)
             page_layout.addStretch()
@@ -348,6 +353,12 @@ class AutomarkersTabMixin:
 
     def _umad_pair_markers_from_settings(self, name: str, count: int) -> dict:
         markers = {}
+        if name == "lightning":
+            for key, default in DEFAULT_SPREAD_MARKERS.items():
+                value = self._settings.get(f"umad_lightning_marker_{key}", default)
+                valid = isinstance(value, str) and (not value or value in TELESTO_MARKER_TOKENS)
+                markers[key] = value if valid else default
+            return markers
         for polarity in ("real", "fake"):
             for number in range(1, count + 1):
                 key = f"{polarity}{number}"

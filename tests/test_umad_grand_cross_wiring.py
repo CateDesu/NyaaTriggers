@@ -1,5 +1,6 @@
 from contextlib import ExitStack
 import json
+from pathlib import Path
 import queue
 import unittest
 from unittest.mock import patch
@@ -10,7 +11,7 @@ from nyaatriggers.trigger_engine import Trigger
 from nyaatriggers.triggevent_bridge import TriggeventBridge
 from nyaatriggers.ui.settings_tab import SettingsTabMixin
 from nyaatriggers.umad_chains import (
-    ACCELERATION_BOMB, CURSED_SHRIEK, FAKE_GAZE_VFX, FORKED_LIGHTNING,
+    ACCELERATION_BOMB, COMPRESSED_WATER, CURSED_SHRIEK, FAKE_GAZE_VFX, FORKED_LIGHTNING,
     GAZE_VFX_STATUS, REAL_GAZE_VFX, StatusPairs,
 )
 from tests import test_session_ui as fixture
@@ -21,8 +22,7 @@ MECHANICS = {"bomb": (ACCELERATION_BOMB, 4), "lightning": (FORKED_LIGHTNING, 2)}
 MARKERS = {
     "bomb": {f"{kind}{index}": f"attack{offset + index}"
              for kind, offset in (("real", 0), ("fake", 4)) for index in range(1, 5)},
-    "lightning": {"real1": "bind1", "real2": "bind2",
-                  "fake1": "ignore1", "fake2": "ignore2"},
+    "lightning": {"spread1": "bind1", "spread2": "bind2"},
 }
 
 
@@ -92,6 +92,8 @@ class GrandCrossWiringTests(unittest.TestCase):
 
     def wave(self, name, actors=None, durations=None, tell=REAL_GAZE_VFX):
         effect, count = MECHANICS[name]
+        if name == "lightning" and tell == FAKE_GAZE_VFX:
+            effect = COMPRESSED_WATER
         actors = actors or ACTORS[:count]
         durations = durations or [30] * count
         self.window._umad_pair_checkboxes[name].setChecked(True)
@@ -119,19 +121,124 @@ class GrandCrossWiringTests(unittest.TestCase):
                     self.window._umad_pair_checkboxes[name].setChecked(True)
                     self.tell(vfx)
                     actors = tuple(reversed(ACTORS[:count]))
-                    durations = (60, 30, 60, 30) if count == 4 else (10, 60)
+                    durations = (60, 30, 60, 30) if count == 4 else (51, 51)
+                    effect = COMPRESSED_WATER if name == "lightning" and polarity == "fake" else MECHANICS[name][0]
+                    marker_kind = "spread" if name == "lightning" else polarity
                     for actor, duration in zip(actors[:-1], durations[:-1]):
                         self.status(effect, actor, duration)
                         self.assertEqual(self.deliver(), [])
                     self.status(effect, actors[-1], durations[-1])
                     ordered = (ACTORS[0], ACTORS[2], ACTORS[1], ACTORS[3]) if count == 4 else ACTORS[:count]
                     self.assertEqual(self.deliver(), [
-                        f"/mk {MARKERS[name][f'{polarity}{index}']} <{ACTORS.index(actor) + 1}>"
+                        f"/mk {MARKERS[name][f'{marker_kind}{index}']} <{ACTORS.index(actor) + 1}>"
                         for index, actor in enumerate(ordered, 1)])
                     self.assertEqual(set(self.window._umad_grand_cross[name].outstanding()), set(actors))
                     for actor in actors:
                         self.status(effect, actor, 30)
                     self.assertEqual(self.deliver(), [])
+
+    def test_spread_signs_transfer_after_both_resolve_for_every_real_fake_order(self):
+        for index in (1, 2):
+            combo = self.window._umad_pair_combos["lightning"][f"spread{index}"]
+            combo.setCurrentIndex(combo.findData(f"ignore{index}"))
+        for first_tell in (REAL_GAZE_VFX, FAKE_GAZE_VFX):
+            for second_tell in (REAL_GAZE_VFX, FAKE_GAZE_VFX):
+                for short_first in (True, False):
+                    with self.subTest(first=first_tell, second=second_tell, short_first=short_first):
+                        self.window._umad_grand_cross_reset(clear_marks=True)
+                        self.deliver()
+                        start = self.clock.value
+                        first = FORKED_LIGHTNING if first_tell == REAL_GAZE_VFX else COMPRESSED_WATER
+                        second = FORKED_LIGHTNING if second_tell == REAL_GAZE_VFX else COMPRESSED_WATER
+                        self.wave("lightning", ACTORS[1::-1], [51 if short_first else 76] * 2, first_tell)
+                        first_marks = ["/mk ignore1 <1>", "/mk ignore2 <2>"] if short_first else []
+                        self.assertEqual(self.deliver(), first_marks)
+                        stack = COMPRESSED_WATER if first == FORKED_LIGHTNING else FORKED_LIGHTNING
+                        for actor in ACTORS[4:6]:
+                            self.status(stack, actor, 51 if short_first else 76)
+                        self.assertEqual(self.deliver(), [])
+                        self.clock.value += 15
+                        self.wave("lightning", ACTORS[3:1:-1], [61 if short_first else 36] * 2, second_tell)
+                        second_marks = [] if short_first else ["/mk ignore1 <3>", "/mk ignore2 <4>"]
+                        self.assertEqual(self.deliver(), second_marks)
+                        stack = COMPRESSED_WATER if second == FORKED_LIGHTNING else FORKED_LIGHTNING
+                        for actor in ACTORS[6:8]:
+                            self.status(stack, actor, 61 if short_first else 36)
+                        self.assertEqual(self.deliver(), [])
+                        short_slots, long_slots = ((1, 2), (3, 4)) if short_first else ((3, 4), (1, 2))
+                        short_effect, long_effect = (first, second) if short_first else (second, first)
+                        self.clock.value = start + 50
+                        self.status(short_effect, ACTORS[short_slots[0] - 1], lost=True)
+                        self.assertEqual(self.deliver(), [f"/mk clear <{short_slots[0]}>"])
+                        self.status(short_effect, ACTORS[short_slots[1] - 1], lost=True)
+                        self.assertEqual(self.deliver(), [f"/mk clear <{short_slots[1]}>",
+                            f"/mk ignore1 <{long_slots[0]}>", f"/mk ignore2 <{long_slots[1]}>"])
+                        for slot in short_slots:
+                            self.status(short_effect, ACTORS[slot - 1], lost=True)
+                        self.assertEqual(self.deliver(), [])
+                        self.clock.value = start + 75
+                        for slot in long_slots:
+                            self.status(long_effect, ACTORS[slot - 1], lost=True)
+                        self.assertEqual(self.deliver(), [f"/mk clear <{slot}>" for slot in long_slots])
+                        self.assertEqual(self.window._umad_grand_cross["lightning"].outstanding(), [])
+
+    def test_spread_handoff_cancels_the_old_pair_before_a_delayed_roster_retry(self):
+        self.roster(())
+        self.wave("lightning", ACTORS[:2], [51, 51])
+        self.clock.value += 15
+        self.wave("lightning", ACTORS[2:4], [61, 61], FAKE_GAZE_VFX)
+        for actor in ACTORS[:2]:
+            self.status(FORKED_LIGHTNING, actor, lost=True)
+        self.assertEqual(self.deliver(), [])
+        self.roster()
+        self.window._retry_umad_grand_cross_pending()
+        self.assertEqual(self.deliver(), ["/mk bind1 <3>", "/mk bind2 <4>"])
+        self.assertEqual(self.window._umad_grand_cross["lightning"].outstanding(), list(ACTORS[2:4]))
+
+    def test_recorded_shriek_vfx_classifies_synthetic_spreads_in_both_timer_orders(self):
+        """Keep recorded VFX and cast timing, with synthetic spread gains and losses."""
+        cases = json.loads((Path(__file__).parent / "fixtures/umad_gazes.json").read_text())
+        self.assertEqual(len(cases), 44)
+        self.assertEqual(sum(len(case["waves"]) for case in cases), 85)
+        self.window._umad_pair_checkboxes["lightning"].setChecked(True)
+        for case in cases:
+            for short_first in (True, False):
+                with self.subTest(pull=case["pull"], short_first=short_first):
+                    self.window._umad_grand_cross_reset(clear_marks=True)
+                    self.deliver()
+                    base = self.clock.value + 100
+                    actors = sorted({actor for wave in case["waves"] for actor in wave["actors"]})
+                    actor_map = dict(zip(actors, ACTORS))
+                    events = [(now, raw.split("|")) for now, raw in case["events"]
+                              if raw.split("|")[0] == "20" or raw.split("|")[2] == GAZE_VFX_STATUS]
+                    pairs = {}
+                    for index, wave in enumerate(case["waves"]):
+                        short = (index == 0) == short_first
+                        duration = (51 if short else 76) if index == 0 else (36 if short else 61)
+                        effect = FORKED_LIGHTNING if wave["real"] else COMPRESSED_WATER
+                        pair = [actor_map[actor] for actor in wave["actors"]]
+                        pairs["short" if short else "long"] = pair
+                        for actor in reversed(pair):
+                            fields = ["26", "synthetic", effect, "Spread", str(duration),
+                                      "E0000000", "", actor, "Player"]
+                            events.append((wave["gain"], fields))
+                            events.append((wave["gain"] + duration, ["30", *fields[1:]]))
+                    sent = []
+                    for now, fields in sorted(events, key=lambda event: event[0]):
+                        self.clock.value = base + now
+                        self.window._on_umad_grand_cross_flush()
+                        self.case.line(fields)
+                        sent += self.deliver()
+                    expected = []
+                    if "short" in pairs:
+                        for kind in ("short", "long"):
+                            pair = pairs.get(kind, [])
+                            expected += [f"/mk bind{index} <{ACTORS.index(actor) + 1}>"
+                                         for index, actor in enumerate(pair, 1)]
+                            expected += [f"/mk clear <{ACTORS.index(actor) + 1}>" for actor in pair]
+                    self.assertEqual(sent, expected)
+                    self.assertEqual(self.window._umad_grand_cross["lightning"].outstanding(), [])
+                    self.assertEqual(self.window._umad_grand_cross_pending["lightning"], [])
 
     def test_marker_choices_and_enabled_state_survive_settings_reload(self):
         for checkbox in self.window._umad_pair_checkboxes.values():
@@ -185,8 +292,10 @@ class GrandCrossWiringTests(unittest.TestCase):
                 self.assertEqual(self.deliver(), [])
                 self.assertEqual(self.window._automark_pending, [])
                 self.wave(name)
+                kind = "spread" if name == "lightning" else "real"
                 self.assertEqual(self.deliver(), [
-                    f"/mk {MARKERS[name][f'real{index}']} <{index}>" for index in range(1, count + 1)])
+                    f"/mk {MARKERS[name][f'{kind}{index}']} <{index}>"
+                    for index in range(1, count + 1)])
                 self.assertTrue(all(owner[0] == f"umad_{name}"
                                     for owner in self.window._automark_owners.values()))
                 self.window._umad_pair_checkboxes[name].setChecked(False)

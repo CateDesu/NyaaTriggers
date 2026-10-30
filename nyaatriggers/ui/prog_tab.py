@@ -1,4 +1,4 @@
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRectF
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QRectF
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QHBoxLayout,
                              QHeaderView, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
@@ -176,7 +176,7 @@ class ProgTab(QWidget):
         self.milestone_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.milestone_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.milestone_table.horizontalScrollBar().rangeChanged.connect(
-            lambda: self._fit_phase_table(self.milestone_table))
+            self._resize_milestone_table)
         self.milestone_table.setToolTip(_("First observed phase date and lowest observed boss HP across saved pulls in this duty."))
         layout.addWidget(self.milestone_table)
         self._milestone_view = None
@@ -224,7 +224,7 @@ class ProgTab(QWidget):
             self.phase_table.setColumnWidth(column, max(200,
                 self.phase_table.fontMetrics().horizontalAdvance(self.phase_table.horizontalHeaderItem(column).text()) + 32))
         self.phase_table.horizontalScrollBar().rangeChanged.connect(
-            lambda: self._fit_phase_table(self.phase_table))
+            self._resize_phase_table)
         layout.addWidget(self.phase_table)
         self._phase_view = None
         self.bookmark = QCheckBox(_("Bookmark this pull"))
@@ -430,6 +430,14 @@ class ProgTab(QWidget):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item.setToolTip(value)
                 self.phase_table.setItem(row, column, item)
+        self._fit_phase_table(self.phase_table)
+
+    @pyqtSlot()
+    def _resize_milestone_table(self):
+        self._fit_phase_table(self.milestone_table)
+
+    @pyqtSlot()
+    def _resize_phase_table(self):
         self._fit_phase_table(self.phase_table)
 
     @staticmethod

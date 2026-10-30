@@ -608,7 +608,185 @@ class CursedShriekPairs:
 
 
 FORKED_LIGHTNING = "15A8"
+COMPRESSED_WATER = "15A9"
 ACCELERATION_BOMB = "15AA"
+DEFAULT_SPREAD_MARKERS = {"spread1": "ignore1", "spread2": "ignore2"}
+
+
+class GrandCrossSpreads:
+    """Mark the short spread pair, then the long pair after both short statuses end."""
+
+    ids = frozenset({FORKED_LIGHTNING, COMPRESSED_WATER})
+
+    def __init__(self, markers: "dict[str, str] | None" = None, slot_of=None):
+        self._markers = dict(DEFAULT_SPREAD_MARKERS)
+        self._slot_of = slot_of or (lambda _actor: None)
+        if markers is not None:
+            self.set_markers(markers)
+        self.reset()
+
+    def set_markers(self, markers: "dict[str, str]") -> None:
+        for key in DEFAULT_SPREAD_MARKERS:
+            value = markers.get(key)
+            if isinstance(value, str):
+                self._markers[key] = value
+
+    def reset(self) -> None:
+        self._polarity = None
+        self._polarity_t = 0.0
+        self._seen_vfx_events = set()
+        self._seen_gains = set()
+        self._pending = {}
+        self._pending_t = 0.0
+        self._completed_effect = None
+        self._sets_done = 0
+        self._waves = {}
+        self._marked = {}
+        self._last_event = 0.0
+
+    def on_vfx(self, vfx_hex: str, now: float, event_id=None) -> "list[tuple]":
+        vfx = _norm_id(vfx_hex)
+        if vfx not in (FAKE_GAZE_VFX, REAL_GAZE_VFX):
+            return []
+        actions = self.flush(now)
+        event = (vfx, now if event_id is None else event_id)
+        if self._sets_done >= GAZE_SETS or event in self._seen_vfx_events:
+            return actions
+        self._seen_vfx_events.add(event)
+        self._completed_effect = None
+        self._polarity = FORKED_LIGHTNING if vfx == REAL_GAZE_VFX else COMPRESSED_WATER
+        self._polarity_t = self._last_event = now
+        return actions + self._assign_wave(now)
+
+    def on_gain(self, effect_hex: str, actor_id: str, duration, now: float) -> "list[tuple]":
+        effect, actor = _norm_id(effect_hex), str(actor_id).strip().upper()
+        if effect not in self.ids or not actor:
+            return []
+        actions = self.flush(now)
+        key = effect, actor
+        if key in self._seen_gains or key in self._pending or self._sets_done >= GAZE_SETS:
+            return actions
+        if self._completed_effect is not None and now - self._pending_t > BURST_GAP_S:
+            self._completed_effect = None
+        if self._completed_effect is not None:
+            if effect != self._completed_effect:
+                self._seen_gains.add(key)
+            return actions
+        if self._polarity is not None and effect != self._polarity:
+            self._seen_gains.add(key)
+            return actions
+        try:
+            remaining = float(duration)
+        except (TypeError, ValueError, OverflowError):
+            return actions
+        if not math.isfinite(remaining) or remaining <= 0:
+            return actions
+        if not self._pending:
+            self._pending_t = now
+        self._last_event = now
+        self._pending[key] = remaining, now + min(remaining, STALE_S)
+        return actions + self._assign_wave(now)
+
+    def _assign_wave(self, now: float) -> "list[tuple]":
+        if self._polarity is None or self._completed_effect is not None:
+            return []
+        pair = [key for key in self._pending if key[0] == self._polarity]
+        if len(pair) != 2:
+            return []
+        # Both casts can apply either timer. Duration identifies resolution order only.
+        kinds = {"short" if self._pending[key][0] < 52 else "long" for key in pair}
+        if len(kinds) != 1:
+            return []
+        kind = kinds.pop()
+        if kind in self._waves:
+            return []
+        pair.sort(key=lambda key: self._carrier_key(key[1]))
+        self._waves[kind] = {key: (f"spread{index}", self._pending[key][1])
+                             for index, key in enumerate(pair, 1)}
+        self._seen_gains.update(self._pending)
+        self._pending.clear()
+        self._completed_effect = self._polarity
+        self._polarity = None
+        self._sets_done += 1
+        return self._advance()
+
+    def _carrier_key(self, actor: str) -> tuple:
+        slot = self._slot_of(actor)
+        return (0, slot, _id_int(actor), actor) if slot is not None else (1, 0, _id_int(actor), actor)
+
+    def _advance(self) -> "list[tuple]":
+        pair = self._waves.get("short")
+        if pair is None:
+            return []
+        if not pair:
+            pair = self._waves.get("long", {})
+        desired = {}
+        occupied = set()
+        for key, (assignment, _expires) in pair.items():
+            marker = self._markers[assignment]
+            if marker and marker not in occupied:
+                desired[key] = marker
+                occupied.add(marker)
+        actions = [("clear", key[1]) for key, marker in self._marked.items()
+                   if desired.get(key) != marker]
+        actions += [("mark", key[1], marker) for key, marker in desired.items()
+                    if self._marked.get(key) != marker]
+        self._marked = desired
+        return actions
+
+    def on_loss(self, effect_hex: str, actor_id: str, now: float) -> "list[tuple]":
+        effect, actor = _norm_id(effect_hex), str(actor_id).strip().upper()
+        if effect not in self.ids:
+            return []
+        if now - self._last_event > STALE_S:
+            return self.flush(now)
+        key = effect, actor
+        if key in self._pending:
+            self._pending.pop(key)
+            if not self._pending and self._polarity_t <= self._pending_t:
+                self._polarity = None
+            self._last_event = now
+        for pair in self._waves.values():
+            if key in pair:
+                pair.pop(key)
+                self._last_event = now
+        return self.flush(now)
+
+    def flush(self, now: float) -> "list[tuple]":
+        if now - self._last_event > STALE_S:
+            actions = [("clear", actor) for actor in self.outstanding()]
+            self.reset()
+            return actions
+        if self._polarity is not None and now - self._polarity_t > GAZE_TELL_S:
+            self._polarity = None
+        if self._pending and now - self._pending_t > BURST_GAP_S:
+            self._pending.clear()
+            if self._polarity_t <= self._pending_t:
+                self._polarity = None
+        for key, (_remaining, expires) in list(self._pending.items()):
+            if now >= expires:
+                self._pending.pop(key)
+                if not self._pending and self._polarity_t <= self._pending_t:
+                    self._polarity = None
+        for pair in self._waves.values():
+            for key, (_assignment, expires) in list(pair.items()):
+                if now >= expires:
+                    pair.pop(key)
+        return self._advance()
+
+    def needs_flush(self) -> bool:
+        return bool(self._pending or any(self._waves.values()))
+
+    def outstanding(self) -> "list[str]":
+        return sorted((key[1] for key in self._marked), key=_id_int)
+
+    def expires_at(self, actor_id: str) -> float | None:
+        actor = str(actor_id).strip().upper()
+        for pair in self._waves.values():
+            for key, (_assignment, expires) in pair.items():
+                if key[1] == actor and key in self._marked:
+                    return expires
+        return None
 
 
 class GrandCrossPairs:

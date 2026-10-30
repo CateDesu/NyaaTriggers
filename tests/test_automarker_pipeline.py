@@ -13,7 +13,7 @@ from nyaatriggers.telesto_client import MAX_COMMAND_AGE_S, MarkerDelivery, Teles
 from nyaatriggers.ui.automarkers_tab import AutomarkersTabMixin
 from nyaatriggers.ui.instance_tab import InstanceTabMixin
 from nyaatriggers.umad_chains import (
-    ACCELERATION_BOMB, FORKED_LIGHTNING, BlackHoleChains, CursedShriekPairs,
+    ACCELERATION_BOMB, COMPRESSED_WATER, FORKED_LIGHTNING, BlackHoleChains, CursedShriekPairs, GrandCrossSpreads,
     GrandCrossPairs, StatusPairs,
 )
 from tests.test_overlay_retention import OverlayHost
@@ -161,16 +161,21 @@ class AutomarkerPipelineTests(unittest.TestCase):
         status, count = (ACCELERATION_BOMB, 4) if mechanic == "bomb" else (FORKED_LIGHTNING, 2)
         host = Host(client)
         host._settings[f"umad_{mechanic}_enabled"] = True
-        host._umad_grand_cross = {mechanic: GrandCrossPairs(status, count,
-            markers={f"{kind}{index}": f"attack{offset + index}"
-                     for kind, offset in (("real", 0), ("fake", count))
-                     for index in range(1, count + 1)})}
+        if mechanic == "lightning":
+            controller = GrandCrossSpreads(
+                markers={"spread1": "attack1", "spread2": "attack2"})
+        else:
+            controller = GrandCrossPairs(status, count,
+                markers={f"{kind}{index}": f"attack{offset + index}"
+                         for kind, offset in (("real", 0), ("fake", count))
+                         for index in range(1, count + 1)})
+        host._umad_grand_cross = {mechanic: controller}
         host._umad_grand_cross_pending = {mechanic: []}
         host._umad_grand_cross_pending_since = {mechanic: {}}
         host._umad_grand_cross_flush_timer = SimpleNamespace(start=lambda: None, stop=lambda: None)
         return host, status, (A, B, C, D)[:count]
 
-    def grand_cross_wave(self, host, status, actors, duration=60):
+    def grand_cross_wave(self, host, status, actors, duration=51):
         host._umad_grand_cross_line(["26", "tell", "808", "VFX", "9999",
                                     "E0000000", "", "40000001", "boss", "462"])
         for actor in actors:
@@ -805,6 +810,40 @@ class AutomarkerPipelineTests(unittest.TestCase):
                 client.clear_actor(A)
             self.drain(client, endpoint)
             self.assertEqual(endpoint.commands, ["/mk clear <1>"])
+
+    def test_spread_handoff_posts_the_exact_short_then_long_party_slots(self):
+        with Endpoint() as endpoint:
+            client = self.client(endpoint)
+            host, _status, _actors = self.grand_cross_host(client, "lightning")
+            host._umad_grand_cross["lightning"].set_markers({"spread1": "ignore1", "spread2": "ignore2"})
+            host._umad_grand_cross_line(["26", "first", "808", "VFX", "9999",
+                                        "E0000000", "", "40000001", "boss", "462"])
+            for actor in (A, B):
+                host._umad_grand_cross_line(["26", "gain", FORKED_LIGHTNING, "status", "76",
+                                            "40000001", "boss", actor, "player"])
+            self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands, [])
+            host._umad_grand_cross_line(["26", "second", "808", "VFX", "9999",
+                                        "E0000000", "", "40000001", "boss", "461"])
+            for actor in (C, D):
+                host._umad_grand_cross_line(["26", "gain", COMPRESSED_WATER, "status", "36",
+                                            "40000001", "boss", actor, "player"])
+            self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands, ["/mk ignore1 <3>", "/mk ignore2 <4>"])
+            for actor in (C, D):
+                host._umad_grand_cross_line(["30", "loss", COMPRESSED_WATER, "status", "0",
+                                            "40000001", "boss", actor, "player"])
+                self.drain(client, endpoint)
+                if actor == C:
+                    self.assertEqual(endpoint.commands[-1:], ["/mk clear <3>"])
+                    self.assertEqual(len(endpoint.commands), 3)
+            self.assertEqual(endpoint.commands, ["/mk ignore1 <3>", "/mk ignore2 <4>",
+                "/mk clear <3>", "/mk clear <4>", "/mk ignore1 <1>", "/mk ignore2 <2>"])
+            for actor in (A, B):
+                host._umad_grand_cross_line(["30", "loss", FORKED_LIGHTNING, "status", "0",
+                                            "40000001", "boss", actor, "player"])
+            self.drain(client, endpoint)
+            self.assertEqual(endpoint.commands[-2:], ["/mk clear <1>", "/mk clear <2>"])
 
     def test_grand_cross_losses_cancel_marks_before_transport_attempts(self):
         for mechanic in ("bomb", "lightning"):
