@@ -157,6 +157,7 @@ with patch.object(ac.QFileDialog, "getOpenFileName", return_value=(str(source), 
         self.stack.enter_context(patch.object(engines, "_tn_packs_dir", return_value=packs))
         self.stack.enter_context(patch.object(engines, "TriggernometryBridge",
                                              SimpleNamespace(is_available=lambda: True)))
+        self.stack.enter_context(patch.object(triggernometry_editor, "validate_native"))
         engines.EnginesMixin._import_triggernometry(host)
         return failure, success, warning
 

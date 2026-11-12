@@ -245,6 +245,8 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin, TriggerConv
             self._triggevent.custom_status.connect(self._on_custom_triggevent_status)
             self._triggevent_recovery = TriggeventRecovery(
                 self._triggevent, self._ws, self._find_iinact_log_dir, self)
+            if self._connected:
+                self._triggevent_recovery._connection(True, "Connected")
             self._triggevent.combatants_request.connect(self._on_triggevent_combatants_request)
             self._ws.set_engine_combatant_polling(True)
             self._apply_engine_overrides("triggevent")

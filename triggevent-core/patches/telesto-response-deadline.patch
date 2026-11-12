@@ -1,0 +1,515 @@
+diff --git a/telesto-support/telesto-core/src/main/java/gg/xp/telestosupport/TelestoMain.java b/telesto-support/telesto-core/src/main/java/gg/xp/telestosupport/TelestoMain.java
+index 296b5cd0030f..9461f6c854f0 100644
+--- a/telesto-support/telesto-core/src/main/java/gg/xp/telestosupport/TelestoMain.java
++++ b/telesto-support/telesto-core/src/main/java/gg/xp/telestosupport/TelestoMain.java
+@@ -28,9 +28,16 @@ import java.net.URISyntaxException;
+ import java.net.http.HttpClient;
+ import java.net.http.HttpRequest;
+ import java.net.http.HttpResponse;
++import java.net.http.HttpTimeoutException;
++import java.nio.ByteBuffer;
+ import java.time.Duration;
+ import java.util.Collections;
+ import java.util.Map;
++import java.util.List;
++import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.CompletionStage;
++import java.util.concurrent.ExecutionException;
++import java.util.concurrent.Flow;
+ import java.util.concurrent.ExecutorService;
+ import java.util.concurrent.Executors;
+ import java.util.concurrent.TimeUnit;
+@@ -47,10 +54,12 @@ public class TelestoMain implements FilteredEventHandler {
+ 	// Handles the actual execution
+ 	private static final ExecutorService exs = Executors.newSingleThreadExecutor();
+ 	private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(3);
++	private static final int MAX_RESPONSE_BYTES = 1024 * 1024;
+ 	private final HttpClient http = HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build();
+ 	private final ObjectMapper mapper = new ObjectMapper();
+ 	private final HttpURISetting uriSetting;
+ 	private final BooleanSetting enablePartyList;
++	private volatile URI endpoint;
+ 
+ 	private static final int VERSION = 1;
+ 	public static final int GAME_CMD_ID = 1_000_000;
+@@ -87,6 +96,8 @@ public class TelestoMain implements FilteredEventHandler {
+ 		this.pls = pls;
+ 		try {
+ 			uriSetting = new HttpURISetting(pers, "telesto-support.uri", new URI("http://localhost:45678/"));
++			endpoint = uriSetting.get();
++			uriSetting.addListener(() -> endpoint = uriSetting.get());
+ 			enablePartyList = new BooleanSetting(pers, "telesto-support.pull-party-list", true);
+ 			commandDelayBase = new IntSetting(pers, "telesto-support.base-cmd-delay", 100, 0, 5000);
+ 			commandDelayPlus = new IntSetting(pers, "telesto-support.plus-cmd-delay", 100, 0, 5000);
+@@ -169,6 +180,7 @@ public class TelestoMain implements FilteredEventHandler {
+ 	}
+ 
+ 	private @Nullable HttpResponse<String> sendMessageDirectly(TelestoOutgoingMessage msg, BooleanSupplier permit) {
++		URI uri = endpoint;
+ 		if (!enabled() || !permit.getAsBoolean()) {
+ 			return null;
+ 		}
+@@ -180,21 +192,45 @@ public class TelestoMain implements FilteredEventHandler {
+ 			if (logLabel != null) {
+ 				log.info("Sending Telesto message labeled '{}'", logLabel);
+ 			}
+-			HttpResponse<String> response = http.send(
++			long deadline = System.nanoTime() + REQUEST_TIMEOUT.toNanos();
++			CompletableFuture<HttpResponse<String>> exchange = http.sendAsync(
+ 					HttpRequest
+-							.newBuilder(uriSetting.get())
++							.newBuilder(uri)
+ 							.timeout(REQUEST_TIMEOUT)
+ 							.POST(
+ 									HttpRequest.BodyPublishers
+ 											.ofString(
+ 													body)).build(),
+-					HttpResponse.BodyHandlers.ofString());
++					info -> new BoundedResponseSubscriber(HttpResponse.BodyHandlers.ofString().apply(info)));
++			HttpResponse<String> response;
++			try {
++				while (true) {
++					if (!enabled() || !permit.getAsBoolean()) {
++						return null;
++					}
++					long remaining = deadline - System.nanoTime();
++					if (remaining <= 0) {
++						throw new HttpTimeoutException("Telesto response deadline exceeded");
++					}
++					try {
++						response = exchange.get(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(50)), TimeUnit.NANOSECONDS);
++						break;
++					}
++					catch (TimeoutException ignored) {
++						// Recheck cancellation while headers or the body are pending.
++					}
++				}
++			}
++			finally {
++				// Cancel the original HTTP future so the socket and subscriber are released.
++				exchange.cancel(true);
++			}
+ 			if (logLabel != null) {
+ 				log.info("Telesto response for label '{}': {} {}", logLabel, response.statusCode(), response.body());
+ 			}
+ 			return response;
+ 		}
+-		catch (IOException | InterruptedException e) {
++		catch (IOException | InterruptedException | ExecutionException e) {
+ 			if (e instanceof InterruptedException) {
+ 				Thread.currentThread().interrupt();
+ 			}
+@@ -206,19 +242,73 @@ public class TelestoMain implements FilteredEventHandler {
+ 
+ 	}
+ 
++	private static final class BoundedResponseSubscriber implements HttpResponse.BodySubscriber<String> {
++		private final HttpResponse.BodySubscriber<String> delegate;
++		private Flow.Subscription subscription;
++		private int received;
++		private boolean finished;
++
++		private BoundedResponseSubscriber(HttpResponse.BodySubscriber<String> delegate) {
++			this.delegate = delegate;
++		}
++
++		@Override
++		public CompletionStage<String> getBody() {
++			return delegate.getBody();
++		}
++
++		@Override
++		public void onSubscribe(Flow.Subscription subscription) {
++			this.subscription = subscription;
++			delegate.onSubscribe(subscription);
++		}
++
++		@Override
++		public void onNext(List<ByteBuffer> buffers) {
++			if (finished) {
++				return;
++			}
++			for (ByteBuffer buffer : buffers) {
++				if (buffer.remaining() > MAX_RESPONSE_BYTES - received) {
++					subscription.cancel();
++					onError(new IOException("Telesto response exceeds " + MAX_RESPONSE_BYTES + " bytes"));
++					return;
++				}
++				received += buffer.remaining();
++			}
++			delegate.onNext(buffers);
++		}
++
++		@Override
++		public void onError(Throwable error) {
++			if (!finished) {
++				finished = true;
++				delegate.onError(error);
++			}
++		}
++
++		@Override
++		public void onComplete() {
++			if (!finished) {
++				finished = true;
++				delegate.onComplete();
++			}
++		}
++	}
++
+ 	private BooleanSupplier capturePermit(TelestoOutgoingMessage msg) {
+-		return capturePermit(msg, uriSetting.get());
++		return capturePermit(msg, endpoint);
+ 	}
+ 
+ 	private BooleanSupplier capturePermit(TelestoOutgoingMessage msg, URI uri) {
+ 		BooleanSupplier permit = deliveryPermit.get();
+-		return () -> permit.getAsBoolean() && uri.equals(uriSetting.get())
++		return () -> permit.getAsBoolean() && uri.equals(endpoint)
+ 				&& (msg.getJson().path("id").asLong() != PARTY_UPDATE_ID || enablePartyList.get());
+ 	}
+ 
+ 	private void reportFailure(BaseTelestoResponse error, URI admittedUri) {
+ 		BooleanSupplier permit = deliveryFailure.get();
+-		error.setDeliveryPermit(() -> permit.getAsBoolean() && admittedUri.equals(uriSetting.get()));
++		error.setDeliveryPermit(() -> permit.getAsBoolean() && admittedUri.equals(endpoint));
+ 		master.pushEvent(error);
+ 		if (error.isCurrent()) {
+ 			updateStatus(TelestoStatus.BAD);
+@@ -227,7 +317,7 @@ public class TelestoMain implements FilteredEventHandler {
+ 
+ 	@HandleEvents
+ 	public void handleMessage(EventContext context, TelestoOutgoingMessage msg) {
+-		URI admittedUri = uriSetting.get();
++		URI admittedUri = endpoint;
+ 		BooleanSupplier permit = capturePermit(msg, admittedUri);
+ 		if (!enabled() || !outgoingGate.test(msg)) {
+ 			return;
+diff --git a/telesto-support/telesto-core/src/test/java/gg/xp/telestosupport/TelestoHttpRegressionTest.java b/telesto-support/telesto-core/src/test/java/gg/xp/telestosupport/TelestoHttpRegressionTest.java
+new file mode 100644
+index 000000000000..aee38a2cafdf
+--- /dev/null
++++ b/telesto-support/telesto-core/src/test/java/gg/xp/telestosupport/TelestoHttpRegressionTest.java
+@@ -0,0 +1,322 @@
++package gg.xp.telestosupport;
++
++import gg.xp.reevent.context.BasicStateStore;
++import gg.xp.reevent.events.BasicEventDistributor;
++import gg.xp.reevent.events.BasicEventQueue;
++import gg.xp.reevent.events.Event;
++import gg.xp.reevent.events.EventMaster;
++import gg.xp.xivsupport.persistence.InMemoryMapPersistenceProvider;
++import gg.xp.xivsupport.sys.KnownLogSource;
++import gg.xp.xivsupport.sys.PrimaryLogSource;
++import org.testng.Assert;
++import org.testng.annotations.Test;
++
++import java.io.BufferedInputStream;
++import java.io.IOException;
++import java.net.ServerSocket;
++import java.net.Socket;
++import java.net.SocketTimeoutException;
++import java.net.InetAddress;
++import java.net.URI;
++import java.net.http.HttpTimeoutException;
++import java.nio.charset.StandardCharsets;
++import java.util.List;
++import java.util.Map;
++import java.util.concurrent.CopyOnWriteArrayList;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicLong;
++
++@Test(singleThreaded = true, timeOut = 15000)
++public class TelestoHttpRegressionTest {
++    private static final int LIMIT = 1024 * 1024;
++
++    private static final class CaptureMaster extends EventMaster {
++        final List<Event> events = new CopyOnWriteArrayList<>();
++        final CountDownLatch response = new CountDownLatch(1);
++        final CountDownLatch failure = new CountDownLatch(1);
++        final CountDownLatch good = new CountDownLatch(1);
++
++        CaptureMaster() { super(new BasicEventDistributor(new BasicStateStore()), new BasicEventQueue()); }
++
++        @Override public void pushEvent(Event event) {
++            events.add(event);
++            if (event instanceof TelestoResponse) response.countDown();
++            if (event instanceof TelestoConnectionError) failure.countDown();
++            if (event instanceof TelestoStatusUpdatedEvent update && update.getNewStatus() == TelestoStatus.GOOD) good.countDown();
++        }
++    }
++
++    private enum Mode { HEADERS_STALL, BODY_STALL, TRICKLE, COMPLETE }
++
++    private static final class Endpoint implements AutoCloseable {
++        final ServerSocket server = new ServerSocket(0, 10, InetAddress.getByName("127.0.0.1"));
++        final ExecutorService workers = Executors.newCachedThreadPool();
++        final List<Socket> sockets = new CopyOnWriteArrayList<>();
++        final List<String> requests = new CopyOnWriteArrayList<>();
++        final CountDownLatch started = new CountDownLatch(1);
++        final CountDownLatch disconnected = new CountDownLatch(1);
++        final Mode mode;
++        byte[] body = "null".getBytes(StandardCharsets.UTF_8);
++        boolean chunked;
++        int status = 200;
++        String charset = "UTF-8";
++
++        Endpoint(Mode mode) throws IOException {
++            this.mode = mode;
++            workers.submit(() -> {
++                try {
++                    while (!server.isClosed()) {
++                        Socket socket = server.accept();
++                        sockets.add(socket);
++                        workers.submit(() -> serve(socket));
++                    }
++                }
++                catch (IOException ignored) { }
++            });
++        }
++
++        private void serve(Socket socket) {
++            try (socket) {
++                socket.setSoTimeout(5000);
++                var input = new BufferedInputStream(socket.getInputStream());
++                int length = 0;
++                String line;
++                while (!(line = line(input)).isEmpty()) {
++                    if (line.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:")) {
++                        length = Integer.parseInt(line.substring(line.indexOf(':') + 1).trim());
++                    }
++                }
++                requests.add(new String(input.readNBytes(length), StandardCharsets.UTF_8));
++                var output = socket.getOutputStream();
++                if (mode != Mode.HEADERS_STALL) {
++                    String framing = chunked ? "Transfer-Encoding: chunked\r\n"
++                            : "Content-Length: " + (mode == Mode.COMPLETE ? body.length : LIMIT) + "\r\n";
++                    output.write(("HTTP/1.1 " + status + " OK\r\n" + framing
++                            + "Content-Type: application/json; charset=" + charset + "\r\n\r\n")
++                            .getBytes(StandardCharsets.US_ASCII));
++                    if (mode == Mode.COMPLETE) {
++                        if (chunked) output.write((Integer.toHexString(body.length) + "\r\n").getBytes(StandardCharsets.US_ASCII));
++                        output.write(body);
++                        if (chunked) output.write("\r\n0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
++                        output.flush();
++                        started.countDown();
++                        return;
++                    }
++                    output.write('n');
++                    output.flush();
++                }
++                started.countDown();
++                socket.setSoTimeout(100);
++                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
++                while (System.nanoTime() < deadline) {
++                    try {
++                        if (input.read() == -1) {
++                            disconnected.countDown();
++                            return;
++                        }
++                    }
++                    catch (SocketTimeoutException ignored) {
++                        if (mode == Mode.TRICKLE) {
++                            output.write(' ');
++                            output.flush();
++                        }
++                    }
++                }
++            }
++            catch (IOException error) {
++                if (!server.isClosed()) disconnected.countDown();
++            }
++        }
++
++        private static String line(BufferedInputStream input) throws IOException {
++            StringBuilder result = new StringBuilder();
++            for (int value; (value = input.read()) != -1;) {
++                if (value == '\n') return result.toString().stripTrailing();
++                result.append((char) value);
++            }
++            throw new IOException("Incomplete request");
++        }
++
++        URI uri() { return URI.create("http://127.0.0.1:" + server.getLocalPort() + "/"); }
++
++        @Override public void close() throws Exception {
++            server.close();
++            for (Socket socket : sockets) socket.close();
++            workers.shutdownNow();
++            Assert.assertTrue(workers.awaitTermination(2, TimeUnit.SECONDS), "Endpoint workers leaked");
++        }
++    }
++
++    private static TelestoMain sender(CaptureMaster master, URI uri) {
++        PrimaryLogSource source = new PrimaryLogSource();
++        source.setLogSource(KnownLogSource.WEBSOCKET_LIVE);
++        TelestoMain main = new TelestoMain(master, new InMemoryMapPersistenceProvider(), source);
++        main.getUriSetting().set(uri);
++        main.getEnablePartyList().set(false);
++        main.getCommandDelayBase().set(0);
++        main.getCommandDelayPlus().set(0);
++        return main;
++    }
++
++    private static TelestoOutgoingMessage message(TelestoMain main, boolean delay) {
++        return main.makeMessage(TelestoMain.GAME_CMD_ID, "ExecuteCommand", Map.of("command", "probe"), delay);
++    }
++
++    private static void await(CountDownLatch latch, long milliseconds, String reason) throws Exception {
++        Assert.assertTrue(latch.await(milliseconds, TimeUnit.MILLISECONDS), reason);
++    }
++
++    private static boolean causedBy(Throwable error, Class<? extends Throwable> type) {
++        while (error != null) {
++            if (type.isInstance(error)) return true;
++            error = error.getCause();
++        }
++        return false;
++    }
++
++    public void fullDeadlineCancelsHeaderBodyAndTricklingResponses() throws Exception {
++        for (Mode mode : List.of(Mode.HEADERS_STALL, Mode.BODY_STALL, Mode.TRICKLE)) {
++            try (Endpoint endpoint = new Endpoint(mode)) {
++                TelestoMain main = sender(new CaptureMaster(), endpoint.uri());
++                long start = System.nanoTime();
++                RuntimeException error = Assert.expectThrows(RuntimeException.class,
++                        () -> main.sendMessageDirectly(message(main, true)));
++                long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
++                Assert.assertTrue(causedBy(error, HttpTimeoutException.class), error.toString());
++                Assert.assertTrue(elapsed >= 2500 && elapsed < 4500, mode + " deadline: " + elapsed);
++                await(endpoint.disconnected, 1000, mode + " HTTP exchange was not cancelled");
++                Assert.assertEquals(endpoint.requests.size(), 1, "Ambiguous command was retried");
++            }
++        }
++    }
++
++    public void endpointChangeReleasesBothSerialWorkersAndSuppressesOldResults() throws Exception {
++        for (boolean delay : List.of(true, false)) {
++            try (Endpoint old = new Endpoint(Mode.BODY_STALL); Endpoint healthy = new Endpoint(Mode.COMPLETE)) {
++                CaptureMaster master = new CaptureMaster();
++                TelestoMain main = sender(master, old.uri());
++                main.handleMessage(null, message(main, delay));
++                await(old.started, 2000, "Old response body did not start");
++                main.handleMessage(null, message(main, delay));
++                main.getUriSetting().set(healthy.uri());
++                main.handleMessage(null, message(main, delay));
++                await(master.response, 1500, "Fresh command blocked behind the retired endpoint");
++                await(master.good, 1000, "Fresh response did not restore transport status");
++                await(old.disconnected, 1000, "Retired endpoint retained its HTTP exchange");
++                Assert.assertEquals(old.requests.size(), 1);
++                Assert.assertEquals(healthy.requests.size(), 1);
++                Assert.assertEquals(master.events.stream().filter(BaseTelestoResponse.class::isInstance).count(), 1L);
++                Assert.assertEquals(main.getStatus(), TelestoStatus.GOOD);
++            }
++        }
++    }
++
++    public void retiredDeliveryPermitCancelsBodyAndAllowsFreshCommand() throws Exception {
++        try (Endpoint old = new Endpoint(Mode.BODY_STALL); Endpoint healthy = new Endpoint(Mode.COMPLETE)) {
++            CaptureMaster master = new CaptureMaster();
++            TelestoMain main = sender(master, old.uri());
++            AtomicLong generation = new AtomicLong();
++            main.setDeliveryPermit(() -> {
++                long admitted = generation.get();
++                return () -> admitted == generation.get();
++            });
++            main.handleMessage(null, message(main, true));
++            await(old.started, 2000, "Response body did not start");
++            main.handleMessage(null, message(main, true));
++            generation.incrementAndGet();
++            await(old.disconnected, 1000, "Retired permit retained its HTTP exchange");
++            Assert.assertTrue(master.events.isEmpty(), "Retired response changed transport state");
++            main.getUriSetting().set(healthy.uri());
++            main.handleMessage(null, message(main, true));
++            await(master.response, 1500, "Fresh generation did not reach the endpoint");
++            Assert.assertEquals(old.requests.size(), 1);
++            Assert.assertEquals(healthy.requests.size(), 1);
++        }
++    }
++
++    public void bodyTimeoutReportsOnceAndQueueRecovers() throws Exception {
++        try (Endpoint old = new Endpoint(Mode.BODY_STALL); Endpoint healthy = new Endpoint(Mode.COMPLETE)) {
++            CaptureMaster master = new CaptureMaster();
++            TelestoMain main = sender(master, old.uri());
++            main.handleMessage(null, message(main, true));
++            await(master.failure, 4500, "Body deadline did not report a transport failure");
++            await(old.disconnected, 1000, "Timed out exchange was not cancelled");
++            main.getUriSetting().set(healthy.uri());
++            main.handleMessage(null, message(main, true));
++            await(master.response, 1500, "Worker did not recover after body timeout");
++            Assert.assertEquals(master.events.stream().filter(TelestoConnectionError.class::isInstance).count(), 1L);
++            Assert.assertEquals(old.requests.size(), 1);
++            Assert.assertEquals(healthy.requests.size(), 1);
++        }
++    }
++
++    public void responseLimitCoversFixedChunkedAndErrorBodies() throws Exception {
++        for (boolean chunked : List.of(false, true)) {
++            for (int status : List.of(200, 503)) {
++                try (Endpoint endpoint = new Endpoint(Mode.COMPLETE)) {
++                    endpoint.chunked = chunked;
++                    endpoint.status = status;
++                    endpoint.body = new byte[LIMIT + 1];
++                    TelestoMain main = sender(new CaptureMaster(), endpoint.uri());
++                    RuntimeException error = Assert.expectThrows(RuntimeException.class,
++                            () -> main.sendMessageDirectly(message(main, true)));
++                    Assert.assertTrue(causedBy(error, IOException.class));
++                    Assert.assertTrue(error.toString().contains("exceeds"), error.toString());
++                    Assert.assertEquals(endpoint.requests.size(), 1);
++                }
++            }
++        }
++        try (Endpoint endpoint = new Endpoint(Mode.COMPLETE)) {
++            endpoint.body = new byte[LIMIT];
++            TelestoMain main = sender(new CaptureMaster(), endpoint.uri());
++            Assert.assertEquals(main.sendMessageDirectly(message(main, true)).body().length(), LIMIT);
++        }
++    }
++
++    public void normalResponsesKeepStatusBodyAndCharset() throws Exception {
++        try (Endpoint endpoint = new Endpoint(Mode.COMPLETE)) {
++            endpoint.status = 503;
++            endpoint.charset = "UTF-16LE";
++            String body = "{\"message\":\"日本語\"}";
++            endpoint.body = body.getBytes(StandardCharsets.UTF_16LE);
++            TelestoMain main = sender(new CaptureMaster(), endpoint.uri());
++            var response = main.sendMessageDirectly(message(main, true));
++            Assert.assertEquals(response.statusCode(), 503);
++            Assert.assertEquals(response.body(), body);
++        }
++    }
++
++    public void interruptionCancelsTheExchangeAndPreservesInterruptStatus() throws Exception {
++        try (Endpoint endpoint = new Endpoint(Mode.BODY_STALL)) {
++            TelestoMain main = sender(new CaptureMaster(), endpoint.uri());
++            CountDownLatch finished = new CountDownLatch(1);
++            List<Throwable> errors = new CopyOnWriteArrayList<>();
++            Thread caller = new Thread(() -> {
++                try {
++                    main.sendMessageDirectly(message(main, true));
++                    errors.add(new AssertionError("Interrupted send returned normally"));
++                }
++                catch (RuntimeException error) {
++                    if (!causedBy(error, InterruptedException.class) || !Thread.currentThread().isInterrupted()) errors.add(error);
++                }
++                finally { finished.countDown(); }
++            });
++            caller.start();
++            try {
++                await(endpoint.started, 2000, "Response body did not start");
++                caller.interrupt();
++                await(finished, 1000, "Interrupted caller stayed blocked");
++                await(endpoint.disconnected, 1000, "Interrupted exchange stayed open");
++                Assert.assertTrue(errors.isEmpty(), errors.toString());
++            }
++            finally {
++                caller.interrupt();
++                caller.join(4000);
++                Assert.assertFalse(caller.isAlive(), "Caller thread leaked");
++            }
++        }
++    }
++}

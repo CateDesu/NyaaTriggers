@@ -81,19 +81,25 @@ def remove_worktree(source, worktree, common):
 
 
 @contextmanager
-def prepared_source(source, patch):
-    source, patch = Path(source).resolve(), Path(patch).resolve()
-    if not patch.is_file():
-        raise RuntimeError(f"Patch file was not found: {patch}")
+def prepared_source(source, *patches):
+    source = Path(source).resolve()
+    patches = [Path(patch).resolve() for patch in patches]
+    for patch in patches:
+        if not patch.is_file():
+            raise RuntimeError(f"Patch file was not found: {patch}")
     root = Path(git(source, "rev-parse", "--show-toplevel").stdout.strip()).resolve()
     if root != source:
         raise RuntimeError("The engine source path must be its Git working tree root")
     if git(source, "status", "--porcelain", "--untracked-files=all").stdout:
         raise RuntimeError("The engine source contains local changes. Commit or move them before building")
-    if git(source, "apply", "--check", "--", str(patch), check=False).returncode:
-        if git(source, "apply", "--reverse", "--check", "--", str(patch), check=False).returncode:
-            raise RuntimeError("The engine patch does not apply and the source does not already contain it")
-        print(">> engine source already contains the patch", flush=True)
+    pending = []
+    for patch in patches:
+        if not git(source, "apply", "--check", "--", str(patch), check=False).returncode:
+            pending.append(patch)
+        elif git(source, "apply", "--reverse", "--check", "--", str(patch), check=False).returncode:
+            raise RuntimeError(f"The engine patch {patch.name} does not apply and the source does not already contain it")
+    if not pending:
+        print(">> engine source already contains the patches", flush=True)
         yield source
         return
     head = git(source, "rev-parse", "HEAD").stdout.strip()
@@ -105,14 +111,15 @@ def prepared_source(source, patch):
         worktree = Path(temporary) / "source"
         try:
             git(source, "worktree", "add", "--detach", str(worktree), head)
-            git(worktree, "apply", "--", str(patch))
+            for patch in pending:
+                git(worktree, "apply", "--", str(patch))
             yield worktree
         finally:
             remove_worktree(source, worktree, common)
 
 
-def build(source, patch, wrapper=None):
-    with prepared_source(source, patch) as prepared:
+def build(source, patch, wrapper=None, *, extra_patches=()):
+    with prepared_source(source, patch, *extra_patches) as prepared:
         if prepared != Path(source).resolve():
             print(">> installing patched Triggevent Engine modules", flush=True)
         install_modules(prepared)
@@ -125,11 +132,11 @@ def build(source, patch, wrapper=None):
 def main():
     parser = argparse.ArgumentParser(description="Install engine modules without modifying the source clone")
     parser.add_argument("source", help="Clean engine source clone")
-    parser.add_argument("patch", help="Engine compatibility patch")
+    parser.add_argument("patch", nargs="+", help="Engine compatibility patches")
     parser.add_argument("--wrapper", type=Path, help="Package and install the host after building modules")
     args = parser.parse_args()
     try:
-        build(args.source, args.patch, args.wrapper)
+        build(args.source, args.patch[0], args.wrapper, extra_patches=args.patch[1:])
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else str(exc)
         print(f"ERROR: {detail}", file=sys.stderr)

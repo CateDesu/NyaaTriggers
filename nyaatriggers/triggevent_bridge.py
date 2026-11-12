@@ -193,7 +193,8 @@ def _wrapper_build_inputs() -> dict:
 
     paths = [_CORE_DIR / name for name in ("pom.xml", "build.sh", "build.bat")]
     paths.extend(path for path in (_CORE_DIR / "build_engine.py",
-                                   _CORE_DIR / "patches" / "same-zone-history.patch") if path.is_file())
+                                   _CORE_DIR / "patches" / "same-zone-history.patch",
+                                   _CORE_DIR / "patches" / "telesto-response-deadline.patch") if path.is_file())
     for directory, _dirs, files in os.walk(_CORE_DIR / "src" / "main", onerror=unreadable):
         paths.extend(Path(directory) / name for name in files)
     inputs = {}
