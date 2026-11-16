@@ -41,6 +41,7 @@ class TriggeventRecovery(QObject):
         self._retry_delay_ms = _RESTART_DELAY_MS
         self._retry_generation = -1
         self._preserve_pending = False
+        self._suspended = False
         self._last_diagnostic = None
         self._initial_state = ws.state_snapshot()
         self._retry_timer = QTimer(self)
@@ -56,6 +57,20 @@ class TriggeventRecovery(QObject):
         bridge.feed_overflow.connect(self._restart)
         ws.engine_message.connect(self.feed)
         ws.status_changed.connect(self._connection)
+
+    def set_suspended(self, suspended: bool) -> None:
+        """Pause recovery before teardown can enter a modal event loop."""
+        self._suspended = bool(suspended)
+        if suspended:
+            self._retry_timer.stop()
+            self._progress_timer.stop()
+        elif self._connected and (self._lost_connection or self._restart_on_connect):
+            self._connected = False
+            self._connection(True, "Connected")
+        else:
+            self._schedule_retry()
+            if self.bridge.is_active() and not self._live:
+                self._progress_timer.start()
 
     def _diagnostic(self, state, reason, generation=None):
         generation = self._generation if generation is None else generation
@@ -98,17 +113,20 @@ class TriggeventRecovery(QObject):
             self._ending = False
             self._checkpoint = 0
             self._diagnostic("starting", "engine_start")
-            self._progress_timer.start()
+            if not self._suspended:
+                self._progress_timer.start()
 
     def _schedule_retry(self):
-        if (self._connected and not self._lost_connection and self._restart_on_connect
+        if (not self._suspended and self._connected and not self._lost_connection
+                and self._restart_on_connect
                 and not self.bridge.is_active() and not self._retry_timer.isActive()):
             self._retry_generation = self.bridge.generation()
             self._retry_timer.start(self._retry_delay_ms)
             self._retry_delay_ms = min(self._retry_delay_ms * 2, _MAX_RESTART_DELAY_MS)
 
     def _retry_engine(self):
-        if (not self._connected or self._lost_connection or not self._restart_on_connect
+        if (self._suspended or not self._connected or self._lost_connection
+                or not self._restart_on_connect
                 or self._retry_generation != self.bridge.generation() or self.bridge.is_active()):
             return
         self._diagnostic("restart", "engine_exit")
@@ -119,7 +137,7 @@ class TriggeventRecovery(QObject):
             self._preserve_pending = False
 
     def _restart(self, generation, reason="feed_overflow"):
-        if generation != self._generation or generation != self.bridge.generation():
+        if self._suspended or generation != self._generation or generation != self.bridge.generation():
             return
         self._progress_timer.stop()
         if self.bridge.is_active():
@@ -132,7 +150,8 @@ class TriggeventRecovery(QObject):
                 self._preserve_pending = False
 
     def _recovery_timed_out(self):
-        if (not self._ready or self._loading) and not self._live and not self._lost_connection:
+        if (not self._suspended and (not self._ready or self._loading)
+                and not self._live and not self._lost_connection):
             _log("recovery: engine readiness timed out" if not self._ready else
                  "recovery: engine acknowledgement timed out")
             self._restart(self._generation, "progress_timeout")
@@ -151,6 +170,9 @@ class TriggeventRecovery(QObject):
         elif not was_connected and (self._lost_connection or self._loading or self._live
                                     or self._restart_on_connect):
             self._retry_timer.stop()
+            if self._suspended:
+                self._restart_on_connect = self._restart_on_connect or self.bridge.is_active()
+                return
             self._lost_connection = False
             restart = self._restart_on_connect
             self._restart_on_connect = False
@@ -188,11 +210,11 @@ class TriggeventRecovery(QObject):
         if self._bytes + size > _MAX_PENDING_BYTES:
             _log("recovery: feed buffer exceeded its limit")
             self._diagnostic("buffer_overflow", "buffer_overflow")
-            if self.bridge.is_active():
+            if self.bridge.is_active() and not self._suspended:
                 self._diagnostic("restart", "buffer_overflow")
             self._pending = []
             self._bytes = 0
-            if self.bridge.is_active():
+            if self.bridge.is_active() and not self._suspended:
                 self.bridge.stop()
                 self.bridge.start()
             if size > _MAX_PENDING_BYTES:
@@ -202,7 +224,7 @@ class TriggeventRecovery(QObject):
         self._try_start()
 
     def _try_start(self, allow_empty=False):
-        if (not self._ready or self._loading or self._live or self._lost_connection
+        if (self._suspended or not self._ready or self._loading or self._live or self._lost_connection
                 or not self.bridge.is_active()):
             return
         if not self.bridge.supports_recovery():
@@ -247,7 +269,7 @@ class TriggeventRecovery(QObject):
             return None
 
     def _finish(self, generation, history, reason):
-        if (generation != self._generation or generation != self.bridge.generation()
+        if (self._suspended or generation != self._generation or generation != self.bridge.generation()
                 or self._live or self._lost_connection or not self.bridge.is_active()):
             return
         if not self._progress_timer.isActive():
@@ -294,7 +316,7 @@ class TriggeventRecovery(QObject):
         self.ws.request_combatants_once()
 
     def _on_progress(self, message, generation):
-        if (generation != self._generation or generation != self.bridge.generation()
+        if (self._suspended or generation != self._generation or generation != self.bridge.generation()
                 or not self._loading or self._live or self._lost_connection
                 or not self.bridge.is_active()
                 or message.get("checkpoint") != self._checkpoint):
@@ -312,7 +334,7 @@ class TriggeventRecovery(QObject):
             self._flush_pending(generation, self._checkpoint)
 
     def _flush_pending(self, generation, acknowledged):
-        if (generation != self._generation or generation != self.bridge.generation()
+        if (self._suspended or generation != self._generation or generation != self.bridge.generation()
                 or acknowledged != self._checkpoint or self._ending or self._live
                 or self._lost_connection or not self.bridge.is_active()):
             return

@@ -497,6 +497,12 @@ class UpdaterUiMixin:
                 self, _("Restart failed"),
                 _("Could not restart automatically: {error}\n\n"
                   "Please close and reopen NyaaTriggers to finish the update.").format(error=exc))
+        finally:
+            self._triggernometry_retry_stopped = False
+            self._triggevent_stopping = False
+            recovery = getattr(self, "_triggevent_recovery", None)
+            if recovery is not None:
+                recovery.set_suspended(False)
 
     def _on_auto_update_changed(self, state: int) -> None:
         self._settings["auto_check_updates"] = bool(state)
@@ -555,11 +561,17 @@ class UpdaterUiMixin:
         self._download_repo_triggers(self._update_trig_btn, _("Update Triggers"))
 
     def _download_repo_triggers(self, btn, label: str) -> None:
-        # Track each download button so concurrent requests restore the right labels.
-        if btn in self._trig_dl_in_flight:
+        # Both buttons publish the same catalog files.
+        if self._trig_dl_in_flight:
             return
-        self._trig_dl_in_flight[btn] = label
-        btn.setEnabled(False)
+        buttons = {btn: (label, btn.isEnabled())}
+        for name in ("_update_trig_btn", "_restore_trig_btn"):
+            other = getattr(self, name, None)
+            if other is not None and other not in buttons:
+                buttons[other] = (other.text(), other.isEnabled())
+        self._trig_dl_in_flight[btn] = buttons
+        for button in buttons:
+            button.setEnabled(False)
         btn.setText(_("Downloading..."))
 
         def _fetch() -> None:
@@ -574,6 +586,8 @@ class UpdaterUiMixin:
                 data = json.loads(raw)
                 if not isinstance(data, list) or not all(isinstance(row, dict) for row in data):
                     raise ValueError("Expected a list of trigger objects")
+                # An earlier stamp must not authorize an interrupted publication.
+                ac._REPO_TRIGGERS_VERSION.unlink(missing_ok=True)
                 # Download to untracked cache names to preserve source checkouts.
                 _atomic_write_json(ac._REPO_TRIGGERS_FILE, data, indent=2)
                 # Retirement refresh failures must not fail the trigger update.
@@ -599,19 +613,24 @@ class UpdaterUiMixin:
         try:
             threading.Thread(target=_fetch, daemon=True).start()
         except Exception:  # noqa: BLE001
-            self._trig_dl_in_flight.pop(btn, None)
-            btn.setEnabled(True)
-            btn.setText(label)
+            self._restore_trig_download_buttons(btn)
+            self._triggers_mtime = ()
+
+    def _restore_trig_download_buttons(self, btn) -> bool:
+        buttons = self._trig_dl_in_flight.pop(btn, None)
+        if buttons is None:
+            return False
+        for button, (label, enabled) in buttons.items():
+            button.setText(label)
+            button.setEnabled(enabled)
+        return True
 
     def _on_trig_update_result(self, btn, msg: str) -> None:
-        label = self._trig_dl_in_flight.pop(btn, None)
-        if label is None:
+        if not self._restore_trig_download_buttons(btn):
             return
-        btn.setEnabled(True)
-        btn.setText(label)
+        self._load_triggers()
         if msg.startswith("ok:"):
             count = msg[3:]
-            self._load_triggers()
             ac.QMessageBox.information(self, _("Bundled Triggers Reloaded"),
                                     _("Loaded {count} bundled triggers from the repo. "
                                       "Your own (custom and edited) triggers are untouched.").format(count=count))

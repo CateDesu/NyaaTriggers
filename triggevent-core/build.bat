@@ -36,7 +36,7 @@ if not exist "%EVENT_TRIGGER_DIR%\.git" (
 )
 
 echo ^>^> installing Triggevent Engine modules to local Maven repo
-python "%HERE%build_engine.py" "%EVENT_TRIGGER_DIR%" "%HERE%patches\same-zone-history.patch" --wrapper "%HERE%." || exit /b 1
+python "%HERE%build_engine.py" "%EVENT_TRIGGER_DIR%" "%HERE%patches\same-zone-history.patch" "%HERE%patches\telesto-response-deadline.patch" --wrapper "%HERE%." || exit /b 1
 
 echo.
 echo Built: %HERE%target\triggevent-core.jar

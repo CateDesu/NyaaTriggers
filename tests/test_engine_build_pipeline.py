@@ -77,8 +77,9 @@ raise SystemExit(int(os.environ.get("NYAA_BUILD_TEST_FAIL", "0")))
                               cwd=self.source, env=self.environment,
                               text=True, encoding="utf-8", capture_output=True, check=True)
 
-    def run_build(self):
-        return subprocess.run([sys.executable, str(HELPER), str(self.source), str(self.patch)],
+    def run_build(self, *extra_patches):
+        return subprocess.run([sys.executable, str(HELPER), str(self.source), str(self.patch),
+                               *map(str, extra_patches)],
                               cwd=self.directory, env=self.environment,
                               text=True, encoding="utf-8", capture_output=True)
 
@@ -143,6 +144,46 @@ raise SystemExit(int(os.environ.get("NYAA_BUILD_TEST_FAIL", "0")))
         self.assertEqual(Path(call["source"]), self.source)
         self.assertFalse(call["detached"])
         self.assertEqual(call["content"], "new\n")
+        self.assert_clone_preserved("new\n", head)
+
+    def transport_patch(self):
+        patch_file = self.directory / "transport.patch"
+        patch_file.write_text("--- /dev/null\n+++ b/transport.txt\n@@ -0,0 +1 @@\n+bounded\n",
+                              encoding="utf-8")
+        return patch_file
+
+    def test_multiple_patches_build_together_and_preserve_clone(self):
+        with engine_build.prepared_source(self.source, self.patch, self.transport_patch()) as prepared:
+            self.assertEqual((prepared / "mechanic.txt").read_text(), "new\n")
+            self.assertEqual((prepared / "transport.txt").read_text(), "bounded\n")
+        self.assert_clone_preserved()
+        self.assertFalse((self.source / "transport.txt").exists())
+
+    def test_missing_second_patch_refuses_build_without_writes(self):
+        result = self.run_build(self.directory / "missing.patch")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Patch file was not found", result.stderr)
+        self.assertFalse(self.calls.exists())
+        self.assert_clone_preserved()
+
+    def test_incompatible_second_patch_refuses_build_without_writes(self):
+        incompatible = self.directory / "incompatible.patch"
+        incompatible.write_text("--- a/missing.txt\n+++ b/missing.txt\n@@ -1 +1 @@\n-old\n+new\n")
+        result = self.run_build(incompatible)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("does not apply", result.stderr)
+        self.assertFalse(self.calls.exists())
+        self.assert_clone_preserved()
+
+    def test_applied_history_patch_still_prepares_missing_transport_fix(self):
+        (self.source / "mechanic.txt").write_text("new\n", encoding="utf-8")
+        self.git("add", "mechanic.txt")
+        self.git("commit", "-q", "-m", "Fixed fixture")
+        head = self.git("rev-parse", "HEAD").stdout.strip()
+        with engine_build.prepared_source(self.source, self.patch, self.transport_patch()) as prepared:
+            self.assertNotEqual(prepared, self.source)
+            self.assertEqual((prepared / "mechanic.txt").read_text(), "new\n")
+            self.assertEqual((prepared / "transport.txt").read_text(), "bounded\n")
         self.assert_clone_preserved("new\n", head)
 
     def test_tracked_and_untracked_local_changes_are_refused_without_writes(self):
@@ -248,6 +289,7 @@ raise SystemExit(int(os.environ.get("NYAA_BUILD_TEST_FAIL", "0")))
             shutil.copy2(ROOT / "triggevent-core" / name, wrapper / name)
         (wrapper / "patches").mkdir()
         shutil.copy2(self.patch, wrapper / "patches/same-zone-history.patch")
+        shutil.copy2(self.transport_patch(), wrapper / "patches/telesto-response-deadline.patch")
         target = wrapper / "target"
         target.mkdir()
         jar = target / "triggevent-core.jar"

@@ -245,6 +245,10 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin, TriggerConv
             self._triggevent.custom_status.connect(self._on_custom_triggevent_status)
             self._triggevent_recovery = TriggeventRecovery(
                 self._triggevent, self._ws, self._find_iinact_log_dir, self)
+            if getattr(self, "_triggevent_stopping", False):
+                self._triggevent_recovery.set_suspended(True)
+            if self._connected:
+                self._triggevent_recovery._connection(True, "Connected")
             self._triggevent.combatants_request.connect(self._on_triggevent_combatants_request)
             self._ws.set_engine_combatant_polling(True)
             self._apply_engine_overrides("triggevent")
@@ -317,6 +321,8 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin, TriggerConv
 
     def _reconcile_triggevent_engine(self) -> None:
         """Run the engine independently of callout mode, tolerating startup failure."""
+        if getattr(self, "_triggevent_stopping", False):
+            return
         if not TriggeventBridge.is_available():
             return
         running = self._triggevent is not None and self._triggevent.is_active()
@@ -446,14 +452,18 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin, TriggerConv
     def _ensure_triggernometry_bridge(self):
         if self._triggernometry is None:
             self._triggernometry = TriggernometryBridge(self)
+            self._triggernometry_retry_timer = QTimer(self)
+            self._triggernometry_retry_timer.setSingleShot(True)
+            self._triggernometry_retry_timer.timeout.connect(self._retry_triggernometry_engine)
+            self._triggernometry_retry_delay = 1000
+            self._triggernometry_retry_stopped = getattr(self, "_triggernometry_retry_stopped", False)
             self._triggernometry.callout.connect(self._on_triggernometry_callout)
             self._triggernometry.tts.connect(self._on_triggernometry_tts)
             self._triggernometry.sound.connect(self._on_triggernometry_sound)
             self._triggernometry.inventory.connect(self._on_triggernometry_inventory)
             self._triggernometry.feed_overflow.connect(
                 self._on_triggernometry_overflow, Qt.ConnectionType.QueuedConnection)
-            self._triggernometry.status.connect(
-                lambda active, msg, gen: self._on_engine_sidecar_status("triggernometry", active, msg, gen))
+            self._triggernometry.status.connect(self._on_triggernometry_status)
             self._ws.log_line.connect(self._triggernometry.feed_log)
             self._ws.in_combat.connect(self._triggernometry.feed_combat)
             self._ws.status_changed.connect(self._on_triggernometry_connection)
@@ -463,6 +473,29 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin, TriggerConv
             self._apply_engine_overrides("triggernometry")
             self._triggernometry.set_disabled(self._triggernometry_disabled)
         return self._triggernometry
+
+    def _on_triggernometry_status(self, active: bool, message: str, generation: int) -> None:
+        bridge = self._triggernometry
+        if _stale_gen(bridge, generation):
+            return
+        self._on_engine_sidecar_status("triggernometry", active, message, generation)
+        timer = self._triggernometry_retry_timer
+        if active or message == "Off" or self._triggernometry_retry_stopped:
+            timer.stop()
+            if active and message == "ready":
+                self._triggernometry_retry_delay = 1000
+        elif (self._triggernometry_mode and self._connected and not bridge.is_active()
+              and not timer.isActive()):
+            self._triggernometry_retry_generation = generation
+            timer.start(self._triggernometry_retry_delay)
+            self._triggernometry_retry_delay = min(self._triggernometry_retry_delay * 2, 30000)
+
+    def _retry_triggernometry_engine(self) -> None:
+        bridge = self._triggernometry
+        if (not self._triggernometry_retry_stopped
+                and self._triggernometry_mode and self._connected and not bridge.is_active()
+                and bridge.generation() == self._triggernometry_retry_generation):
+            self._set_triggernometry_enabled(True)
 
     def _on_triggernometry_overflow(self, generation: int) -> None:
         bridge = self._triggernometry
@@ -474,6 +507,9 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin, TriggerConv
 
     def _on_triggernometry_connection(self, connected: bool, _message: str) -> None:
         if not connected:
+            timer = getattr(self, "_triggernometry_retry_timer", None)
+            if timer is not None:
+                timer.stop()
             if self._triggernometry is not None:
                 self._triggernometry.stop()
         elif self._triggernometry_mode:
@@ -481,6 +517,9 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin, TriggerConv
 
     def _set_triggernometry_enabled(self, enabled: bool) -> None:
         if enabled:
+            if getattr(self, "_triggernometry_retry_stopped", False):
+                self._triggernometry_mode = True
+                return
             if (TriggernometryBridge is None or not TriggernometryBridge.is_available()
                     or not self._has_triggernometry_packs()):
                 self._triggernometry_mode = False
@@ -492,6 +531,8 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin, TriggerConv
                 was_active = br.is_active()
                 if not was_active:
                     br.set_disabled(self._triggernometry_disabled)
+                # Launch failures can report status before start returns.
+                self._triggernometry_mode = True
                 br.start()
                 if (not was_active and br.is_active()
                         and getattr(self, "_triggernometry_reload_pending", False)):
@@ -513,14 +554,19 @@ class EnginesMixin(CustomTriggeventMixin, TriggernometryEditorMixin, TriggerConv
                         and (self._current_zone or self._current_zone_id)):
                     br.feed_zone(self._current_zone_id, self._current_zone)
                 self._ws.set_combatant_polling(True)
-                self._triggernometry_mode = True
             except Exception as exc:  # noqa: BLE001
                 self._triggernometry_mode = False
+                timer = getattr(self, "_triggernometry_retry_timer", None)
+                if timer is not None:
+                    timer.stop()
                 if self._triggernometry is not None:
                     self._triggernometry.stop()
                 print(f"[triggernometry] failed to enable: {exc!r}", file=sys.stderr)
         else:
             self._triggernometry_mode = False
+            timer = getattr(self, "_triggernometry_retry_timer", None)
+            if timer is not None:
+                timer.stop()
             if self._triggernometry is not None:
                 self._triggernometry.stop()
             try:

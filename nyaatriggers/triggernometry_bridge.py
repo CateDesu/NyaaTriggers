@@ -207,6 +207,7 @@ class TriggernometryBridge(QObject):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._proc: "subprocess.Popen | None" = None
+        self._retired_procs = {}
         self._reader: "threading.Thread | None" = None
         self._errpump: "threading.Thread | None" = None
         self._writer: "threading.Thread | None" = None
@@ -400,17 +401,24 @@ class TriggernometryBridge(QObject):
         self.status.emit(True, "Starting Triggernometry engine...", gen)
 
     def stop(self, wait: bool = False) -> None:
-        if not self._active and self._proc is None:
-            if wait:
-                self._close_telesto(None, wait=True)
-            return
         with self._state_lock:
+            idle = not self._active and self._proc is None
             self._active = False
-            self._gen += 1
+            if not idle:
+                self._gen += 1
             gen = self._gen
             proc, self._proc = self._proc, None
+            if proc is not None:
+                self._retired_procs[id(proc)] = proc
             relay, self._telesto = self._telesto, None
+            if relay is not None:
+                self._retired_telesto.append(relay)
             wq = self._wq
+        if idle:
+            if wait:
+                self._close_telesto(None, wait=True)
+                self._wait_retired()
+            return
         self._close_telesto(relay, wait=wait)
         try:
             wq.put_nowait(_STOP)
@@ -423,17 +431,27 @@ class TriggernometryBridge(QObject):
         if proc is not None:
             # Signal the group now because the parent may exit before the background reaper.
             self._signal_group(proc, graceful=True)
-            if wait:
-                self._reap(proc)
-            else:
-                threading.Thread(target=self._reap, args=(proc,), daemon=True, name="tn-reap").start()
+            if not wait:
+                threading.Thread(target=self._reap_retired, args=(proc,), daemon=True, name="tn-reap").start()
+        if wait:
+            self._wait_retired()
         self.status.emit(False, "Off", gen)
+
+    def _wait_retired(self) -> None:
+        """Join cleanup from every retired generation without holding the state lock."""
+        with self._state_lock:
+            retired = list(self._retired_procs.values())
+        for proc in retired:
+            self._reap_retired(proc)
+
+    def _reap_retired(self, proc) -> None:
+        self._reap(proc)
+        with self._state_lock:
+            self._retired_procs.pop(id(proc), None)
 
     def _close_telesto(self, relay, wait=False):
         with self._state_lock:
             self._retired_telesto = [old for old in self._retired_telesto if not old.is_finished()]
-            if relay is not None:
-                self._retired_telesto.append(relay)
             retired = list(self._retired_telesto)
         if relay is not None:
             relay.close()
@@ -535,8 +553,11 @@ class TriggernometryBridge(QObject):
                 relay = None
                 if was_current:
                     self._active = False
+                    self._retired_procs[id(proc)] = proc
                     self._proc = None
                     relay, self._telesto = self._telesto, None
+                    if relay is not None:
+                        self._retired_telesto.append(relay)
             try:
                 if relay:
                     self._close_telesto(relay)
@@ -554,7 +575,7 @@ class TriggernometryBridge(QObject):
                     except (queue.Empty, queue.Full):
                         pass
                 try:
-                    self._reap(proc)
+                    self._reap_retired(proc)
                 finally:
                     if proc.stdout is not None:
                         try:

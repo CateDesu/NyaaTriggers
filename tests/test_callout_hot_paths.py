@@ -1,5 +1,7 @@
 import threading
 import unittest
+from copy import deepcopy
+from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -7,7 +9,9 @@ from PyQt6.QtCore import QThread
 
 from nyaatriggers import record_store
 from nyaatriggers.prog_session import ProgSessions
+from nyaatriggers.recap_store import MAX_PENDING_RECAPS
 from nyaatriggers.record_store import RecordWriter, read_record, write_record
+from nyaatriggers.telesto_client import TelestoClient
 from nyaatriggers.trigger_engine import Trigger
 from nyaatriggers.triggevent_bridge import TriggeventBridge
 from nyaatriggers.triggernometry_bridge import TriggernometryBridge
@@ -23,7 +27,10 @@ class HotPathTests(unittest.TestCase):
 
     def setUp(self):
         self.fixture = test_session_ui.SessionUiTests('test_window_icon_loads_from_bundled_assets')
-        self.fixture.setUp()
+        with patch.object(TelestoClient, 'start'), \
+                patch.object(TriggeventBridge, 'is_available', return_value=False), \
+                patch.object(TriggernometryBridge, 'is_available', return_value=False):
+            self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.window = self.fixture.window
 
@@ -217,6 +224,84 @@ class HotPathTests(unittest.TestCase):
             self.assertIn('Archive failed', sessions.save_error)
         sessions.flush_pending(wait=True)
         self.assertNotIn('archived', read_record(sessions.directory / (session['id'] + '.json')))
+
+    def check_shutdown_recap_retries(self, recover):
+        window = self.window
+        self.fixture.connect()
+        window._on_in_combat(True, True)
+        self.fixture.line(ability())
+        sessions = window._prog_sessions
+        session = sessions.current
+        pull = session['pulls'][0]
+        sessions.poll_saves(wait=True)
+        unavailable = True
+        actual = record_store.os.replace
+        attempted = []
+
+        def replace(source, destination):
+            attempted.append(Path(destination))
+            if unavailable:
+                raise OSError('Storage unavailable')
+            return actual(source, destination)
+
+        with patch.object(record_store.os, 'replace', side_effect=replace):
+            for index in range(MAX_PENDING_RECAPS):
+                self.fixture.clock.value += 2
+                self.fixture.line(ability(pairs=[('03', f'{(index + 1) << 16:X}')]))
+                self.fixture.line(['25', 'ts', PLAYER, f'Player {index + 1}'])
+            sessions.end(window._dps_meter.full_snapshot(), 'duty-left')
+            sessions.poll_saves(wait=True)
+            self.assertIsNone(sessions.current)
+            expected = deepcopy(sessions.recaps.unsaved)
+            self.assertEqual(len(expected), MAX_PENDING_RECAPS)
+            self.assertEqual([data['events'][-1]['amount'] for data in expected.values()],
+                             list(range(1, MAX_PENDING_RECAPS + 1)))
+            self.assertEqual(list(sessions.unsaved), [session['id']])
+            real_poll = sessions.poll_saves
+            drained = False
+
+            def poll_saves(*, wait=False):
+                nonlocal unavailable, drained
+                real_poll(wait=wait)
+                # Recovery follows the initial nonblocking Prog flush and shutdown drain.
+                if wait and not drained:
+                    drained = True
+                    unavailable = not recover
+                    attempted.clear()
+
+            with patch.object(sessions, 'poll_saves', side_effect=poll_saves):
+                window._finish_activity()
+            self.assertTrue(drained)
+            self.assertEqual(len(attempted), MAX_PENDING_RECAPS + 1)
+            self.assertEqual(len(set(attempted)), len(attempted))
+            self.assertEqual(sessions.writer._latest, {})
+            self.assertFalse(sessions.writer._pending)
+            self.assertIsNone(sessions.writer._executor)
+            self.assertEqual(sessions._saving, {})
+            self.assertEqual(sessions.recaps._saving, {})
+            self.assertEqual(sessions.recaps.dropped, 0)
+            if not recover:
+                self.assertEqual(sessions.recaps.unsaved, expected)
+                self.assertIn('Storage unavailable', sessions.save_error)
+                self.assertEqual(set(sessions.recaps.errors), set(expected))
+                self.assertEqual(set(sessions.recaps.errors.values()), {'Storage unavailable'})
+                return
+        self.assertEqual(sessions.unsaved, {})
+        self.assertEqual(sessions.recaps.unsaved, {})
+        self.assertEqual(sessions.save_error, '')
+        self.assertEqual(sessions.recaps.save_error, '')
+        restarted = ProgSessions(sessions.directory)
+        self.assertEqual(restarted.errors, [])
+        self.assertEqual(restarted.sessions[0]['pulls'][0]['recap_count'], MAX_PENDING_RECAPS)
+        records, errors = restarted.recaps.load(session['id'], pull['id'])
+        self.assertEqual(errors, [])
+        self.assertEqual({data['id']: data for data in records}, expected)
+
+    def test_shutdown_retries_the_full_recap_queue_after_storage_recovers(self):
+        self.check_shutdown_recap_retries(recover=True)
+
+    def test_shutdown_keeps_full_recap_failures_bounded(self):
+        self.check_shutdown_recap_retries(recover=False)
 
     def test_writer_bounds_backlog_and_keeps_latest_record_after_earlier_writes(self):
         writer = RecordWriter()

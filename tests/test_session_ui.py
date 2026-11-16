@@ -43,9 +43,19 @@ class SessionUiTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.stack.enter_context(patch("nyaatriggers.tts._speech_suspended", False))
         self.temp = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
+        self.stack.enter_context(patch.object(mw, "_DATA_DIR", self.temp))
         self.stack.enter_context(patch("nyaatriggers.drop_log._LOG_FILE", self.temp / "nyaatriggers.log"))
+        self.stack.enter_context(patch("nyaatriggers.diagnostics._LOG_FILE", self.temp / "diagnostics.log"))
+        for engine in ("triggevent", "triggernometry"):
+            self.stack.enter_context(patch(f"nyaatriggers.{engine}_bridge._log_path",
+                                          return_value=self.temp / f"{engine}.log"))
         for key, value in {"_DATA_DIR": self.temp, "_SETTINGS_FILE": self.temp / "settings.json",
+                           "_USER_SOUNDS_DIR": self.temp / "sounds",
+                           "_USER_VOICES_DIR": self.temp / "voices",
+                           "_TRIGGEVENT_INVENTORY_CACHE": self.temp / "triggevent_inventory.json",
+                           "_TRIGGEVENT_AUTOMARK_INVENTORY_CACHE": self.temp / "triggevent_automarkers.json",
                            "_TRIGGERNOMETRY_INVENTORY_CACHE": self.temp / "triggernometry_inventory.json",
+                           "_CALLOUTS_JA_CACHE": self.temp / "callouts_ja.cache.json",
                            "TRIGGERS_LOCAL_FILE": self.temp / "triggers.local.json"}.items():
             self.stack.enter_context(patch.object(ac, key, value))
         packs = self.temp / "triggernometry-packs"
@@ -57,6 +67,7 @@ class SessionUiTests(unittest.TestCase):
         self.stack.enter_context(patch.object(mw.MainWindow, "_load_settings", settings))
         for method in ("_load_triggers", "_load_timeline_for_zone", "_refresh_telesto_party"):
             self.stack.enter_context(patch.object(mw.MainWindow, method))
+        self.stack.enter_context(patch.object(mw.MainWindow, "_scan_voices", return_value=[]))
         for target in ((mw.PluginLink, "start"), (mw.QTimer, "singleShot"),
                        (mw, "kokoro_ready"), (mw, "_ensure_worker"), (ac.QMessageBox, "warning")):
             self.stack.enter_context(patch.object(*target))

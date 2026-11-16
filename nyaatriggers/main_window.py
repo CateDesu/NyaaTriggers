@@ -1328,6 +1328,14 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
     def _stop_background_timers(self) -> None:
         """Also used by update restarts that bypass closeEvent."""
         step = self._teardown_step
+        self._triggevent_stopping = True
+        recovery = getattr(self, "_triggevent_recovery", None)
+        if recovery is not None:
+            step("triggevent recovery suspend", lambda: recovery.set_suspended(True))
+        self._triggernometry_retry_stopped = True
+        retry = getattr(self, "_triggernometry_retry_timer", None)
+        if retry is not None:
+            step("triggernometry retry timer stop", retry.stop)
         step("recap import stop", lambda: self._stop_recap_import())
         step("speech stop", tts_suspend)
         step("timeline stop", lambda: self._timeline.reset())
@@ -1360,7 +1368,7 @@ class MainWindow(ProfilesMixin, SessionTrackingMixin, DeathRecapTabMixin, Ambien
             step("settings save flush", lambda: self._flush_pending_settings_save())
             step("meter encounter finalize", lambda: self._finalize_live_encounter())
             step("cactbot reader stop", lambda: self._stop_cactbot_reader())
-            step("triggevent stop", lambda: self._stop_sidecar("_triggevent"))
+            step("triggevent stop", lambda: self._stop_sidecar("_triggevent", wait=True))
             step("triggernometry stop", lambda: self._stop_sidecar("_triggernometry", wait=True))
             # Request both stops before joining to overlap shutdown waits.
             step("telesto stop request", lambda: self._request_sidecar_stop("_telesto_client"))

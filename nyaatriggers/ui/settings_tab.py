@@ -31,45 +31,50 @@ class SettingsTabMixin:
 
     def _load_settings(self) -> None:
         self._settings_backup_pending = False
-        if ac._SETTINGS_FILE.exists():
-            bad = ""
+        bad = ""
+        try:
+            with ac._SETTINGS_FILE.open("rb") as fh:
+                data = fh.read(_MAX_SETTINGS_BYTES + 1)
+            if len(data) > _MAX_SETTINGS_BYTES:
+                raise ValueError("settings file exceeds 4 MiB")
+            self._settings = json.loads(data.decode("utf-8"))
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError, RecursionError) as exc:
+            self._settings = {}
+            bad = str(exc)
+        if not isinstance(self._settings, dict):
+            self._settings = {}
+            bad = bad or "not a settings object"
+        if bad:
+            # Preserve unreadable settings before defaults can overwrite them.
             try:
-                with ac._SETTINGS_FILE.open("rb") as fh:
-                    data = fh.read(_MAX_SETTINGS_BYTES + 1)
-                if len(data) > _MAX_SETTINGS_BYTES:
-                    raise ValueError("settings file exceeds 4 MiB")
-                self._settings = json.loads(data.decode("utf-8"))
-            except (OSError, ValueError, RecursionError) as exc:
-                self._settings = {}
-                bad = str(exc)
-            if not isinstance(self._settings, dict):
-                self._settings = {}
-                bad = bad or "not a settings object"
-            if bad:
-                # Preserve unreadable settings before defaults can overwrite them.
                 backup = _next_bad_name(ac._SETTINGS_FILE)
-                try:
-                    shutil.copy2(ac._SETTINGS_FILE, backup)
-                except OSError:
-                    backup = None
-                    self._settings_backup_pending = True
-                # Apply the saved language before displaying warnings.
-                self._settings_load_warning = (bad, backup)
-            # Older settings predate the local trigger switch.
-            if self._settings and "local_enabled" not in self._settings:
-                self._settings["local_enabled"] = True
-            if self._settings.get("overlay_sound_file") == "__egg_sound__":
-                self._settings["overlay_sound_file"] = "ding.wav"
-            # Migrate only the old localhost default. OverlayPlugin does not listen on IPv6.
-            if self._settings.get("ws_url") == "ws://localhost:10501/ws":
-                self._settings["ws_url"] = "ws://127.0.0.1:10501/ws"
-            for key in ("triggers_enabled", "triggevent_enabled", "update_channel"):
-                self._settings.pop(key, None)
+                shutil.copy2(ac._SETTINGS_FILE, backup)
+            except OSError:
+                backup = None
+                self._settings_backup_pending = True
+            # Apply the saved language before displaying warnings.
+            self._settings_load_warning = (bad, backup)
+        # Older settings predate the local trigger switch.
+        if self._settings and "local_enabled" not in self._settings:
+            self._settings["local_enabled"] = True
+        if self._settings.get("overlay_sound_file") == "__egg_sound__":
+            self._settings["overlay_sound_file"] = "ding.wav"
+        # Migrate only the old localhost default. OverlayPlugin does not listen on IPv6.
+        if self._settings.get("ws_url") == "ws://localhost:10501/ws":
+            self._settings["ws_url"] = "ws://127.0.0.1:10501/ws"
+        for key in ("triggers_enabled", "triggevent_enabled", "update_channel"):
+            self._settings.pop(key, None)
 
     def _save_settings(self) -> bool:
         try:
             if getattr(self, "_settings_backup_pending", False):
-                if ac._SETTINGS_FILE.exists():
+                try:
+                    ac._SETTINGS_FILE.stat()
+                except FileNotFoundError:
+                    pass
+                else:
                     shutil.copy2(ac._SETTINGS_FILE, _next_bad_name(ac._SETTINGS_FILE))
                 self._settings_backup_pending = False
             _atomic_write_json(ac._SETTINGS_FILE, self._settings, indent=2)
@@ -141,7 +146,8 @@ class SettingsTabMixin:
         if lang == self._settings.get("ui_language", "auto"):
             return
         self._settings["ui_language"] = lang
-        self._save_settings()
+        if not self._save_settings():
+            return
         if ac.QMessageBox.question(
                 self, _("Restart NyaaTriggers"),
                 _("The interface language changed. Restart NyaaTriggers now to apply it?"),

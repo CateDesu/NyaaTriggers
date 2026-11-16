@@ -44,7 +44,7 @@ else
 fi
 
 echo ">> installing Triggevent Engine modules to local Maven repo"
-python3 "$HERE/build_engine.py" "$ET_DIR" "$HERE/patches/same-zone-history.patch" --wrapper "$HERE"
+python3 "$HERE/build_engine.py" "$ET_DIR" "$HERE/patches/same-zone-history.patch" "$HERE/patches/telesto-response-deadline.patch" --wrapper "$HERE"
 
 echo ""
 echo "Built: $HERE/target/triggevent-core.jar"

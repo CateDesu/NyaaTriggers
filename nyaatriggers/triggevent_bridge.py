@@ -193,7 +193,8 @@ def _wrapper_build_inputs() -> dict:
 
     paths = [_CORE_DIR / name for name in ("pom.xml", "build.sh", "build.bat")]
     paths.extend(path for path in (_CORE_DIR / "build_engine.py",
-                                   _CORE_DIR / "patches" / "same-zone-history.patch") if path.is_file())
+                                   _CORE_DIR / "patches" / "same-zone-history.patch",
+                                   _CORE_DIR / "patches" / "telesto-response-deadline.patch") if path.is_file())
     for directory, _dirs, files in os.walk(_CORE_DIR / "src" / "main", onerror=unreadable):
         paths.extend(Path(directory) / name for name in files)
     inputs = {}
@@ -454,6 +455,7 @@ class TriggeventBridge(QObject):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._proc: subprocess.Popen | None = None
+        self._retired_procs = {}
         self._recovery_gen = -1
         self._history_gen = -1
         self._catchup_gen = -1
@@ -746,15 +748,8 @@ class TriggeventBridge(QObject):
         self.status.emit(True, "Starting Triggevent Engine...", gen)
 
     def stop(self, wait: bool = False) -> None:
-        if not self._active and self._proc is None:
-            with self._state_lock:
-                self._gen += 1
-                self._speech_cancel_pending.clear()
-                self._speech_cancel_all_pending = None
-                gen = self._gen
-            self.status.emit(False, "Off", gen)
-            return
         with self._state_lock:
+            idle = not self._active and self._proc is None
             previous_gen = self._gen
             self._active = False
             self._gen += 1
@@ -762,7 +757,14 @@ class TriggeventBridge(QObject):
             self._speech_cancel_all_pending = None
             gen = self._gen
             proc, self._proc = self._proc, None
+            if proc is not None:
+                self._retired_procs[id(proc)] = proc
             wq = self._wq
+        if idle:
+            if wait:
+                self._wait_retired()
+            self.status.emit(False, "Off", gen)
+            return
         self._diagnostic("engine_stop", gen, previous_gen=previous_gen, wait=wait, reason="requested")
         self._queue_diagnostic(gen=previous_gen, wq=wq, frames=self._feed_frames, chars=self._feed_chars)
         with self._seen_lock:
@@ -778,13 +780,24 @@ class TriggeventBridge(QObject):
         if proc is not None:
             # Signal the group now because the parent may exit before the background reaper.
             self._signal_group(proc, graceful=True)
-            if wait:
-                # Wait for Java to release bundle files before Windows updates replace them.
-                self._reap(proc)
-            else:
-                threading.Thread(target=self._reap, args=(proc,), daemon=True,
+            if not wait:
+                threading.Thread(target=self._reap_retired, args=(proc,), daemon=True,
                                  name="triggevent-reap").start()
+        if wait:
+            self._wait_retired()
         self.status.emit(False, "Off", gen)
+
+    def _wait_retired(self) -> None:
+        """Join cleanup from every retired generation without holding the state lock."""
+        with self._state_lock:
+            retired = list(self._retired_procs.values())
+        for proc in retired:
+            self._reap_retired(proc)
+
+    def _reap_retired(self, proc) -> None:
+        self._reap(proc)
+        with self._state_lock:
+            self._retired_procs.pop(id(proc), None)
 
     _signal_group = staticmethod(proc_env.signal_group)
 
@@ -958,6 +971,7 @@ class TriggeventBridge(QObject):
                 was_current = proc is self._proc and self._active
                 if was_current:
                     self._active = False
+                    self._retired_procs[id(proc)] = proc
                     self._proc = None
             try:
                 self._diagnostic("engine_exit", gen, reason=reason, expected=not was_current,
@@ -978,7 +992,7 @@ class TriggeventBridge(QObject):
                     except (queue.Empty, queue.Full):
                         pass
                 try:
-                    self._reap(proc)
+                    self._reap_retired(proc)
                 finally:
                     if proc.stdout is not None:
                         try:

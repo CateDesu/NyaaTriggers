@@ -51,22 +51,24 @@ def _read_official_triggers(path):
 
 
 class TriggersTabMixin:
-    def _load_retired_ids(self) -> set[str]:
-        self._trigger_replacements = {}
-        src = ac._REPO_RETIRED_FILE
-        # Load downloaded retirements only when their version stamp matches the program.
-        if not (src.exists() and src != ac.RETIRED_FILE
-                and _repo_download_version() == _VERSION):
-            src = ac.RETIRED_FILE
-        if not src.exists():
-            return set()
+    def _load_retired_ids(self, *, use_download: bool | None = None) -> set[str]:
+        replacements = {}
+        if use_download is None:
+            use_download = _repo_download_version() == _VERSION
         try:
-            raw = json.loads(src.read_text(encoding="utf-8"))
-        except (OSError, ValueError, RecursionError):
-            return set()
+            if use_download and ac._REPO_RETIRED_FILE != ac.RETIRED_FILE:
+                try:
+                    text = ac._REPO_RETIRED_FILE.read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    text = ac.RETIRED_FILE.read_text(encoding="utf-8")
+            else:
+                text = ac.RETIRED_FILE.read_text(encoding="utf-8")
+            raw = json.loads(text)
+        except (FileNotFoundError, ValueError, RecursionError):
+            raw = []
         rows = raw.get("retired", []) if isinstance(raw, dict) else raw
         if not isinstance(rows, list):
-            return set()
+            rows = []
         out: set[str] = set()
         for row in rows:
             if isinstance(row, str):
@@ -75,32 +77,40 @@ class TriggersTabMixin:
                 out.add(row["id"])
                 targets = row.get("replaced_by")
                 if isinstance(targets, list) and all(isinstance(t, str) for t in targets):
-                    self._trigger_replacements[row["id"]] = targets
+                    replacements[row["id"]] = targets
         self._trigger_replacements = {
             ident: [t for t in targets if t not in out]
-            for ident, targets in self._trigger_replacements.items()
+            for ident, targets in replacements.items()
         }
         return out
 
     def _load_triggers(self, *, read_snapshot=None) -> None:
         if getattr(self, "_local_conflict_dialog", False):
             return
-        self._local_conflict_warned = False
-        # Block local saves while the file is unreadable. Each reload checks again.
-        self._local_corrupt = False
+        if getattr(self, "_trig_dl_in_flight", {}):
+            self._triggers_mtime = ()
+            return
         cached = read_snapshot[1] if read_snapshot is not None else {}
         official: list[Trigger] = []
         retry_read = False
         _override = ac._REPO_TRIGGERS_FILE
-        if _repo_download_version() != _VERSION:
+        try:
+            version = _repo_download_version()
+        except OSError as exc:
+            self._triggers_mtime = ()
+            if hasattr(self, "_local_trigger_baseline"):
+                return
+            ac.log_drop("triggers", f"Download version unreadable: {exc!r}")
+            version = None
+            retry_read = True
+        if not retry_read and version != _VERSION:
             for _p in (ac._REPO_TRIGGERS_FILE, ac._REPO_RETIRED_FILE, ac._REPO_TRIGGERS_VERSION):
                 try:
                     _p.unlink(missing_ok=True)
                 except OSError:
                     pass
-        # Recheck the stamp because deleting a stale file may have failed.
-        _trig_src = (_override if (_override.exists() and _override != ac.TRIGGERS_FILE
-                                   and _repo_download_version() == _VERSION)
+        _trig_src = (_override if (_override != ac.TRIGGERS_FILE
+                                   and version == _VERSION)
                      else ac.TRIGGERS_FILE)
         stamp = self._trigger_files_stamp()
         if read_snapshot is not None:
@@ -113,32 +123,58 @@ class TriggersTabMixin:
                     if data is None:
                         continue
                 else:
-                    if not _src.exists():
-                        continue
                     data = _read_official_triggers(_src)
                 official = [Trigger.from_dict(d) for d in data]
+            except FileNotFoundError:
+                continue
             except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
+                if (isinstance(exc, OSError) and _src == ac.TRIGGERS_FILE
+                        and hasattr(self, "_local_trigger_baseline")):
+                    self._triggers_mtime = ()
+                    return
                 retry_read = True
                 ac.log_drop("triggers", f"{_src.name} unreadable: {exc!r}")
                 continue
             break
-        self._retired_ids = self._load_retired_ids()
+        # Read once so external writes cannot mix versions.
+        raw = cached.get(ac.TRIGGERS_LOCAL_FILE)
+        local_error = False
+        if ac.TRIGGERS_LOCAL_FILE not in cached:
+            try:
+                raw = _read_local_triggers()
+            except FileNotFoundError:
+                pass
+            except (OSError, ValueError, KeyError, TypeError, RecursionError) as exc:
+                if isinstance(exc, OSError) and hasattr(self, "_local_trigger_baseline"):
+                    self._triggers_mtime = ()
+                    return
+                local_error = True
+        try:
+            retired = self._load_retired_ids(use_download=version == _VERSION)
+        except OSError as exc:
+            self._triggers_mtime = ()
+            if hasattr(self, "_local_trigger_baseline"):
+                return
+            ac.log_drop("triggers", f"Retirements unreadable: {exc!r}")
+            retry_read = True
+            try:
+                retired = self._load_retired_ids(use_download=False)
+            except OSError:
+                retired = set()
+                self._trigger_replacements = {}
+        self._local_conflict_warned = False
+        self._local_corrupt = False
+        if local_error:
+            self._handle_local_corrupt()
+        self._retired_ids = retired
         # A stale download may still contain retired IDs.
         official = [t for t in official if t.id not in self._retired_ids]
         self._official_ids      = {t.id for t in official}
         # Local edits must not mutate the save baseline.
         self._official_triggers = {t.id: Trigger.from_dict(t.to_dict()) for t in official}
-
         local_triggers: list[Trigger] = []
         enabled_overrides: dict[str, bool] = {}
         self._deleted_ids = set()
-        # Read once so external writes cannot mix versions.
-        raw = cached.get(ac.TRIGGERS_LOCAL_FILE)
-        if ac.TRIGGERS_LOCAL_FILE not in cached and ac.TRIGGERS_LOCAL_FILE.exists():
-            try:
-                raw = _read_local_triggers()
-            except (OSError, ValueError, KeyError, TypeError, RecursionError):
-                self._handle_local_corrupt()
         self._local_trigger_baseline = deepcopy(raw)
         if isinstance(raw, dict):
             trigs = raw.get("triggers")
@@ -227,9 +263,9 @@ class TriggersTabMixin:
     def _handle_local_corrupt(self) -> None:
         """Preserve unreadable local files and block saves until a successful reload."""
         self._local_corrupt = True
-        backup = _next_bad_name(ac.TRIGGERS_LOCAL_FILE)
         where = ""
         try:
+            backup = _next_bad_name(ac.TRIGGERS_LOCAL_FILE)
             shutil.copy2(ac.TRIGGERS_LOCAL_FILE, backup)
             where = "\n\n" + _("A copy was kept at:\n{path}").format(path=backup)
         except OSError:
@@ -1621,9 +1657,13 @@ class TriggersTabMixin:
             return
         try:
             backup = None
-            if ac.TRIGGERS_LOCAL_FILE.exists():
+            try:
+                previous = ac.TRIGGERS_LOCAL_FILE.read_bytes()
+            except FileNotFoundError:
+                pass
+            else:
                 backup = ac.TRIGGERS_LOCAL_FILE.with_name(ac.TRIGGERS_LOCAL_FILE.name + ".bak")
-                _atomic_write_bytes(backup, ac.TRIGGERS_LOCAL_FILE.read_bytes())
+                _atomic_write_bytes(backup, previous)
             _atomic_write_bytes(ac.TRIGGERS_LOCAL_FILE, imported)
         except OSError as exc:
             ac.QMessageBox.critical(self, _("Import Failed"),
@@ -1661,12 +1701,13 @@ class TriggersTabMixin:
         contents = {}
         for p in (ac.TRIGGERS_FILE, ac.TRIGGERS_LOCAL_FILE):
             try:
+                p.stat()
+                if p == ac.TRIGGERS_LOCAL_FILE:
+                    contents[p] = _read_local_triggers()
+                else:
+                    contents[p] = _read_official_triggers(p)
+            except FileNotFoundError:
                 contents[p] = None
-                if p.exists():
-                    if p == ac.TRIGGERS_LOCAL_FILE:
-                        contents[p] = _read_local_triggers()
-                    else:
-                        contents[p] = _read_official_triggers(p)
             except (OSError, ValueError, RecursionError):
                 self._triggers_mtime = ()
                 return

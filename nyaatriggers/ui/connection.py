@@ -151,11 +151,11 @@ class ConnectionMixin:
 
     def _quit_for_windows_handoff(self) -> None:
         # Wait for sidecars to release runtime files before the Windows handoff.
+        self._stop_background_timers()
         app = QApplication.instance()
         if app is not None:
             app.processEvents()
         step = self._teardown_step
-        self._stop_background_timers()
         step("clear status timers", lambda: self._clear_status_timers())
         step("clear seq runners", lambda: self._clear_seq_runners())
         step("settings save flush", lambda: self._flush_pending_settings_save())

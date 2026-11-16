@@ -468,6 +468,8 @@ class ProgSessions:
         for session in list(self.unsaved.values()):
             if session["id"] not in self._saving:
                 self.save(session)
+            if wait:
+                self.poll_saves(wait=True)
         self.recaps.flush_pending()
         self.poll_saves(wait=wait)
 

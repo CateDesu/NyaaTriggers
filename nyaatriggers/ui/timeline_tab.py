@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import sys
 import threading
 import time
@@ -15,13 +16,22 @@ from nyaatriggers.app_common import (
 )
 
 
+def _timeline_path_exists(path: Path) -> bool:
+    """Keep operational failures visible to the loader's retry policy."""
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def _local_timeline_path(fight: str):
     """Prefer a writable local timeline over its bundled fallback, or return None."""
     p = ac.TIMELINES_DIR / f"{fight}.txt"
-    if p.exists():
+    if _timeline_path_exists(p):
         return p
     p = ac._BUNDLE_TIMELINES_DIR / f"{fight}.txt"
-    return p if p.exists() else None
+    return p if _timeline_path_exists(p) else None
 
 
 class TimelineTabMixin:
@@ -113,9 +123,9 @@ class TimelineTabMixin:
                 ctag, rel = cb
                 # Writable cactbot downloads take precedence and remain separate from user timelines.
                 cb_path = ac.TIMELINES_DIR / f"{ctag}.cactbot.cache.txt"
-                if not cb_path.exists():
+                if not _timeline_path_exists(cb_path):
                     cb_path = ac._BUNDLE_TIMELINES_DIR / f"{ctag}.cactbot.txt"
-                if cb_path.exists():
+                if _timeline_path_exists(cb_path):
                     # Serve stale copies during background refresh.
                     try:
                         if time.time() - cb_path.stat().st_mtime > _CACTBOT_TIMELINE_TTL_S:
@@ -130,7 +140,7 @@ class TimelineTabMixin:
                         path = _local_timeline_path(local_fight)
             elif local_fight:
                 path = _local_timeline_path(local_fight)
-            if path and path.exists():
+            if path and _timeline_path_exists(path):
                 # Accept a BOM so the first entry or hideall directive still parses.
                 text = path.read_text(encoding="utf-8-sig")
                 entries = timeline_parser.parse(text)

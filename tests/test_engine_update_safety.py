@@ -172,9 +172,10 @@ class EngineUpdateTests(unittest.TestCase):
         resource = self.root / "src/main/resources/new.xml"
         resource.parent.mkdir()
         patch_file = self.root / "patches" / "same-zone-history.patch"
+        telesto_patch = self.root / "patches" / "telesto-response-deadline.patch"
         patch_file.parent.mkdir()
         for path in (self.root / "pom.xml", self.root / "build.bat",
-                     self.root / "build_engine.py", patch_file, resource):
+                     self.root / "build_engine.py", patch_file, telesto_patch, resource):
             with self.subTest(path=path.name):
                 path.write_text("changed input\n")
                 self.assertTrue(bridge.update_engine()[0])

@@ -82,7 +82,9 @@ The script clones the engine, installs its modules into the local Maven reposito
 
 Host builds use a temporary output directory and replace the installed jar only after Maven succeeds. A failed build leaves the previous engine available for restarts and recovery.
 
-The same-zone history fix in `patches/same-zone-history.patch` builds in a private source worktree. The primary clone stays clean for engine updates, and the worktree is removed after success or failure. A source revision that already contains the fix builds directly. The native regression gate uses the same source preparation. The program tracks the patch and build helper alongside wrapper sources when deciding whether to rebuild.
+The fixes in `patches/same-zone-history.patch` and `patches/telesto-response-deadline.patch` build in a private source worktree. The primary clone stays clean for engine updates, and the worktree is removed after success or failure. A source revision that already contains both fixes builds directly. The native regression gate uses the same source preparation. The program tracks both patches and the build helper alongside wrapper sources when deciding whether to rebuild.
+
+Telesto HTTP exchanges have a three-second deadline covering headers and the complete response body. Timeout, interruption, endpoint changes and retired delivery permits cancel the exchange. Responses are limited to 1 MiB, including HTTP errors. Commands are not retried after ambiguous failures. `TelestoHttpRegressionTest` checks stalled and trickling bodies, socket cancellation, worker recovery and response limits against loopback endpoints.
 
 For a standalone debug run on Linux:
 

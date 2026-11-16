@@ -168,7 +168,8 @@ class TriggernometryEditorMixin:
         if label is not None:
             label.setText(_("Triggernometry pack saved. Reload will run after combat ends.") if pending else "")
             label.setVisible(pending)
-        if not pending or getattr(self, "_in_game_combat", False):
+        if (not pending or getattr(self, "_in_game_combat", False)
+                or getattr(self, "_triggernometry_retry_stopped", False)):
             return
         self._triggernometry_reload_pending = False
         if label is not None:

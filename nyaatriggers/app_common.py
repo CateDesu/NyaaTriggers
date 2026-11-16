@@ -152,23 +152,33 @@ def _fsync_file(path: "Path") -> None:
 def _next_bad_name(path: "Path", cap: int = 100) -> "Path":
     candidate = path.with_name(path.name + ".bad")
     for n in range(1, cap):
-        if not candidate.exists():
+        try:
+            candidate.stat()
+        except FileNotFoundError:
             break
         candidate = path.with_name(f"{path.name}.bad.{n}")
     return candidate
 
 
 def _repo_download_version() -> "str | None":
+    """Operational failures must not authorize download cleanup."""
     try:
         v = json.loads(_REPO_TRIGGERS_VERSION.read_text(encoding="utf-8"))
-        # Source updates may keep the same version.
-        if not updater.is_frozen() and any(
-                bundled.exists() and bundled.stat().st_mtime_ns > _REPO_TRIGGERS_VERSION.stat().st_mtime_ns
-                for bundled in (TRIGGERS_FILE, RETIRED_FILE)):
+        if not isinstance(v, str):
             return None
-    except (OSError, ValueError, RecursionError):
+        # Source updates may keep the same version.
+        if not updater.is_frozen():
+            stamp = _REPO_TRIGGERS_VERSION.stat().st_mtime_ns
+            for bundled in (TRIGGERS_FILE, RETIRED_FILE):
+                try:
+                    modified = bundled.stat().st_mtime_ns
+                except FileNotFoundError:
+                    continue
+                if modified > stamp:
+                    return None
+    except (FileNotFoundError, ValueError, RecursionError):
         return None
-    return v if isinstance(v, str) else None
+    return v
 
 
 def _sweep_stale_update_parts(tmpdir: "Path", older_than_s: float = 3600.0) -> None:

@@ -45,7 +45,7 @@ class SavedRecapDialog(QDialog):
                     number=number, time=format_time(pull["started"]),
                     count=count if count is not None else "?")
                 item = QListWidgetItem(text, self.pulls)
-                item.setData(Qt.ItemDataRole.UserRole, number - 1)
+                item.setData(Qt.ItemDataRole.UserRole, pull["id"])
             self.pulls.setCurrentRow(0)
         self._select()
 
@@ -54,17 +54,21 @@ class SavedRecapDialog(QDialog):
         self.selection = None
         if item is not None:
             session = self.sessions[self.session.currentIndex()]
-            index = item.data(Qt.ItemDataRole.UserRole)
-            self.selection = session, session["pulls"][index], index + 1
+            ident = item.data(Qt.ItemDataRole.UserRole)
+            self.selection = next(((session, pull, index + 1)
+                                   for index, pull in enumerate(session["pulls"])
+                                   if pull["id"] == ident), None)
         self.buttons.button(QDialogButtonBox.StandardButton.Open).setEnabled(self.selection is not None)
         self.delete_button.setEnabled(self.selection is not None
                                       and self.parent()._prog_sessions.can_delete_pull(*self.selection[:2]))
 
     def _delete_pull(self):
+        self._select()
         if self.selection is not None and self.parent()._prog_tab.delete_pull(*self.selection[:2], parent=self):
             self._refresh()
 
     def accept(self):
+        self._select()
         if self.selection is not None:
             super().accept()
 

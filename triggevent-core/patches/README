@@ -1,5 +1,12 @@
 same-zone-history.patch preserves pull history across repeated zone announcements.
 The build applies it in a private source worktree until the engine fork includes it.
 
+telesto-response-deadline.patch bounds complete Telesto responses and cancels
+HTTP exchanges when their deadline or delivery permit expires. It includes the
+native TelestoHttpRegressionTest suite. Both build scripts and the release gate
+apply it in the same private source worktree. Move it into CateDesu/event-trigger
+on main when publishing the fork fix, then update both engine pins. No fork
+commit is required to build or distribute the patched host jar.
+
 The older crash and arrow guards were retired 2026-09-05 and live in
 CateDesu/event-trigger on main. They remain as rollback references.
