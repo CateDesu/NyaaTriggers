@@ -299,7 +299,7 @@ class EngineTeardownTests(unittest.TestCase):
                             log("fixture worker finished")
                             diagnostics.record("engine_exit", reason="eof", expected=True)
                             observed.append((tv._log_path(), diagnostics._LOG_FILE,
-                                             diagnostics._LOG_FILE.read_text()))
+                                             (case.temp / "diagnostics.log").read_text()))
 
                         case.stack.enter_context(patch.object(case.bridge, "_err_loop", delayed_stderr))
                         outcome = self.assertRaisesRegex(RuntimeError, "fixture failure") if fail else nullcontext()
@@ -342,10 +342,11 @@ class EngineTeardownTests(unittest.TestCase):
                     patch.object(diagnostics, "_ENABLED", True):
                 try:
                     case.setUp()
-                    log = tv._log_path()
-                    self.assertIsNotNone(log)
+                    log = case.temp / "triggevent.log"
+                    self.assertEqual(tv._log_path(), log)
                     self.assertIn("status: active=True Starting", log.read_text())
-                    support_log = diagnostics._LOG_FILE
+                    support_log = case.temp / "diagnostics.log"
+                    self.assertEqual(diagnostics._LOG_FILE, support_log)
                     self.assertIn('"event":"recovery_state"', support_log.read_text())
 
                     def observe_cleanup():

@@ -69,13 +69,18 @@ def remove_tree(path):
 def remove_worktree(source, worktree, common):
     git(source, "worktree", "remove", "--force", str(worktree), check=False)
     administrative = common / "worktrees"
+    expected = os.path.normcase(os.path.abspath(worktree / ".git"))
+    if os.path.normcase(os.path.realpath(administrative)) != os.path.normcase(str(administrative)):
+        return
     if administrative.is_dir():
         for entry in administrative.iterdir():
+            if entry.is_symlink():
+                continue
             try:
-                destination = Path((entry / "gitdir").read_text(encoding="utf-8").strip())
+                destination = (entry / "gitdir").read_text(encoding="utf-8").strip()
             except (OSError, UnicodeError):
                 continue
-            if destination.resolve() == (worktree / ".git").resolve():
+            if os.path.normcase(os.path.abspath(destination)) == expected:
                 # Git can leave this record after an interrupted checkout or removal.
                 remove_tree(entry)
 
@@ -108,7 +113,7 @@ def prepared_source(source, *patches):
         common = source / common
     common = common.resolve()
     with tempfile.TemporaryDirectory(prefix="nyaa-engine-build-") as temporary:
-        worktree = Path(temporary) / "source"
+        worktree = Path(temporary).resolve() / "source"
         try:
             git(source, "worktree", "add", "--detach", str(worktree), head)
             for patch in pending:

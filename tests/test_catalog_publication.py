@@ -460,7 +460,16 @@ class CatalogWaitTests(unittest.TestCase):
         self.assertEqual(waits, [20])
 
 
+def catalog_fixture_root(value):
+    temporary = os.path.realpath(tempfile.gettempdir())
+    root = os.path.realpath(value)
+    if not root.startswith(os.path.join(temporary, "")) or root != os.path.join(temporary, "catalog"):
+        raise ValueError("Catalog subprocesses require their temporary catalog fixture")
+    return Path(root)
+
+
 def catalog_process(mode, root):
+    root = catalog_fixture_root(root)
     CatalogPublicationTests.setUpClass()
     case = CatalogPublicationTests("test_update_then_restore_preserves_distinct_catalogs")
     case.fixture_root = root
@@ -533,13 +542,14 @@ class CatalogRestartTests(unittest.TestCase):
     def run_process(self, mode, root):
         environment = os.environ.copy()
         profile = root.parent / (mode + "-profile")
-        for key in ("HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "APPDATA", "TMPDIR"):
+        for key in ("HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "APPDATA"):
             path = profile / key
             path.mkdir(parents=True, exist_ok=True)
             environment[key] = str(path)
         # Keep installed dependencies visible when HOME changes for the disposable profile.
         environment["PYTHONPATH"] = os.pathsep.join(str(Path(path).resolve()) for path in sys.path if path)
         environment.update(QT_QPA_PLATFORM="offscreen", NYAA_REPLAY_TEST="1", PYTHONDONTWRITEBYTECODE="1")
+        environment["TMPDIR"] = str(root.parent)
         result = subprocess.run(
             [sys.executable, "-m", "tests.test_catalog_publication", "--catalog-process", mode, str(root)],
             cwd=Path(__file__).resolve().parents[1], env=environment,
@@ -569,6 +579,28 @@ class CatalogRestartTests(unittest.TestCase):
                 else:
                     path.write_text(json.dumps(stamp), encoding="utf-8")
                 self.run_process("consume", root)
+
+
+class CatalogFixturePathTests(unittest.TestCase):
+    def test_only_the_catalog_in_the_process_temporary_directory_is_accepted(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(tempfile, "gettempdir", return_value=directory):
+            root = Path(directory) / "catalog"
+            root.mkdir()
+            self.assertEqual(catalog_fixture_root(root), root.resolve())
+            for invalid in (Path(directory), root / "nested", Path(directory) / "catalog-other",
+                            root / ".." / "outside", Path(directory + "-other") / "catalog"):
+                with self.subTest(path=invalid), self.assertRaises(ValueError):
+                    catalog_fixture_root(invalid)
+
+    @unittest.skipUnless(os.name == "posix", "Requires symbolic links")
+    def test_catalog_symlink_cannot_escape_the_process_temporary_directory(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside, \
+                patch.object(tempfile, "gettempdir", return_value=directory):
+            root = Path(directory) / "catalog"
+            root.symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                catalog_fixture_root(root)
 
 
 if __name__ == "__main__":

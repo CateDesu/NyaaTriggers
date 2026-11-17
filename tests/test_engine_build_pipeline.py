@@ -234,6 +234,79 @@ raise SystemExit(int(os.environ.get("NYAA_BUILD_TEST_FAIL", "0")))
         self.assertEqual((self.source / "mechanic.txt").read_text(encoding="utf-8"), "old\n")
         self.assertEqual(self.git("status", "--porcelain").stdout, "")
 
+    @unittest.skipUnless(os.name == "posix", "Requires symbolic links")
+    def test_removal_fallback_does_not_follow_administrative_symlinks(self):
+        administrative = self.source / ".git" / "worktrees"
+        worktree = self.directory / "owned-worktree"
+        for linked in ("entry", "directory"):
+            with self.subTest(linked=linked), tempfile.TemporaryDirectory(dir=self.directory) as directory:
+                outside = Path(directory)
+                record = outside / "record"
+                record.mkdir()
+                (record / "gitdir").write_text(str(worktree / ".git"), encoding="utf-8")
+                marker = record / "preserved"
+                marker.write_bytes(b"unrelated data")
+                if linked == "directory":
+                    link = administrative
+                    link.symlink_to(outside, target_is_directory=True)
+                else:
+                    administrative.mkdir()
+                    link = administrative / "linked-record"
+                    link.symlink_to(record, target_is_directory=True)
+                try:
+                    with patch.object(engine_build, "git", return_value=subprocess.CompletedProcess([], 1)):
+                        engine_build.remove_worktree(self.source, worktree, self.source / ".git")
+                    self.assertEqual(marker.read_bytes(), b"unrelated data")
+                    self.assertEqual((record / "gitdir").read_text(), str(worktree / ".git"))
+                finally:
+                    link.unlink()
+                    if linked == "entry":
+                        administrative.rmdir()
+
+    @unittest.skipUnless(os.name == "posix", "Requires symbolic links")
+    def test_removal_fallback_preserves_a_registration_that_only_matches_through_a_symlink(self):
+        original = engine_build.git
+        alias = self.directory / "alias"
+        administrative = self.source / ".git" / "worktrees"
+        unrelated = administrative / "unrelated"
+
+        def interrupted(source, *arguments, **kwargs):
+            if arguments[:2] == ("worktree", "remove"):
+                alias.symlink_to(arguments[-1], target_is_directory=True)
+                unrelated.mkdir()
+                (unrelated / "gitdir").write_text(str(alias / ".git"), encoding="utf-8")
+                return subprocess.CompletedProcess(arguments, 1, "", "interrupted removal")
+            return original(source, *arguments, **kwargs)
+
+        with patch.dict(os.environ, self.environment), patch.object(engine_build, "git", side_effect=interrupted):
+            engine_build.build(self.source, self.patch)
+        self.assertEqual((unrelated / "gitdir").read_text(), str(alias / ".git"))
+        self.assertEqual(list(administrative.iterdir()), [unrelated])
+        call, = self.observations()
+        self.assertFalse(Path(call["source"]).exists())
+
+    @unittest.skipUnless(os.name == "posix", "Requires symbolic links")
+    def test_removal_fallback_cleans_its_registration_with_a_symlinked_temporary_directory(self):
+        original = engine_build.git
+        actual = self.directory / "temporary"
+        actual.mkdir()
+        alias = self.directory / "temporary-alias"
+        alias.symlink_to(actual, target_is_directory=True)
+
+        def interrupted(source, *arguments, **kwargs):
+            if arguments[:2] == ("worktree", "remove"):
+                return subprocess.CompletedProcess(arguments, 1, "", "interrupted removal")
+            return original(source, *arguments, **kwargs)
+
+        with patch.dict(os.environ, self.environment | {"TMPDIR": str(alias)}), \
+                patch.object(tempfile, "tempdir", None), \
+                patch.object(engine_build, "git", side_effect=interrupted):
+            engine_build.build(self.source, self.patch)
+        call, = self.observations()
+        self.assertEqual(Path(call["source"]).parent.parent, actual.resolve())
+        self.assertFalse(Path(call["source"]).exists())
+        self.assert_clone_preserved()
+
     def test_windows_maven_batch_path_is_passed_as_a_quoted_environment_value(self):
         maven = r"C:\Maven & tools\mvn.cmd"
         interpreter = r"C:\Windows folder\System32\cmd.exe"

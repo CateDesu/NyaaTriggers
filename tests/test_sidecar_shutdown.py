@@ -522,6 +522,31 @@ class ShutdownBoundaryTests(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "linux", "Linux orphan supervision")
 class ParentShutdownTests(unittest.TestCase):
+    def test_parent_rejects_unsafe_roots_before_launching(self):
+        with tempfile.TemporaryDirectory() as external, \
+                tempfile.TemporaryDirectory(prefix="nyaa-sidecar-") as sandbox:
+            root = Path(sandbox)
+            sentinel = root / "fixture-engine"
+            sentinel.write_text("preserve existing contents")
+            link = root.with_name(root.name + "-link")
+            link.symlink_to(external, target_is_directory=True)
+            try:
+                sibling = root.parent.with_name(root.parent.name + "-other") / root.name
+                for unsafe in (external, str(root / ".." / Path(external).name),
+                               str(sibling), str(root / "nested"), str(link), str(root)):
+                    with self.subTest(root=unsafe):
+                        result = subprocess.run(
+                            [sys.executable, "-m", "tests.test_sidecar_shutdown", "--parent",
+                             tv.__name__, "exit", unsafe],
+                            capture_output=True, text=True, timeout=10)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("Unsafe parent fixture root", result.stderr)
+                        self.assertEqual(sentinel.read_text(), "preserve existing contents")
+                        self.assertEqual(list(Path(external).iterdir()), [])
+                        self.assertEqual(list(root.iterdir()), [sentinel])
+            finally:
+                link.unlink()
+
     def check_supervisor(self, scenario):
         for module, _ in BRIDGES:
             with self.subTest(bridge=module.__name__):
@@ -535,13 +560,34 @@ class ParentShutdownTests(unittest.TestCase):
         self.check_supervisor("exec")
 
     def test_wait_survives_parent_exit(self):
-        self.check_supervisor("exit")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            directory = root / "temporary"
+            directory.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(directory, target_is_directory=True)
+            with patch.dict(os.environ, {"TMPDIR": str(alias)}):
+                self.check_supervisor("exit")
 
     def test_reader_retirement_covers_exited_wrapper_and_live_group_child(self):
         self.check_supervisor("group")
 
 
-def parent_exit(module, cls, operation, root):
+def parent_root(value):
+    base = os.path.realpath(tempfile.gettempdir())
+    normalized = os.path.abspath(value)
+    if not normalized.startswith(base + os.sep):
+        raise ValueError("Unsafe parent fixture root")
+    root = Path(normalized)
+    if (root.parent != Path(base) or not root.name.startswith("nyaa-sidecar-")
+            or os.path.realpath(normalized) != normalized or not root.is_dir()
+            or any(root.iterdir())):
+        raise ValueError("Unsafe parent fixture root")
+    return root
+
+
+def parent_exit(module, cls, operation, value):
+    root = parent_root(value)
     bridge = cls()
     launch = launched(module, bridge, root)
     proc, runtime, child = launch.__enter__()
@@ -562,8 +608,8 @@ def supervised(module, cls, scenario):
     import ctypes
     import shutil
     assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
+    with tempfile.TemporaryDirectory(prefix="nyaa-sidecar-") as temp:
+        root = Path(temp).resolve()
         child = group = parent = runtime_path = None
         try:
             if scenario == "group":
@@ -638,6 +684,6 @@ if __name__ == "__main__":
         if sys.argv[1] == "--supervise":
             supervised(module, cls, sys.argv[3])
         else:
-            parent_exit(module, cls, sys.argv[3], Path(sys.argv[4]))
+            parent_exit(module, cls, sys.argv[3], sys.argv[4])
     else:
         unittest.main()
